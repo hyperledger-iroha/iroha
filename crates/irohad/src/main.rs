@@ -86,7 +86,6 @@ use iroha_core::{
     },
 };
 use iroha_crypto::Algorithm;
-use iroha_data_model::nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus};
 use iroha_data_model::query::{self as dm_query, ErasedIterQuery};
 use iroha_data_model::{block::decode_framed_signed_block, prelude::*, transaction::Executable};
 use iroha_data_model::{
@@ -1036,7 +1035,6 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::LaneBlockNewViewCertificate(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
-                | BlockMessage::V2(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcInitRequest(_)
@@ -2703,11 +2701,11 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn block_message_blocking_ingress_policy_matches_expected_variants() {
+    fn block_message_blocking_ingress_policy_admits_only_authoritative_v2() {
         let signed = signed_block_for_test();
         let created =
             BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
-        assert!(created.requires_blocking_ingress());
+        assert!(!created.requires_blocking_ingress());
 
         assert!(
             BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
@@ -2747,7 +2745,7 @@ mod network_relay_tests {
                 .expect("signed block has signature")
                 .clone(),
         });
-        assert!(init.requires_blocking_ingress());
+        assert!(!init.requires_blocking_ingress());
 
         let chunk = iroha_core::sumeragi::consensus::RbcChunk {
             block_hash: signed.hash(),
@@ -2757,8 +2755,8 @@ mod network_relay_tests {
             idx: 0,
             bytes: vec![0x55],
         };
-        assert!(BlockMessage::RbcChunk(chunk.clone()).requires_blocking_ingress());
-        assert!(BlockMessage::from_rbc_chunk(chunk).requires_blocking_ingress());
+        assert!(!BlockMessage::RbcChunk(chunk.clone()).requires_blocking_ingress());
+        assert!(!BlockMessage::from_rbc_chunk(chunk).requires_blocking_ingress());
 
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         let fetch = FetchPendingBlock {
@@ -2770,7 +2768,7 @@ mod network_relay_tests {
             requester_roster_proof_known: None,
             commit_qc_only: Some(true),
         };
-        assert!(BlockMessage::FetchPendingBlock(fetch).requires_blocking_ingress());
+        assert!(!BlockMessage::FetchPendingBlock(fetch).requires_blocking_ingress());
 
         let background_fetch = FetchPendingBlock {
             requester: PeerId::new(KeyPair::random().public_key().clone()),
@@ -9503,56 +9501,6 @@ fn compute_consensus_handshake_caps(
     })
 }
 
-fn npos_validator_status_counts<'a>(
-    validators: impl IntoIterator<Item = &'a PublicLaneValidatorRecord> + 'a,
-) -> (usize, usize, usize, usize) {
-    let mut active_bls = 0usize;
-    let mut active_total = 0usize;
-    let mut pending = 0usize;
-    let mut total = 0usize;
-    for record in validators {
-        total = total.saturating_add(1);
-        match record.status {
-            PublicLaneValidatorStatus::Active => {
-                active_total = active_total.saturating_add(1);
-                if let Some(pk) = record.validator.try_signatory()
-                    && matches!(pk.try_algorithm(), Ok(Algorithm::BlsNormal))
-                {
-                    active_bls = active_bls.saturating_add(1);
-                }
-            }
-            PublicLaneValidatorStatus::PendingActivation(_) => {
-                pending = pending.saturating_add(1);
-            }
-            _ => {}
-        }
-    }
-    (active_bls, active_total, pending, total)
-}
-
-fn effective_npos_validator_status_counts(state: &State) -> (usize, usize, usize, usize) {
-    let raw_counts = {
-        let world = state.world_view();
-        npos_validator_status_counts(
-            world
-                .public_lane_validators()
-                .iter()
-                .map(|(_, record)| record),
-        )
-    };
-    let Some(roster) = state.epoch_validator_peer_ids_fast(0) else {
-        return raw_counts;
-    };
-    let active_total = roster.len();
-    let active_bls = roster
-        .iter()
-        .filter(|peer| matches!(peer.public_key().try_algorithm(), Ok(Algorithm::BlsNormal)))
-        .count();
-    let pending = raw_counts.2;
-    let total = raw_counts.3.max(active_total.saturating_add(pending));
-    (active_bls, active_total, pending, total)
-}
-
 #[allow(clippy::too_many_lines)]
 fn verify_genesis_metadata(
     genesis: &GenesisBlock,
@@ -10265,59 +10213,6 @@ mod tests {
             let scaled = cfg.scaled(2);
             assert_eq!(scaled.rate_per_sec.get(), 4);
             assert_eq!(scaled.burst.get(), 6);
-        }
-    }
-
-    mod npos_validator_counts {
-        use super::*;
-        use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::{
-            account::AccountId,
-            metadata::Metadata,
-            nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
-        };
-        use iroha_primitives::numeric::Numeric;
-
-        fn record_with_status(
-            status: PublicLaneValidatorStatus,
-            algorithm: Algorithm,
-        ) -> PublicLaneValidatorRecord {
-            let keypair = KeyPair::random_with_algorithm(algorithm);
-            let account_id = AccountId::new(keypair.public_key().clone());
-            let stake = Numeric::from(10_u64);
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: account_id.clone(),
-                peer_id: PeerId::from(keypair.public_key().clone()),
-                stake_account: account_id,
-                total_stake: stake.clone(),
-                self_stake: stake,
-                metadata: Metadata::default(),
-                status,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            }
-        }
-
-        #[test]
-        fn tracks_active_bls_validators() {
-            let active_bls =
-                record_with_status(PublicLaneValidatorStatus::Active, Algorithm::BlsNormal);
-            let active_ed =
-                record_with_status(PublicLaneValidatorStatus::Active, Algorithm::Ed25519);
-            let pending = record_with_status(
-                PublicLaneValidatorStatus::PendingActivation(0),
-                Algorithm::BlsNormal,
-            );
-
-            let (active_bls_count, active_total, pending_count, total) =
-                npos_validator_status_counts([&active_bls, &active_ed, &pending]);
-
-            assert_eq!(active_bls_count, 1);
-            assert_eq!(active_total, 2);
-            assert_eq!(pending_count, 1);
-            assert_eq!(total, 3);
         }
     }
 

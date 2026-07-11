@@ -2763,7 +2763,11 @@ mod model {
         pub authority: AccountId,
         /// Registered device identifier used for policy/App-Attest lookup.
         pub device_id: String,
-        /// Stable idempotency/replay identifier.
+        /// Globally unique chain idempotency/replay identifier.
+        ///
+        /// Unlike nonces and payload digests, this identifier is not scoped by
+        /// `authority`; every Kagemusha V2 chain operation shares one replay
+        /// namespace.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
@@ -2803,7 +2807,7 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Streamed Reserved-lineage init proving package.
         pub lineage_artifact: KagemushaRecursiveSpendArtifactReferenceV2,
-        /// Replay-stable operation identifier bound by the V2 circuit.
+        /// Globally unique replay-stable operation identifier bound by the V2 circuit.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
@@ -3525,7 +3529,7 @@ mod model {
         pub offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV2>,
         /// Height used for verifier activation-window checks.
         pub block_height: u64,
-        /// Stable idempotency identifier for finality-safe retries.
+        /// Globally unique idempotency identifier for finality-safe retries.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Self-contained recipient/device authorization.

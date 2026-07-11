@@ -47,7 +47,7 @@ seiyaku RegisterAndMint {
         let to = AccountId::parse(
             "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
         );
-        ledger::asset::mint(account: to, asset_definition: asset, amount: Amount::from_i64(250));
+        ledger::asset::mint(account: to, asset_definition: asset, amount: 250);
     }
 }
 ```

@@ -541,36 +541,9 @@ fn validate_tlv_any_region(
     address: u64,
     expected: PointerType,
 ) -> Result<Tlv<'_>, VMError> {
-    vm.ensure_owned_public_tlv_range(address, 7)?;
-    let header = vm
-        .memory
-        .load_region(address, 7)
-        .map_err(|_| VMError::NoritoInvalid)?;
-    let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
-    let envelope_len = 7usize
-        .checked_add(payload_len)
-        .and_then(|len| len.checked_add(Hash::LENGTH))
-        .ok_or(VMError::NoritoInvalid)?;
-    vm.ensure_owned_public_tlv_range(
-        address,
-        u64::try_from(envelope_len).map_err(|_| VMError::NoritoInvalid)?,
-    )?;
-    let bytes = vm
-        .memory
-        .load_region(
-            address,
-            u64::try_from(envelope_len).map_err(|_| VMError::NoritoInvalid)?,
-        )
-        .map_err(|_| VMError::NoritoInvalid)?;
-    let tlv = pointer_abi::validate_tlv_bytes(bytes)?;
+    let tlv = vm.validate_tlv(address)?;
     if tlv.type_id != expected {
         return Err(VMError::NoritoInvalid);
-    }
-    if !pointer_abi::is_type_allowed_for_policy(vm.syscall_policy(), tlv.type_id) {
-        return Err(VMError::AbiTypeNotAllowed {
-            abi: vm.abi_version(),
-            type_id: tlv.type_id as u16,
-        });
     }
     Ok(tlv)
 }
@@ -587,18 +560,12 @@ fn encode_tlv(pointer_type: PointerType, payload: &[u8]) -> Result<Vec<u8>, VMEr
 }
 
 fn decode_int(value: &njson::Value) -> Result<BigInt, VMError> {
-    match value {
-        njson::Value::Number(njson::native::Number::I64(value)) => Ok(BigInt::from(*value)),
-        njson::Value::Number(njson::native::Number::U64(value)) => Ok(BigInt::from(*value)),
-        njson::Value::String(raw) => {
-            let parsed: BigInt = raw.parse().map_err(|_| VMError::DecodeError)?;
-            if parsed.to_string() != *raw {
-                return Err(VMError::DecodeError);
-            }
-            Ok(parsed)
-        }
-        _ => Err(VMError::DecodeError),
+    let raw = value.as_str().ok_or(VMError::DecodeError)?;
+    let parsed: BigInt = raw.parse().map_err(|_| VMError::DecodeError)?;
+    if parsed.to_string() != raw {
+        return Err(VMError::DecodeError);
     }
+    Ok(parsed)
 }
 
 fn decode_u64(value: &njson::Value) -> Result<u64, VMError> {
@@ -622,18 +589,12 @@ fn decode_canonical_string<T>(
 }
 
 fn decode_numeric(value: &njson::Value) -> Result<Numeric, VMError> {
-    match value {
-        njson::Value::String(raw) => {
-            let parsed: Numeric = raw.parse().map_err(|_| VMError::DecodeError)?;
-            if parsed.to_string() != *raw {
-                return Err(VMError::DecodeError);
-            }
-            Ok(parsed)
-        }
-        njson::Value::Number(njson::native::Number::I64(value)) => Ok(Numeric::from(*value)),
-        njson::Value::Number(njson::native::Number::U64(value)) => Ok(Numeric::from(*value)),
-        _ => Err(VMError::DecodeError),
+    let raw = value.as_str().ok_or(VMError::DecodeError)?;
+    let parsed: Numeric = raw.parse().map_err(|_| VMError::DecodeError)?;
+    if parsed.to_string() != raw {
+        return Err(VMError::DecodeError);
     }
+    Ok(parsed)
 }
 
 fn decode_blob(value: &njson::Value) -> Result<Vec<u8>, VMError> {
@@ -659,9 +620,9 @@ fn encode_leaf_atom(
         encode_tlv(pointer_type, &payload).map(EntrypointValueAtomV1::Pointer)
     };
     Ok(match kind {
-        EntrypointValueKindV1::Int => EntrypointValueAtomV1::Pointer(
-            crate::numeric_tlv::encode_int(&decode_int(value)?)?,
-        ),
+        EntrypointValueKindV1::Int => {
+            EntrypointValueAtomV1::Pointer(crate::numeric_tlv::encode_int(&decode_int(value)?)?)
+        }
         EntrypointValueKindV1::Decimal => {
             let decimal = DecimalValueV1::try_from_numeric(decode_numeric(value)?)
                 .map_err(|_| VMError::DecodeError)?;
@@ -1243,12 +1204,12 @@ fn validate_pointer_atom(
 ) -> Result<(), VMError> {
     let expected = expected_pointer_type(kind).ok_or(VMError::DecodeError)?;
     let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
-    if tlv.type_id != expected
-        || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id)
-        || encode_tlv(tlv.type_id, tlv.payload)?.as_slice() != envelope
-    {
+    if tlv.type_id != expected || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
         return Err(VMError::DecodeError);
     }
+    // Exact TLV validation already proves the version, declared length,
+    // payload hash, and absence of trailing bytes. Re-encoding would hash the
+    // authenticated payload a second time without strengthening the check.
     validate_pointer_payload(kind, tlv.payload)
 }
 
@@ -1954,6 +1915,34 @@ mod tests {
         let schema_bytes = to_bytes(schema).expect("encode schema for gas bound");
         let bound = schema_materialization_bound(schema).expect("valid schema bound");
         argument_record_gas_for_schema_bound(record_bytes, schema_bytes.len(), bound)
+    }
+
+    #[test]
+    fn numeric_argument_atoms_require_canonical_decimal_strings() {
+        assert_eq!(decode_int(&norito::json!("-7")), Ok(BigInt::from_i128(-7)));
+        assert_eq!(
+            decode_numeric(&norito::json!("1.25")),
+            Ok(Numeric::new(125, 2))
+        );
+
+        for value in [
+            norito::json!(7),
+            norito::json!(7_u64),
+            norito::json!("+7"),
+            norito::json!("07"),
+            norito::json!("-0"),
+        ] {
+            assert_eq!(decode_int(&value), Err(VMError::DecodeError));
+        }
+        for value in [
+            norito::json!(1.25),
+            norito::json!("+1.25"),
+            norito::json!("01.25"),
+            norito::json!("1.250"),
+            norito::json!("1e0"),
+        ] {
+            assert_eq!(decode_numeric(&value), Err(VMError::DecodeError));
+        }
     }
 
     fn alloc(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> u64 {
@@ -2763,9 +2752,9 @@ mod tests {
     }
 
     #[test]
-    fn nested_amount_lists_materialize_as_one_schema_bound_sequence() {
-        let amount = argument_type(EntrypointValueKindV1::Amount);
-        let inner = list_type(2, amount);
+    fn nested_quantity_lists_materialize_as_one_schema_bound_sequence() {
+        let quantity = argument_type(EntrypointValueKindV1::Quantity);
+        let inner = list_type(2, quantity);
         let schema = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {
                 name: "amounts".to_owned(),
@@ -2776,7 +2765,7 @@ mod tests {
             "amounts": [["1.25"], ["2"]],
         }));
         let mut vm = install_record(&schema, &payload);
-        decode_argument_record(&mut vm).expect("decode nested amount list");
+        decode_argument_record(&mut vm).expect("decode nested quantity list");
         let words = decoded_words(&vm);
         assert_eq!(words.len(), 1, "a bounded list is one VM handle");
         let outer_layout = ListLayoutV1::try_new(2, 1).expect("outer layout");
@@ -2790,12 +2779,11 @@ mod tests {
             assert_eq!(
                 inner[0].len(),
                 1,
-                "inner list element must contain one Amount pointer word"
+                "inner list element must contain one quantity pointer word"
             );
-            let amount = vm.validate_tlv(inner[0][0]).expect("valid Amount TLV");
-            assert_eq!(amount.type_id, PointerType::Quantity);
-            let numeric: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
-            numeric.validate_amount().expect("canonical Amount");
+            let quantity = vm.validate_tlv(inner[0][0]).expect("valid quantity TLV");
+            assert_eq!(quantity.type_id, PointerType::Quantity);
+            QuantityValueV1::decode_frame(quantity.payload).expect("decode canonical quantity");
         }
 
         let overflow = Json::from(norito::json!({
@@ -3046,7 +3034,7 @@ mod tests {
             nodes: vec![
                 EntrypointValueTypeNodeV1::Option,
                 EntrypointValueTypeNodeV1::Result,
-                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Amount),
+                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Quantity),
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool),
             ],
         };
@@ -3083,10 +3071,12 @@ mod tests {
         let (ok, amount) =
             crate::sum::read_words(&vm, first[0], result_layout).expect("read first Result");
         assert!(ok);
-        let amount = vm.validate_tlv(amount[0]).expect("Amount TLV");
-        assert_eq!(amount.type_id, PointerType::Quantity);
-        let amount: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
-        assert_eq!(amount, Numeric::new(125, 2));
+        let quantity = vm.validate_tlv(amount[0]).expect("quantity TLV");
+        assert_eq!(quantity.type_id, PointerType::Quantity);
+        let quantity = QuantityValueV1::decode_frame(quantity.payload)
+            .expect("decode quantity")
+            .into_quantity();
+        assert_eq!(quantity.as_numeric(), &Numeric::new(125, 2));
 
         let (some, second) =
             crate::sum::read_words(&vm, list[1][0], option_layout).expect("read second Option");

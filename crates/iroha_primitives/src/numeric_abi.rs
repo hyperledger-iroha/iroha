@@ -9,8 +9,10 @@ use std::io::Write;
 use norito::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize};
 
 use crate::{
-    bigint::{BigInt, BigIntError, MAX_ENCODED_BYTES},
-    numeric::{MAX_DECIMAL_SCALE, Numeric, NumericOperationError, Quantity},
+    bigint::{BigInt, BigIntError},
+    numeric::{
+        MAX_DECIMAL_SCALE, MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity,
+    },
 };
 
 /// Nominal schema name of a V1 integer frame.
@@ -36,7 +38,8 @@ pub const QUANTITY_SCHEMA_HASH_V1: [u8; 16] = [
 /// Norito header length used by all V1 numeric frames.
 pub const NUMERIC_FRAME_HEADER_BYTES_V1: usize = 40;
 /// Maximum canonical integer frame length.
-pub const MAX_INT_FRAME_BYTES_V1: usize = NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + MAX_ENCODED_BYTES;
+pub const MAX_INT_FRAME_BYTES_V1: usize =
+    NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + MAX_MANTISSA_BYTES;
 /// Maximum canonical decimal frame length.
 pub const MAX_DECIMAL_FRAME_BYTES_V1: usize = MAX_INT_FRAME_BYTES_V1 + 1;
 /// Maximum canonical quantity frame length.
@@ -103,10 +106,15 @@ impl Eq for NumericAbiError {}
 pub struct IntValueV1(BigInt);
 
 impl IntValueV1 {
-    /// Wrap a signed-domain integer.
-    #[must_use]
-    pub fn new(value: BigInt) -> Self {
-        Self(value)
+    /// Validate and wrap a signed-domain integer.
+    ///
+    /// # Errors
+    /// Rejects values outside the signed 512-bit V1 domain.
+    pub fn try_new(value: BigInt) -> Result<Self, NumericAbiError> {
+        if value.twos_byte_len() > MAX_MANTISSA_BYTES {
+            return Err(NumericAbiError::MantissaOverflow);
+        }
+        Ok(Self(value))
     }
 
     /// Borrow the integer.
@@ -328,7 +336,7 @@ fn decode_int_body(bytes: &[u8]) -> Result<(BigInt, usize), NumericAbiError> {
         bytes[..4].try_into().expect("length prefix was checked"),
     ))
     .map_err(|_| NumericAbiError::LengthMismatch)?;
-    if length > MAX_ENCODED_BYTES {
+    if length > MAX_MANTISSA_BYTES {
         return Err(NumericAbiError::MantissaOverflow);
     }
     let end = 4_usize
@@ -472,7 +480,7 @@ mod tests {
 
     #[test]
     fn canonical_frames_roundtrip_and_have_exact_small_sizes() {
-        let integer = IntValueV1::new(BigInt::from_i128(-129));
+        let integer = IntValueV1::try_new(BigInt::from_i128(-129)).expect("bounded integer");
         let integer_frame = integer.encode_frame().expect("encode integer");
         assert_eq!(integer_frame.len(), NUMERIC_FRAME_HEADER_BYTES_V1 + 6);
         assert_eq!(IntValueV1::decode_frame(&integer_frame), Ok(integer));
@@ -490,29 +498,58 @@ mod tests {
 
     #[test]
     fn signed_endpoint_frames_hit_pinned_maximum() {
-        for bytes in [
-            vec![0xff_u8; MAX_ENCODED_BYTES - 1]
+        let endpoint_bytes = [
+            vec![0xff_u8; MAX_MANTISSA_BYTES - 1]
                 .into_iter()
                 .chain([0x7f])
                 .collect::<Vec<_>>(),
-            vec![0_u8; MAX_ENCODED_BYTES - 1]
+            vec![0_u8; MAX_MANTISSA_BYTES - 1]
                 .into_iter()
                 .chain([0x80])
                 .collect::<Vec<_>>(),
-        ] {
-            let value = IntValueV1::new(BigInt::from_twos_bytes(&bytes).expect("endpoint"));
+        ];
+        for bytes in endpoint_bytes {
+            let value = IntValueV1::try_new(BigInt::from_twos_bytes(&bytes).expect("endpoint"))
+                .expect("512-bit endpoint");
             let frame = value.encode_frame().expect("frame");
             assert_eq!(frame.len(), MAX_INT_FRAME_BYTES_V1);
             assert_eq!(IntValueV1::decode_frame(&frame), Ok(value));
         }
-        assert_eq!(MAX_INT_ENVELOPE_BYTES_V1, 595);
-        assert_eq!(MAX_DECIMAL_ENVELOPE_BYTES_V1, 596);
-        assert_eq!(MAX_QUANTITY_ENVELOPE_BYTES_V1, 596);
+        assert_eq!(MAX_INT_ENVELOPE_BYTES_V1, 147);
+        assert_eq!(MAX_DECIMAL_ENVELOPE_BYTES_V1, 148);
+        assert_eq!(MAX_QUANTITY_ENVELOPE_BYTES_V1, 148);
+    }
+
+    #[test]
+    fn integer_wrapper_rejects_both_signed_domain_neighbors() {
+        let mut maximum_bytes = vec![0xff_u8; MAX_MANTISSA_BYTES - 1];
+        maximum_bytes.push(0x7f);
+        let maximum = BigInt::from_twos_bytes(&maximum_bytes).expect("maximum");
+        let above_maximum = maximum
+            .checked_add(&BigInt::one())
+            .expect("generic bigint can represent the upper neighbor");
+
+        let mut minimum_bytes = vec![0_u8; MAX_MANTISSA_BYTES - 1];
+        minimum_bytes.push(0x80);
+        let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("minimum");
+        let below_minimum = minimum
+            .checked_sub(&BigInt::one())
+            .expect("generic bigint can represent the lower neighbor");
+
+        assert_eq!(
+            IntValueV1::try_new(above_maximum),
+            Err(NumericAbiError::MantissaOverflow)
+        );
+        assert_eq!(
+            IntValueV1::try_new(below_minimum),
+            Err(NumericAbiError::MantissaOverflow)
+        );
     }
 
     #[test]
     fn cross_type_and_header_mutations_are_rejected_before_payload_decode() {
-        let frame = IntValueV1::new(BigInt::one())
+        let frame = IntValueV1::try_new(BigInt::one())
+            .expect("bounded integer")
             .encode_frame()
             .expect("integer frame");
         assert!(matches!(
@@ -540,7 +577,8 @@ mod tests {
 
     #[test]
     fn truncation_extension_and_declared_length_attacks_are_rejected() {
-        let frame = IntValueV1::new(BigInt::from_i128(128))
+        let frame = IntValueV1::try_new(BigInt::from_i128(128))
+            .expect("bounded integer")
             .encode_frame()
             .expect("frame");
         for end in 0..frame.len() {
@@ -611,7 +649,8 @@ mod tests {
 
     #[test]
     fn checksum_tampering_is_rejected() {
-        let mut frame = IntValueV1::new(BigInt::from_i128(42))
+        let mut frame = IntValueV1::try_new(BigInt::from_i128(42))
+            .expect("bounded integer")
             .encode_frame()
             .expect("frame");
         let final_index = frame.len() - 1;

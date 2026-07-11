@@ -18,7 +18,7 @@ mod common;
 fn ephemeral_map_constructor_is_rejected() {
     let src = r#"
         seiyaku LegacyMap {
-          fn main() -> i64 {
+          fn main() -> int {
             let m = Map::new();
             return 0;
           }
@@ -37,9 +37,9 @@ fn ephemeral_map_constructor_is_rejected() {
 fn get_or_state_map() {
     let src = r#"
         seiyaku StateMapHelpers {
-          state m: StateMap<i64, i64>;
+          state StateMap<int, int> m;
 
-          kotoage fn main() -> i64 authorize("WriteState") {
+          kotoage fn main() -> int authorize("WriteState") {
               m[7] = 111;
               let a = m.get_or(key: 7, default: 5);
               let b = m.get_or(key: 8, default: 9);
@@ -60,8 +60,8 @@ fn get_or_state_map() {
 fn ir_lower_ensure_state_map() {
     let src = r#"
         seiyaku EnsureLowering {
-          state m: StateMap<i64, i64>;
-          kotoage fn f(k: i64) -> i64 authorize("WriteState") { return m.ensure(k); }
+          state StateMap<int, int> m;
+          kotoage fn f(int k) -> int authorize("WriteState") { return m.ensure(k); }
         }
     "#;
     let prog = parse(src).expect("parse ensure");
@@ -90,7 +90,7 @@ fn ir_lower_ensure_state_map() {
 fn semantic_ensure_pointer_requires_explicit_default() {
     let src = r#"
         seiyaku EnsurePointer {
-          state m: StateMap<i64, Name>;
+          state StateMap<int, Name> m;
           fn f() { let _ = m.ensure(1); }
         }
     "#;
@@ -106,7 +106,7 @@ fn semantic_ensure_pointer_requires_explicit_default() {
 fn semantic_ensure_non_int_requires_explicit_default() {
     let src = r#"
         seiyaku EnsureBool {
-          state m: StateMap<i64, bool>;
+          state StateMap<int, bool> m;
           fn f() { let _ = m.ensure(1); }
         }
     "#;
@@ -137,7 +137,7 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
         let src = format!(
             r#"
         seiyaku C {{
-            state S: StateMap<i64, {ty}>;
+            state StateMap<int, {ty}> S;
             kotoage fn main() -> {ty} authorize("WriteState") {{
                 return S.ensure(7, {ctor});
             }}
@@ -222,8 +222,8 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
 fn runtime_durable_ensure_state_map() {
     let src = r#"
         seiyaku C {
-            state S: StateMap<i64, i64>;
-            kotoage fn main() -> i64 authorize("WriteState") {
+            state StateMap<int, int> S;
+            kotoage fn main() -> int authorize("WriteState") {
                 let x = S.ensure(7);
                 let y = S.ensure(7);
                 return x + y;

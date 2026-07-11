@@ -21,7 +21,6 @@ use thiserror::Error;
 
 use super::{
     network_topology::Topology,
-    stake_snapshot::strict_v2_voting_roster,
     v2_body_store::{BodyValidationError, V2BodyStore},
     v2_effects::{ApplyTask, DurableApplyCompletion},
 };
@@ -30,7 +29,7 @@ use crate::{
     block::{BlockValidationError, ValidBlock},
     kura::{CommitManifest, Kura},
     queue::{Queue, RoutingDecision},
-    state::{StakeSnapshot, State},
+    state::State,
 };
 
 /// Immutable dependencies of the single v2 application service.
@@ -42,6 +41,7 @@ pub(crate) struct V2ApplyService {
     block_cadence: Duration,
     genesis_account: AccountId,
     events_sender: EventsSender,
+    validator_set_pops: Vec<Vec<u8>>,
 }
 
 impl V2ApplyService {
@@ -137,6 +137,7 @@ impl V2ApplyService {
         block_cadence: Duration,
         genesis_account: AccountId,
         events_sender: EventsSender,
+        validator_set_pops: Vec<Vec<u8>>,
     ) -> Self {
         Self {
             state,
@@ -146,6 +147,7 @@ impl V2ApplyService {
             block_cadence,
             genesis_account,
             events_sender,
+            validator_set_pops,
         }
     }
 
@@ -218,14 +220,15 @@ impl V2ApplyService {
         // though executing the block a second time is forbidden.
         self.persist_post_apply_metadata(context, task)?;
 
-        let next_epoch_snapshot = self.finalized_next_epoch_snapshot(context)?;
         let artifact = wire::finality::V2FinalityArtifact::new(
             context.clone(),
             task.subject(),
             task.certificate().clone(),
-            next_epoch_snapshot,
+            self.validator_set_pops.clone(),
         );
-        artifact.validate()?;
+        artifact
+            .verify()
+            .map_err(V2ApplyError::FinalityCryptography)?;
         let receipt = self.kura.store_v2_finality_artifact(&artifact)?;
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
     }
@@ -373,54 +376,6 @@ impl V2ApplyService {
         Ok(())
     }
 
-    fn finalized_next_epoch_snapshot(
-        &self,
-        context: &wire::HeightContext,
-    ) -> Result<Option<wire::finality::FinalizedNextEpochSnapshot>, V2ApplyError> {
-        if context.height != context.epoch_end_height {
-            return Ok(None);
-        }
-        let epoch = context
-            .epoch
-            .checked_add(1)
-            .ok_or(V2ApplyError::EpochOverflow)?;
-        let view = self.state.view();
-        let roster = match context.mode {
-            wire::ConsensusMode::Permissioned => context.roster.clone(),
-            wire::ConsensusMode::Npos => {
-                let elected = StakeSnapshot::epoch_validator_peer_ids(&view, epoch)
-                    .ok_or(V2ApplyError::MissingFinalizedEpochRoster)?;
-                let nexus = self.state.nexus_snapshot();
-                let active_lanes = nexus
-                    .enabled
-                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
-                strict_v2_voting_roster(view.world(), &elected, active_lanes.as_ref())?
-            }
-        };
-        let quorum = wire::DualQuorum::from_roster(&roster)?;
-        let leader_seed = match context.mode {
-            wire::ConsensusMode::Permissioned => {
-                let mut preimage = b"sumeragi-v2:permissioned-next-epoch".to_vec();
-                preimage.extend_from_slice(&context.leader_seed);
-                preimage.extend_from_slice(&context.height.to_le_bytes());
-                Hash::new(preimage).into()
-            }
-            wire::ConsensusMode::Npos => super::npos_seed_for_height(
-                &view,
-                context
-                    .height
-                    .checked_add(1)
-                    .ok_or(V2ApplyError::HeightOverflow)?,
-            ),
-        };
-        Ok(Some(wire::finality::FinalizedNextEpochSnapshot {
-            epoch,
-            mode: context.mode,
-            roster,
-            quorum,
-            leader_seed,
-        }))
-    }
 }
 
 /// Fail-closed application or recovery failure.
@@ -432,15 +387,15 @@ pub(crate) enum V2ApplyError {
     /// Finality artifact is malformed.
     #[error(transparent)]
     Finality(#[from] wire::finality::V2FinalityValidationError),
+    /// Frozen PoPs or the exact CommitQC failed cryptographic verification.
+    #[error("invalid Sumeragi v2 durable finality cryptography: {0}")]
+    FinalityCryptography(wire::finality::V2QuorumCertificateVerificationError),
     /// Exact-body loading or marker verification failed.
     #[error(transparent)]
     Body(#[from] super::v2_body_store::V2BodyStoreError),
     /// Kura persistence or canonical association failed.
     #[error(transparent)]
     Kura(#[from] crate::kura::Error),
-    /// NPoS stake snapshot could not be frozen exactly.
-    #[error(transparent)]
-    Stake(#[from] super::stake_snapshot::StrictV2StakeSnapshotError),
     /// Apply task and frozen context do not identify one exact decision.
     #[error("Sumeragi v2 Apply task differs from its frozen context or body")]
     TaskMismatch,
@@ -485,12 +440,6 @@ pub(crate) enum V2ApplyError {
     /// WSV transaction could not commit.
     #[error("Sumeragi v2 state commit failed: {0}")]
     StateCommit(String),
-    /// Epoch arithmetic overflowed.
-    #[error("Sumeragi v2 epoch number overflowed")]
-    EpochOverflow,
-    /// NPoS boundary lacks a finalized election roster.
-    #[error("Sumeragi v2 NPoS epoch boundary lacks a finalized next-epoch roster")]
-    MissingFinalizedEpochRoster,
 }
 
 impl BodyValidationError for V2ApplyError {
@@ -511,7 +460,7 @@ mod tests {
     };
 
     use iroha_config::parameters::actual::Queue as QueueConfig;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -581,6 +530,7 @@ mod tests {
                 height: 1,
                 epoch: 0,
                 epoch_end_height: u64::MAX,
+                next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -624,6 +574,12 @@ mod tests {
                 Duration::from_secs(1),
                 transaction_authority.clone(),
                 events_sender,
+                keys.iter()
+                    .map(|key| {
+                        iroha_crypto::bls_normal_pop_prove(key.private_key())
+                            .expect("fixture validator PoP")
+                    })
+                    .collect(),
             );
 
             let round = wire::ConsensusRound {
@@ -702,13 +658,38 @@ mod tests {
                 std::slice::from_ref(&canonical_wire),
             )
             .expect("fixture manifest");
-            let certificate = wire::QuorumCertificate {
+            let mut certificate = wire::QuorumCertificate {
                 round,
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xA7; 48],
+                aggregate_signature: Vec::new(),
             };
+            let preimage = wire::Vote {
+                round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                signer: 0,
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let signatures = certificate
+                .signers
+                .iter()
+                .map(|index| {
+                    Signature::try_new(
+                        keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                        &preimage,
+                    )
+                    .expect("sign fixture Commit vote")
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate fixture Commit votes");
 
             let body_root = tempfile::tempdir().expect("body-store directory");
             let mut body_store = V2BodyStore::open_with_policy(

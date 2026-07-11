@@ -4,7 +4,10 @@ use std::{collections::BTreeMap, sync::Arc};
 use criterion::{BatchSize, Criterion};
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
-use iroha_primitives::{AmountRoundingMode, Numeric, json::Json};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Quantity, RoundingMode},
+};
 use ivm::{
     IVM, ProgramMetadata, encoding,
     host::DefaultHost,
@@ -15,7 +18,7 @@ use ivm::{
 const LITERAL_BENCH_SIZE: usize = 512;
 
 fn kotodama_program() -> Vec<u8> {
-    let src = "seiyaku Add { view fn add(a: i64, b: i64) -> i64 { return a + b; } }";
+    let src = "seiyaku Add { view fn add(int a, int b) -> int { return a + b; } }";
     Compiler::new().compile_source(src).expect("compile failed")
 }
 
@@ -57,7 +60,7 @@ fn add_argument_host(program: &[u8]) -> DefaultHost {
         .find(|entrypoint| entrypoint.name == "add")
         .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
         .expect("benchmark entrypoint has an argument schema");
-    let payload = Json::from(norito::json!({"a": 4, "b": 7}));
+    let payload = Json::from(norito::json!({"a": "4", "b": "7"}));
     let payload = ivm::encode_argument_record_from_json(schema, &payload)
         .expect("encode canonical benchmark argument record");
     let key: Name = "trigger_event_json"
@@ -314,9 +317,9 @@ fn bounded_list_source() -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "seiyaku BoundedLists {{ fn main() -> i64 {{ \
-            let source: List<i64, 64> = [{values}]; \
-            let mapped: List<i64, 64> = [value + 1 for value in source if value >= 0]; \
+        "seiyaku BoundedLists {{ fn main() -> int {{ \
+            let List<int, 64> source = [{values}]; \
+            let List<int, 64> mapped = [value + 1 for value in source if value >= 0]; \
             mapped.len() \
         }} }}"
     )
@@ -328,19 +331,19 @@ fn bounded_list_runtime_source(manual: bool) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let body = if manual {
-        "var mapped: List<i64, 64> = []; \
+        "var List<int, 64> mapped = []; \
          for index in range(64) { \
-             let value = source.get(index).unwrap_or(0); \
+             let value = match source.get(index) { Option::some(value) => value, Option::none => 0 }; \
              if !mapped.try_push(value + 1) { return -1; } \
          }"
     } else {
-        "let mapped: List<i64, 64> = [value + 1 for value in source];"
+        "let List<int, 64> mapped = [value + 1 for value in source];"
     };
     format!(
-        "seiyaku BoundedListRuntime {{ view fn main() -> i64 {{ \
-            let source: List<i64, 64> = [{values}]; \
+        "seiyaku BoundedListRuntime {{ view fn main() -> int {{ \
+            let List<int, 64> source = [{values}]; \
             {body} \
-            mapped.get(63).unwrap_or(-1) \
+            match mapped.get(63) {{ Option::some(value) => value, Option::none => -1 }} \
         }} }}"
     )
 }
@@ -458,74 +461,70 @@ fn bench_bounded_lists(c: &mut Criterion) {
     });
 }
 
-fn amount(value: &str) -> Numeric {
-    value
-        .parse::<Numeric>()
-        .expect("benchmark Amount literal parses")
-        .canonicalize_amount()
-        .expect("benchmark Amount is canonical and nonnegative")
+fn quantity(value: &str) -> Quantity {
+    value.parse().expect("benchmark quantity literal parses")
 }
 
-fn bench_amount_arithmetic(c: &mut Criterion) {
-    let add_lhs = amount("1234567890123456789012345678901234567890.1234567890123456789012345678");
-    let add_rhs = amount("0.8765432109876543210987654321");
-    let sub_rhs = amount("0.1234567890123456789012345678");
-    let mul_lhs = amount("1234567890123456789012345678901234567890.12345678901234");
-    let mul_rhs = amount("98765432109876543210.87654321098765");
-    let exact_lhs = amount("123456789012345678901234567890.125");
-    let exact_divisor = amount("8");
-    let rounded_divisor = amount("7");
+fn bench_quantity_arithmetic(c: &mut Criterion) {
+    let add_lhs = quantity("1234567890123456789012345678901234567890.1234567890123456789012345678");
+    let add_rhs = quantity("0.8765432109876543210987654321");
+    let sub_rhs = quantity("0.1234567890123456789012345678");
+    let mul_lhs = quantity("1234567890123456789012345678901234567890.12345678901234");
+    let mul_rhs = quantity("98765432109876543210.87654321098765");
+    let exact_lhs = quantity("123456789012345678901234567890.125");
+    let exact_divisor = quantity("8");
+    let rounded_divisor = quantity("7");
 
-    c.bench_function("kotodama_amount_add", |b| {
+    c.bench_function("kotodama_quantity_add", |b| {
         b.iter(|| {
             std::hint::black_box(
                 add_lhs
-                    .checked_amount_add(&add_rhs)
-                    .expect("benchmark Amount addition"),
+                    .checked_add(&add_rhs)
+                    .expect("benchmark quantity addition"),
             )
         })
     });
-    c.bench_function("kotodama_amount_sub", |b| {
+    c.bench_function("kotodama_quantity_sub", |b| {
         b.iter(|| {
             std::hint::black_box(
                 add_lhs
-                    .checked_amount_sub(&sub_rhs)
-                    .expect("benchmark Amount subtraction"),
+                    .checked_sub(&sub_rhs)
+                    .expect("benchmark quantity subtraction"),
             )
         })
     });
-    c.bench_function("kotodama_amount_mul", |b| {
+    c.bench_function("kotodama_quantity_mul_decimal", |b| {
         b.iter(|| {
             std::hint::black_box(
                 mul_lhs
-                    .checked_amount_mul(&mul_rhs)
-                    .expect("benchmark Amount multiplication"),
+                    .try_mul_decimal(mul_rhs.as_numeric())
+                    .expect("benchmark quantity multiplication"),
             )
         })
     });
-    c.bench_function("kotodama_amount_div_exact", |b| {
+    c.bench_function("kotodama_quantity_div_decimal_exact", |b| {
         b.iter(|| {
             std::hint::black_box(
                 exact_lhs
-                    .checked_amount_div_exact(&exact_divisor)
-                    .expect("benchmark exact Amount division"),
+                    .try_div_decimal_exact(exact_divisor.as_numeric())
+                    .expect("benchmark exact quantity division"),
             )
         })
     });
     for (name, mode) in [
-        ("kotodama_amount_div_round_floor", AmountRoundingMode::Floor),
-        ("kotodama_amount_div_round_ceil", AmountRoundingMode::Ceil),
+        ("kotodama_quantity_div_round_floor", RoundingMode::Floor),
+        ("kotodama_quantity_div_round_ceil", RoundingMode::Ceil),
         (
-            "kotodama_amount_div_round_nearest_even",
-            AmountRoundingMode::NearestEven,
+            "kotodama_quantity_div_round_nearest_even",
+            RoundingMode::NearestEven,
         ),
     ] {
         c.bench_function(name, |b| {
             b.iter(|| {
                 std::hint::black_box(
                     exact_lhs
-                        .checked_amount_div_round(&rounded_divisor, 28, mode)
-                        .expect("benchmark rounded Amount division"),
+                        .try_div_decimal_round(rounded_divisor.as_numeric(), 28, mode)
+                        .expect("benchmark rounded quantity division"),
                 )
             })
         });
@@ -555,7 +554,7 @@ fn main() {
     bench_compiler_phases(&mut c);
     bench_bounded_lists(&mut c);
     bench_compiled_bounded_list_runtime(&mut c);
-    bench_amount_arithmetic(&mut c);
+    bench_quantity_arithmetic(&mut c);
     bench_literal_heavy_compile(&mut c);
     c.final_summary();
 }

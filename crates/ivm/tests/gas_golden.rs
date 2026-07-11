@@ -3,9 +3,8 @@
 mod common;
 
 use instruction::wide;
-use iroha_primitives::Numeric;
 use ivm::{
-    IVM, PointerType, VMError, cost_of as cost_of_opt,
+    IVM, VMError, cost_of as cost_of_opt,
     host::{DefaultHost, IVMHost},
     instruction,
 };
@@ -225,25 +224,14 @@ fn schedule_vs_runtime_syscall_extra() {
 }
 
 #[test]
-fn v1_amount_add_quote_golden() {
-    let mut vm = IVM::new(10_000);
-    let lhs = norito::to_bytes(&Numeric::new(125_u32, 2)).expect("encode lhs Amount");
-    let rhs = norito::to_bytes(&Numeric::new(75_u32, 2)).expect("encode rhs Amount");
-    let lhs = vm
-        .alloc_input_tlv(&make_tlv(PointerType::Quantity as u16, &lhs))
-        .expect("allocate lhs Amount");
-    let rhs = vm
-        .alloc_input_tlv(&make_tlv(PointerType::Quantity as u16, &rhs))
-        .expect("allocate rhs Amount");
-    vm.set_register(10, lhs);
-    vm.set_register(11, rhs);
-
+fn v1_numeric_syscalls_use_staged_metering_without_a_quote() {
+    let vm = IVM::new(10_000);
     assert_eq!(
         DefaultHost::new()
-            .prepare_syscall(ivm::syscalls::SYSCALL_AMOUNT_ADD, &vm)
-            .expect("quote Amount addition"),
-        171,
-        "V1 Amount shape-only preparation quotes ten aligned limbs plus the maximum 115-byte result"
+            .prepare_syscall(ivm::syscalls::SYSCALL_QUANTITY_ADD, &vm)
+            .expect("prepare quantity addition"),
+        0,
+        "numeric calls debit each bounded phase immediately and never reserve/refund a quote",
     );
 }
 

@@ -18,7 +18,7 @@ seiyaku ThresholdEscrow {
     state bool is_released;
     state bool is_refunded;
     hajimari() {
-        let zero = 0;
+        let quantity zero = 0;
         payer_account = context::authority();
         recipient_account = AccountId::parse(recipient_account_literal);
         escrow_account_id = AccountId::parse(escrow_account_literal);
@@ -53,7 +53,7 @@ seiyaku ThresholdEscrow {
     // first-release access set without manual annotations.
     kotoage fn open_escrow(quantity target_amount) authorize("Admin") {
         assert_unopened();
-        let zero = 0;
+        let quantity zero = 0;
         require(target_amount > zero, EscrowError::NonPositiveTarget);
         payer_account = context::authority();
         recipient_account = AccountId::parse(recipient_account_literal);

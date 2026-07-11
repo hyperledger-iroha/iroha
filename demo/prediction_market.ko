@@ -18,8 +18,8 @@ seiyaku PredictionMarket {
         let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
         let oracle_yes = AccountId::parse("sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888", );
         let oracle_no = AccountId::parse("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", );
-        let stake = 10;
-        let payout = 20;
+        let quantity stake = 10;
+        let quantity payout = 20;
         if (caller == oracle_yes) {
             if (!resolved && alice_staked && bob_staked) {
                 ledger::asset::transfer(

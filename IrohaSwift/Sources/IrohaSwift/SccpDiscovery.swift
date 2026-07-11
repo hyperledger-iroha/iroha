@@ -91,12 +91,12 @@ public struct SccpSemanticProofProfileV1: Equatable, Sendable {
 
 /// Immutable Taira finality checkpoint exposed as Groth16 public signal 10.
 public struct SccpSoraFinalityAnchorV1: Equatable, Sendable {
+    public let protocolVersion: UInt16
     public let chainIdHash: Data
     public let checkpointHeight: UInt64
     public let checkpointBlockHash: Data
-    public let validatorSetEpoch: UInt64
-    public let validatorSetHash: Data
-    public let validatorSetHashVersion: UInt16
+    public let checkpointContextId: Data
+    public let checkpointFinalityArtifactHash: Data
     public let anchorHash: Data
 }
 
@@ -936,7 +936,8 @@ private enum SccpExactParser {
         let semantic = try semanticProfile(object(item, "semantic_profile"), label: "\(label).semantic_profile")
         let anchor = try finalityAnchor(object(item, "sora_finality_anchor"), label: "\(label).sora_finality_anchor")
         let roles = [semantic.circuitCommitment, semantic.witnessGeneratorCommitment, semantic.publicSignalSchemaHash,
-                     semantic.profileHash, anchor.chainIdHash, anchor.checkpointBlockHash, anchor.validatorSetHash, anchor.anchorHash]
+                     semantic.profileHash, anchor.chainIdHash, anchor.checkpointBlockHash,
+                     anchor.checkpointContextId, anchor.checkpointFinalityArtifactHash, anchor.anchorHash]
         guard roles.allSatisfy({ !$0.allSatisfy { $0 == 0 } }), Set(roles).count == roles.count else {
             throw SccpV1Error.invalid("\(label) reuses a proof-policy hash role")
         }
@@ -971,35 +972,39 @@ private enum SccpExactParser {
 
     private static func finalityAnchor(_ item: [String: Any], label: String) throws -> SccpSoraFinalityAnchorV1 {
         try SccpStrictJSON.exactFields(item, [
-            "version", "source_network", "chain_id_hash", "checkpoint_height", "checkpoint_block_hash",
-            "validator_set_epoch", "validator_set_hash", "validator_set_hash_version",
+            "version", "source_network", "protocol_version", "chain_id_hash", "checkpoint_height",
+            "checkpoint_block_hash", "checkpoint_context_id", "checkpoint_finality_artifact_hash",
         ], label: label)
         guard try SccpStrictJSON.uint64(item, "version", minimum: 1) == 1,
               try network(object(item, "source_network"), label: "\(label).source_network") == .soraTaira
         else { throw SccpV1Error.invalid("\(label) must be a V1 Taira anchor") }
+        let protocolVersion = try SccpStrictJSON.uint32(
+            item, "protocol_version", minimum: 2, maximum: 2
+        )
         let chainHash = try upperFixed(item, "chain_id_hash", bytes: 32)
         guard chainHash == irohaKeccak256(tairaChainId) else { throw SccpV1Error.invalid("\(label).chain_id_hash is not Taira") }
         let checkpointHeight = try SccpStrictJSON.uint64(item, "checkpoint_height", minimum: 1)
         let checkpointHash = try upperFixed(item, "checkpoint_block_hash", bytes: 32)
-        let epoch = try SccpStrictJSON.uint64(item, "validator_set_epoch", minimum: 0)
-        let validatorHash = try upperFixed(item, "validator_set_hash", bytes: 32)
-        let hashVersion = try SccpStrictJSON.uint32(item, "validator_set_hash_version", minimum: 1, maximum: 1)
-        guard Set([chainHash, checkpointHash, validatorHash]).count == 3 else { throw SccpV1Error.invalid("\(label) reuses a consensus hash role") }
+        let contextId = try upperFixed(item, "checkpoint_context_id", bytes: 32)
+        let artifactHash = try upperFixed(item, "checkpoint_finality_artifact_hash", bytes: 32)
+        guard Set([chainHash, checkpointHash, contextId, artifactHash]).count == 4 else {
+            throw SccpV1Error.invalid("\(label) reuses a finality hash role")
+        }
         var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
+        appendUInt16LE(UInt16(protocolVersion), to: &canonical)
         canonical.append(chainHash)
         appendUInt64LE(checkpointHeight, to: &canonical)
         canonical.append(checkpointHash)
-        appendUInt64LE(epoch, to: &canonical)
-        canonical.append(validatorHash)
-        appendUInt16LE(UInt16(hashVersion), to: &canonical)
+        canonical.append(contextId)
+        canonical.append(artifactHash)
         let hash = irohaKeccak256(Data("sccp:sora-finality-anchor:v1".utf8) + canonical)
         return SccpSoraFinalityAnchorV1(
+            protocolVersion: UInt16(protocolVersion),
             chainIdHash: chainHash,
             checkpointHeight: checkpointHeight,
             checkpointBlockHash: checkpointHash,
-            validatorSetEpoch: epoch,
-            validatorSetHash: validatorHash,
-            validatorSetHashVersion: UInt16(hashVersion),
+            checkpointContextId: contextId,
+            checkpointFinalityArtifactHash: artifactHash,
             anchorHash: hash
         )
     }

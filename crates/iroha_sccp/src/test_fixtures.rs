@@ -8,21 +8,27 @@ use halo2curves::{
     ff::PrimeField as _,
     group::Curve,
 };
-use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     account::AccountId,
+    block::consensus_v2::{
+        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+        GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
+        ValidatorPower, finality::V2FinalityArtifact,
+    },
     bridge::{
-        BridgeSccpDestinationProofV1, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-        SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
-        SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
-        SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
-        SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
-        SccpOutboundProofPolicyV1, SccpRouteActivationV1, SccpSemanticProofProfileV1,
-        SccpSoraFinalityAnchorV1, SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofV1,
+        SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
+        SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
+        SccpEvmSourceEmitterV1, SccpGovernedRouteV1, SccpGroth16Bn254IcV1,
+        SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1,
+        SccpNetworkV1, SccpOutboundMessageContextV1, SccpOutboundProofPolicyV1,
+        SccpRouteActivationV1, SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1,
+        SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
         sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_sora_taira_chain_id_hash_v1,
         sccp_v1_taira_xor_asset_definition_id,
     },
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    peer::PeerId,
 };
 use norito::to_bytes;
 
@@ -120,12 +126,12 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
         sora_finality_anchor: SccpSoraFinalityAnchorV1 {
             version: 1,
             source_network: SccpNetworkV1::SoraTaira,
+            protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
             checkpoint_height: 5,
             checkpoint_block_hash: [0x73; 32],
-            validator_set_epoch: 1,
-            validator_set_hash: [0x74; 32],
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            checkpoint_context_id: [0x74; 32],
+            checkpoint_finality_artifact_hash: [0x75; 32],
         },
     }
 }
@@ -235,8 +241,9 @@ fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
     })
 }
 
-fn signed_finality_proof(commitment_root: H256, height: u64) -> Vec<u8> {
-    let chain_id = SCCP_TAIRA_FINALITY_CHAIN_ID_V1.to_owned();
+/// Build an exact cryptographically valid Sumeragi-v2 Taira finality proof.
+pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
+    let height = 1;
     let mut block_header = BlockHeader::new(
         NonZeroU64::new(height).expect("exact SCCP fixture height is nonzero"),
         None,
@@ -246,65 +253,90 @@ fn signed_finality_proof(commitment_root: H256, height: u64) -> Vec<u8> {
         0,
     );
     block_header.set_sccp_commitment_root(Some(commitment_root));
-    let block_hash = hash_block_header_for_sccp_finality(&block_header);
-    let keypairs = [
+    let mut keypairs = vec![
         KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal).expect("BLS fixture key 1"),
         KeyPair::try_from_seed(vec![2; 32], Algorithm::BlsNormal).expect("BLS fixture key 2"),
         KeyPair::try_from_seed(vec![3; 32], Algorithm::BlsNormal).expect("BLS fixture key 3"),
+        KeyPair::try_from_seed(vec![4; 32], Algorithm::BlsNormal).expect("BLS fixture key 4"),
     ];
-    let validator_public_keys = keypairs
+    keypairs.sort_by(|left, right| {
+        PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+    });
+    let roster = keypairs
         .iter()
-        .map(|keypair| keypair.public_key().to_string())
+        .zip([40_u64, 30, 20, 10])
+        .map(|(keypair, power)| ValidatorPower {
+            validator: PeerId::new(keypair.public_key().clone()),
+            power,
+        })
         .collect::<Vec<_>>();
-    let validator_set_hash = taira_validator_set_hash_from_public_keys(&validator_public_keys)
-        .expect("exact SCCP BLS fixture roster");
-    let mut commit_qc = TairaCommitQcV1 {
-        version: 1,
-        phase: TairaConsensusPhaseV1::Commit,
+    let context = HeightContext {
+        chain_id: SCCP_TAIRA_FINALITY_CHAIN_ID_V1.into(),
+        protocol_version: PROTOCOL_VERSION,
         height,
-        view: 1,
-        epoch: 1,
-        mode_tag: "normal".to_owned(),
-        subject_block_hash: block_hash,
-        parent_state_root: [0x12; 32],
-        post_state_root: [0x13; 32],
-        chain_order_hash: [0x14; 32],
-        rechain_seq: 1,
-        highest_qc: None,
-        validator_set_hash,
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_public_keys,
-        validator_set_pops: keypairs
-            .iter()
-            .map(|keypair| {
-                iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("BLS fixture PoP")
-            })
-            .collect(),
-        signers_bitmap: vec![0b0000_0111],
-        bls_aggregate_signature: Vec::new(),
+        epoch: 0,
+        epoch_end_height: 10,
+        mode: ConsensusMode::Npos,
+        parent_commit_qc: None,
+        quorum: DualQuorum::from_roster(&roster).expect("valid powered SCCP fixture roster"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"exact SCCP fixture Nexus/AMX context"),
+        da_layout: DataAvailabilityLayout {
+            encoding: PayloadEncoding::Plain,
+            chunk_size_bytes: 1024,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 4,
+        },
+        leader_seed: [0x5a; 32],
     };
-    let message = taira_commit_vote_preimage(&chain_id, &commit_qc);
-    let signatures = keypairs
+    let subject = BlockSubject {
+        parent_block_hash: None,
+        block_hash: block_header.hash(),
+        payload_hash: Hash::new(b"exact SCCP fixture payload"),
+    };
+    let mut commit_qc = QuorumCertificate {
+        round: ConsensusRound {
+            context_id: context.id(),
+            height,
+            view: 1,
+        },
+        phase: GlobalPhase::Commit,
+        subject,
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![1],
+    };
+    let message = commit_qc
+        .signer_preimage(&context, 0)
+        .expect("valid exact Sumeragi-v2 commit certificate");
+    let signatures = commit_qc
+        .signers
         .iter()
-        .map(|keypair| {
-            Signature::try_new(keypair.private_key(), &message).expect("BLS fixture commit vote")
+        .map(|index| {
+            let index = usize::try_from(*index).expect("fixture signer index fits usize");
+            Signature::try_new(keypairs[index].private_key(), &message)
+                .expect("BLS fixture commit vote")
         })
         .collect::<Vec<_>>();
     let signature_refs = signatures
         .iter()
         .map(|signature| signature.payload().as_ref())
         .collect::<Vec<_>>();
-    commit_qc.bls_aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-            .expect("aggregate BLS fixture votes");
+    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .expect("aggregate BLS fixture votes");
+    let validator_set_pops = keypairs
+        .iter()
+        .map(|keypair| {
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("BLS fixture PoP")
+        })
+        .collect();
+    let finality_artifact = V2FinalityArtifact::new(context, subject, commit_qc, None);
     to_bytes(&TairaBridgeFinalityProofV1 {
-        version: 1,
-        chain_id,
-        height,
-        block_hash,
-        commitment_root,
-        block_header_bytes: to_bytes(&block_header).expect("canonical fixture block header"),
-        commit_qc,
+        version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+        block_header,
+        finality_artifact,
+        validator_set_pops,
     })
     .expect("canonical exact SCCP finality fixture")
 }
@@ -334,7 +366,7 @@ fn message_bundle(route: &SccpGovernedRouteV1, nonce: u64) -> TairaSccpMessagePr
         commitment,
         merkle_proof,
         payload,
-        finality_proof: signed_finality_proof(commitment_root, 31),
+        finality_proof: signed_finality_proof(commitment_root),
     };
     assert!(verify_message_bundle_structure(&bundle));
     assert!(

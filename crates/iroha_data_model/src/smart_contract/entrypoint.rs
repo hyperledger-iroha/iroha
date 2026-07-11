@@ -93,7 +93,7 @@ pub const DECODED_ARGUMENT_WORD_BYTES: i16 = 8;
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum EntrypointValueKindV1 {
-    /// Canonical signed 4,096-bit integer pointer.
+    /// Canonical signed 512-bit integer pointer.
     Int,
     /// Canonical exact decimal pointer.
     Decimal,

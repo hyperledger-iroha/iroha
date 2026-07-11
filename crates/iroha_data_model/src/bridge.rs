@@ -3,14 +3,11 @@
 
 use std::{string::String, vec::Vec};
 
-use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
-use crate::{
-    ChainId, consensus::VALIDATOR_SET_HASH_VERSION_V1, nexus::LaneId, peer::PeerId, proof::ProofBox,
-};
+use crate::{ChainId, nexus::LaneId, proof::ProofBox};
 
 /// Versioned SCCP network, lane, and source-identity wire types.
 pub mod sccp;
@@ -532,66 +529,45 @@ pub struct BridgeProofRecord {
     pub size_bytes: u32,
 }
 
-/// Finality proof for an Iroha block built from the consensus commit certificate.
+/// Current schema version of [`BridgeFinalityProof`].
+pub const BRIDGE_FINALITY_PROOF_VERSION_V1: u8 = 1;
+
+/// Exact Sumeragi-v2 finality proof for one Iroha block.
 ///
-/// This proof is self-contained: it carries the block header, its hash, and the
-/// commit certificate (validator set + BLS aggregate signature) produced by the
-/// active validator set for that height. Verifiers recompute the block hash from
-/// the header and validate the commit certificate aggregate signature against the
-/// provided validator set and the certificate's mode tag.
+/// The durable finality artifact is the single source of consensus context,
+/// height, block hash, roster powers, quorum, subject, and commit certificate.
+/// No legacy certificate projection or duplicate proof-controlled consensus
+/// field is carried alongside it.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeFinalityProof {
-    /// Height of the finalized block.
-    pub height: u64,
-    /// Chain identifier to prevent cross-chain replay.
-    pub chain_id: crate::ChainId,
+    /// Proof schema version. The first release requires
+    /// [`BRIDGE_FINALITY_PROOF_VERSION_V1`].
+    pub version: u8,
     /// Block header for the finalized block.
     pub block_header: crate::block::BlockHeader,
-    /// Consensus hash of the block header.
-    pub block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
-    /// Commit certificate collected for the block.
-    pub commit_qc: crate::consensus::Qc,
-    /// Proof-of-possession entries aligned with `commit_qc.validator_set`.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub validator_set_pops: Vec<Vec<u8>>,
+    /// Exact immutable finality artifact persisted by the Sumeragi-v2 apply path.
+    pub finality_artifact: crate::block::consensus_v2::finality::V2FinalityArtifact,
 }
 
-/// Authority set snapshot used for bridge commitments.
+/// Commitment covering a block hash and its exact Sumeragi-v2 context.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-pub struct BridgeAuthoritySet {
-    /// Monotonically increasing authority set identifier.
-    pub id: u64,
-    /// Ordered validator set at this authority set id.
-    pub validator_set: Vec<crate::peer::PeerId>,
-    /// Hash of the validator set using the configured hash version.
-    pub validator_set_hash: iroha_crypto::HashOf<Vec<crate::peer::PeerId>>,
-    /// Hash version used when computing `validator_set_hash`.
-    pub validator_set_hash_version: u16,
-}
-
-/// Commitment covering a block hash and authority set.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeCommitment {
     /// Chain identifier to prevent cross-chain replay.
     pub chain_id: crate::ChainId,
-    /// Authority set that signed this commitment.
-    pub authority_set: BridgeAuthoritySet,
+    /// Typed hash of the complete immutable height context that finalized the block.
+    pub height_context_id: crate::block::consensus_v2::HeightContextId,
     /// Block height bound into the commitment.
     pub block_height: u64,
     /// Block hash bound into the commitment (used as the leaf hash in the MMR).
@@ -608,176 +584,84 @@ pub struct BridgeCommitment {
     /// reconstructing the root, bag peaks from right to left:
     /// `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
     pub mmr_peaks: Option<Vec<[u8; 32]>>,
-    /// Optional next authority set advertised by this commitment.
-    pub next_authority_set: Option<BridgeAuthoritySet>,
 }
 
-/// Justification (signatures) for a bridge commitment.
+/// Bundle containing an MMR commitment and its exact typed finality proof.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-pub struct BridgeCommitmentJustification {
-    /// Signatures from the authority set over the commitment payload.
-    pub signatures: Vec<crate::block::BlockSignature>,
-}
-
-/// Bundle containing a commitment, justification, and block details.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
 pub struct BridgeFinalityBundle {
-    /// Commitment binding the block hash and authority set.
+    /// Commitment binding the block hash and immutable height context.
     pub commitment: BridgeCommitment,
-    /// Justification (signatures) for the commitment.
-    pub justification: BridgeCommitmentJustification,
-    /// Block header for the finalized block.
-    pub block_header: crate::block::BlockHeader,
-    /// Commit certificate for the block.
-    pub commit_qc: crate::consensus::Qc,
+    /// Exact typed finality proof authenticated by the bundle.
+    pub finality_proof: BridgeFinalityProof,
 }
 
 /// Errors surfaced when verifying bridge finality proofs.
+#[allow(variant_size_differences)]
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BridgeFinalityVerifyError {
+    /// Proof schema version is unsupported.
+    #[error("bridge finality proof version {actual} is unsupported; expected {expected}")]
+    UnsupportedProofVersion {
+        /// Supported first-release version.
+        expected: u8,
+        /// Version carried by the proof.
+        actual: u8,
+    },
     /// Proof is bound to a different chain id.
     #[error("chain id mismatch: expected {expected}, got {got}")]
     ChainIdMismatch {
         /// Expected chain id.
         expected: ChainId,
-        /// Chain id carried inside the proof.
+        /// Chain id carried inside the artifact.
         got: ChainId,
     },
-    /// Commit certificate height disagrees with the proof height.
-    #[error(
-        "commit certificate height {certificate_height} does not match proof height {proof_height}"
-    )]
-    CertificateHeightMismatch {
-        /// Height recorded in the proof.
-        proof_height: u64,
-        /// Height recorded in the commit certificate.
-        certificate_height: u64,
+    /// Typed artifact failed its structural v2 bindings.
+    #[error("invalid Sumeragi-v2 finality artifact: {0}")]
+    InvalidArtifact(crate::block::consensus_v2::finality::V2FinalityValidationError),
+    /// Block header height differs from the artifact height.
+    #[error("block header height {header_height} does not match artifact height {artifact_height}")]
+    BlockHeaderHeightMismatch {
+        /// Height recomputed from the block header.
+        header_height: u64,
+        /// Height carried by the durable artifact.
+        artifact_height: u64,
     },
-    /// Commit certificate phase is not `Commit`.
-    #[error("commit certificate phase {got:?} does not match expected {expected:?}")]
-    CertificatePhaseMismatch {
-        /// Expected commit-certificate phase.
-        expected: crate::block::consensus::CertPhase,
-        /// Phase carried in the commit certificate.
-        got: crate::block::consensus::CertPhase,
-    },
-    /// Block hash is inconsistent across the header/proof/certificate tuple.
-    #[error(
-        "block hash mismatch (header {header_hash:?}, proof field {proof_hash:?}, certificate {certificate_hash:?})"
-    )]
-    BlockHashMismatch {
+    /// Block header hash differs from the artifact's canonical block hash.
+    #[error("block header hash {header_hash:?} does not match artifact hash {artifact_hash:?}")]
+    BlockHeaderHashMismatch {
         /// Hash recomputed from the block header.
         header_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
-        /// Hash advertised by the proof.
-        proof_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
-        /// Hash advertised by the commit certificate.
-        certificate_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+        /// Hash carried by the durable artifact.
+        artifact_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
     },
-    /// Validator-set hash version is unknown.
-    #[error("validator set hash version {version} is not supported")]
-    UnsupportedValidatorSetHashVersion {
-        /// Validator-set hash version carried in the proof.
-        version: u16,
+    /// V2 certificate/roster cryptography failed.
+    #[error("Sumeragi-v2 finality cryptography failed: {0}")]
+    CertificateVerification(
+        crate::block::consensus_v2::finality::V2QuorumCertificateVerificationError,
+    ),
+    /// Verification was attempted without a trusted first-height context id.
+    #[error("a trusted Sumeragi-v2 height-context id is required")]
+    MissingContextAnchor,
+    /// The first proof does not match the trusted height-context id.
+    #[error("proof context {got:?} does not match trusted context {expected:?}")]
+    UnexpectedContext {
+        /// Trusted context identifier.
+        expected: crate::block::consensus_v2::HeightContextId,
+        /// Context identifier carried by the artifact.
+        got: crate::block::consensus_v2::HeightContextId,
     },
-    /// Validator-set hash does not match the recorded validator set.
-    #[error(
-        "validator set hash mismatch: recorded {recorded:?}, computed {computed:?} (version {version})"
-    )]
-    ValidatorSetHashMismatch {
-        /// Hash recorded in the proof.
-        recorded: iroha_crypto::HashOf<Vec<PeerId>>,
-        /// Hash recomputed from the validator set.
-        computed: iroha_crypto::HashOf<Vec<PeerId>>,
-        /// Validator-set hash version recorded in the proof.
-        version: u16,
-    },
-    /// Proof was built with a different validator set than the expected anchor.
-    #[error("validator set hash {got:?} does not match expected {expected:?}")]
-    UnexpectedValidatorSet {
-        /// Expected validator-set hash anchor.
-        expected: iroha_crypto::HashOf<Vec<PeerId>>,
-        /// Validator-set hash carried in the proof.
-        got: iroha_crypto::HashOf<Vec<PeerId>>,
-    },
-    /// Proof was produced for a different epoch than the expected anchor.
-    #[error("commit certificate epoch {got} does not match expected {expected}")]
-    UnexpectedEpoch {
-        /// Expected epoch anchor.
-        expected: u64,
-        /// Epoch carried in the proof.
-        got: u64,
-    },
-    /// Verification attempted without an explicit validator-set hash anchor.
-    #[error("validator set anchor is required before verifying bridge finality proofs")]
-    MissingValidatorSetAnchor,
-    /// Verification attempted without an explicit epoch anchor.
-    #[error("epoch anchor is required before verifying bridge finality proofs")]
-    MissingEpochAnchor,
-    /// Proof carries an empty validator set.
-    #[error("validator set is empty")]
-    EmptyValidatorSet,
-    /// Validator-set `PoP` length does not match the validator-set length.
-    #[error("validator set pop length {got} does not match expected {expected}")]
-    ValidatorSetPopLengthMismatch {
-        /// Expected `PoP` count.
-        expected: usize,
-        /// Actual `PoP` count.
-        got: usize,
-    },
-    /// Signer bitmap length does not match the validator-set length.
-    #[error("signer bitmap length {got} does not match expected {expected}")]
-    SignerBitmapLengthMismatch {
-        /// Expected bitmap length.
-        expected: usize,
-        /// Actual bitmap length.
-        got: usize,
-    },
-    /// Signer bitmap references a validator outside the roster bounds.
-    #[error("signer index {index} is out of range for validator set length {len}")]
-    SignatureIndexOutOfRange {
-        /// Index inferred from the signer bitmap.
-        index: u64,
-        /// Validator-set length.
-        len: usize,
-    },
-    /// Validator key is not a BLS key, so aggregate verification cannot proceed.
-    #[error("validator key at index {index} is not BLS: {algorithm:?}")]
-    InvalidValidatorKeyAlgorithm {
-        /// Signer index that failed validation.
-        index: u64,
-        /// Algorithm advertised by the public key.
-        algorithm: iroha_crypto::Algorithm,
-    },
-    /// Validator key compact state is malformed.
-    #[error("validator key at index {index} is malformed")]
-    MalformedValidatorPublicKey {
-        /// Signer index that failed validation.
-        index: u64,
-    },
-    /// Aggregate signature is missing from the commit certificate.
-    #[error("aggregate signature is missing")]
-    AggregateSignatureMissing,
-    /// Aggregate signature failed to verify against the advertised validator set.
-    #[error("aggregate signature failed to verify")]
-    InvalidAggregateSignature,
-    /// Proof does not contain enough signers to satisfy quorum.
-    #[error("insufficient signers: required {required}, collected {collected}")]
-    InsufficientSigners {
-        /// Quorum required for the advertised validator set.
-        required: usize,
-        /// Unique signer count from the bitmap.
-        collected: usize,
-    },
+    /// The next proof does not carry a valid certificate for the prior decision.
+    #[error("successor proof is not anchored to the previously finalized decision")]
+    ParentFinalityMismatch,
+    /// The next proof changes frozen election inputs outside v2 transition rules.
+    #[error("successor proof violates the Sumeragi-v2 context transition")]
+    SuccessorContextMismatch,
     /// Proof height is older than the latest verified height.
     #[error("proof height {height} is stale relative to latest verified height {latest}")]
     StaleHeight {
@@ -798,384 +682,197 @@ pub enum BridgeFinalityVerifyError {
 
 /// Stateful verifier for bridge finality proofs.
 ///
-/// The verifier enforces the canonical `(block_header, block_hash, commit_qc)` tuple,
-/// binds proofs to a chain id, and checks the commit-certificate aggregate signature against the
-/// advertised validator set with the production quorum rule. It tracks the latest verified height
-/// to reject stale or skipped proofs, and requires explicit validator-set and
-/// epoch anchors to reject replays across topology changes.
+/// The first proof must match an explicitly trusted Sumeragi-v2 height-context
+/// id. Every later proof must be the immediate, cryptographically linked
+/// successor of the last accepted artifact. This preserves count-and-power
+/// quorum, epoch transitions, and parent finality without trusting a
+/// proof-controlled roster.
 #[derive(Debug, Clone)]
 pub struct BridgeFinalityVerifier {
     expected_chain_id: ChainId,
-    expected_validator_set_hash: Option<iroha_crypto::HashOf<Vec<PeerId>>>,
-    validator_set_hash_version: u16,
-    expected_epoch: Option<u64>,
-    latest_height: Option<u64>,
+    trusted_context_id: Option<crate::block::consensus_v2::HeightContextId>,
+    latest_proof: Option<BridgeFinalityProof>,
 }
 
 impl BridgeFinalityVerifier {
-    /// Construct a verifier bound to the expected `chain_id`.
+    /// Construct a verifier bound only to a chain id.
+    ///
+    /// set_context_anchor must be called before the first proof can be accepted.
     #[must_use]
     pub fn new(expected_chain_id: ChainId) -> Self {
         Self {
             expected_chain_id,
-            expected_validator_set_hash: None,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            expected_epoch: None,
-            latest_height: None,
+            trusted_context_id: None,
+            latest_proof: None,
         }
     }
 
-    /// Construct a verifier bound to the expected `chain_id` and validator-set hash anchor.
+    /// Construct a verifier bound to a chain and first trusted v2 context id.
     #[must_use]
-    pub fn with_validator_set(
+    pub fn with_context(
         expected_chain_id: ChainId,
-        validator_set_hash: iroha_crypto::HashOf<Vec<PeerId>>,
-        validator_set_hash_version: u16,
+        trusted_context_id: crate::block::consensus_v2::HeightContextId,
     ) -> Self {
         Self {
             expected_chain_id,
-            expected_validator_set_hash: Some(validator_set_hash),
-            validator_set_hash_version,
-            expected_epoch: None,
-            latest_height: None,
+            trusted_context_id: Some(trusted_context_id),
+            latest_proof: None,
         }
     }
 
-    /// Construct a verifier bound to the expected `chain_id`, validator-set hash, and epoch anchor.
-    #[must_use]
-    pub fn with_validator_set_and_epoch(
-        expected_chain_id: ChainId,
-        validator_set_hash: iroha_crypto::HashOf<Vec<PeerId>>,
-        validator_set_hash_version: u16,
-        expected_epoch: u64,
-    ) -> Self {
-        Self {
-            expected_chain_id,
-            expected_validator_set_hash: Some(validator_set_hash),
-            validator_set_hash_version,
-            expected_epoch: Some(expected_epoch),
-            latest_height: None,
-        }
-    }
-
-    /// Update the expected validator-set hash anchor used when verifying proofs.
-    pub fn set_validator_set_anchor(
+    /// Replace the trusted first context and discard prior verifier progress.
+    pub fn set_context_anchor(
         &mut self,
-        validator_set_hash: iroha_crypto::HashOf<Vec<PeerId>>,
-        validator_set_hash_version: u16,
+        trusted_context_id: crate::block::consensus_v2::HeightContextId,
     ) {
-        self.expected_validator_set_hash = Some(validator_set_hash);
-        self.validator_set_hash_version = validator_set_hash_version;
-    }
-
-    /// Update the expected epoch anchor used when verifying proofs.
-    pub fn set_epoch_anchor(&mut self, expected_epoch: u64) {
-        self.expected_epoch = Some(expected_epoch);
-    }
-
-    /// Update both the validator-set and epoch anchors together to reflect a topology change.
-    pub fn set_validator_set_and_epoch_anchor(
-        &mut self,
-        validator_set_hash: iroha_crypto::HashOf<Vec<PeerId>>,
-        validator_set_hash_version: u16,
-        expected_epoch: u64,
-    ) {
-        self.set_validator_set_anchor(validator_set_hash, validator_set_hash_version);
-        self.expected_epoch = Some(expected_epoch);
+        self.trusted_context_id = Some(trusted_context_id);
+        self.latest_proof = None;
     }
 
     /// Verify a bridge finality proof against the configured expectations.
     ///
     /// # Errors
-    /// Returns [`BridgeFinalityVerifyError`] when the proof's chain id, height continuity,
-    /// hashes, epoch anchor, validator-set hash/version, or commit signatures are invalid.
+    ///
+    /// Returns BridgeFinalityVerifyError when the proof's version, chain,
+    /// artifact/header binding, context anchor, successor transition, quorum,
+    /// PoPs, or aggregate signature is invalid.
     pub fn verify(&mut self, proof: &BridgeFinalityProof) -> Result<(), BridgeFinalityVerifyError> {
-        if proof.chain_id != self.expected_chain_id {
-            return Err(BridgeFinalityVerifyError::ChainIdMismatch {
-                expected: self.expected_chain_id.clone(),
-                got: proof.chain_id.clone(),
-            });
-        }
-
-        if let Some(latest) = self.latest_height {
-            if proof.height <= latest {
+        verify_bridge_finality_proof(proof, &self.expected_chain_id)?;
+        if let Some(previous) = self.latest_proof.as_ref() {
+            let previous_height = previous.finality_artifact.height;
+            let height = proof.finality_artifact.height;
+            if height <= previous_height {
                 return Err(BridgeFinalityVerifyError::StaleHeight {
-                    latest,
-                    height: proof.height,
+                    latest: previous_height,
+                    height,
                 });
             }
-            if proof.height > latest.saturating_add(1) {
+            if height > previous_height.saturating_add(1) {
                 return Err(BridgeFinalityVerifyError::AdvancedHeight {
-                    latest,
-                    height: proof.height,
+                    latest: previous_height,
+                    height,
                 });
             }
-        }
-
-        if proof.commit_qc.height != proof.height {
-            return Err(BridgeFinalityVerifyError::CertificateHeightMismatch {
-                proof_height: proof.height,
-                certificate_height: proof.commit_qc.height,
-            });
-        }
-        if proof.commit_qc.phase != crate::block::consensus::CertPhase::Commit {
-            return Err(BridgeFinalityVerifyError::CertificatePhaseMismatch {
-                expected: crate::block::consensus::CertPhase::Commit,
-                got: proof.commit_qc.phase,
-            });
-        }
-
-        let header_hash = proof.block_header.hash();
-        let proof_hash = proof.block_hash;
-        let certificate_hash = proof.commit_qc.subject_block_hash;
-        if header_hash != proof_hash || header_hash != certificate_hash {
-            return Err(BridgeFinalityVerifyError::BlockHashMismatch {
-                header_hash,
-                proof_hash,
-                certificate_hash,
-            });
-        }
-
-        let recorded_version = proof.commit_qc.validator_set_hash_version;
-        if recorded_version != self.validator_set_hash_version {
-            return Err(
-                BridgeFinalityVerifyError::UnsupportedValidatorSetHashVersion {
-                    version: recorded_version,
-                },
-            );
-        }
-
-        let recorded_hash = proof.commit_qc.validator_set_hash;
-        let computed_hash = iroha_crypto::HashOf::new(&proof.commit_qc.validator_set);
-        if computed_hash != recorded_hash {
-            return Err(BridgeFinalityVerifyError::ValidatorSetHashMismatch {
-                recorded: recorded_hash,
-                computed: computed_hash,
-                version: recorded_version,
-            });
-        }
-
-        let validator_set = &proof.commit_qc.validator_set;
-        if validator_set.is_empty() {
-            return Err(BridgeFinalityVerifyError::EmptyValidatorSet);
-        }
-
-        Self::validate_commit_qc(&proof.chain_id, &proof.commit_qc, &proof.validator_set_pops)?;
-
-        let expected_epoch = self
-            .expected_epoch
-            .ok_or(BridgeFinalityVerifyError::MissingEpochAnchor)?;
-        if proof.commit_qc.epoch != expected_epoch {
-            return Err(BridgeFinalityVerifyError::UnexpectedEpoch {
-                expected: expected_epoch,
-                got: proof.commit_qc.epoch,
-            });
-        }
-
-        let expected = self
-            .expected_validator_set_hash
-            .ok_or(BridgeFinalityVerifyError::MissingValidatorSetAnchor)?;
-        if recorded_hash != expected {
-            return Err(BridgeFinalityVerifyError::UnexpectedValidatorSet {
-                expected,
-                got: recorded_hash,
-            });
-        }
-
-        self.latest_height = Some(proof.height);
-        Ok(())
-    }
-
-    fn validate_commit_qc(
-        chain_id: &ChainId,
-        certificate: &crate::consensus::Qc,
-        validator_set_pops: &[Vec<u8>],
-    ) -> Result<(), BridgeFinalityVerifyError> {
-        let validator_set = &certificate.validator_set;
-        let required = Self::min_signatures(validator_set.len());
-        let indices =
-            signer_indices_from_bitmap(&certificate.aggregate.signers_bitmap, validator_set.len())?;
-        let collected = indices.len();
-        if collected < required {
-            return Err(BridgeFinalityVerifyError::InsufficientSigners {
-                required,
-                collected,
-            });
-        }
-
-        if certificate.aggregate.bls_aggregate_signature.is_empty() {
-            return Err(BridgeFinalityVerifyError::AggregateSignatureMissing);
-        }
-        if validator_set_pops.len() != validator_set.len() {
-            return Err(BridgeFinalityVerifyError::ValidatorSetPopLengthMismatch {
-                expected: validator_set.len(),
-                got: validator_set_pops.len(),
-            });
-        }
-
-        let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(indices.len());
-        let mut pops: Vec<&[u8]> = Vec::with_capacity(indices.len());
-        for idx in indices {
-            let peer = &validator_set[idx];
-            let algorithm = peer.public_key.try_algorithm().map_err(|_| {
-                BridgeFinalityVerifyError::MalformedValidatorPublicKey { index: idx as u64 }
-            })?;
-            if algorithm != iroha_crypto::Algorithm::BlsNormal {
-                return Err(BridgeFinalityVerifyError::InvalidValidatorKeyAlgorithm {
-                    index: idx as u64,
-                    algorithm,
-                });
-            }
-            public_keys.push(peer.public_key());
-            pops.push(validator_set_pops[idx].as_slice());
-        }
-
-        let preimage = commit_vote_preimage(chain_id, certificate);
-        iroha_crypto::bls_normal_verify_preaggregated_same_message(
-            &preimage,
-            &certificate.aggregate.bls_aggregate_signature,
-            &public_keys,
-            &pops,
-        )
-        .map_err(|_| BridgeFinalityVerifyError::InvalidAggregateSignature)?;
-
-        Ok(())
-    }
-
-    const fn min_signatures(len: usize) -> usize {
-        if len <= 3 {
-            len
+            verify_successor_bridge_finality_proof(previous, proof)?;
         } else {
-            len.saturating_mul(2) / 3 + 1
+            let expected = self
+                .trusted_context_id
+                .ok_or(BridgeFinalityVerifyError::MissingContextAnchor)?;
+            let got = proof.finality_artifact.context_id();
+            if got != expected {
+                return Err(BridgeFinalityVerifyError::UnexpectedContext { expected, got });
+            }
         }
+
+        self.latest_proof = Some(proof.clone());
+        Ok(())
     }
 }
 
-fn consensus_domain(
-    chain_id: &ChainId,
-    message_type_tag: &str,
-    extra: &[u8],
-    mode_tag: &str,
-) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2b512, Digest as _};
-    let mut hasher = Blake2b512::new();
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, b"iroha-sumeragi-consensus/v1");
-    iroha_crypto::blake2::digest::Update::update(
-        &mut hasher,
-        chain_id.clone().into_inner().as_bytes(),
-    );
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, mode_tag.as_bytes());
-    iroha_crypto::blake2::digest::Update::update(
-        &mut hasher,
-        &crate::block::consensus::PROTO_VERSION.to_be_bytes(),
-    );
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, message_type_tag.as_bytes());
-    iroha_crypto::blake2::digest::Update::update(&mut hasher, extra);
-    let digest = iroha_crypto::blake2::Digest::finalize(hasher);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    out
-}
-
-fn commit_vote_preimage(chain_id: &ChainId, certificate: &crate::consensus::Qc) -> Vec<u8> {
-    let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
-    let domain = consensus_domain(chain_id, "Vote", b"v2", &certificate.mode_tag);
-    out.extend_from_slice(&domain);
-    out.extend_from_slice(certificate.subject_block_hash.as_ref().as_ref());
-    out.extend_from_slice(certificate.parent_state_root.as_ref());
-    out.extend_from_slice(certificate.post_state_root.as_ref());
-    out.extend_from_slice(&certificate.height.to_be_bytes());
-    out.extend_from_slice(&certificate.view.to_be_bytes());
-    out.extend_from_slice(&certificate.epoch.to_be_bytes());
-    out.extend_from_slice(certificate.chain_order_hash.as_ref());
-    out.extend_from_slice(&certificate.rechain_seq.to_be_bytes());
-    out.push(certificate.phase as u8);
-    match certificate.highest_qc {
-        Some(highest_qc) => {
-            out.push(1);
-            out.extend_from_slice(&highest_qc.height.to_be_bytes());
-            out.extend_from_slice(&highest_qc.view.to_be_bytes());
-            out.extend_from_slice(&highest_qc.epoch.to_be_bytes());
-            out.extend_from_slice(highest_qc.subject_block_hash.as_ref().as_ref());
-            out.push(highest_qc.phase as u8);
-        }
-        None => out.push(0),
-    }
-
-    out
-}
-
-fn signer_indices_from_bitmap(
-    bitmap: &[u8],
-    roster_len: usize,
-) -> Result<Vec<usize>, BridgeFinalityVerifyError> {
-    let expected_len = roster_len.div_ceil(8);
-    if bitmap.len() != expected_len {
-        return Err(BridgeFinalityVerifyError::SignerBitmapLengthMismatch {
-            expected: expected_len,
-            got: bitmap.len(),
+/// Verify one exact bridge finality proof without maintaining successor state.
+///
+/// # Errors
+///
+/// Returns [`BridgeFinalityVerifyError`] when the version, chain, header,
+/// durable artifact, powered quorum, roster PoPs, or aggregate signature is
+/// invalid. Callers must separately pin the artifact's
+/// [`crate::block::consensus_v2::finality::V2FinalityArtifact::context_id`]
+/// or use [`BridgeFinalityVerifier`] when establishing trust.
+pub fn verify_bridge_finality_proof(
+    proof: &BridgeFinalityProof,
+    expected_chain_id: &ChainId,
+) -> Result<(), BridgeFinalityVerifyError> {
+    if proof.version != BRIDGE_FINALITY_PROOF_VERSION_V1 {
+        return Err(BridgeFinalityVerifyError::UnsupportedProofVersion {
+            expected: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            actual: proof.version,
         });
     }
-
-    let mut indices = Vec::new();
-    for (byte_idx, byte) in bitmap.iter().enumerate() {
-        if *byte == 0 {
-            continue;
-        }
-        for bit in 0..8 {
-            if (byte >> bit) & 1 == 0 {
-                continue;
-            }
-            let idx = byte_idx * 8 + bit;
-            if idx >= roster_len {
-                return Err(BridgeFinalityVerifyError::SignatureIndexOutOfRange {
-                    index: idx as u64,
-                    len: roster_len,
-                });
-            }
-            indices.push(idx);
-        }
+    let artifact = &proof.finality_artifact;
+    artifact
+        .validate()
+        .map_err(BridgeFinalityVerifyError::InvalidArtifact)?;
+    if artifact.height_context.chain_id != *expected_chain_id {
+        return Err(BridgeFinalityVerifyError::ChainIdMismatch {
+            expected: expected_chain_id.clone(),
+            got: artifact.height_context.chain_id.clone(),
+        });
     }
+    let header_height = proof.block_header.height().get();
+    if header_height != artifact.height {
+        return Err(BridgeFinalityVerifyError::BlockHeaderHeightMismatch {
+            header_height,
+            artifact_height: artifact.height,
+        });
+    }
+    let header_hash = proof.block_header.hash();
+    if header_hash != artifact.block_hash {
+        return Err(BridgeFinalityVerifyError::BlockHeaderHashMismatch {
+            header_hash,
+            artifact_hash: artifact.block_hash,
+        });
+    }
+    artifact
+        .verify()
+        .map_err(BridgeFinalityVerifyError::CertificateVerification)
+}
 
-    Ok(indices)
+fn verify_successor_bridge_finality_proof(
+    previous: &BridgeFinalityProof,
+    current: &BridgeFinalityProof,
+) -> Result<(), BridgeFinalityVerifyError> {
+    use crate::block::consensus_v2::finality::verify_quorum_certificate_with_validator_pops;
+
+    let parent = &previous.finality_artifact;
+    let child = &current.finality_artifact;
+    let context = &child.height_context;
+    let Some(parent_qc) = context.parent_commit_qc.as_ref() else {
+        return Err(BridgeFinalityVerifyError::ParentFinalityMismatch);
+    };
+    if context.chain_id != parent.height_context.chain_id
+        || context.mode != parent.height_context.mode
+        || context.da_layout != parent.height_context.da_layout
+        || !parent_qc
+            .as_ref()
+            .same_commit_decision(parent.commit_qc.as_ref())
+    {
+        return Err(BridgeFinalityVerifyError::ParentFinalityMismatch);
+    }
+    verify_quorum_certificate_with_validator_pops(
+        &parent.height_context,
+        parent_qc,
+        &parent.validator_set_pops,
+    )
+    .map_err(BridgeFinalityVerifyError::CertificateVerification)?;
+
+    let transition_matches = if let Some(snapshot) = &parent.height_context.next_epoch_snapshot {
+        context.epoch == snapshot.epoch
+            && context.mode == snapshot.mode
+            && context.roster == snapshot.roster
+            && context.quorum == snapshot.quorum
+            && context.leader_seed == snapshot.leader_seed
+    } else {
+        context.epoch == parent.height_context.epoch
+            && context.epoch_end_height == parent.height_context.epoch_end_height
+            && context.roster == parent.height_context.roster
+            && context.quorum == parent.height_context.quorum
+            && context.leader_seed == parent.height_context.leader_seed
+    };
+    if !transition_matches {
+        return Err(BridgeFinalityVerifyError::SuccessorContextMismatch);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::DecodeAll;
 
     use super::*;
-
-    fn validator_set_from_keys(keys: &[KeyPair]) -> Vec<PeerId> {
-        keys.iter()
-            .map(|kp| PeerId::from(kp.public_key().clone()))
-            .collect()
-    }
-
-    fn signer_bitmap(len: usize, signers: &[usize]) -> Vec<u8> {
-        let bytes = len.div_ceil(8);
-        let mut bitmap = vec![0u8; bytes];
-        for &idx in signers {
-            let byte_idx = idx / 8;
-            let bit = idx % 8;
-            bitmap[byte_idx] |= 1u8 << bit;
-        }
-        bitmap
-    }
-
-    fn checked_commit_vote_signature_payload(keypair: &KeyPair, preimage: &[u8]) -> Vec<u8> {
-        Signature::try_new(keypair.private_key(), preimage)
-            .expect("checked bridge commit-vote signature")
-            .payload()
-            .to_vec()
-    }
-
-    fn checked_random_keypair() -> KeyPair {
-        KeyPair::try_random().expect("test fixture random key generation should succeed")
-    }
+    use crate::peer::PeerId;
 
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
@@ -1187,133 +884,134 @@ mod tests {
         checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
     }
 
-    fn make_finality_proof_with_signers_and_mode(
-        chain_id: &str,
-        height: u64,
-        epoch: u64,
-        keys: &[KeyPair],
-        signer_indices: &[usize],
-        mode_tag: &str,
-    ) -> BridgeFinalityProof {
-        assert!(
-            !signer_indices.is_empty(),
-            "test helper requires at least one signer"
-        );
+    struct V2Fixture {
+        proof: BridgeFinalityProof,
+    }
 
+    fn make_v2_fixture(chain_id: &str) -> V2Fixture {
+        make_v2_fixture_with_quorum(chain_id, &[40, 30, 20, 10], &[0, 1, 2])
+    }
+
+    fn make_v2_fixture_with_quorum(
+        chain_id: &str,
+        powers: &[u64],
+        signer_indices: &[u32],
+    ) -> V2Fixture {
+        use crate::block::consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+            GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
+            ValidatorPower, Vote,
+        };
+
+        let mut keys = powers
+            .iter()
+            .map(|_| checked_bls_keypair())
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let roster = keys
+            .iter()
+            .zip(powers)
+            .map(|(key, power)| ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: *power,
+            })
+            .collect::<Vec<_>>();
         let header = crate::block::BlockHeader::new(
-            NonZeroU64::new(height).expect("non-zero height"),
+            NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
             None,
             0,
             0,
         );
-        let block_hash = header.hash();
-        let validator_set = validator_set_from_keys(keys);
-        let validator_set_pops: Vec<Vec<u8>> = keys
+        let context = HeightContext {
+            chain_id: chain_id.parse().expect("chain id"),
+            protocol_version: PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Npos,
+            parent_commit_qc: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid powered roster"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"bridge v2 test nexus context"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x5A; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: None,
+            block_hash: header.hash(),
+            payload_hash: Hash::new(b"bridge v2 test payload"),
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height: 1,
+            view: 0,
+        };
+        let mut commit_qc = QuorumCertificate {
+            round,
+            phase: GlobalPhase::Commit,
+            subject,
+            signers: signer_indices.to_vec(),
+            aggregate_signature: vec![1],
+        };
+        let preimage = Vote {
+            round,
+            phase: GlobalPhase::Commit,
+            subject,
+            signer: signer_indices.first().copied().unwrap_or(0),
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signature_payloads = signer_indices
             .iter()
-            .map(|kp| {
-                iroha_crypto::bls_normal_pop_prove(kp.private_key())
-                    .expect("PoP prove for validator keypair")
+            .map(|index| {
+                Signature::try_new(
+                    keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                    &preimage,
+                )
+                .expect("sign v2 commit vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signature_payloads
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        commit_qc.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("aggregate v2 commit votes");
+        let validator_set_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("derive validator proof of possession")
             })
             .collect();
-        let validator_set_hash = HashOf::new(&validator_set);
-        let cert_template = crate::consensus::Qc {
-            phase: crate::block::consensus::CertPhase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            height,
-            view: 0,
-            epoch,
-            chain_order_hash: crate::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: mode_tag.to_string(),
-            highest_qc: None,
-            validator_set_hash,
-            validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: validator_set.clone(),
-            aggregate: crate::consensus::QcAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        let preimage = commit_vote_preimage(&chain_id.parse().expect("chain id"), &cert_template);
-        let mut sig_payloads = Vec::with_capacity(signer_indices.len());
-        for &idx in signer_indices {
-            sig_payloads.push(checked_commit_vote_signature_payload(&keys[idx], &preimage));
-        }
-        let sig_refs: Vec<&[u8]> = sig_payloads.iter().map(Vec::as_slice).collect();
-        let aggregate =
-            iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
-        let signers_bitmap = signer_bitmap(validator_set.len(), signer_indices);
-        let commit_qc = crate::consensus::Qc {
-            aggregate: crate::consensus::QcAggregate {
-                signers_bitmap,
-                bls_aggregate_signature: aggregate,
-            },
-            ..cert_template
-        };
-
-        BridgeFinalityProof {
-            height,
-            chain_id: chain_id.parse().expect("chain id"),
-            block_header: header,
-            block_hash,
+        let artifact = crate::block::consensus_v2::finality::V2FinalityArtifact::new(
+            context,
+            subject,
             commit_qc,
             validator_set_pops,
+        );
+        V2Fixture {
+            proof: BridgeFinalityProof {
+                version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+                block_header: header,
+                finality_artifact: artifact,
+            },
         }
-    }
-
-    fn make_finality_proof(
-        chain_id: &str,
-        height: u64,
-        epoch: u64,
-        keys: &[KeyPair],
-    ) -> BridgeFinalityProof {
-        make_finality_proof_with_signers_and_mode(
-            chain_id,
-            height,
-            epoch,
-            keys,
-            &(0..keys.len()).collect::<Vec<_>>(),
-            crate::block::consensus::PERMISSIONED_TAG,
-        )
-    }
-
-    fn verifier_anchored_to(proof: &BridgeFinalityProof) -> BridgeFinalityVerifier {
-        BridgeFinalityVerifier::with_validator_set_and_epoch(
-            proof.chain_id.clone(),
-            proof.commit_qc.validator_set_hash,
-            proof.commit_qc.validator_set_hash_version,
-            proof.commit_qc.epoch,
-        )
-    }
-
-    fn make_block_signature(
-        index: u64,
-        keypair: &KeyPair,
-        header: &crate::block::BlockHeader,
-    ) -> crate::block::BlockSignature {
-        crate::block::BlockSignature::new(
-            index,
-            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
-                .expect("checked bridge block-header signature"),
-        )
-    }
-
-    #[test]
-    fn bridge_finality_fixture_checked_signature_verifies_preimage() {
-        let keys = vec![checked_bls_keypair()];
-        let proof = make_finality_proof("chain-a", 1, 0, &keys);
-        let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
-        let signature_payload = checked_commit_vote_signature_payload(&keys[0], &preimage);
-        let signature = Signature::try_from_bytes(&signature_payload)
-            .expect("checked bridge commit-vote signature payload passes admission");
-
-        signature
-            .verify(keys[0].public_key(), &preimage)
-            .expect("checked bridge commit-vote signature verifies preimage");
     }
 
     #[test]
@@ -1613,44 +1311,6 @@ mod tests {
     }
 
     #[test]
-    fn signer_indices_from_bitmap_collects_sparse_signers() {
-        let indices =
-            signer_indices_from_bitmap(&[0b0010_1001], 6).expect("sparse bitmap should decode");
-        assert_eq!(indices, vec![0, 3, 5]);
-    }
-
-    #[test]
-    fn bridge_finality_min_signatures_matches_quorum_policy() {
-        assert_eq!(BridgeFinalityVerifier::min_signatures(0), 0);
-        assert_eq!(BridgeFinalityVerifier::min_signatures(1), 1);
-        assert_eq!(BridgeFinalityVerifier::min_signatures(3), 3);
-        assert_eq!(BridgeFinalityVerifier::min_signatures(4), 3);
-        assert_eq!(BridgeFinalityVerifier::min_signatures(6), 5);
-        assert_eq!(BridgeFinalityVerifier::min_signatures(7), 5);
-    }
-
-    #[test]
-    fn bridge_finality_rejects_pop_length_mismatch() {
-        let keys = vec![checked_bls_keypair(), checked_bls_keypair()];
-        let proof = make_finality_proof("bridge-pop-mismatch", 1, 0, &keys);
-        let mut verifier =
-            BridgeFinalityVerifier::new("bridge-pop-mismatch".parse().expect("chain id"));
-        let mut bad = proof.clone();
-        bad.validator_set_pops.pop();
-
-        let err = verifier
-            .verify(&bad)
-            .expect_err("validator pop length mismatch should fail");
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::ValidatorSetPopLengthMismatch {
-                expected: 2,
-                got: 1
-            }
-        ));
-    }
-
-    #[test]
     fn wrapped_asset_roundtrip() {
         let def = WrappedAssetDef {
             origin_chain: b"btc".to_vec(),
@@ -1912,882 +1572,265 @@ mod tests {
     }
 
     #[test]
-    fn bridge_finality_proof_roundtrip() {
-        let keys = vec![checked_bls_keypair()];
-        let proof = make_finality_proof("proof-chain", 1, 0, &keys);
-        let buf = proof.encode();
-        let dec = BridgeFinalityProof::decode_all(&mut &buf[..]).expect("decode");
-        assert_eq!(proof, dec);
+    fn bridge_finality_proof_roundtrip_preserves_exact_v2_artifact() {
+        let fixture = make_v2_fixture("proof-chain");
+        let encoded = fixture.proof.encode();
+        let decoded = BridgeFinalityProof::decode_all(&mut encoded.as_slice()).expect("decode");
+
+        assert_eq!(decoded, fixture.proof);
+        decoded
+            .finality_artifact
+            .verify()
+            .expect("roundtripped proof remains cryptographically valid");
     }
 
     #[test]
-    fn bridge_finality_proof_roundtrip_without_validator_pops() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("proof-chain-no-pops", 2, 0, &keys);
-        proof.validator_set_pops.clear();
-
-        let buf = proof.encode();
-        let dec = BridgeFinalityProof::decode_all(&mut &buf[..]).expect("decode");
-        assert_eq!(proof, dec);
-        assert!(dec.validator_set_pops.is_empty());
-    }
-
-    #[test]
-    fn bridge_finality_bundle_roundtrip() {
-        let validator_keys: Vec<_> = (0..2).map(|_| checked_bls_keypair()).collect();
-        let next_keys: Vec<_> = (0..2).map(|_| checked_bls_keypair()).collect();
-        let signature_key = checked_random_keypair();
-        let proof = make_finality_proof("bundle-chain", 4, 2, &validator_keys);
-        let authority_set = BridgeAuthoritySet {
-            id: 9,
-            validator_set: proof.commit_qc.validator_set.clone(),
-            validator_set_hash: proof.commit_qc.validator_set_hash,
-            validator_set_hash_version: proof.commit_qc.validator_set_hash_version,
-        };
-        let next_authority_set = BridgeAuthoritySet {
-            id: 10,
-            validator_set: validator_set_from_keys(&next_keys),
-            validator_set_hash: HashOf::new(&validator_set_from_keys(&next_keys)),
-            validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        };
+    fn bridge_finality_bundle_roundtrip_commits_to_exact_context() {
+        let fixture = make_v2_fixture("bundle-chain");
+        let proof = fixture.proof;
+        let context_id = proof.finality_artifact.context_id();
         let bundle = BridgeFinalityBundle {
             commitment: BridgeCommitment {
-                chain_id: proof.chain_id.clone(),
-                authority_set: authority_set.clone(),
-                block_height: proof.height,
-                block_hash: proof.block_hash,
+                chain_id: proof.finality_artifact.height_context.chain_id.clone(),
+                height_context_id: context_id,
+                block_height: proof.finality_artifact.height,
+                block_hash: proof.finality_artifact.block_hash,
                 mmr_root: Some([0x91; 32]),
-                mmr_leaf_index: Some(3),
-                mmr_peaks: Some(vec![[0x92; 32], [0x93; 32]]),
-                next_authority_set: Some(next_authority_set),
+                mmr_leaf_index: Some(0),
+                mmr_peaks: Some(vec![[0x92; 32]]),
             },
-            justification: BridgeCommitmentJustification {
-                signatures: vec![make_block_signature(0, &signature_key, &proof.block_header)],
-            },
-            block_header: proof.block_header,
-            commit_qc: proof.commit_qc,
+            finality_proof: proof,
         };
 
-        let buf = bundle.encode();
-        let dec = BridgeFinalityBundle::decode_all(&mut &buf[..]).expect("decode");
-        assert_eq!(bundle, dec);
-        assert_eq!(dec.commitment.authority_set, authority_set);
+        let encoded = bundle.encode();
+        let decoded = BridgeFinalityBundle::decode_all(&mut encoded.as_slice()).expect("decode");
+        assert_eq!(decoded, bundle);
+        assert_eq!(decoded.commitment.height_context_id, context_id);
     }
 
     #[test]
-    fn bridge_commitment_roundtrip_without_optional_fields() {
-        let keys: Vec<_> = (0..2).map(|_| checked_bls_keypair()).collect();
-        let authority_set = BridgeAuthoritySet {
-            id: 12,
-            validator_set: validator_set_from_keys(&keys),
-            validator_set_hash: HashOf::new(&validator_set_from_keys(&keys)),
-            validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        };
-        let header = crate::block::BlockHeader::new(
-            NonZeroU64::new(12).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
+    fn verifier_accepts_weighted_npos_quorum_with_context_anchor() {
+        let fixture = make_v2_fixture("chain-a");
+        let proof = fixture.proof;
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            proof.finality_artifact.height_context.chain_id.clone(),
+            proof.finality_artifact.context_id(),
         );
-        let commitment = BridgeCommitment {
-            chain_id: "commitment-chain".parse().expect("chain id"),
-            authority_set,
-            block_height: 12,
-            block_hash: header.hash(),
-            mmr_root: None,
-            mmr_leaf_index: None,
-            mmr_peaks: None,
-            next_authority_set: None,
-        };
 
-        let buf = commitment.encode();
-        let dec = BridgeCommitment::decode_all(&mut &buf[..]).expect("decode");
-        assert_eq!(commitment, dec);
+        verifier.verify(&proof).expect("valid exact v2 proof");
     }
 
     #[test]
-    fn consensus_domain_changes_with_chain_tag_and_mode() {
-        let chain_a: ChainId = "chain-a".parse().expect("chain id");
-        let chain_b: ChainId = "chain-b".parse().expect("chain id");
-        let vote_v2 = consensus_domain(
-            &chain_a,
-            "Vote",
-            b"v2",
-            crate::block::consensus::PERMISSIONED_TAG,
+    fn verifier_requires_an_explicit_context_anchor() {
+        let fixture = make_v2_fixture("chain-a");
+        let mut verifier = BridgeFinalityVerifier::new(
+            fixture
+                .proof
+                .finality_artifact
+                .height_context
+                .chain_id
+                .clone(),
         );
 
-        assert_eq!(
-            vote_v2,
-            consensus_domain(
-                &chain_a,
-                "Vote",
-                b"v2",
-                crate::block::consensus::PERMISSIONED_TAG,
-            )
-        );
-        assert_ne!(
-            vote_v2,
-            consensus_domain(
-                &chain_b,
-                "Vote",
-                b"v2",
-                crate::block::consensus::PERMISSIONED_TAG,
-            )
-        );
-        assert_ne!(
-            vote_v2,
-            consensus_domain(
-                &chain_a,
-                "Proposal",
-                b"v2",
-                crate::block::consensus::PERMISSIONED_TAG,
-            )
-        );
-        assert_ne!(
-            vote_v2,
-            consensus_domain(
-                &chain_a,
-                "Vote",
-                b"v1",
-                crate::block::consensus::PERMISSIONED_TAG,
-            )
-        );
-        assert_ne!(
-            vote_v2,
-            consensus_domain(&chain_a, "Vote", b"v2", crate::block::consensus::NPOS_TAG)
-        );
-    }
-
-    #[test]
-    fn commit_vote_preimage_serializes_vote_fields_in_order() {
-        let keys = vec![checked_bls_keypair()];
-        let proof = make_finality_proof("preimage-chain", 7, 3, &keys);
-        let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
-        let domain = consensus_domain(&proof.chain_id, "Vote", b"v2", &proof.commit_qc.mode_tag);
-
-        let mut offset = 0usize;
-        assert_eq!(&preimage[offset..offset + 32], &domain);
-        offset += 32;
-        assert_eq!(
-            &preimage[offset..offset + Hash::LENGTH],
-            proof.commit_qc.subject_block_hash.as_ref().as_ref()
-        );
-        offset += Hash::LENGTH;
-        assert_eq!(
-            &preimage[offset..offset + Hash::LENGTH],
-            proof.commit_qc.parent_state_root.as_ref()
-        );
-        offset += Hash::LENGTH;
-        assert_eq!(
-            &preimage[offset..offset + Hash::LENGTH],
-            proof.commit_qc.post_state_root.as_ref()
-        );
-        offset += Hash::LENGTH;
-        assert_eq!(
-            &preimage[offset..offset + 8],
-            &proof.commit_qc.height.to_be_bytes()
-        );
-        offset += 8;
-        assert_eq!(
-            &preimage[offset..offset + 8],
-            &proof.commit_qc.view.to_be_bytes()
-        );
-        offset += 8;
-        assert_eq!(
-            &preimage[offset..offset + 8],
-            &proof.commit_qc.epoch.to_be_bytes()
-        );
-        offset += 8;
-        assert_eq!(
-            &preimage[offset..offset + Hash::LENGTH],
-            proof.commit_qc.chain_order_hash.as_ref()
-        );
-        offset += Hash::LENGTH;
-        assert_eq!(
-            &preimage[offset..offset + 8],
-            &proof.commit_qc.rechain_seq.to_be_bytes()
-        );
-        offset += 8;
-        assert_eq!(preimage[offset], proof.commit_qc.phase as u8);
-        offset += 1;
-        assert_eq!(preimage[offset], 0);
-        offset += 1;
-        assert_eq!(offset, preimage.len());
-    }
-
-    #[test]
-    fn commit_vote_preimage_serializes_highest_qc_when_present() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("preimage-highest-qc-chain", 7, 3, &keys);
-        let highest_qc = crate::consensus::QcRef {
-            height: 6,
-            view: 2,
-            epoch: 3,
-            subject_block_hash: proof.block_hash,
-            phase: crate::block::consensus::CertPhase::Prepare,
-        };
-        proof.commit_qc.highest_qc = Some(highest_qc);
-
-        let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
-        let mut offset = 32 + Hash::LENGTH * 3 + 8 * 3 + Hash::LENGTH + 8 + 1;
-
-        assert_eq!(preimage[offset], 1);
-        offset += 1;
-        assert_eq!(
-            &preimage[offset..offset + 8],
-            &highest_qc.height.to_be_bytes()
-        );
-        offset += 8;
-        assert_eq!(
-            &preimage[offset..offset + 8],
-            &highest_qc.view.to_be_bytes()
-        );
-        offset += 8;
-        assert_eq!(
-            &preimage[offset..offset + 8],
-            &highest_qc.epoch.to_be_bytes()
-        );
-        offset += 8;
-        assert_eq!(
-            &preimage[offset..offset + Hash::LENGTH],
-            highest_qc.subject_block_hash.as_ref().as_ref()
-        );
-        offset += Hash::LENGTH;
-        assert_eq!(preimage[offset], highest_qc.phase as u8);
-        offset += 1;
-        assert_eq!(offset, preimage.len());
-    }
-
-    #[test]
-    fn signer_indices_from_bitmap_accepts_empty_roster() {
-        let indices = signer_indices_from_bitmap(&[], 0).expect("empty roster should decode");
-        assert!(indices.is_empty());
-    }
-
-    #[test]
-    fn signer_indices_from_bitmap_collects_bits_across_multiple_bytes() {
-        let indices = signer_indices_from_bitmap(&[0b0000_0000, 0b0000_0101], 11).expect("bitmap");
-        assert_eq!(indices, vec![8, 10]);
-    }
-
-    #[test]
-    fn verifier_with_validator_set_accepts_after_epoch_anchor_update() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let proof = make_finality_proof("chain-a", 1, 0, &keys);
-        let mut verifier = BridgeFinalityVerifier::with_validator_set(
-            proof.chain_id.clone(),
-            proof.commit_qc.validator_set_hash,
-            proof.commit_qc.validator_set_hash_version,
-        );
-
-        let err = verifier
-            .verify(&proof)
-            .expect_err("epoch anchor should still be required");
-        assert!(matches!(err, BridgeFinalityVerifyError::MissingEpochAnchor));
-
-        verifier.set_epoch_anchor(proof.commit_qc.epoch);
-        verifier
-            .verify(&proof)
-            .expect("validator-set-only constructor should accept once epoch anchor is set");
-    }
-
-    #[test]
-    fn verifier_rejects_wrong_chain_id() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let proof = make_finality_proof("chain-a", 1, 0, &keys);
-        let mut verifier = BridgeFinalityVerifier::new("chain-b".parse().expect("chain id parses"));
-
-        let err = verifier.verify(&proof).unwrap_err();
         assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::ChainIdMismatch { .. }
+            verifier.verify(&fixture.proof),
+            Err(BridgeFinalityVerifyError::MissingContextAnchor)
         ));
     }
 
     #[test]
-    fn verifier_accepts_consensus_hash_when_result_merkle_root_is_present() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.block_header = crate::block::BlockHeader::new(
+    fn verifier_rejects_version_chain_header_height_and_hash_drift() {
+        let fixture = make_v2_fixture("chain-a");
+        let expected_chain = fixture
+            .proof
+            .finality_artifact
+            .height_context
+            .chain_id
+            .clone();
+        let context_id = fixture.proof.finality_artifact.context_id();
+
+        let mut wrong_version = fixture.proof.clone();
+        wrong_version.version = BRIDGE_FINALITY_PROOF_VERSION_V1 + 1;
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
+        assert!(matches!(
+            verifier.verify(&wrong_version),
+            Err(BridgeFinalityVerifyError::UnsupportedProofVersion { .. })
+        ));
+
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            "other-chain".parse().expect("chain id"),
+            context_id,
+        );
+        assert!(matches!(
+            verifier.verify(&fixture.proof),
+            Err(BridgeFinalityVerifyError::ChainIdMismatch { .. })
+        ));
+
+        let mut wrong_height = fixture.proof.clone();
+        wrong_height.block_header = crate::block::BlockHeader::new(
+            NonZeroU64::new(2).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain.clone(), context_id);
+        assert!(matches!(
+            verifier.verify(&wrong_height),
+            Err(BridgeFinalityVerifyError::BlockHeaderHeightMismatch { .. })
+        ));
+
+        let mut wrong_hash = fixture.proof.clone();
+        wrong_hash.block_header = crate::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-                [0xAB; Hash::LENGTH],
+            Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"different result root",
             ))),
             0,
             0,
         );
-        proof.block_hash = proof.block_header.hash();
-        proof.commit_qc.subject_block_hash = proof.block_hash;
-        let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
-        let signatures: Vec<Vec<u8>> = keys
-            .iter()
-            .map(|kp| checked_commit_vote_signature_payload(kp, &preimage))
-            .collect();
-        let signature_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
-        proof.commit_qc.aggregate.bls_aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
-                .expect("aggregate signatures");
-
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            proof.chain_id.clone(),
-            proof.commit_qc.validator_set_hash,
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            0,
-        );
-
-        verifier
-            .verify(&proof)
-            .expect("consensus hash should ignore result merkle root");
+        let mut verifier = BridgeFinalityVerifier::with_context(expected_chain, context_id);
+        assert!(matches!(
+            verifier.verify(&wrong_hash),
+            Err(BridgeFinalityVerifyError::BlockHeaderHashMismatch { .. })
+        ));
     }
 
     #[test]
-    fn verifier_accepts_exact_quorum_signer_subset() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let proof = make_finality_proof_with_signers_and_mode(
-            "chain-a",
-            1,
-            0,
-            &keys,
-            &[0, 2, 3],
-            crate::block::consensus::PERMISSIONED_TAG,
-        );
-        let mut verifier = verifier_anchored_to(&proof);
+    fn verifier_rejects_missing_or_invalid_roster_pops() {
+        let fixture = make_v2_fixture("chain-a");
+        let context = fixture.proof.finality_artifact.height_context.clone();
+        let context_id = context.id();
 
-        verifier
-            .verify(&proof)
-            .expect("exact quorum subset should verify");
+        let mut missing = fixture.proof.clone();
+        missing.finality_artifact.validator_set_pops.pop();
+        let mut verifier =
+            BridgeFinalityVerifier::with_context(context.chain_id.clone(), context_id);
+        assert!(matches!(
+            verifier.verify(&missing),
+            Err(BridgeFinalityVerifyError::InvalidArtifact(
+                crate::block::consensus_v2::finality::V2FinalityValidationError::ProofOfPossessionCount { .. }
+            ))
+        ));
+
+        let other = make_v2_fixture("chain-b");
+        let mut invalid = fixture.proof;
+        invalid.finality_artifact.validator_set_pops[3] =
+            other.proof.finality_artifact.validator_set_pops[0].clone();
+        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context_id);
+        assert!(matches!(
+            verifier.verify(&invalid),
+            Err(BridgeFinalityVerifyError::CertificateVerification(
+                crate::block::consensus_v2::finality::V2QuorumCertificateVerificationError::InvalidProofOfPossession { index: 3 }
+            ))
+        ));
     }
 
     #[test]
-    fn verifier_accepts_npos_mode_with_matching_signature_domain() {
-        let keys = vec![checked_bls_keypair()];
-        let proof = make_finality_proof_with_signers_and_mode(
-            "chain-a",
-            1,
-            0,
-            &keys,
-            &[0],
-            crate::block::consensus::NPOS_TAG,
-        );
-        let mut verifier = verifier_anchored_to(&proof);
+    fn verifier_rejects_invalid_aggregate_signature() {
+        let mut fixture = make_v2_fixture("chain-a");
+        let context = fixture.proof.finality_artifact.height_context.clone();
+        fixture
+            .proof
+            .finality_artifact
+            .commit_qc
+            .aggregate_signature[0] ^= 0x80;
+        let mut verifier = BridgeFinalityVerifier::with_context(context.chain_id, context.id());
 
-        verifier
-            .verify(&proof)
-            .expect("alternate consensus mode tag should verify when signature domain matches");
+        assert!(matches!(
+            verifier.verify(&fixture.proof),
+            Err(BridgeFinalityVerifyError::CertificateVerification(
+                crate::block::consensus_v2::finality::V2QuorumCertificateVerificationError::InvalidAggregateSignature
+            ))
+        ));
     }
 
     #[test]
-    fn validate_commit_qc_rejects_empty_roster_without_aggregate_signature() {
-        let header = crate::block::BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let certificate = crate::consensus::Qc {
-            phase: crate::block::consensus::CertPhase::Commit,
-            subject_block_hash: header.hash(),
-            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-            height: 1,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-            validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: Vec::new(),
-            aggregate: crate::consensus::QcAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: Vec::new(),
-            },
+    fn verifier_enforces_both_npos_signer_count_and_voting_power() {
+        use crate::block::consensus_v2::{
+            ValidationError,
+            finality::{V2FinalityValidationError, V2QuorumCertificateVerificationError},
         };
 
-        let err = BridgeFinalityVerifier::validate_commit_qc(
-            &"chain-a".parse().expect("chain id"),
-            &certificate,
-            &[],
-        )
-        .expect_err("helper should still require an aggregate signature");
+        let too_few = make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[0]);
+        let err = too_few
+            .proof
+            .finality_artifact
+            .verify()
+            .expect_err("power alone cannot satisfy signer-count quorum");
         assert!(matches!(
             err,
-            BridgeFinalityVerifyError::AggregateSignatureMissing
+            V2QuorumCertificateVerificationError::InvalidArtifact(
+                V2FinalityValidationError::InvalidCommitCertificate(
+                    ValidationError::InsufficientSignerCount
+                )
+            )
+        ));
+
+        let too_little_power =
+            make_v2_fixture_with_quorum("chain-a", &[70, 10, 10, 10], &[1, 2, 3]);
+        let err = too_little_power
+            .proof
+            .finality_artifact
+            .verify()
+            .expect_err("signer count alone cannot satisfy powered quorum");
+        assert!(matches!(
+            err,
+            V2QuorumCertificateVerificationError::InvalidArtifact(
+                V2FinalityValidationError::InvalidCommitCertificate(
+                    ValidationError::InsufficientVotingPower
+                )
+            )
         ));
     }
 
     #[test]
-    fn verifier_does_not_advance_height_after_failed_proof() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let expected_hash = HashOf::new(&validator_set_from_keys(&keys));
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            "chain-a".parse().expect("chain id parses"),
-            expected_hash,
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            0,
+    fn verifier_rejects_duplicate_unsorted_and_out_of_range_signers() {
+        use crate::block::consensus_v2::{
+            ValidationError,
+            finality::{V2FinalityValidationError, V2QuorumCertificateVerificationError},
+        };
+
+        for signers in [vec![0, 0, 2], vec![1, 0, 2], vec![0, 1, 9]] {
+            let mut fixture = make_v2_fixture("chain-a");
+            fixture.proof.finality_artifact.commit_qc.signers = signers;
+            let err = fixture
+                .proof
+                .finality_artifact
+                .verify()
+                .expect_err("malformed signer sequence must fail before BLS");
+            assert!(matches!(
+                err,
+                V2QuorumCertificateVerificationError::InvalidArtifact(
+                    V2FinalityValidationError::InvalidCommitCertificate(
+                        ValidationError::SignersNotStrictlySorted
+                            | ValidationError::SignerOutOfRange
+                    )
+                )
+            ));
+        }
+    }
+
+    #[test]
+    fn verifier_rejects_wrong_trusted_context() {
+        let fixture = make_v2_fixture("chain-a");
+        let other = make_v2_fixture("chain-a");
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            fixture
+                .proof
+                .finality_artifact
+                .height_context
+                .chain_id
+                .clone(),
+            other.proof.finality_artifact.context_id(),
         );
 
-        let first = make_finality_proof("chain-a", 1, 0, &keys);
-        verifier.verify(&first).expect("first proof accepted");
-
-        let bad_second = make_finality_proof("chain-a", 2, 1, &keys);
-        let err = verifier.verify(&bad_second).unwrap_err();
         assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnexpectedEpoch {
-                expected: 0,
-                got: 1
-            }
-        ));
-
-        let good_second = make_finality_proof("chain-a", 2, 0, &keys);
-        verifier
-            .verify(&good_second)
-            .expect("failed proof must not advance verifier state");
-
-        let stale = verifier.verify(&good_second).unwrap_err();
-        assert!(matches!(
-            stale,
-            BridgeFinalityVerifyError::StaleHeight {
-                latest: 2,
-                height: 2
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_certificate_height_mismatch() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.height = 2;
-
-        let mut verifier = BridgeFinalityVerifier::new(proof.chain_id.clone());
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::CertificateHeightMismatch {
-                proof_height: 1,
-                certificate_height: 2
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_non_commit_certificate_phase() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.phase = crate::block::consensus::CertPhase::Prepare;
-
-        let mut verifier = BridgeFinalityVerifier::new(proof.chain_id.clone());
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::CertificatePhaseMismatch {
-                expected: crate::block::consensus::CertPhase::Commit,
-                got: crate::block::consensus::CertPhase::Prepare
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_mismatched_block_hash_field() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xCD; Hash::LENGTH]));
-
-        let mut verifier = BridgeFinalityVerifier::new(proof.chain_id.clone());
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::BlockHashMismatch { .. }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_mismatched_certificate_hash_field() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.subject_block_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xCE; Hash::LENGTH]));
-
-        let mut verifier = BridgeFinalityVerifier::new(proof.chain_id.clone());
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::BlockHashMismatch { .. }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_unsupported_validator_set_hash_version() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        let unsupported_version = crate::consensus::VALIDATOR_SET_HASH_VERSION_V1 + 1;
-        proof.commit_qc.validator_set_hash_version = unsupported_version;
-
-        let mut verifier = BridgeFinalityVerifier::new(proof.chain_id.clone());
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnsupportedValidatorSetHashVersion {
-                version
-            } if version == unsupported_version
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_empty_validator_set() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.validator_set.clear();
-        proof.commit_qc.validator_set_hash = HashOf::new(&proof.commit_qc.validator_set);
-        proof.commit_qc.aggregate.signers_bitmap.clear();
-        proof.validator_set_pops.clear();
-
-        let mut verifier = verifier_anchored_to(&proof);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(err, BridgeFinalityVerifyError::EmptyValidatorSet));
-    }
-
-    #[test]
-    fn verifier_rejects_signer_bitmap_length_mismatch() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.aggregate.signers_bitmap.clear();
-
-        let mut verifier = verifier_anchored_to(&proof);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::SignerBitmapLengthMismatch {
-                expected: 1,
-                got: 0
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_signer_bitmap_index_out_of_range() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.aggregate.signers_bitmap = vec![0b0000_0011];
-
-        let mut verifier = verifier_anchored_to(&proof);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::SignatureIndexOutOfRange { index: 1, len: 1 }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_insufficient_signers_for_quorum() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.aggregate.signers_bitmap = vec![0b0000_0001];
-
-        let mut verifier = verifier_anchored_to(&proof);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::InsufficientSigners {
-                required: 3,
-                collected: 1
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_missing_aggregate_signature() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.aggregate.bls_aggregate_signature.clear();
-
-        let mut verifier = verifier_anchored_to(&proof);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::AggregateSignatureMissing
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_non_bls_validator_key_in_commit_qc() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        let wrong_key = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
-        assert_eq!(
-            wrong_key
-                .public_key()
-                .try_algorithm()
-                .expect("checked public-key algorithm"),
-            Algorithm::Ed25519
-        );
-        proof.commit_qc.validator_set = vec![PeerId::from(wrong_key.public_key().clone())];
-        proof.commit_qc.validator_set_hash = HashOf::new(&proof.commit_qc.validator_set);
-
-        let mut verifier = verifier_anchored_to(&proof);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::InvalidValidatorKeyAlgorithm {
-                index: 0,
-                algorithm: Algorithm::Ed25519
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_invalid_aggregate_signature_payload() {
-        let keys = vec![checked_bls_keypair()];
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof
-            .commit_qc
-            .aggregate
-            .bls_aggregate_signature
-            .pop()
-            .expect("aggregate signature should not be empty before truncation");
-
-        let mut verifier = verifier_anchored_to(&proof);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::InvalidAggregateSignature
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_stale_and_advanced_heights() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            "chain-a".parse().expect("chain id parses"),
-            HashOf::new(&validator_set_from_keys(&keys)),
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            0,
-        );
-
-        let first = make_finality_proof("chain-a", 1, 0, &keys);
-        verifier.verify(&first).expect("first proof accepted");
-
-        let stale_err = verifier.verify(&first).unwrap_err();
-        assert!(matches!(
-            stale_err,
-            BridgeFinalityVerifyError::StaleHeight {
-                latest: 1,
-                height: 1
-            }
-        ));
-
-        let advanced = make_finality_proof("chain-a", 3, 0, &keys);
-        let advanced_err = verifier.verify(&advanced).unwrap_err();
-        assert!(matches!(
-            advanced_err,
-            BridgeFinalityVerifyError::AdvancedHeight {
-                latest: 1,
-                height: 3
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_replayed_validator_set_after_anchor() {
-        let old_keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let new_keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let expected_hash = HashOf::new(&validator_set_from_keys(&new_keys));
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            "chain-a".parse().expect("chain id parses"),
-            expected_hash,
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            0,
-        );
-
-        let proof = make_finality_proof("chain-a", 1, 0, &old_keys);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnexpectedValidatorSet { .. }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_unexpected_epoch_anchor() {
-        let keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
-        let expected_hash = HashOf::new(&validator_set_from_keys(&keys));
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            "chain-a".parse().expect("chain id parses"),
-            expected_hash,
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            5,
-        );
-
-        let proof = make_finality_proof("chain-a", 1, 4, &keys);
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnexpectedEpoch {
-                expected: 5,
-                got: 4
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_tampered_validator_set_hash() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let mut proof = make_finality_proof("chain-a", 1, 0, &keys);
-        proof.commit_qc.validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
-
-        let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::ValidatorSetHashMismatch { .. }
-        ));
-    }
-
-    #[test]
-    fn verifier_rejects_prior_epoch_after_anchor_rotation() {
-        let epoch0_keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
-        let epoch1_keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            "chain-a".parse().expect("chain id parses"),
-            HashOf::new(&validator_set_from_keys(&epoch0_keys)),
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            0,
-        );
-
-        let proof_epoch0 = make_finality_proof("chain-a", 1, 0, &epoch0_keys);
-        verifier
-            .verify(&proof_epoch0)
-            .expect("initial anchored proof should verify");
-
-        verifier.set_validator_set_and_epoch_anchor(
-            HashOf::new(&validator_set_from_keys(&epoch1_keys)),
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            1,
-        );
-
-        let replayed = make_finality_proof("chain-a", 2, 0, &epoch0_keys);
-        let err = verifier.verify(&replayed).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnexpectedEpoch {
-                expected: 1,
-                got: 0
-            }
-        ));
-    }
-
-    #[test]
-    fn verifier_accepts_epoch_and_roster_rotation_after_combined_anchor_update() {
-        let roster_a: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let roster_b: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            "chain-a".parse().expect("chain id parses"),
-            HashOf::new(&validator_set_from_keys(&roster_a)),
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            0,
-        );
-
-        let proof_a = make_finality_proof("chain-a", 1, 0, &roster_a);
-        verifier.verify(&proof_a).expect("first proof accepted");
-
-        let proof_b = make_finality_proof("chain-a", 2, 1, &roster_b);
-        let err = verifier.verify(&proof_b).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnexpectedEpoch {
-                expected: 0,
-                got: 1
-            }
-        ));
-
-        verifier.set_validator_set_and_epoch_anchor(
-            HashOf::new(&validator_set_from_keys(&roster_b)),
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            1,
-        );
-
-        verifier
-            .verify(&proof_b)
-            .expect("combined anchor rotation should accept the new roster and epoch");
-    }
-
-    #[test]
-    fn verifier_accepts_roster_change_after_anchor_update() {
-        let roster_a: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let roster_b: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-            "chain-a".parse().expect("chain id parses"),
-            HashOf::new(&validator_set_from_keys(&roster_a)),
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            0,
-        );
-
-        let proof_a = make_finality_proof("chain-a", 1, 0, &roster_a);
-        verifier.verify(&proof_a).expect("first proof accepted");
-
-        let proof_b = make_finality_proof("chain-a", 2, 0, &roster_b);
-        let err = verifier.verify(&proof_b).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnexpectedValidatorSet { .. }
-        ));
-
-        verifier.set_validator_set_anchor(
-            HashOf::new(&validator_set_from_keys(&roster_b)),
-            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        );
-
-        verifier.verify(&proof_b).expect("anchor swap accepted");
-    }
-
-    #[test]
-    fn verifier_requires_explicit_epoch_and_validator_set_anchors() {
-        let keys: Vec<_> = (0..4).map(|_| checked_bls_keypair()).collect();
-        let proof = make_finality_proof("chain-a", 1, 0, &keys);
-
-        let mut missing_both =
-            BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
-        let err = missing_both
-            .verify(&proof)
-            .expect_err("missing anchors should fail");
-        assert!(matches!(err, BridgeFinalityVerifyError::MissingEpochAnchor));
-
-        let mut missing_validator =
-            BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
-        missing_validator.set_epoch_anchor(0);
-        let err = missing_validator
-            .verify(&proof)
-            .expect_err("missing validator set anchor should fail");
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::MissingValidatorSetAnchor
-        ));
-    }
-
-    #[test]
-    fn verifier_enforces_hash_version_updated_via_anchor_setter() {
-        let keys: Vec<_> = (0..3).map(|_| checked_bls_keypair()).collect();
-        let proof = make_finality_proof("chain-a", 1, 0, &keys);
-        let unsupported_version = crate::consensus::VALIDATOR_SET_HASH_VERSION_V1 + 1;
-        let mut verifier = BridgeFinalityVerifier::new(proof.chain_id.clone());
-        verifier.set_epoch_anchor(proof.commit_qc.epoch);
-        verifier.set_validator_set_anchor(proof.commit_qc.validator_set_hash, unsupported_version);
-
-        let err = verifier.verify(&proof).unwrap_err();
-        assert!(matches!(
-            err,
-            BridgeFinalityVerifyError::UnsupportedValidatorSetHashVersion {
-                version
-            } if version == crate::consensus::VALIDATOR_SET_HASH_VERSION_V1
+            verifier.verify(&fixture.proof),
+            Err(BridgeFinalityVerifyError::UnexpectedContext { .. })
         ));
     }
 }

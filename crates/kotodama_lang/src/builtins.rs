@@ -473,7 +473,8 @@ pub enum Builtin {
     JsonSetIntDirect,
     JsonSetAccountIdDirect,
     JsonGetIntDirect,
-    JsonGetNumericDirect,
+    JsonGetDecimalDirect,
+    JsonGetQuantityDirect,
     JsonGetJsonDirect,
     JsonGetNameDirect,
     JsonGetAccountIdDirect,
@@ -513,13 +514,13 @@ pub enum Builtin {
     NumericLeDirect,
     NumericGtDirect,
     NumericGeDirect,
-    /// Explicit two's-complement wrapping `i64` addition.
+    /// Explicit modulo-2^512 `int` addition.
     WrappingAdd,
-    /// Explicit two's-complement wrapping `i64` subtraction.
+    /// Explicit modulo-2^512 `int` subtraction.
     WrappingSub,
-    /// Explicit two's-complement wrapping `i64` multiplication.
+    /// Explicit modulo-2^512 `int` multiplication.
     WrappingMul,
-    /// Explicit two's-complement wrapping `i64` negation.
+    /// Explicit modulo-2^512 `int` negation.
     WrappingNeg,
     Isqrt,
     Abs,
@@ -534,7 +535,8 @@ pub enum Builtin {
     Valcom,
     SetVl,
     GetInt,
-    GetNumeric,
+    GetDecimal,
+    GetQuantity,
     GetJson,
     GetName,
     GetAccountId,
@@ -742,7 +744,8 @@ impl Builtin {
         Self::JsonSetIntDirect,
         Self::JsonSetAccountIdDirect,
         Self::JsonGetIntDirect,
-        Self::JsonGetNumericDirect,
+        Self::JsonGetDecimalDirect,
+        Self::JsonGetQuantityDirect,
         Self::JsonGetJsonDirect,
         Self::JsonGetNameDirect,
         Self::JsonGetAccountIdDirect,
@@ -756,32 +759,6 @@ impl Builtin {
         Self::SchemaEncodeDirect,
         Self::SchemaDecodeDirect,
         Self::SchemaInfoDirect,
-        Self::NumericToInt,
-        Self::NumericNeg,
-        Self::NumericAdd,
-        Self::NumericSub,
-        Self::NumericMul,
-        Self::NumericDiv,
-        Self::NumericRem,
-        Self::NumericEq,
-        Self::NumericNe,
-        Self::NumericLt,
-        Self::NumericLe,
-        Self::NumericGt,
-        Self::NumericGe,
-        Self::NumericToIntDirect,
-        Self::NumericAddDirect,
-        Self::NumericSubDirect,
-        Self::NumericMulDirect,
-        Self::NumericDivDirect,
-        Self::NumericRemDirect,
-        Self::NumericNegDirect,
-        Self::NumericEqDirect,
-        Self::NumericNeDirect,
-        Self::NumericLtDirect,
-        Self::NumericLeDirect,
-        Self::NumericGtDirect,
-        Self::NumericGeDirect,
         Self::WrappingAdd,
         Self::WrappingSub,
         Self::WrappingMul,
@@ -799,7 +776,8 @@ impl Builtin {
         Self::Valcom,
         Self::SetVl,
         Self::GetInt,
-        Self::GetNumeric,
+        Self::GetDecimal,
+        Self::GetQuantity,
         Self::GetJson,
         Self::GetName,
         Self::GetAccountId,
@@ -997,7 +975,8 @@ impl Builtin {
             "json_set_int_direct" => Self::JsonSetIntDirect,
             "json_set_account_id_direct" => Self::JsonSetAccountIdDirect,
             "json_get_int_direct" => Self::JsonGetIntDirect,
-            "json_get_numeric_direct" => Self::JsonGetNumericDirect,
+            "json_get_decimal_direct" => Self::JsonGetDecimalDirect,
+            "json_get_quantity_direct" => Self::JsonGetQuantityDirect,
             "json_get_json_direct" => Self::JsonGetJsonDirect,
             "json_get_name_direct" => Self::JsonGetNameDirect,
             "json_get_account_id_direct" => Self::JsonGetAccountIdDirect,
@@ -1011,32 +990,6 @@ impl Builtin {
             "schema_encode_direct" => Self::SchemaEncodeDirect,
             "schema_decode_direct" => Self::SchemaDecodeDirect,
             "schema_info_direct" => Self::SchemaInfoDirect,
-            "numeric_to_int" => Self::NumericToInt,
-            "numeric_neg" => Self::NumericNeg,
-            "numeric_add" => Self::NumericAdd,
-            "numeric_sub" => Self::NumericSub,
-            "numeric_mul" => Self::NumericMul,
-            "numeric_div" => Self::NumericDiv,
-            "numeric_rem" => Self::NumericRem,
-            "numeric_eq" => Self::NumericEq,
-            "numeric_ne" => Self::NumericNe,
-            "numeric_lt" => Self::NumericLt,
-            "numeric_le" => Self::NumericLe,
-            "numeric_gt" => Self::NumericGt,
-            "numeric_ge" => Self::NumericGe,
-            "numeric_to_int_direct" => Self::NumericToIntDirect,
-            "numeric_add_direct" => Self::NumericAddDirect,
-            "numeric_sub_direct" => Self::NumericSubDirect,
-            "numeric_mul_direct" => Self::NumericMulDirect,
-            "numeric_div_direct" => Self::NumericDivDirect,
-            "numeric_rem_direct" => Self::NumericRemDirect,
-            "numeric_neg_direct" => Self::NumericNegDirect,
-            "numeric_eq_direct" => Self::NumericEqDirect,
-            "numeric_ne_direct" => Self::NumericNeDirect,
-            "numeric_lt_direct" => Self::NumericLtDirect,
-            "numeric_le_direct" => Self::NumericLeDirect,
-            "numeric_gt_direct" => Self::NumericGtDirect,
-            "numeric_ge_direct" => Self::NumericGeDirect,
             "wrapping_add" => Self::WrappingAdd,
             "wrapping_sub" => Self::WrappingSub,
             "wrapping_mul" => Self::WrappingMul,
@@ -1054,7 +1007,8 @@ impl Builtin {
             "valcom" => Self::Valcom,
             "setvl" => Self::SetVl,
             "get_int" => Self::GetInt,
-            "get_numeric" => Self::GetNumeric,
+            "get_decimal" => Self::GetDecimal,
+            "get_quantity" => Self::GetQuantity,
             "get_json" => Self::GetJson,
             "get_name" => Self::GetName,
             "get_account_id" => Self::GetAccountId,
@@ -1249,7 +1203,8 @@ impl Builtin {
             Self::JsonSetIntDirect => "json_set_int_direct",
             Self::JsonSetAccountIdDirect => "json_set_account_id_direct",
             Self::JsonGetIntDirect => "json_get_int_direct",
-            Self::JsonGetNumericDirect => "json_get_numeric_direct",
+            Self::JsonGetDecimalDirect => "json_get_decimal_direct",
+            Self::JsonGetQuantityDirect => "json_get_quantity_direct",
             Self::JsonGetJsonDirect => "json_get_json_direct",
             Self::JsonGetNameDirect => "json_get_name_direct",
             Self::JsonGetAccountIdDirect => "json_get_account_id_direct",
@@ -1306,7 +1261,8 @@ impl Builtin {
             Self::Valcom => "valcom",
             Self::SetVl => "setvl",
             Self::GetInt => "get_int",
-            Self::GetNumeric => "get_numeric",
+            Self::GetDecimal => "get_decimal",
+            Self::GetQuantity => "get_quantity",
             Self::GetJson => "get_json",
             Self::GetName => "get_name",
             Self::GetAccountId => "get_account_id",
@@ -1391,7 +1347,7 @@ impl Builtin {
             Self::SubscriptionBill => "ledger::subscription::bill",
             Self::SubscriptionRecordUsage => "ledger::subscription::record_usage",
             Self::GetAccountBalance => "ledger::asset::balance",
-            Self::DebugPrint => "debug::print_i64",
+            Self::DebugPrint => self.name(),
             Self::DebugLog => "debug::log",
             Self::Assert => "test::assert",
             Self::Require => "require",
@@ -1481,10 +1437,14 @@ impl Builtin {
             Self::VrfVerifyBatch => "crypto::vrf::verify_batch",
             Self::Sm3Hash => "crypto::sm3",
             Self::JsonObject => "json::object",
-            Self::JsonSetInt => "json::set_i64",
+            // The scalar setter cannot represent Kotodama's adaptive-width
+            // `int`; source must use native `json { ... }` construction,
+            // which carries the exact pointer-backed value.
+            Self::JsonSetInt => self.name(),
             Self::JsonSetAccountId => "json::set_account_id",
-            Self::GetInt => "json::get_i64",
-            Self::GetNumeric => "json::get_amount",
+            Self::GetInt => "json::get_int",
+            Self::GetDecimal => "json::get_decimal",
+            Self::GetQuantity => "json::get_quantity",
             Self::GetJson => "json::get",
             Self::GetName => "json::get_name",
             Self::GetAccountId => "json::get_account_id",
@@ -1519,26 +1479,29 @@ impl Builtin {
             Self::TlvEq => "codec::tlv_eq",
             Self::TlvLen => "codec::tlv_len",
             Self::PointerToNorito => "codec::to_norito",
-            Self::EncodeInt => "codec::encode_i64",
-            Self::DecodeInt => "codec::decode_i64",
+            Self::EncodeInt => self.name(),
+            Self::DecodeInt => self.name(),
             Self::EncodeJson => "codec::encode_json",
             Self::DecodeJson => "codec::decode_json",
             Self::SchemaEncode => "codec::schema::encode",
             Self::SchemaDecode => "codec::schema::decode",
             Self::SchemaInfo => "codec::schema::info",
-            Self::NumericToInt => "numeric::to_i64",
-            Self::NumericNeg => "numeric::neg",
-            Self::NumericAdd => "numeric::add",
-            Self::NumericSub => "numeric::sub",
-            Self::NumericMul => "numeric::mul",
-            Self::NumericDiv => "numeric::div",
-            Self::NumericRem => "numeric::rem",
-            Self::NumericEq => "numeric::eq",
-            Self::NumericNe => "numeric::ne",
-            Self::NumericLt => "numeric::lt",
-            Self::NumericLe => "numeric::le",
-            Self::NumericGt => "numeric::gt",
-            Self::NumericGe => "numeric::ge",
+            // Operators and the named V1 conversions are the only numeric
+            // source surface. These registry entries remain compiler-owned
+            // lowering helpers and deliberately have no source alias.
+            Self::NumericToInt
+            | Self::NumericNeg
+            | Self::NumericAdd
+            | Self::NumericSub
+            | Self::NumericMul
+            | Self::NumericDiv
+            | Self::NumericRem
+            | Self::NumericEq
+            | Self::NumericNe
+            | Self::NumericLt
+            | Self::NumericLe
+            | Self::NumericGt
+            | Self::NumericGe => self.name(),
             Self::WrappingAdd => "math::wrapping_add",
             Self::WrappingSub => "math::wrapping_sub",
             Self::WrappingMul => "math::wrapping_mul",
@@ -1568,7 +1531,8 @@ impl Builtin {
             | Self::JsonSetIntDirect
             | Self::JsonSetAccountIdDirect
             | Self::JsonGetIntDirect
-            | Self::JsonGetNumericDirect
+            | Self::JsonGetDecimalDirect
+            | Self::JsonGetQuantityDirect
             | Self::JsonGetJsonDirect
             | Self::JsonGetNameDirect
             | Self::JsonGetAccountIdDirect
@@ -1615,7 +1579,8 @@ impl Builtin {
             | Self::Ensure
             | Self::StateMapRemove => BuiltinSurface::MethodOnly,
             Self::GetInt
-            | Self::GetNumeric
+            | Self::GetDecimal
+            | Self::GetQuantity
             | Self::GetJson
             | Self::GetName
             | Self::GetAccountId
@@ -1853,6 +1818,7 @@ impl Builtin {
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope
             | Self::PointerToNorito
+            | Self::JsonSetInt
             | Self::Path
             | Self::NameDecode
             | Self::TlvEq
@@ -1867,7 +1833,8 @@ impl Builtin {
             | Self::JsonSetIntDirect
             | Self::JsonSetAccountIdDirect
             | Self::JsonGetIntDirect
-            | Self::JsonGetNumericDirect
+            | Self::JsonGetDecimalDirect
+            | Self::JsonGetQuantityDirect
             | Self::JsonGetJsonDirect
             | Self::JsonGetNameDirect
             | Self::JsonGetAccountIdDirect
@@ -1878,6 +1845,19 @@ impl Builtin {
             | Self::SchemaEncodeDirect
             | Self::SchemaDecodeDirect
             | Self::SchemaInfoDirect
+            | Self::NumericToInt
+            | Self::NumericNeg
+            | Self::NumericAdd
+            | Self::NumericSub
+            | Self::NumericMul
+            | Self::NumericDiv
+            | Self::NumericRem
+            | Self::NumericEq
+            | Self::NumericNe
+            | Self::NumericLt
+            | Self::NumericLe
+            | Self::NumericGt
+            | Self::NumericGe
             | Self::NumericToIntDirect
             | Self::NumericAddDirect
             | Self::NumericSubDirect
@@ -2131,8 +2111,9 @@ impl Builtin {
             Self::DecodeJson => &[s::SYSCALL_JSON_DECODE],
             Self::JsonSetIntDirect => &[s::SYSCALL_JSON_SET_I64_DIRECT],
             Self::JsonSetAccountIdDirect => &[s::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT],
-            Self::JsonGetIntDirect => &[s::SYSCALL_JSON_GET_I64_DIRECT],
-            Self::JsonGetNumericDirect => &[s::SYSCALL_JSON_GET_AMOUNT_DIRECT],
+            Self::JsonGetIntDirect => &[s::SYSCALL_JSON_GET_INT_DIRECT],
+            Self::JsonGetDecimalDirect => &[s::SYSCALL_JSON_GET_DECIMAL_DIRECT],
+            Self::JsonGetQuantityDirect => &[s::SYSCALL_JSON_GET_QUANTITY_DIRECT],
             Self::JsonGetJsonDirect => &[s::SYSCALL_JSON_GET_JSON_DIRECT],
             Self::JsonGetNameDirect => &[s::SYSCALL_JSON_GET_NAME_DIRECT],
             Self::JsonGetAccountIdDirect => &[s::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT],
@@ -2148,32 +2129,73 @@ impl Builtin {
             Self::SchemaEncodeDirect => &[s::SYSCALL_SCHEMA_ENCODE_DIRECT],
             Self::SchemaDecodeDirect => &[s::SYSCALL_SCHEMA_DECODE_DIRECT],
             Self::SchemaInfoDirect => &[s::SYSCALL_SCHEMA_INFO_DIRECT],
-            Self::NumericToInt => &[s::SYSCALL_NUMERIC_TO_INT],
-            Self::NumericNeg => &[s::SYSCALL_NUMERIC_NEG],
-            Self::NumericAdd => &[s::SYSCALL_NUMERIC_ADD],
-            Self::NumericSub => &[s::SYSCALL_NUMERIC_SUB],
-            Self::NumericMul => &[s::SYSCALL_NUMERIC_MUL],
-            Self::NumericDiv => &[s::SYSCALL_NUMERIC_DIV],
-            Self::NumericRem => &[s::SYSCALL_NUMERIC_REM],
-            Self::NumericEq => &[s::SYSCALL_NUMERIC_EQ],
-            Self::NumericNe => &[s::SYSCALL_NUMERIC_NE],
-            Self::NumericLt => &[s::SYSCALL_NUMERIC_LT],
-            Self::NumericLe => &[s::SYSCALL_NUMERIC_LE],
-            Self::NumericGt => &[s::SYSCALL_NUMERIC_GT],
-            Self::NumericGe => &[s::SYSCALL_NUMERIC_GE],
-            Self::NumericToIntDirect => &[s::SYSCALL_NUMERIC_TO_INT_DIRECT],
-            Self::NumericAddDirect => &[s::SYSCALL_NUMERIC_ADD_DIRECT],
-            Self::NumericSubDirect => &[s::SYSCALL_NUMERIC_SUB_DIRECT],
-            Self::NumericMulDirect => &[s::SYSCALL_NUMERIC_MUL_DIRECT],
-            Self::NumericDivDirect => &[s::SYSCALL_NUMERIC_DIV_DIRECT],
-            Self::NumericRemDirect => &[s::SYSCALL_NUMERIC_REM_DIRECT],
-            Self::NumericNegDirect => &[s::SYSCALL_NUMERIC_NEG_DIRECT],
-            Self::NumericEqDirect => &[s::SYSCALL_NUMERIC_EQ_DIRECT],
-            Self::NumericNeDirect => &[s::SYSCALL_NUMERIC_NE_DIRECT],
-            Self::NumericLtDirect => &[s::SYSCALL_NUMERIC_LT_DIRECT],
-            Self::NumericLeDirect => &[s::SYSCALL_NUMERIC_LE_DIRECT],
-            Self::NumericGtDirect => &[s::SYSCALL_NUMERIC_GT_DIRECT],
-            Self::NumericGeDirect => &[s::SYSCALL_NUMERIC_GE_DIRECT],
+            Self::NumericToInt => &[s::SYSCALL_DECIMAL_TRY_TO_INT_EXACT],
+            Self::NumericNeg => &[s::SYSCALL_INT_NEG, s::SYSCALL_DECIMAL_NEG],
+            Self::NumericAdd => &[
+                s::SYSCALL_INT_ADD,
+                s::SYSCALL_DECIMAL_ADD,
+                s::SYSCALL_QUANTITY_ADD,
+            ],
+            Self::NumericSub => &[
+                s::SYSCALL_INT_SUB,
+                s::SYSCALL_DECIMAL_SUB,
+                s::SYSCALL_QUANTITY_SUB,
+            ],
+            Self::NumericMul => &[
+                s::SYSCALL_INT_MUL,
+                s::SYSCALL_DECIMAL_MUL,
+                s::SYSCALL_QUANTITY_MUL_DECIMAL,
+            ],
+            Self::NumericDiv => &[
+                s::SYSCALL_INT_DIV,
+                s::SYSCALL_DECIMAL_DIV_EXACT,
+                s::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+                s::SYSCALL_QUANTITY_RATIO_EXACT,
+            ],
+            Self::NumericRem => &[s::SYSCALL_INT_REM],
+            Self::NumericEq => &[
+                s::SYSCALL_INT_EQ,
+                s::SYSCALL_DECIMAL_EQ,
+                s::SYSCALL_QUANTITY_EQ,
+            ],
+            Self::NumericNe => &[
+                s::SYSCALL_INT_NE,
+                s::SYSCALL_DECIMAL_NE,
+                s::SYSCALL_QUANTITY_NE,
+            ],
+            Self::NumericLt => &[
+                s::SYSCALL_INT_LT,
+                s::SYSCALL_DECIMAL_LT,
+                s::SYSCALL_QUANTITY_LT,
+            ],
+            Self::NumericLe => &[
+                s::SYSCALL_INT_LE,
+                s::SYSCALL_DECIMAL_LE,
+                s::SYSCALL_QUANTITY_LE,
+            ],
+            Self::NumericGt => &[
+                s::SYSCALL_INT_GT,
+                s::SYSCALL_DECIMAL_GT,
+                s::SYSCALL_QUANTITY_GT,
+            ],
+            Self::NumericGe => &[
+                s::SYSCALL_INT_GE,
+                s::SYSCALL_DECIMAL_GE,
+                s::SYSCALL_QUANTITY_GE,
+            ],
+            Self::NumericToIntDirect
+            | Self::NumericAddDirect
+            | Self::NumericSubDirect
+            | Self::NumericMulDirect
+            | Self::NumericDivDirect
+            | Self::NumericRemDirect
+            | Self::NumericNegDirect
+            | Self::NumericEqDirect
+            | Self::NumericNeDirect
+            | Self::NumericLtDirect
+            | Self::NumericLeDirect
+            | Self::NumericGtDirect
+            | Self::NumericGeDirect => &[],
             Self::WrappingAdd
             | Self::WrappingSub
             | Self::WrappingMul
@@ -2190,8 +2212,9 @@ impl Builtin {
             | Self::Pubkgen
             | Self::Valcom
             | Self::SetVl => &[],
-            Self::GetInt => &[s::SYSCALL_JSON_GET_I64],
-            Self::GetNumeric => &[s::SYSCALL_JSON_GET_AMOUNT],
+            Self::GetInt => &[s::SYSCALL_JSON_GET_INT],
+            Self::GetDecimal => &[s::SYSCALL_JSON_GET_DECIMAL],
+            Self::GetQuantity => &[s::SYSCALL_JSON_GET_QUANTITY],
             Self::GetJson => &[s::SYSCALL_JSON_GET_JSON],
             Self::GetName => &[s::SYSCALL_JSON_GET_NAME],
             Self::GetAccountId => &[s::SYSCALL_JSON_GET_ACCOUNT_ID],
@@ -2262,15 +2285,15 @@ impl Builtin {
             Self::GetOr | Self::Ensure => S::new(&["StateMap<K,V>", "K", "V?"], "V"),
             Self::StateMapRemove => S::new(&["StateMap<K,V>", "K"], "Option<V>"),
             Self::KeysTake2 | Self::ValuesTake2 => {
-                S::new(&["StateMap<i64,i64>", "i64", "i64"], "i64")
+                S::new(&["StateMap<int,int>", "int", "int"], "int")
             }
-            Self::KeysValuesTake2 => S::new(&["StateMap<i64,i64>", "i64", "i64"], "(i64,i64)"),
+            Self::KeysValuesTake2 => S::new(&["StateMap<int,int>", "int", "int"], "(int,int)"),
             Self::StateGet => S::new(&["Name"], "bytes"),
             Self::StateSet => S::new(&["Name", "bytes"], "()"),
             Self::StateDel => S::new(&["Name"], "()"),
-            Self::StateKeys => S::new(&["Name", "i64", "i64"], "bytes"),
+            Self::StateKeys => S::new(&["Name", "int", "int"], "bytes"),
             Self::StateHas => S::new(&["Name"], "bool"),
-            Self::StateLen | Self::StateCount => S::new(&["Name"], "i64"),
+            Self::StateLen | Self::StateCount => S::new(&["Name"], "int"),
             Self::QueryExecuteNorito
             | Self::QueryGetContractManifest
             | Self::ZkRootsGet
@@ -2283,13 +2306,13 @@ impl Builtin {
             }
             Self::QueryGetDomain => S::new(&["DomainId"], "Option<DomainView>"),
             Self::QueryGetNft => S::new(&["NftId"], "Option<NftView>"),
-            Self::QueryPageAccounts => S::new(&["i64", "i64"], "QueryPage<AccountView>"),
-            Self::QueryPageAssets => S::new(&["i64", "i64"], "QueryPage<AssetView>"),
+            Self::QueryPageAccounts => S::new(&["int", "int"], "QueryPage<AccountView>"),
+            Self::QueryPageAssets => S::new(&["int", "int"], "QueryPage<AssetView>"),
             Self::QueryPageAssetDefinitions => {
-                S::new(&["i64", "i64"], "QueryPage<AssetDefinitionView>")
+                S::new(&["int", "int"], "QueryPage<AssetDefinitionView>")
             }
-            Self::QueryPageDomains => S::new(&["i64", "i64"], "QueryPage<DomainView>"),
-            Self::QueryPageNfts => S::new(&["i64", "i64"], "QueryPage<NftView>"),
+            Self::QueryPageDomains => S::new(&["int", "int"], "QueryPage<DomainView>"),
+            Self::QueryPageNfts => S::new(&["int", "int"], "QueryPage<NftView>"),
             Self::QueryGetParameter | Self::QueryGetContractInstance => {
                 S::new(&["Name|bytes"], "bytes")
             }
@@ -2301,7 +2324,7 @@ impl Builtin {
                 &[
                     "AssetDefinitionId",
                     "AccountId",
-                    "i64",
+                    "int",
                     "bytes",
                     "bytes?",
                     "string",
@@ -2316,14 +2339,14 @@ impl Builtin {
             Self::ExecuteQuery => S::new(&["bytes"], "bytes"),
             Self::ResolveAccountAlias => S::new(&["string|bytes"], "AccountId"),
             Self::SubscriptionBill | Self::SubscriptionRecordUsage => S::new(&[], "()"),
-            Self::GetAccountBalance => S::new(&["AccountId", "AssetDefinitionId"], "Amount"),
+            Self::GetAccountBalance => S::new(&["AccountId", "AssetDefinitionId"], "quantity"),
             Self::GetPublicInput => S::new(&["Name"], "bytes"),
-            Self::DebugPrint => S::new(&["i64"], "()"),
+            Self::DebugPrint => S::new(&["int"], "()"),
             Self::DebugLog => S::new(&["string"], "()"),
-            Self::Assert => S::new(&["bool", "string|i64?"], "()"),
+            Self::Assert => S::new(&["bool", "string|int?"], "()"),
             Self::Require => S::new(&["bool", "ErrorEnum::Variant"], "()"),
-            Self::Info => S::new(&["string|i64"], "()"),
-            Self::AssertEq => S::new(&["i64", "i64"], "()"),
+            Self::Info => S::new(&["string|int"], "()"),
+            Self::AssertEq => S::new(&["int", "int"], "()"),
             Self::TestInvokeEntrypoint => S::new(&["string", "Json"], "T"),
             Self::TestInvokeEntrypointAs => S::new(&["string", "string", "Json"], "T"),
             Self::TestExpectRejectAs => S::new(&["string", "string", "Json"], "()"),
@@ -2332,14 +2355,14 @@ impl Builtin {
             Self::TestActorSign => S::new(&["string", "bytes"], "bytes"),
             Self::SetAccountDetail => S::new(&["AccountId", "Name", "Json"], "()"),
             Self::MintAsset | Self::BurnAsset => {
-                S::new(&["AccountId", "AssetDefinitionId", "Amount"], "()")
+                S::new(&["AccountId", "AssetDefinitionId", "quantity"], "()")
             }
             Self::TransferAsset => S::new(
                 &[
                     "AccountId",
                     "AccountId",
                     "AssetDefinitionId",
-                    "Amount",
+                    "quantity",
                     "DataSpaceId",
                 ],
                 "()",
@@ -2351,16 +2374,16 @@ impl Builtin {
             Self::RegisterDomain | Self::UnregisterDomain => S::new(&["DomainId"], "()"),
             Self::TransferDomain => S::new(&["AccountId", "DomainId|Name", "AccountId"], "()"),
             Self::RegisterAccount | Self::UnregisterAccount => S::new(&["AccountId"], "()"),
-            Self::RegisterAsset => S::new(&["AssetDefinitionId", "string", "i64", "i64"], "()"),
+            Self::RegisterAsset => S::new(&["AssetDefinitionId", "string", "int", "int"], "()"),
             Self::CreateNewAsset => S::new(
-                &["AssetDefinitionId", "string", "i64", "AccountId", "i64"],
+                &["AssetDefinitionId", "string", "int", "AccountId", "int"],
                 "()",
             ),
             Self::UnregisterAsset => S::new(&["AssetDefinitionId"], "()"),
             Self::RegisterPeer | Self::UnregisterPeer => S::new(&["Json"], "()"),
             Self::CreateTrigger | Self::RegisterTrigger => S::new(&["Json"], "()"),
             Self::RemoveTrigger | Self::UnregisterTrigger => S::new(&["Name"], "()"),
-            Self::SetTriggerEnabled => S::new(&["Name", "i64"], "()"),
+            Self::SetTriggerEnabled => S::new(&["Name", "int"], "()"),
             Self::CreateRole => S::new(&["Name", "Json"], "()"),
             Self::DeleteRole => S::new(&["Name"], "()"),
             Self::GrantRole | Self::RevokeRole => S::new(&["AccountId", "Name"], "()"),
@@ -2368,14 +2391,14 @@ impl Builtin {
                 S::new(&["AccountId", "Name|Json"], "()")
             }
             Self::EscrowOpenOffer => {
-                S::new(&["Name", "AssetDefinitionId", "Amount", "bytes?"], "()")
+                S::new(&["Name", "AssetDefinitionId", "quantity", "bytes?"], "()")
             }
             Self::EscrowAccept
             | Self::EscrowMarkPaymentSent
             | Self::EscrowRelease
             | Self::EscrowCancel => S::new(&["Name"], "()"),
             Self::EscrowOpenDispute => S::new(&["Name", "bytes?"], "()"),
-            Self::EscrowResolveDispute => S::new(&["Name", "Amount", "Amount", "bytes?"], "()"),
+            Self::EscrowResolveDispute => S::new(&["Name", "quantity", "quantity", "bytes?"], "()"),
             Self::AnonymousEscrowOpenOffer
             | Self::AnonymousEscrowRelease
             | Self::AnonymousEscrowCancel
@@ -2384,14 +2407,14 @@ impl Builtin {
                 S::new(&["Name"], "()")
             }
             Self::AnonymousEscrowOpenDispute => S::new(&["Name", "bytes?"], "()"),
-            Self::GetPrivateInput => S::new(&["i64"], "Secret<i64>"),
-            Self::UseNullifier => S::new(&["i64"], "()"),
+            Self::GetPrivateInput => S::new(&["int"], "Secret<int>"),
+            Self::UseNullifier => S::new(&["int"], "()"),
             Self::CommitOutput | Self::CreateNftsForAllUsers => S::new(&[], "()"),
-            Self::SetExecutionDepth => S::new(&["i64"], "()"),
+            Self::SetExecutionDepth => S::new(&["int"], "()"),
             Self::TransferV1BatchBegin | Self::TransferV1BatchEnd => S::new(&[], "()"),
             Self::TransferV1BatchApply => S::new(&["bytes"], "()"),
             Self::TransferBatch => {
-                S::new(&["(AccountId,AccountId,AssetDefinitionId,Amount)..."], "()")
+                S::new(&["(AccountId,AccountId,AssetDefinitionId,quantity)..."], "()")
             }
             Self::AxtBegin => S::new(&["AxtDescriptor"], "()"),
             Self::AxtTouch => S::new(&["DataSpaceId", "bytes"], "AssetHandle"),
@@ -2408,7 +2431,7 @@ impl Builtin {
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
-            Self::VrfVerify => S::new(&["bytes", "bytes", "bytes", "i64"], "bytes"),
+            Self::VrfVerify => S::new(&["bytes", "bytes", "bytes", "int"], "bytes"),
             Self::VrfVerifyBatch => S::new(&["bytes"], "bytes"),
             Self::Sm3Hash
             | Self::Sha256Hash
@@ -2417,19 +2440,19 @@ impl Builtin {
             | Self::Keccak256Hash
             | Self::IrohaHash => S::new(&["bytes"], "bytes"),
             Self::Sm2Verify => S::new(&["bytes", "bytes", "bytes", "bytes?"], "bool"),
-            Self::VerifySignature => S::new(&["bytes", "bytes", "bytes", "i64"], "bool"),
+            Self::VerifySignature => S::new(&["bytes", "bytes", "bytes", "int"], "bool"),
             Self::Sm4GcmSeal | Self::Sm4GcmOpen => {
                 S::new(&["bytes", "bytes", "bytes", "bytes"], "bytes")
             }
             Self::Sm4CcmSeal | Self::Sm4CcmOpen => {
-                S::new(&["bytes", "bytes", "bytes", "bytes", "i64?"], "bytes")
+                S::new(&["bytes", "bytes", "bytes", "bytes", "int?"], "bytes")
             }
-            Self::Alloc | Self::GrowHeap => S::new(&["i64"], "i64"),
+            Self::Alloc | Self::GrowHeap => S::new(&["int"], "int"),
             Self::ProveExecution => S::new(&[], "bytes"),
             Self::VerifyProof => S::new(&["bytes"], "bool"),
-            Self::GetMerklePath => S::new(&["i64", "i64", "i64?"], "i64"),
+            Self::GetMerklePath => S::new(&["int", "int", "int?"], "int"),
             Self::GetMerkleCompact | Self::GetRegisterMerkleCompact => {
-                S::new(&["i64", "i64", "i64?", "i64?"], "i64")
+                S::new(&["int", "int", "int?", "int?"], "int")
             }
             Self::SoracloudReadCommittedState
             | Self::SoracloudEmitStateMutation
@@ -2444,24 +2467,27 @@ impl Builtin {
                 S::new(&["SoracloudRequest"], "SoracloudResponse")
             }
             Self::AddSignatory | Self::RemoveSignatory => S::new(&["AccountId", "Json"], "()"),
-            Self::SetAccountQuorum => S::new(&["AccountId", "Amount"], "()"),
-            Self::Path => S::new(&["Name", "i64|bytes"], "Name"),
+            Self::SetAccountQuorum => S::new(&["AccountId", "quantity"], "()"),
+            Self::Path => S::new(&["Name", "int|bytes"], "Name"),
             Self::NameDecode => S::new(&["bytes"], "Name"),
             Self::TlvEq => S::new(&["pointer-ABI", "pointer-ABI"], "bool"),
-            Self::TlvLen => S::new(&["pointer-ABI"], "i64"),
+            Self::TlvLen => S::new(&["pointer-ABI"], "int"),
             Self::PointerToNorito => S::new(&["pointer-ABI"], "bytes"),
             Self::JsonObject => S::new(&[], "Json"),
-            Self::JsonSetInt | Self::JsonSetIntDirect => S::new(&["Json", "Name", "i64"], "Json"),
+            Self::JsonSetInt | Self::JsonSetIntDirect => S::new(&["Json", "Name", "int"], "Json"),
             Self::JsonSetAccountId | Self::JsonSetAccountIdDirect => {
                 S::new(&["Json", "Name", "AccountId"], "Json")
             }
-            Self::EncodeInt => S::new(&["i64"], "bytes"),
-            Self::DecodeInt => S::new(&["bytes"], "i64"),
+            Self::EncodeInt => S::new(&["int"], "bytes"),
+            Self::DecodeInt => S::new(&["bytes"], "int"),
             Self::EncodeJson => S::new(&["Json"], "bytes"),
             Self::DecodeJson => S::new(&["bytes"], "Json"),
-            Self::JsonGetIntDirect | Self::GetInt => S::new(&["Json", "Name"], "Option<i64>"),
-            Self::JsonGetNumericDirect | Self::GetNumeric => {
-                S::new(&["Json", "Name"], "Option<Amount>")
+            Self::JsonGetIntDirect | Self::GetInt => S::new(&["Json", "Name"], "Option<int>"),
+            Self::JsonGetDecimalDirect | Self::GetDecimal => {
+                S::new(&["Json", "Name"], "Option<decimal>")
+            }
+            Self::JsonGetQuantityDirect | Self::GetQuantity => {
+                S::new(&["Json", "Name"], "Option<quantity>")
             }
             Self::JsonGetJsonDirect | Self::GetJson => S::new(&["Json", "Name"], "Option<Json>"),
             Self::JsonGetNameDirect | Self::GetName => S::new(&["Json", "Name"], "Option<Name>"),
@@ -2479,8 +2505,8 @@ impl Builtin {
             Self::SchemaEncode | Self::SchemaEncodeDirect => S::new(&["Name", "Json"], "bytes"),
             Self::SchemaDecode | Self::SchemaDecodeDirect => S::new(&["Name", "bytes"], "Json"),
             Self::SchemaInfo | Self::SchemaInfoDirect => S::new(&["Name"], "Json"),
-            Self::NumericToInt | Self::NumericToIntDirect => S::new(&["wide-numeric"], "i64"),
-            Self::NumericNeg | Self::NumericNegDirect => S::new(&["Amount"], "Amount"),
+            Self::NumericToInt | Self::NumericToIntDirect => S::new(&["wide-numeric"], "int"),
+            Self::NumericNeg | Self::NumericNegDirect => S::new(&["quantity"], "quantity"),
             Self::NumericAdd
             | Self::NumericSub
             | Self::NumericMul
@@ -2503,20 +2529,20 @@ impl Builtin {
             | Self::NumericLeDirect
             | Self::NumericGtDirect
             | Self::NumericGeDirect => S::new(&["wide-numeric", "same-as-arg0"], "bool"),
-            Self::WrappingNeg | Self::Isqrt | Self::Abs => S::new(&["i64"], "i64"),
+            Self::WrappingNeg | Self::Isqrt | Self::Abs => S::new(&["int"], "int"),
             Self::WrappingAdd | Self::WrappingSub | Self::WrappingMul => {
-                S::new(&["i64", "i64"], "i64")
+                S::new(&["int", "int"], "int")
             }
             Self::Min | Self::Max | Self::DivCeil | Self::Gcd | Self::Mean => {
-                S::new(&["i64", "i64"], "i64")
+                S::new(&["int", "int"], "int")
             }
-            Self::Poseidon2 | Self::Valcom => S::new(&["i64", "i64"], "i64"),
-            Self::Poseidon6 => S::new(&["i64", "i64", "i64", "i64", "i64", "i64"], "i64"),
-            Self::Pubkgen => S::new(&["i64|Secret<i64>"], "i64"),
-            Self::SetVl => S::new(&["i64"], "()"),
+            Self::Poseidon2 | Self::Valcom => S::new(&["int", "int"], "int"),
+            Self::Poseidon6 => S::new(&["int", "int", "int", "int", "int", "int"], "int"),
+            Self::Pubkgen => S::new(&["int|Secret<int>"], "int"),
+            Self::SetVl => S::new(&["int"], "()"),
             Self::TriggerEvent => S::new(&[], "Json"),
             Self::Authority | Self::SysvarAuthority => S::new(&[], "AccountId"),
-            Self::CurrentTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "i64"),
+            Self::CurrentTimeMs | Self::BlockHeight | Self::BlockTimeMs => S::new(&[], "int"),
             Self::ChainId | Self::ContractAddress | Self::Entrypoint => S::new(&[], "bytes"),
         };
 
@@ -2653,8 +2679,10 @@ impl Builtin {
             }
             Self::JsonGetIntDirect
             | Self::GetInt
-            | Self::JsonGetNumericDirect
-            | Self::GetNumeric
+            | Self::JsonGetDecimalDirect
+            | Self::GetDecimal
+            | Self::JsonGetQuantityDirect
+            | Self::GetQuantity
             | Self::JsonGetJsonDirect
             | Self::GetJson
             | Self::JsonGetNameDirect
@@ -2747,7 +2775,8 @@ impl Builtin {
         matches!(
             self,
             Self::GetInt
-                | Self::GetNumeric
+                | Self::GetDecimal
+                | Self::GetQuantity
                 | Self::GetJson
                 | Self::GetName
                 | Self::GetAccountId
@@ -2756,7 +2785,8 @@ impl Builtin {
                 | Self::GetBlobHex
                 | Self::TriggerEvent
                 | Self::JsonGetIntDirect
-                | Self::JsonGetNumericDirect
+                | Self::JsonGetDecimalDirect
+                | Self::JsonGetQuantityDirect
                 | Self::JsonGetJsonDirect
                 | Self::JsonGetNameDirect
                 | Self::JsonGetAccountIdDirect
@@ -3028,7 +3058,7 @@ mod tests {
         let spec = Builtin::EscrowOpenOffer.spec();
         assert_eq!(
             spec.signature.parameters,
-            &["Name", "AssetDefinitionId", "Amount", "bytes?"]
+            &["Name", "AssetDefinitionId", "quantity", "bytes?"]
         );
         assert_eq!(spec.signature.return_type, "()");
         assert_eq!(
@@ -3082,7 +3112,7 @@ mod tests {
                 &[ivm_abi::syscalls::SYSCALL_CORE_QUERY_GET]
             );
 
-            assert_eq!(plural.signature().parameters, &["i64", "i64"]);
+            assert_eq!(plural.signature().parameters, &["int", "int"]);
             assert_eq!(plural.signature().parameter_names, &["offset", "limit"]);
             assert_eq!(plural.signature().return_type, format!("QueryPage<{view}>"));
             assert_eq!(plural.call_policy(), BuiltinCallPolicy::Pagination);
@@ -3096,8 +3126,8 @@ mod tests {
     #[test]
     fn typed_json_getter_registry_returns_active_only_options() {
         for (getter, direct, payload) in [
-            (Builtin::GetInt, Builtin::JsonGetIntDirect, "i64"),
-            (Builtin::GetNumeric, Builtin::JsonGetNumericDirect, "Amount"),
+            (Builtin::GetInt, Builtin::JsonGetIntDirect, "int"),
+            (Builtin::GetQuantity, Builtin::JsonGetQuantityDirect, "quantity"),
             (Builtin::GetJson, Builtin::JsonGetJsonDirect, "Json"),
             (Builtin::GetName, Builtin::JsonGetNameDirect, "Name"),
             (
@@ -3117,7 +3147,7 @@ mod tests {
             assert_eq!(getter.signature().return_type, expected);
             assert_eq!(direct.signature().return_type, expected);
         }
-        assert_eq!(Builtin::GetNumeric.source_name(), "json::get_amount");
+        assert_eq!(Builtin::GetQuantity.source_name(), "json::get_quantity");
     }
 
     #[test]

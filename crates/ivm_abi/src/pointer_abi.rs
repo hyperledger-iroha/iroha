@@ -53,15 +53,12 @@ pub enum PointerType {
     SoracloudRequest = 0x000E,
     /// Soracloud host response envelope.
     SoracloudResponse = 0x000F,
-    /// Permanently retired pre-release `Amount` ID. It is known so diagnostics
-    /// can distinguish it from an unknown ID, but no ABI policy permits it.
-    RetiredAmount = 0x0010,
+    /// Canonical non-negative nominal Kotodama `quantity` value.
+    Quantity = 0x0010,
     /// Canonical Kotodama `int` value.
     Int = 0x0011,
     /// Canonical exact Kotodama `decimal` value.
     Decimal = 0x0012,
-    /// Canonical non-negative nominal Kotodama `quantity` value.
-    Quantity = 0x0013,
     /// Test-only pointer type used to exercise policy failures.
     #[cfg(test)]
     TestOnly = 0x0FFE,
@@ -85,10 +82,9 @@ impl PointerType {
             0x000D => Some(Self::ProofBlob),
             0x000E => Some(Self::SoracloudRequest),
             0x000F => Some(Self::SoracloudResponse),
-            0x0010 => Some(Self::RetiredAmount),
+            0x0010 => Some(Self::Quantity),
             0x0011 => Some(Self::Int),
             0x0012 => Some(Self::Decimal),
-            0x0013 => Some(Self::Quantity),
             #[cfg(test)]
             0x0FFE => Some(Self::TestOnly),
             _ => None,
@@ -113,10 +109,9 @@ impl PointerType {
             Self::ProofBlob,
             Self::SoracloudRequest,
             Self::SoracloudResponse,
-            Self::RetiredAmount,
+            Self::Quantity,
             Self::Int,
             Self::Decimal,
-            Self::Quantity,
             #[cfg(test)]
             Self::TestOnly,
         ]
@@ -290,13 +285,9 @@ pub fn render_pointer_types_markdown_table() -> String {
             PointerType::SoracloudResponse as u16,
             PointerType::SoracloudResponse,
         ),
-        (
-            PointerType::RetiredAmount as u16,
-            PointerType::RetiredAmount,
-        ),
+        (PointerType::Quantity as u16, PointerType::Quantity),
         (PointerType::Int as u16, PointerType::Int),
         (PointerType::Decimal as u16, PointerType::Decimal),
-        (PointerType::Quantity as u16, PointerType::Quantity),
     ];
     all.sort_by_key(|(id, _)| *id);
 
@@ -346,13 +337,16 @@ mod tests {
     }
 
     #[test]
-    fn retired_amount_is_known_but_never_allowed() {
-        assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::RetiredAmount));
-        assert!(!is_type_allowed_for_policy(
-            SyscallPolicy::AbiV1,
-            PointerType::RetiredAmount
-        ));
-        for ty in [PointerType::Int, PointerType::Decimal, PointerType::Quantity] {
+    fn exact_numeric_pointer_ids_use_the_clean_v1_surface() {
+        assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::Quantity));
+        assert_eq!(PointerType::from_u16(0x0011), Some(PointerType::Int));
+        assert_eq!(PointerType::from_u16(0x0012), Some(PointerType::Decimal));
+        assert_eq!(PointerType::from_u16(0x0013), None);
+        for ty in [
+            PointerType::Quantity,
+            PointerType::Int,
+            PointerType::Decimal,
+        ] {
             assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
         }
     }
@@ -379,6 +373,22 @@ mod tests {
         trailing.push(0);
         assert!(matches!(
             validate_tlv_bytes(&trailing),
+            Err(VMError::NoritoInvalid)
+        ));
+    }
+
+    #[test]
+    fn envelope_rejects_unassigned_numeric_pointer_id() {
+        let payload = b"canonical";
+        let mut envelope = Vec::new();
+        envelope.extend_from_slice(&0x0013_u16.to_be_bytes());
+        envelope.push(1);
+        envelope.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        envelope.extend_from_slice(payload);
+        envelope.extend_from_slice(iroha_crypto::Hash::new(payload).as_ref());
+
+        assert!(matches!(
+            validate_tlv_bytes(&envelope),
             Err(VMError::NoritoInvalid)
         ));
     }

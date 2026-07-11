@@ -14,12 +14,12 @@ seiyaku PoolManager {
     kotoage fn quote_or_deposit(AccountId trader, Name pool, quantity amount_a, quantity amount_b) -> quantity authorize(
         "Admin"
     ) {
-        let zero = 0;
+        let quantity zero = 0;
         let reserve_a = ReserveA.ensure(pool, zero);
         let reserve_b = ReserveB.ensure(pool, zero);
         let pool_account = PoolAccount.get(pool).unwrap_or(trader);
         let quoted = (reserve_a == zero) ? amount_b : min_value(
-            a: (amount_a * reserve_b) / reserve_a,
+            a: reserve_b * (amount_a / reserve_a),
             b: amount_b,
         );
         if (quoted > zero) {

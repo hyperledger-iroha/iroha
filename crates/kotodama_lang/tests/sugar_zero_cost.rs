@@ -22,7 +22,7 @@ fn assert_executable_equivalent(sugar: &str, explicit: &str, description: &str) 
 fn result_propagation_matches_the_exhaustive_early_return_form() {
     let propagated = r#"
         seiyaku ResultPropagation {
-            view fn main(value: Result<i64, bool>) -> Result<(i64, i64), bool> {
+            view fn main(Result<int, bool> value) -> Result<(int, int), bool> {
                 let payload = value?;
                 Result::ok((payload, payload))
             }
@@ -30,7 +30,7 @@ fn result_propagation_matches_the_exhaustive_early_return_form() {
     "#;
     let explicit = r#"
         seiyaku ResultPropagation {
-            view fn main(value: Result<i64, bool>) -> Result<(i64, i64), bool> {
+            view fn main(Result<int, bool> value) -> Result<(int, int), bool> {
                 let payload = match value {
                     Result::ok(payload) => payload,
                     Result::err(failure) => { return Result::err(failure); },
@@ -51,7 +51,7 @@ fn result_propagation_matches_the_exhaustive_early_return_form() {
 fn option_propagation_matches_the_exhaustive_early_return_form() {
     let propagated = r#"
         seiyaku OptionPropagation {
-            view fn main(value: Option<i64>) -> Option<(i64, i64)> {
+            view fn main(Option<int> value) -> Option<(int, int)> {
                 let payload = value?;
                 Option::some((payload, payload))
             }
@@ -59,7 +59,7 @@ fn option_propagation_matches_the_exhaustive_early_return_form() {
     "#;
     let explicit = r#"
         seiyaku OptionPropagation {
-            view fn main(value: Option<i64>) -> Option<(i64, i64)> {
+            view fn main(Option<int> value) -> Option<(int, int)> {
                 let payload = match value {
                     Option::some(payload) => payload,
                     Option::none => { return Option::none; },
@@ -80,12 +80,12 @@ fn option_propagation_matches_the_exhaustive_early_return_form() {
 fn function_tail_matches_explicit_return() {
     let tail = r#"
         seiyaku TailExpression {
-            view fn main(value: i64) -> i64 { value + 1 }
+            view fn main(int value) -> int { value + 1 }
         }
     "#;
     let explicit = r#"
         seiyaku TailExpression {
-            view fn main(value: i64) -> i64 { return value + 1; }
+            view fn main(int value) -> int { return value + 1; }
         }
     "#;
 
@@ -96,14 +96,14 @@ fn function_tail_matches_explicit_return() {
 fn if_block_expression_matches_the_existing_ternary() {
     let block = r#"
         seiyaku IfExpression {
-            view fn main(condition: bool, yes: i64, no: i64) -> i64 {
+            view fn main(bool condition, int yes, int no) -> int {
                 if condition { yes } else { no }
             }
         }
     "#;
     let ternary = r#"
         seiyaku IfExpression {
-            view fn main(condition: bool, yes: i64, no: i64) -> i64 {
+            view fn main(bool condition, int yes, int no) -> int {
                 condition ? yes : no
             }
         }
@@ -116,14 +116,14 @@ fn if_block_expression_matches_the_existing_ternary() {
 fn if_let_matches_the_exhaustive_match_form() {
     let if_let = r#"
         seiyaku IfLetExpression {
-            view fn main(value: Option<i64>, fallback: i64) -> i64 {
+            view fn main(Option<int> value, int fallback) -> int {
                 if let Option::some(payload) = value { payload } else { fallback }
             }
         }
     "#;
     let exhaustive = r#"
         seiyaku IfLetExpression {
-            view fn main(value: Option<i64>, fallback: i64) -> i64 {
+            view fn main(Option<int> value, int fallback) -> int {
                 match value {
                     Option::some(payload) => payload,
                     Option::none => fallback,
@@ -139,7 +139,7 @@ fn if_let_matches_the_exhaustive_match_form() {
 fn exhaustive_option_match_matches_eager_unwrap_or() {
     let matched = r#"
         seiyaku MatchExpression {
-            view fn main(value: Option<i64>, fallback: i64) -> i64 {
+            view fn main(Option<int> value, int fallback) -> int {
                 match value {
                     Option::some(payload) => payload,
                     Option::none => fallback,
@@ -149,7 +149,7 @@ fn exhaustive_option_match_matches_eager_unwrap_or() {
     "#;
     let explicit = r#"
         seiyaku MatchExpression {
-            view fn main(value: Option<i64>, fallback: i64) -> i64 {
+            view fn main(Option<int> value, int fallback) -> int {
                 value.unwrap_or(fallback)
             }
         }

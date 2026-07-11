@@ -132,9 +132,9 @@ seiyaku StateMapOptionAcceptance {
     RemovalLostValue = 6
   }
 
-  state Values: StateMap<i64, i64>;
+  state StateMap<int, int> Values;
 
-  kotoage fn run() -> i64 authorize("WriteState") {
+  kotoage fn run() -> int authorize("WriteState") {
     let missing = Values.get(7);
     require(missing.is_none(), StateMapError::MissingReportedPresent);
     require(missing.unwrap_or(91) == 91, StateMapError::MissingFallbackIgnored);
@@ -170,10 +170,10 @@ seiyaku AggregateStateAcceptance {
     RemovalDidNotDelete = 5
   }
 
-  struct Pair { count: i64, ready: bool }
-  state Values: StateMap<i64, Pair>;
+  struct Pair { int count, bool ready }
+  state StateMap<int, Pair> Values;
 
-  kotoage fn run() -> i64 authorize("WriteState") {
+  kotoage fn run() -> int authorize("WriteState") {
     Values[7] = Pair { count: 9, ready: true };
     let found = Values.get(7);
     require(found.is_some(), AggregateError::MissingValue);
@@ -206,22 +206,22 @@ seiyaku AggregateSumAcceptance {
     ResultErrorLost = 5
   }
 
-  struct Pair { count: i64, ready: bool }
+  struct Pair { int count, bool ready }
 
-  view fn run() -> i64 {
-    let some: Option<Pair> = Option::some(Pair { count: 7, ready: true });
+  view fn run() -> int {
+    let Option<Pair> some = Option::some(Pair { count: 7, ready: true });
     let from_some = some.unwrap_or(Pair { count: 90, ready: false });
     require(from_some.count == 7 && from_some.ready, AggregateSumError::SomeLost);
 
-    let none: Option<Pair> = Option::none;
+    let Option<Pair> none = Option::none;
     let from_none = none.unwrap_or(Pair { count: 11, ready: true });
     require(from_none.count == 11 && from_none.ready, AggregateSumError::NoneFallbackLost);
 
-    let ok: Result<Pair, Pair> = Result::ok(Pair { count: 13, ready: true });
+    let Result<Pair, Pair> ok = Result::ok(Pair { count: 13, ready: true });
     let from_ok = ok.unwrap_or(Pair { count: 91, ready: false });
     require(from_ok.count == 13 && from_ok.ready, AggregateSumError::OkLost);
 
-    let err: Result<Pair, Pair> = Result::err(Pair { count: 17, ready: true });
+    let Result<Pair, Pair> err = Result::err(Pair { count: 17, ready: true });
     let from_err = err.unwrap_or(Pair { count: 19, ready: true });
     require(from_err.count == 19 && from_err.ready, AggregateSumError::ErrFallbackLost);
     let error_value = err.unwrap_err_or(Pair { count: 92, ready: false });
@@ -239,11 +239,11 @@ seiyaku AggregateSumAcceptance {
 fn propagation_materializes_the_enclosing_sum_layout_on_failure() {
     let result_source = r#"
 seiyaku ResultPropagationLayoutAcceptance {
-  fn source() -> Result<i64, bool> {
+  fn source() -> Result<int, bool> {
     Result::err(true)
   }
 
-  view fn run() -> Result<(i64, i64), bool> {
+  view fn run() -> Result<(int, int), bool> {
     let value = source()?;
     Result::ok((value, value))
   }
@@ -259,11 +259,11 @@ seiyaku ResultPropagationLayoutAcceptance {
 
     let option_source = r#"
 seiyaku OptionPropagationLayoutAcceptance {
-  fn source() -> Option<i64> {
+  fn source() -> Option<int> {
     Option::none
   }
 
-  view fn run() -> Option<(i64, i64)> {
+  view fn run() -> Option<(int, int)> {
     let value = source()?;
     Option::some((value, value))
   }
@@ -283,17 +283,17 @@ fn native_json_executes_once_and_returns_canonical_recursive_values() {
     let source = r#"
 seiyaku NativeJsonRuntimeAcceptance {
   view fn run() -> Json {
-    let labels: List<string, 4> = ["primary", "secondary"];
-    var blobs: List<bytes, 2> = [];
+    let List<string, 4> labels = ["primary", "secondary"];
+    var List<bytes, 2> blobs = [];
     blobs.try_push(b"\xaa");
     blobs.try_push(b"\xbb");
-    let maybe: Option<Amount> = Option::some(1.25amt);
+    let Option<quantity> maybe = Option::some(1.25);
     json {
       z_bytes: b"\xab\x01",
       maybe: maybe,
       labels: labels,
       blobs: blobs,
-      amount: 1.25amt,
+      amount: 1.25,
     }
   }
 }
@@ -335,9 +335,12 @@ seiyaku NativeJsonRuntimeAcceptance {
 fn native_json_and_typed_getters_execute_with_default_host() {
     let source = r#"
 seiyaku DefaultHostNativeJsonAcceptance {
-  view fn run() -> i64 {
-    let payload: Json = json { value: 7 };
-    json::get_i64(payload, Name::parse("value")).unwrap_or(0)
+  view fn run() -> int {
+    let Json payload = json { value: 7 };
+    match payload.get_int(Name::parse("value")) {
+      Option::some(value) => value,
+      Option::none => 0,
+    }
   }
 }
 "#;
@@ -356,11 +359,11 @@ seiyaku StateRootAcceptance {
     ResultLost = 4
   }
 
-  struct Pair { count: i64, ready: bool }
-  state Counter: i64;
-  state Current: Pair;
-  state Maybe: Option<Pair>;
-  state Outcome: Result<Pair, Pair>;
+  struct Pair { int count, bool ready }
+  state int Counter;
+  state Pair Current;
+  state Option<Pair> Maybe;
+  state Result<Pair, Pair> Outcome;
 
   hajimari() {
     Counter = 3;
@@ -369,7 +372,7 @@ seiyaku StateRootAcceptance {
     Outcome = Result::ok(Pair { count: 11, ready: true });
   }
 
-  kotoage fn run() -> i64 authorize("WriteState") {
+  kotoage fn run() -> int authorize("WriteState") {
     require(Counter == 3, StateRootError::ScalarLost);
     require(Current.count == 5 && Current.ready, StateRootError::StructLost);
     let maybe = Maybe.unwrap_or(Pair { count: 0, ready: false });
@@ -391,11 +394,11 @@ fn pointer_literal_state_is_materialized_before_record_encoding() {
     let source = r#"
 seiyaku PointerStateAcceptance {
   error enum PointerStateError { LiteralLost = 1 }
-  state Message: string;
+  state string Message;
 
   hajimari() { Message = "言霊"; }
 
-  view fn run() -> i64 {
+  view fn run() -> int {
     require(Message == "言霊", PointerStateError::LiteralLost);
     return 1;
   }
@@ -418,15 +421,15 @@ seiyaku ShortCircuitAcceptance {
     WrongSideEffectCount = 5
   }
 
-  state Hits: StateMap<i64, i64>;
+  state StateMap<int, int> Hits;
 
-  fn bump(result: bool) -> bool {
+  fn bump(bool result) -> bool {
     let previous = Hits.get_or(key: 0, default: 0);
     Hits[0] = previous + 1;
     return result;
   }
 
-  kotoage fn run() -> i64 authorize("WriteState") {
+  kotoage fn run() -> int authorize("WriteState") {
     let false_and = false && bump(true);
     let true_or = true || bump(false);
     let true_and = true && bump(true);
@@ -458,9 +461,9 @@ seiyaku StateMapIterationAcceptance {
     WrongItemCount = 3
   }
 
-  state Values: StateMap<i64, i64>;
+  state StateMap<int, int> Values;
 
-  kotoage fn run() -> i64 authorize("WriteState") {
+  kotoage fn run() -> int authorize("WriteState") {
 "#,
     );
     let inserted = (-32_i64..32).rev().collect::<Vec<_>>();
@@ -469,7 +472,7 @@ seiyaku StateMapIterationAcceptance {
     }
     source.push_str(
         r#"
-    var seen: i64 = 0;
+    var int seen = 0;
     for (key, value) in Values.take(64) {
 "#,
     );
@@ -502,13 +505,13 @@ seiyaku StateMapIterationAcceptance {
 fn signed_comparisons_match_all_boundary_pairs_in_values_and_branches() {
     let source = r#"
 seiyaku SignedComparisonAcceptance {
-  view fn compare(left: i64, right: i64) -> (bool, bool, bool, bool, bool, bool, i64, i64, i64, i64, i64, i64) {
-    var branch_eq: i64 = 0;
-    var branch_ne: i64 = 0;
-    var branch_lt: i64 = 0;
-    var branch_le: i64 = 0;
-    var branch_gt: i64 = 0;
-    var branch_ge: i64 = 0;
+  view fn compare(int left, int right) -> (bool, bool, bool, bool, bool, bool, int, int, int, int, int, int) {
+    var int branch_eq = 0;
+    var int branch_ne = 0;
+    var int branch_lt = 0;
+    var int branch_le = 0;
+    var int branch_gt = 0;
+    var int branch_ge = 0;
     if (left == right) { branch_eq = 1; }
     if (left != right) { branch_ne = 1; }
     if (left < right) { branch_lt = 1; }

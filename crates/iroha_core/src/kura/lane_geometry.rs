@@ -27,8 +27,6 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 
-#[cfg(test)]
-use super::CertifiedLaneBlockArtifact;
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
     AutonomousLaneBlockArtifact, BlockStore, CERTIFIED_LANE_BLOCKS_DATA_FILE,
@@ -48,6 +46,11 @@ const CHECKPOINT_VERSION: u8 = 2;
 const JOURNAL_FILE_NAME: &str = "lane_geometry_journal.norito";
 const JOURNAL_TEMP_FILE_NAME: &str = "lane_geometry_journal.norito.tmp";
 const JOURNAL_RESTORE_TEMP_FILE_NAME: &str = "lane_geometry_journal.norito.restore.tmp";
+#[cfg(test)]
+const JOURNAL_IDENTITY_SWAP_FILE_NAME: &str = "lane_geometry_journal.norito.identity-swap";
+#[cfg(test)]
+const JOURNAL_IDENTITY_DISPLACED_FILE_NAME: &str =
+    "lane_geometry_journal.norito.identity-displaced";
 const MARKER_FILE_NAME: &str = ".lane-incarnation.norito";
 const TRANSITION_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-transition:v1\0";
 const CATALOG_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-catalog:v1\0";
@@ -64,6 +67,13 @@ const MAX_GEOMETRY_ARCHIVE_DEPTH: usize = 128;
 const MAX_GEOMETRY_ARCHIVE_ENTRIES: usize = 4_000_000;
 const MAX_LANE_RETIREMENT_ARTIFACT_FILES: usize = 65_536;
 const MAX_LANE_RETIREMENT_WORK_ITEMS: usize = 65_536;
+
+#[cfg(test)]
+static CONFIGURED_CATALOG_PREFLIGHT_IDENTITY_SWAP: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
+#[cfg(test)]
+static CONFIGURED_CATALOG_PREFLIGHT_FAIL_AFTER_ESTABLISH: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
 
 const GC_FAIL_AFTER_COMPACTION_INTENT: usize = 1;
 const GC_FAIL_AFTER_ARCHIVE_QUARANTINE: usize = 2;
@@ -226,121 +236,533 @@ struct LaneIncarnationMarker {
     activation_height: u64,
 }
 
+struct ConfiguredCatalogPreflightJournal {
+    bytes: Vec<u8>,
+    journal: LaneGeometryJournal,
+    identity: GeometryFileIdentity,
+}
+
+fn configured_catalog_preflight_error(
+    store_root: &Path,
+    kind: ErrorKind,
+    message: impl Into<String>,
+) -> Error {
+    Error::IO(
+        std::io::Error::new(kind, message.into()),
+        store_root.join(JOURNAL_FILE_NAME),
+    )
+}
+
+fn configured_catalog_store_root_identity(store_root: &Path) -> Result<GeometryFileIdentity> {
+    let metadata = fs::symlink_metadata(store_root)
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "Kura configured-catalog store root must be a non-symlink directory",
+        ));
+    }
+    Ok(geometry_file_identity(&metadata))
+}
+
+fn configured_catalog_require_store_root_identity(
+    store_root: &Path,
+    expected: GeometryFileIdentity,
+) -> Result<()> {
+    let actual = configured_catalog_store_root_identity(store_root)?;
+    if actual != expected {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "Kura configured-catalog store root changed during startup preflight",
+        ));
+    }
+    Ok(())
+}
+
+fn read_configured_catalog_journal_for_preflight(
+    store_root: &Path,
+    root_identity: GeometryFileIdentity,
+    path: &Path,
+    inject_identity_swap: bool,
+) -> Result<Option<ConfiguredCatalogPreflightJournal>> {
+    if path.parent() != Some(store_root) {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "configured-catalog preflight file must be a direct child of the Kura store root",
+        ));
+    }
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+    let path_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+    };
+    if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "configured-catalog journal path is a symlink or has the wrong file type",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    if path_metadata.len() > MAX_GEOMETRY_JOURNAL_BYTES {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "lane geometry journal exceeds the encoded byte limit",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+
+    let expected_identity = geometry_file_identity(&path_metadata);
+    let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if !opened_metadata.is_file()
+        || geometry_file_identity(&opened_metadata) != expected_identity
+        || opened_metadata.len() > MAX_GEOMETRY_JOURNAL_BYTES
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "opened configured-catalog journal does not match its directory entry",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+
+    #[cfg(test)]
+    if inject_identity_swap {
+        let should_swap = {
+            let mut hook = CONFIGURED_CATALOG_PREFLIGHT_IDENTITY_SWAP
+                .lock()
+                .expect("configured-catalog identity-swap hook lock");
+            if hook.as_deref() == Some(path) {
+                hook.take();
+                true
+            } else {
+                false
+            }
+        };
+        if should_swap {
+            let replacement = store_root.join(JOURNAL_IDENTITY_SWAP_FILE_NAME);
+            let displaced = store_root.join(JOURNAL_IDENTITY_DISPLACED_FILE_NAME);
+            fs::rename(path, &displaced).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            fs::rename(&replacement, path)
+                .map_err(|error| Error::IO(error, replacement.to_path_buf()))?;
+        }
+    }
+    #[cfg(not(test))]
+    let _ = inject_identity_swap;
+
+    let capacity = usize::try_from(opened_metadata.len())?;
+    let mut bytes = Vec::with_capacity(capacity);
+    (&mut file)
+        .take(MAX_GEOMETRY_JOURNAL_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_GEOMETRY_JOURNAL_BYTES {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "lane geometry journal exceeded the encoded byte limit while being read",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    let final_opened_metadata = file
+        .metadata()
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let final_path_metadata =
+        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if !final_opened_metadata.is_file()
+        || geometry_file_identity(&final_opened_metadata) != expected_identity
+        || final_opened_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        || final_path_metadata.file_type().is_symlink()
+        || !final_path_metadata.file_type().is_file()
+        || geometry_file_identity(&final_path_metadata) != expected_identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "configured-catalog journal changed during startup preflight",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+
+    let journal = decode_exact::<LaneGeometryJournal>(&bytes).map_err(Error::NoritoFrame)?;
+    validate_lane_geometry_journal_structure(store_root, &journal)?;
+    Ok(Some(ConfiguredCatalogPreflightJournal {
+        bytes,
+        journal,
+        identity: expected_identity,
+    }))
+}
+
+fn validate_configured_catalog_journal(
+    store_root: &Path,
+    journal: &LaneGeometryJournal,
+    attempted: Hash,
+) -> Result<()> {
+    validate_lane_geometry_journal_structure(store_root, journal)?;
+    match journal.configured_catalog_hash {
+        Some(expected) if expected == attempted => Ok(()),
+        Some(expected) => Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidData,
+            format!(
+                "configured lane catalog baseline mismatch: expected {expected}, attempted {attempted}"
+            ),
+        )),
+        None => Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "existing lane geometry journal has no configured lane catalog baseline",
+        )),
+    }
+}
+
+fn write_initial_configured_catalog_temp(
+    store_root: &Path,
+    root_identity: GeometryFileIdentity,
+    temp_path: &Path,
+    bytes: &[u8],
+) -> Result<GeometryFileIdentity> {
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(temp_path)
+        .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    let identity = geometry_file_identity(
+        &file
+            .metadata()
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?,
+    );
+    file.write_all(bytes)
+        .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    file.sync_all()
+        .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    let path_metadata = fs::symlink_metadata(temp_path)
+        .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.file_type().is_file()
+        || geometry_file_identity(&path_metadata) != identity
+        || path_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "configured-catalog startup temp changed while being persisted",
+            ),
+            temp_path.to_path_buf(),
+        ));
+    }
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+    Ok(identity)
+}
+
+fn remove_exact_configured_catalog_temp(
+    store_root: &Path,
+    root_identity: GeometryFileIdentity,
+    journal_path: &Path,
+    expected_journal: &ConfiguredCatalogPreflightJournal,
+    temp_path: &Path,
+    expected_temp: &ConfiguredCatalogPreflightJournal,
+) -> Result<()> {
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+    let current_journal = read_configured_catalog_journal_for_preflight(
+        store_root,
+        root_identity,
+        journal_path,
+        false,
+    )?
+    .ok_or_else(|| {
+        configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::NotFound,
+            "authoritative configured-catalog journal disappeared during temp recovery",
+        )
+    })?;
+    let current_temp =
+        read_configured_catalog_journal_for_preflight(store_root, root_identity, temp_path, false)?
+            .ok_or_else(|| {
+                configured_catalog_preflight_error(
+                    store_root,
+                    ErrorKind::NotFound,
+                    "configured-catalog temp disappeared during exact recovery",
+                )
+            })?;
+    if current_journal.identity != expected_journal.identity
+        || current_journal.bytes != expected_journal.bytes
+        || current_temp.identity != expected_temp.identity
+        || current_temp.bytes != expected_temp.bytes
+        || current_temp.bytes != current_journal.bytes
+        || current_temp.identity != current_journal.identity
+    {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "configured-catalog journal or temp identity changed during exact recovery",
+        ));
+    }
+    fs::remove_file(temp_path).map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    sync_dir(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    configured_catalog_require_store_root_identity(store_root, root_identity)
+}
+
+fn promote_initial_configured_catalog_temp(
+    store_root: &Path,
+    root_identity: GeometryFileIdentity,
+    temp_path: &Path,
+    temp_identity: GeometryFileIdentity,
+    journal_path: &Path,
+    expected_bytes: &[u8],
+) -> Result<()> {
+    configured_catalog_require_store_root_identity(store_root, root_identity)?;
+    let temp_metadata = fs::symlink_metadata(temp_path)
+        .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    if temp_metadata.file_type().is_symlink()
+        || !temp_metadata.file_type().is_file()
+        || geometry_file_identity(&temp_metadata) != temp_identity
+        || temp_metadata.len() != u64::try_from(expected_bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "configured-catalog startup temp identity changed before promotion",
+            ),
+            temp_path.to_path_buf(),
+        ));
+    }
+
+    match fs::hard_link(temp_path, journal_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let existing = read_configured_catalog_journal_for_preflight(
+                store_root,
+                root_identity,
+                journal_path,
+                false,
+            )?
+            .ok_or_else(|| Error::IO(error, journal_path.to_path_buf()))?;
+            if existing.bytes != expected_bytes {
+                return Err(configured_catalog_preflight_error(
+                    store_root,
+                    ErrorKind::AlreadyExists,
+                    "a different configured-catalog journal won the startup establishment race",
+                ));
+            }
+        }
+        Err(error) => return Err(Error::IO(error, journal_path.to_path_buf())),
+    }
+
+    let journal_metadata = fs::symlink_metadata(journal_path)
+        .map_err(|error| Error::IO(error, journal_path.to_path_buf()))?;
+    if journal_metadata.file_type().is_symlink()
+        || !journal_metadata.file_type().is_file()
+        || geometry_file_identity(&journal_metadata) != temp_identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "configured-catalog journal does not retain the promoted temp identity",
+            ),
+            journal_path.to_path_buf(),
+        ));
+    }
+    sync_dir(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+
+    let final_temp_metadata = fs::symlink_metadata(temp_path)
+        .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    if final_temp_metadata.file_type().is_symlink()
+        || !final_temp_metadata.file_type().is_file()
+        || geometry_file_identity(&final_temp_metadata) != temp_identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "configured-catalog startup temp changed before exact cleanup",
+            ),
+            temp_path.to_path_buf(),
+        ));
+    }
+    fs::remove_file(temp_path).map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+    sync_dir(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    configured_catalog_require_store_root_identity(store_root, root_identity)
+}
+
 impl Kura {
-    /// Authenticate the stable configured-catalog journal before Kura opens any
-    /// lane-derived storage path.
-    pub(super) fn preflight_configured_lane_catalog_baseline(
+    /// Establish or authenticate the stable configured-catalog journal before
+    /// Kura opens any lane-derived storage path.
+    pub(super) fn establish_or_verify_configured_lane_catalog_baseline(
         store_root: &Path,
         attempted: Hash,
     ) -> Result<()> {
+        create_dir_all_with_context(store_root)?;
+        let root_identity = configured_catalog_store_root_identity(store_root)?;
         let journal_path = store_root.join(JOURNAL_FILE_NAME);
-        let root_metadata = match fs::symlink_metadata(store_root) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(Error::IO(error, store_root.to_path_buf())),
+        let publication_temp_path = store_root.join(JOURNAL_TEMP_FILE_NAME);
+        let restore_temp_path = store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME);
+
+        let journal = read_configured_catalog_journal_for_preflight(
+            store_root,
+            root_identity,
+            &journal_path,
+            true,
+        )?;
+        let publication_temp = read_configured_catalog_journal_for_preflight(
+            store_root,
+            root_identity,
+            &publication_temp_path,
+            false,
+        )?;
+        let restore_temp = read_configured_catalog_journal_for_preflight(
+            store_root,
+            root_identity,
+            &restore_temp_path,
+            false,
+        )?;
+
+        if let Some(journal) = journal {
+            validate_configured_catalog_journal(store_root, &journal.journal, attempted)?;
+            if let Some(temp) = publication_temp.as_ref() {
+                validate_configured_catalog_journal(store_root, &temp.journal, attempted)?;
+                if temp.bytes != journal.bytes {
+                    return Err(configured_catalog_preflight_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "unresolved configured-catalog publication temp differs from the authoritative journal",
+                    ));
+                }
+                remove_exact_configured_catalog_temp(
+                    store_root,
+                    root_identity,
+                    &journal_path,
+                    &journal,
+                    &publication_temp_path,
+                    temp,
+                )?;
+            }
+            if let Some(temp) = restore_temp.as_ref() {
+                validate_configured_catalog_journal(store_root, &temp.journal, attempted)?;
+                return Err(configured_catalog_preflight_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "configured-catalog restore temp has no startup-owned provenance",
+                ));
+            }
+            configured_catalog_require_store_root_identity(store_root, root_identity)?;
+            return Ok(());
+        }
+
+        if restore_temp.is_some() {
+            return Err(configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "configured-catalog restore temp exists without its authoritative journal",
+            ));
+        }
+
+        let expected_journal = LaneGeometryJournal {
+            configured_catalog_hash: Some(attempted),
+            ..LaneGeometryJournal::default()
         };
-        if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
-            return Err(Error::IO(
-                std::io::Error::new(
+        let expected_bytes = expected_journal.encode();
+        let publication_temp_identity = if let Some(temp) = publication_temp {
+            if temp.bytes != expected_bytes || temp.journal != expected_journal {
+                return Err(configured_catalog_preflight_error(
+                    store_root,
                     ErrorKind::InvalidData,
-                    "Kura configured-catalog store root must be a non-symlink directory",
-                ),
-                store_root.to_path_buf(),
-            ));
-        }
-
-        let journal_metadata = match fs::symlink_metadata(&journal_path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(Error::IO(error, journal_path)),
+                    "configured-catalog startup temp is not the exact initial baseline journal",
+                ));
+            }
+            temp.identity
+        } else {
+            write_initial_configured_catalog_temp(
+                store_root,
+                root_identity,
+                &publication_temp_path,
+                &expected_bytes,
+            )?
         };
-        if journal_metadata.file_type().is_symlink() || !journal_metadata.file_type().is_file() {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "configured-catalog journal is a symlink or has the wrong file type",
-                ),
-                journal_path,
-            ));
-        }
-        if journal_metadata.len() > MAX_GEOMETRY_JOURNAL_BYTES {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "lane geometry journal exceeds the encoded byte limit",
-                ),
-                journal_path,
-            ));
-        }
 
-        let expected_identity = geometry_file_identity(&journal_metadata);
-        let mut file =
-            File::open(&journal_path).map_err(|error| Error::IO(error, journal_path.clone()))?;
-        let opened_metadata = file
-            .metadata()
-            .map_err(|error| Error::IO(error, journal_path.clone()))?;
-        if !opened_metadata.is_file()
-            || geometry_file_identity(&opened_metadata) != expected_identity
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "opened configured-catalog journal does not match its directory entry",
-                ),
-                journal_path,
+        promote_initial_configured_catalog_temp(
+            store_root,
+            root_identity,
+            &publication_temp_path,
+            publication_temp_identity,
+            &journal_path,
+            &expected_bytes,
+        )?;
+        let established = read_configured_catalog_journal_for_preflight(
+            store_root,
+            root_identity,
+            &journal_path,
+            false,
+        )?
+        .ok_or_else(|| {
+            configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::NotFound,
+                "configured-catalog baseline journal disappeared after establishment",
+            )
+        })?;
+        if established.bytes != expected_bytes || established.journal != expected_journal {
+            return Err(configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "established configured-catalog baseline journal differs from the exact startup value",
             ));
         }
-        let capacity = usize::try_from(journal_metadata.len())?;
-        let mut bytes = Vec::with_capacity(capacity);
-        file.read_to_end(&mut bytes)
-            .map_err(|error| Error::IO(error, journal_path.clone()))?;
-        let final_metadata = fs::symlink_metadata(&journal_path)
-            .map_err(|error| Error::IO(error, journal_path.clone()))?;
-        if final_metadata.file_type().is_symlink()
-            || !final_metadata.file_type().is_file()
-            || geometry_file_identity(&final_metadata) != expected_identity
-        {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "configured-catalog journal changed during startup preflight",
-                ),
-                journal_path,
-            ));
-        }
+        configured_catalog_require_store_root_identity(store_root, root_identity)
+    }
 
-        let journal = decode_exact::<LaneGeometryJournal>(&bytes).map_err(Error::NoritoFrame)?;
-        if journal.version != JOURNAL_VERSION {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "unsupported lane geometry journal version {}",
-                        journal.version
-                    ),
-                ),
-                journal_path,
+    #[cfg(test)]
+    pub(super) fn replace_configured_catalog_journal_after_open_for_test(store_root: &Path) {
+        *CONFIGURED_CATALOG_PREFLIGHT_IDENTITY_SWAP
+            .lock()
+            .expect("configured-catalog identity-swap hook lock") =
+            Some(store_root.join(JOURNAL_FILE_NAME));
+    }
+
+    #[cfg(test)]
+    pub(super) fn fail_after_configured_catalog_preflight_for_test(store_root: &Path) {
+        *CONFIGURED_CATALOG_PREFLIGHT_FAIL_AFTER_ESTABLISH
+            .lock()
+            .expect("configured-catalog crash hook lock") = Some(store_root.to_path_buf());
+    }
+
+    #[cfg(test)]
+    pub(super) fn configured_catalog_preflight_crash_boundary(store_root: &Path) -> Result<()> {
+        let should_fail = {
+            let mut hook = CONFIGURED_CATALOG_PREFLIGHT_FAIL_AFTER_ESTABLISH
+                .lock()
+                .expect("configured-catalog crash hook lock");
+            if hook.as_deref() == Some(store_root) {
+                hook.take();
+                true
+            } else {
+                false
+            }
+        };
+        if should_fail {
+            return Err(configured_catalog_preflight_error(
+                store_root,
+                ErrorKind::Interrupted,
+                "configured-catalog startup crash boundary injected after baseline establishment",
             ));
         }
-        match journal.configured_catalog_hash {
-            Some(expected) if expected == attempted => Ok(()),
-            Some(expected) => Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "configured lane catalog baseline mismatch: expected {expected}, attempted {attempted}"
-                    ),
-                ),
-                journal_path,
-            )),
-            None => Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "existing lane geometry journal has no configured lane catalog baseline",
-                ),
-                journal_path,
-            )),
-        }
+        Ok(())
     }
 
     /// Verify the exact process-configured lane-catalog baseline.
@@ -404,6 +826,8 @@ impl Kura {
             self.geometry_bindings(updated, updated_incarnations, updated_activation_heights)?;
         let previous_catalog = geometry_catalog_fingerprint(&previous_bindings);
         let updated_catalog = geometry_catalog_fingerprint(&updated_bindings);
+        let journal_was_present =
+            self.validate_path_kind(&self.lane_geometry_journal_path(), false)?;
         let mut journal = self.read_lane_geometry_journal()?;
         let _ = self.finish_pending_lane_geometry_gc_locked(&mut journal)?;
         self.reconcile_lane_geometry_history(&mut journal, previous_catalog)?;
@@ -414,11 +838,15 @@ impl Kura {
         )?;
         if previous_catalog == updated_catalog {
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
-            // `finish_pending_lane_geometry_gc_locked` persists any journal state it changes.
-            // With no physical transition there is otherwise no recovery intent to rewrite;
-            // exact configured-baseline publication remains idempotent whether a startup journal
-            // was already established or this path is operating without one.
-            return Ok(());
+            // Reconciliation can update retained transition phases, so an existing or non-empty
+            // journal must still be rewritten. A genuinely absent, default journal has no
+            // recovery state to invent; exact configured-baseline publication remains atomic in
+            // the later catalog-publication step.
+            return if journal_was_present || journal != LaneGeometryJournal::default() {
+                self.write_lane_geometry_journal(&journal)
+            } else {
+                Ok(())
+            };
         }
 
         let transition_id = geometry_transition_id(previous_catalog, updated_catalog);
@@ -3809,6 +4237,14 @@ impl Kura {
     }
 
     fn validate_lane_geometry_journal(&self, journal: &LaneGeometryJournal) -> Result<()> {
+        validate_lane_geometry_journal_structure(&self.store_root, journal)?;
+        self.validate_lane_geometry_journal_with_durable_evidence(journal)
+    }
+
+    fn validate_lane_geometry_journal_with_durable_evidence(
+        &self,
+        journal: &LaneGeometryJournal,
+    ) -> Result<()> {
         if journal.version != JOURNAL_VERSION
             || journal.records.len() > MAX_GEOMETRY_TRANSITIONS
             || journal.pending_archive_gc.len() > MAX_GEOMETRY_TRANSITIONS
@@ -4325,6 +4761,505 @@ impl Kura {
     }
 }
 
+fn lane_geometry_journal_structure_error(
+    store_root: &Path,
+    kind: ErrorKind,
+    message: &'static str,
+) -> Error {
+    Error::IO(
+        std::io::Error::new(kind, message),
+        store_root.join(JOURNAL_FILE_NAME),
+    )
+}
+
+fn validate_lane_geometry_journal_structure(
+    store_root: &Path,
+    journal: &LaneGeometryJournal,
+) -> Result<()> {
+    if journal.version != JOURNAL_VERSION
+        || journal.records.len() > MAX_GEOMETRY_TRANSITIONS
+        || journal.pending_archive_gc.len() > MAX_GEOMETRY_TRANSITIONS
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry journal has an unsupported version or too many transitions",
+        ));
+    }
+    if let Some(checkpoint) = journal.checkpoint.as_ref() {
+        validate_lane_geometry_checkpoint_structure(store_root, checkpoint)?;
+        if journal
+            .records
+            .first()
+            .is_some_and(|record| record.previous_catalog != checkpoint.catalog)
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal retained history does not start at its checkpoint catalog",
+            ));
+        }
+    } else if !journal.pending_archive_gc.is_empty() {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry journal has pending archive GC without a durable checkpoint",
+        ));
+    }
+    validate_pending_lane_geometry_gc_structure(store_root, journal)?;
+
+    let mut transition_ids = BTreeSet::new();
+    let mut retained_paths = BTreeSet::new();
+    for (record_index, record) in journal.records.iter().enumerate() {
+        if record.transition_id
+            != geometry_transition_id(record.previous_catalog, record.updated_catalog)
+            || record.previous_catalog == record.updated_catalog
+            || !transition_ids.insert(record.transition_id)
+            || record.operations.len() > MAX_GEOMETRY_BINDINGS.saturating_mul(2)
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal contains an invalid or duplicate transition",
+            ));
+        }
+        for bindings in [&record.previous_bindings, &record.updated_bindings] {
+            validate_geometry_binding_set_structure(store_root, bindings)?;
+        }
+        if geometry_catalog_fingerprint(&record.previous_bindings) != record.previous_catalog
+            || geometry_catalog_fingerprint(&record.updated_bindings) != record.updated_catalog
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal catalog fingerprint does not match its bindings",
+            ));
+        }
+        if record_index > 0
+            && journal.records[record_index - 1].updated_catalog != record.previous_catalog
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal transition chain is not contiguous",
+            ));
+        }
+
+        let transition_hex = hex::encode(record.transition_id.as_ref());
+        let previous_by_lane = record
+            .previous_bindings
+            .iter()
+            .map(|binding| (binding.lane_id, binding))
+            .collect::<BTreeMap<_, _>>();
+        let updated_by_lane = record
+            .updated_bindings
+            .iter()
+            .map(|binding| (binding.lane_id, binding))
+            .collect::<BTreeMap<_, _>>();
+        if record
+            .operations
+            .windows(2)
+            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal operations are duplicated or unsorted",
+            ));
+        }
+
+        let mut lane_ids = BTreeSet::new();
+        for operation in &record.operations {
+            if !lane_ids.insert(operation.lane_id)
+                || operation
+                    .previous
+                    .as_ref()
+                    .is_some_and(|binding| binding.lane_id != operation.lane_id)
+                || operation
+                    .updated
+                    .as_ref()
+                    .is_some_and(|binding| binding.lane_id != operation.lane_id)
+            {
+                return Err(lane_geometry_journal_structure_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "lane geometry journal contains duplicate or mismatched lane operations",
+                ));
+            }
+            let expected_root = format!(
+                "retired/lane_geometry/{transition_hex}/lane_{:010}",
+                operation.lane_id.as_u32()
+            );
+            let expected_paths = [
+                format!("{expected_root}/previous_blocks"),
+                format!("{expected_root}/previous_merge.log"),
+                format!("{expected_root}/unpublished_blocks"),
+                format!("{expected_root}/unpublished_merge.log"),
+            ];
+            let actual_paths = [
+                &operation.archived_blocks_path,
+                &operation.archived_merge_path,
+                &operation.unpublished_blocks_path,
+                &operation.unpublished_merge_path,
+            ];
+            if actual_paths
+                .iter()
+                .zip(expected_paths.iter())
+                .any(|(actual, expected)| *actual != expected)
+                || actual_paths
+                    .iter()
+                    .any(|path| !retained_paths.insert((*path).clone()))
+            {
+                return Err(lane_geometry_journal_structure_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "lane geometry journal contains forged or colliding archive paths",
+                ));
+            }
+            for (path, directory) in actual_paths.iter().zip([true, false, true, false]) {
+                validate_geometry_journal_relative_path(store_root, path, directory)?;
+            }
+            for binding in operation.previous.iter().chain(operation.updated.iter()) {
+                validate_geometry_binding_structure(store_root, binding)?;
+            }
+            if operation.previous.as_ref() != previous_by_lane.get(&operation.lane_id).copied()
+                || operation.updated.as_ref() != updated_by_lane.get(&operation.lane_id).copied()
+            {
+                return Err(lane_geometry_journal_structure_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "lane geometry operation does not match its authenticated catalog bindings",
+                ));
+            }
+            let shape_is_valid = match operation.kind {
+                LaneGeometryOperationKind::Create => {
+                    operation.previous.is_none() && operation.updated.is_some()
+                }
+                LaneGeometryOperationKind::Retire => {
+                    operation.previous.is_some() && operation.updated.is_none()
+                }
+                LaneGeometryOperationKind::Replace => operation
+                    .previous
+                    .as_ref()
+                    .zip(operation.updated.as_ref())
+                    .is_some_and(|(previous, updated)| {
+                        previous.incarnation != updated.incarnation
+                            || previous.activation_height != updated.activation_height
+                    }),
+                LaneGeometryOperationKind::Relabel => operation
+                    .previous
+                    .as_ref()
+                    .zip(operation.updated.as_ref())
+                    .is_some_and(|(previous, updated)| {
+                        previous.incarnation == updated.incarnation
+                            && previous.activation_height == updated.activation_height
+                            && (previous.blocks_path != updated.blocks_path
+                                || previous.merge_path != updated.merge_path)
+                    }),
+            };
+            if !shape_is_valid {
+                return Err(lane_geometry_journal_structure_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "lane geometry journal contains an invalid operation shape",
+                ));
+            }
+        }
+
+        let expected_changed_lanes = previous_by_lane
+            .keys()
+            .chain(updated_by_lane.keys())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|lane_id| {
+                previous_by_lane.get(lane_id).copied() != updated_by_lane.get(lane_id).copied()
+            })
+            .count();
+        if record.operations.len() != expected_changed_lanes {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal omits or invents a catalog binding operation",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_lane_geometry_checkpoint_structure(
+    store_root: &Path,
+    checkpoint: &LaneGeometrySnapshotCheckpoint,
+) -> Result<()> {
+    validate_geometry_binding_set_structure(store_root, &checkpoint.bindings)?;
+    validate_geometry_merge_release_structure(
+        store_root,
+        &checkpoint.merge_releases,
+        checkpoint.snapshot_height,
+    )?;
+    if checkpoint.version != CHECKPOINT_VERSION
+        || checkpoint
+            .snapshot_state_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        || checkpoint.catalog != geometry_catalog_fingerprint(&checkpoint.bindings)
+        || checkpoint.commitment != geometry_checkpoint_commitment(checkpoint)
+        || checkpoint.snapshot_height == 0
+        || checkpoint.snapshot_block_hash.is_none()
+        || checkpoint
+            .snapshot_block_hash
+            .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+        || checkpoint
+            .bindings
+            .iter()
+            .any(|binding| binding.activation_height > checkpoint.snapshot_height)
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry checkpoint commitment, catalog, height, block hash, or activation is invalid",
+        ));
+    }
+    match (
+        checkpoint.transition_previous_catalog,
+        checkpoint.transition_id,
+    ) {
+        (None, None) => Ok(()),
+        (Some(previous), Some(transition_id))
+            if transition_id == geometry_transition_id(previous, checkpoint.catalog) =>
+        {
+            Ok(())
+        }
+        _ => Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry checkpoint transition binding is invalid",
+        )),
+    }
+}
+
+fn validate_geometry_merge_release_structure(
+    store_root: &Path,
+    releases: &[LaneGeometryMergeRelease],
+    snapshot_height: u64,
+) -> Result<()> {
+    if releases.len() > MAX_GEOMETRY_MERGE_RELEASES
+        || releases.windows(2).any(|pair| pair[0] >= pair[1])
+        || releases.iter().any(|release| {
+            release.lane_block_height == 0
+                || release.application_block_height == 0
+                || release.application_block_height > snapshot_height
+                || release
+                    .lane_incarnation
+                    .as_ref()
+                    .iter()
+                    .all(|byte| *byte == 0)
+        })
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "geometry checkpoint merge releases are invalid, duplicated, unsorted, or oversized",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pending_lane_geometry_gc_structure(
+    store_root: &Path,
+    journal: &LaneGeometryJournal,
+) -> Result<()> {
+    if journal.pending_archive_gc.is_empty() {
+        if journal
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.pending_archive_gc_root.is_some())
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry checkpoint commits a missing pending archive GC set",
+            ));
+        }
+        return Ok(());
+    }
+    let checkpoint = journal.checkpoint.as_ref().ok_or_else(|| {
+        lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "pending lane geometry GC has no checkpoint",
+        )
+    })?;
+    let retained_ids = journal
+        .records
+        .iter()
+        .map(|record| record.transition_id)
+        .collect::<BTreeSet<_>>();
+    let mut pending_ids = BTreeSet::new();
+    for (index, pending) in journal.pending_archive_gc.iter().enumerate() {
+        let intent = &pending.intent;
+        let standalone = LaneGeometryJournal {
+            version: JOURNAL_VERSION,
+            configured_catalog_hash: None,
+            checkpoint: None,
+            pending_archive_gc: Vec::new(),
+            records: vec![intent.clone()],
+        };
+        validate_lane_geometry_journal_structure(store_root, &standalone)?;
+        if intent.phase != LaneGeometryPhase::CatalogPublished
+            || !pending_ids.insert(intent.transition_id)
+            || retained_ids.contains(&intent.transition_id)
+            || index > 0
+                && journal.pending_archive_gc[index - 1].intent.updated_catalog
+                    != intent.previous_catalog
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal has forged or non-contiguous pending archive GC",
+            ));
+        }
+    }
+    if checkpoint.pending_archive_gc_root
+        != Some(geometry_pending_archive_gc_root(
+            &journal.pending_archive_gc,
+        ))
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry checkpoint does not bind its exact pending archive GC set",
+        ));
+    }
+    let last = journal
+        .pending_archive_gc
+        .last()
+        .expect("non-empty pending archive GC");
+    if last.intent.updated_catalog != checkpoint.catalog
+        || checkpoint.transition_previous_catalog != Some(last.intent.previous_catalog)
+        || checkpoint.transition_id != Some(last.intent.transition_id)
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry pending archive GC does not terminate at its checkpoint",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_geometry_binding_structure(
+    store_root: &Path,
+    binding: &LaneGeometryBinding,
+) -> Result<()> {
+    if binding.incarnation.as_ref().iter().all(|byte| *byte == 0) {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry journal contains a zero incarnation",
+        ));
+    }
+    validate_geometry_journal_relative_path(store_root, &binding.blocks_path, true)?;
+    validate_geometry_journal_relative_path(store_root, &binding.merge_path, false)
+}
+
+fn validate_geometry_binding_set_structure(
+    store_root: &Path,
+    bindings: &[LaneGeometryBinding],
+) -> Result<()> {
+    if bindings.is_empty()
+        || bindings.len() > MAX_GEOMETRY_BINDINGS
+        || bindings
+            .windows(2)
+            .any(|pair| pair[0].lane_id >= pair[1].lane_id)
+    {
+        return Err(lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "lane geometry catalog bindings are empty, duplicated, or unsorted",
+        ));
+    }
+    let mut incarnations = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    for binding in bindings {
+        validate_geometry_binding_structure(store_root, binding)?;
+        if !incarnations.insert(binding.incarnation)
+            || !paths.insert(binding.blocks_path.clone())
+            || !paths.insert(binding.merge_path.clone())
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry catalog contains duplicate incarnations or storage paths",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_geometry_journal_relative_path(
+    store_root: &Path,
+    relative: &str,
+    directory: bool,
+) -> Result<()> {
+    let relative = Path::new(relative);
+    validate_relative_path(relative)?;
+    let root_metadata = fs::symlink_metadata(store_root)
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
+        return Err(configured_catalog_preflight_error(
+            store_root,
+            ErrorKind::InvalidData,
+            "Kura geometry store root must remain a non-symlink directory",
+        ));
+    }
+
+    let components = relative.components().collect::<Vec<_>>();
+    let mut cursor = store_root.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        cursor.push(component.as_os_str());
+        let is_target = index + 1 == components.len();
+        match fs::symlink_metadata(&cursor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry journal path traverses or targets a symlink",
+                    ),
+                    cursor,
+                ));
+            }
+            Ok(metadata) if !is_target && !metadata.file_type().is_dir() => {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry journal path traverses a non-directory",
+                    ),
+                    cursor,
+                ));
+            }
+            Ok(metadata)
+                if is_target
+                    && ((directory && !metadata.file_type().is_dir())
+                        || (!directory && !metadata.file_type().is_file())) =>
+            {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry journal path target has the wrong file type",
+                    ),
+                    cursor,
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
+            Err(error) => return Err(Error::IO(error, cursor)),
+        }
+    }
+    Ok(())
+}
+
 fn lane_payload_targets_retirement(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
     retiring: &BTreeSet<LaneRetirementIdentity>,
@@ -4571,15 +5506,17 @@ mod tests {
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         isi::Log,
-        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneLifecycleParameterV1},
         peer::PeerId,
         transaction::{TransactionBuilder, signed::TransactionResultInner},
         trigger::DataTriggerSequence,
     };
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+    use nonzero_ext::nonzero;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::kura::CertifiedLaneBlockArtifact;
     use crate::{
         block::BlockBuilder,
         lane_consensus::{
@@ -4589,7 +5526,12 @@ mod tests {
     };
 
     fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
-        let config = KuraConfig {
+        let config = kura_config(root);
+        Kura::new(&config, lane_config).expect("open test Kura").0
+    }
+
+    fn kura_config(root: &Path) -> KuraConfig {
+        KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(root.to_path_buf()),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
@@ -4601,8 +5543,30 @@ mod tests {
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
             eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
-        };
-        Kura::new(&config, lane_config).expect("open test Kura").0
+        }
+    }
+
+    fn configured_primary_catalog(alias: &str) -> LaneCatalog {
+        LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![ModelLaneConfig {
+                alias: alias.to_owned(),
+                ..ModelLaneConfig::default()
+            }],
+        )
+        .expect("configured primary-lane catalog")
+    }
+
+    fn assert_lane_paths_absent(root: &Path, lane_config: &RuntimeLaneConfig) {
+        let primary = lane_config.primary();
+        assert!(
+            !primary.blocks_dir(root).exists(),
+            "rejected startup must not create its block-store path"
+        );
+        assert!(
+            !primary.merge_log_path(root).exists(),
+            "rejected startup must not create its merge-ledger path"
+        );
     }
 
     fn initial_and_extended_configs() -> (RuntimeLaneConfig, RuntimeLaneConfig) {
@@ -4644,16 +5608,27 @@ mod tests {
         let root = temp.path().join("kura");
         let mut lanes = LaneCatalog::default().lanes().to_vec();
         lanes[0].description = Some("operator-only catalog description".to_owned());
-        let catalog =
-            LaneCatalog::new(nonzero!(1_u32), lanes).expect("description-only lane catalog");
+        let catalog = LaneCatalog::new(NonZeroU32::new(1).expect("non-zero lane count"), lanes)
+            .expect("description-only lane catalog");
         let config = RuntimeLaneConfig::from_catalog(&catalog);
+        let previous = RuntimeLaneConfig::default();
         let baseline = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
         let (incarnations, activation_heights) = initial_geometry();
-        let kura = open_kura(&root, &config);
+        let kura = open_kura(&root, &previous);
+        kura.apply_lane_geometry_transition(
+            &previous,
+            &config,
+            &incarnations,
+            &incarnations,
+            &activation_heights,
+            &activation_heights,
+            &BTreeSet::new(),
+        )
+        .expect("description-only catalog has no physical geometry transition");
         let journal_path = kura.lane_geometry_journal_path();
         assert!(
             !journal_path.exists(),
-            "opening static geometry must not invent a recovery journal"
+            "description-only geometry application must not invent a recovery journal"
         );
         kura.fail_next_lane_geometry_publication_after_write_for_test();
 
@@ -4666,7 +5641,7 @@ mod tests {
             )
             .expect_err("failure after target replacement must restore prior absence");
         assert!(
-            !matches!(error, Error::LaneGeometryPublicationRestoreFailed { .. }),
+            !matches!(&error, Error::LaneGeometryPublicationRestoreFailed { .. }),
             "exact restoration should preserve the original injected publication error: {error}"
         );
         assert!(
@@ -4707,7 +5682,7 @@ mod tests {
         let unrelated_kura = open_kura(&unrelated_root, &config);
         let publication_temp = unrelated_root.join(JOURNAL_TEMP_FILE_NAME);
         fs::write(&publication_temp, b"operator-owned-temp").expect("seed unrelated temp");
-        unrelated_kura
+        let error = unrelated_kura
             .mark_lane_geometry_catalog_published(
                 &config,
                 &incarnations,
@@ -4715,6 +5690,10 @@ mod tests {
                 Some(baseline),
             )
             .expect_err("an unrelated preexisting temp must fail closed");
+        assert!(
+            !matches!(&error, Error::LaneGeometryPublicationRestoreFailed { .. }),
+            "an untouched preexisting temp does not make prior-target restoration ambiguous: {error}"
+        );
         assert_eq!(
             fs::read(&publication_temp).expect("unrelated temp retained"),
             b"operator-owned-temp"
@@ -4742,7 +5721,7 @@ mod tests {
             )
             .expect_err("inject failure after consuming exact resume temp");
         assert!(!matches!(
-            error,
+            &error,
             Error::LaneGeometryPublicationRestoreFailed { .. }
         ));
         assert!(
@@ -4794,7 +5773,7 @@ mod tests {
             )
             .expect_err("inject failure after replacing an existing journal");
         assert!(!matches!(
-            error,
+            &error,
             Error::LaneGeometryPublicationRestoreFailed { .. }
         ));
         assert_eq!(
@@ -4856,7 +5835,7 @@ mod tests {
             )
             .expect_err("restore-temp collision must prevent claiming exact restoration");
         assert!(matches!(
-            error,
+            &error,
             Error::LaneGeometryPublicationRestoreFailed { .. }
         ));
         assert_eq!(
@@ -6766,5 +7745,246 @@ mod tests {
             &extended_activations,
         )
         .expect_err("forged archive path must fail closed");
+    }
+
+    #[test]
+    fn configured_catalog_preflight_persists_baseline_before_any_lane_path() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured_a = configured_primary_catalog("crash-a");
+        let configured_b = configured_primary_catalog("crash-b");
+        let lane_config_a = RuntimeLaneConfig::from_catalog(&configured_a);
+        let lane_config_b = RuntimeLaneConfig::from_catalog(&configured_b);
+        let config = kura_config(&root);
+
+        Kura::fail_after_configured_catalog_preflight_for_test(&root);
+        let error = Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
+            .expect_err("injected crash must stop immediately after baseline establishment");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, _) if source.kind() == ErrorKind::Interrupted
+        ));
+        assert_lane_paths_absent(&root, &lane_config_a);
+        let journal = decode_exact::<LaneGeometryJournal>(
+            &fs::read(root.join(JOURNAL_FILE_NAME)).expect("durable baseline journal"),
+        )
+        .expect("decode durable baseline journal");
+        assert_eq!(
+            journal.configured_catalog_hash,
+            Some(LaneLifecycleParameterV1::catalog_hash(&configured_a))
+        );
+
+        Kura::new_with_configured_lane_catalog(&config, &lane_config_b, &configured_b)
+            .expect_err("a reconstructed process must reject a different configured catalog");
+        assert_lane_paths_absent(&root, &lane_config_b);
+
+        Kura::new_with_configured_lane_catalog(&config, &lane_config_a, &configured_a)
+            .expect("the exact configured catalog must resume after the crash boundary");
+    }
+
+    #[test]
+    fn configured_catalog_preflight_recovers_exact_first_start_temp() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        fs::create_dir_all(&root).expect("Kura root");
+        let configured = configured_primary_catalog("temp-recovery");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let expected = LaneGeometryJournal {
+            configured_catalog_hash: Some(LaneLifecycleParameterV1::catalog_hash(&configured)),
+            ..LaneGeometryJournal::default()
+        };
+        fs::write(root.join(JOURNAL_TEMP_FILE_NAME), expected.encode())
+            .expect("simulate synced first-start temp before hard-link promotion");
+
+        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+            .expect("reconstructed process must promote the exact baseline temp");
+        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+        let recovered = decode_exact::<LaneGeometryJournal>(
+            &fs::read(root.join(JOURNAL_FILE_NAME)).expect("promoted baseline journal"),
+        )
+        .expect("decode promoted baseline journal");
+        assert_eq!(recovered, expected);
+    }
+
+    #[test]
+    fn configured_catalog_preflight_cleans_exact_startup_owned_hard_link_temp() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("link-recovery");
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
+            .expect("establish baseline before simulated crash");
+        let journal_path = root.join(JOURNAL_FILE_NAME);
+        fs::hard_link(&journal_path, root.join(JOURNAL_TEMP_FILE_NAME))
+            .expect("simulate crash after durable hard-link promotion");
+
+        Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
+            .expect("exact startup-owned hard-link temp must be cleaned before lane storage opens");
+        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+        assert!(journal_path.is_file());
+    }
+
+    #[test]
+    fn configured_catalog_preflight_rejects_unproven_restore_temp() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("restore-temp");
+        let attempted = configured_primary_catalog("restore-must-not-open");
+        let attempted_lane_config = RuntimeLaneConfig::from_catalog(&attempted);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
+            .expect("establish baseline");
+        let journal_path = root.join(JOURNAL_FILE_NAME);
+        fs::copy(&journal_path, root.join(JOURNAL_RESTORE_TEMP_FILE_NAME))
+            .expect("seed byte-identical but unowned restore temp");
+
+        Kura::new_with_configured_lane_catalog(
+            &kura_config(&root),
+            &attempted_lane_config,
+            &configured,
+        )
+        .expect_err("byte equality does not prove restore-temp ownership");
+        assert_lane_paths_absent(&root, &attempted_lane_config);
+        assert!(root.join(JOURNAL_RESTORE_TEMP_FILE_NAME).is_file());
+    }
+
+    #[test]
+    fn configured_catalog_preflight_rejects_tampered_v4_structure_before_lane_mutation() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("structural-baseline");
+        let attempted_lane_catalog = configured_primary_catalog("must-not-open");
+        let attempted_lane_config = RuntimeLaneConfig::from_catalog(&attempted_lane_catalog);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
+            .expect("establish valid v4 baseline");
+
+        let journal_path = root.join(JOURNAL_FILE_NAME);
+        let mut journal = decode_exact::<LaneGeometryJournal>(
+            &fs::read(&journal_path).expect("read valid baseline journal"),
+        )
+        .expect("decode valid baseline journal");
+        let previous_catalog = Hash::new(b"forged previous catalog");
+        let updated_catalog = Hash::new(b"forged updated catalog");
+        journal.records.push(LaneGeometryIntent {
+            transition_id: geometry_transition_id(previous_catalog, updated_catalog),
+            previous_catalog,
+            updated_catalog,
+            previous_bindings: Vec::new(),
+            updated_bindings: Vec::new(),
+            phase: LaneGeometryPhase::Intent,
+            operations: Vec::new(),
+        });
+        fs::write(&journal_path, journal.encode()).expect("write decodable structural forgery");
+
+        Kura::new_with_configured_lane_catalog(
+            &kura_config(&root),
+            &attempted_lane_config,
+            &configured,
+        )
+        .expect_err("correct baseline must not mask a malformed v4 journal");
+        assert_lane_paths_absent(&root, &attempted_lane_config);
+    }
+
+    #[test]
+    fn configured_catalog_preflight_rejects_version_mismatch_before_lane_mutation() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("version-baseline");
+        let attempted_lane_catalog = configured_primary_catalog("version-must-not-open");
+        let attempted_lane_config = RuntimeLaneConfig::from_catalog(&attempted_lane_catalog);
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
+            .expect("establish valid v4 baseline");
+        let journal_path = root.join(JOURNAL_FILE_NAME);
+        let mut journal = decode_exact::<LaneGeometryJournal>(
+            &fs::read(&journal_path).expect("read valid baseline journal"),
+        )
+        .expect("decode valid baseline journal");
+        journal.version = JOURNAL_VERSION.saturating_add(1);
+        fs::write(&journal_path, journal.encode()).expect("write unsupported journal version");
+
+        Kura::new_with_configured_lane_catalog(
+            &kura_config(&root),
+            &attempted_lane_config,
+            &configured,
+        )
+        .expect_err("unsupported journal version must fail at the startup boundary");
+        assert_lane_paths_absent(&root, &attempted_lane_config);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_catalog_preflight_rejects_journal_derived_symlink_before_lane_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = LaneCatalog::default();
+        let (initial, extended) = initial_and_extended_configs();
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&kura_config(&root), &initial, &configured)
+                .expect("establish valid configured startup");
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        )
+        .expect("persist a valid journal-derived archive path");
+        let journal = kura
+            .read_lane_geometry_journal()
+            .expect("transition journal");
+        let relative_link = &journal.records[0].operations[0].archived_blocks_path;
+        let link = root.join(relative_link);
+        fs::create_dir_all(link.parent().expect("archive path parent"))
+            .expect("archive path parent");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).expect("outside directory");
+        symlink(&outside, &link).expect("inject journal-derived symlink");
+        drop(kura);
+
+        let attempted_catalog = configured_primary_catalog("symlink-must-not-open");
+        let attempted_lane_config = RuntimeLaneConfig::from_catalog(&attempted_catalog);
+        Kura::new_with_configured_lane_catalog(
+            &kura_config(&root),
+            &attempted_lane_config,
+            &configured,
+        )
+        .expect_err("journal-derived symlink must fail before opening attempted lane storage");
+        assert_lane_paths_absent(&root, &attempted_lane_config);
+        assert!(link.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_catalog_preflight_rejects_journal_identity_swap_before_lane_mutation() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured = configured_primary_catalog("identity-baseline");
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
+        Kura::establish_or_verify_configured_lane_catalog_baseline(&root, baseline)
+            .expect("establish valid configured baseline");
+        let journal_path = root.join(JOURNAL_FILE_NAME);
+        fs::copy(&journal_path, root.join(JOURNAL_IDENTITY_SWAP_FILE_NAME))
+            .expect("prepare same-content replacement inode");
+        Kura::replace_configured_catalog_journal_after_open_for_test(&root);
+
+        let attempted_catalog = configured_primary_catalog("identity-must-not-open");
+        let attempted_lane_config = RuntimeLaneConfig::from_catalog(&attempted_catalog);
+        Kura::new_with_configured_lane_catalog(
+            &kura_config(&root),
+            &attempted_lane_config,
+            &configured,
+        )
+        .expect_err("journal identity replacement during read must fail closed");
+        assert_lane_paths_absent(&root, &attempted_lane_config);
+        assert!(root.join(JOURNAL_IDENTITY_DISPLACED_FILE_NAME).is_file());
     }
 }

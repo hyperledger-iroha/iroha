@@ -56,7 +56,7 @@ fn compile_stub() {
 
 #[test]
 fn lex_simple_function() {
-    let src = "fn add(a: i64, b: i64) { let c = a + b; }";
+    let src = "fn add(int a, int b) { let c = a + b; }";
     let tokens = lex(src).expect("lex failed");
     assert!(tokens.iter().any(|t| matches!(t.kind, TokenKind::Fn)));
     assert!(
@@ -68,7 +68,7 @@ fn lex_simple_function() {
 
 #[test]
 fn parse_simple_add() {
-    let src = "module SimpleAdd { fn add(a: i64, b: i64) { let c = a + b; } }";
+    let src = "module SimpleAdd { fn add(int a, int b) { let c = a + b; } }";
     let prog = parse(src).expect("parse failed");
     let Item::Function(Function {
         name, params, body, ..
@@ -120,7 +120,8 @@ fn lexer_accepts_v1_branded_keywords_in_both_scripts() {
 
 #[test]
 fn parse_and_type_tuples_and_types() {
-    let src = "module Types { fn t(x: i64) -> (i64, bool) { let (a, b): (i64, bool) = (1, true); return (x, true); } }";
+    let src =
+        "module Types { fn t(int x) -> (int, bool) { let (a, b) = (1, true); return (x, true); } }";
     let prog = parse(src).expect("parse");
     let typed = analyze(&prog).expect("type");
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
@@ -129,7 +130,7 @@ fn parse_and_type_tuples_and_types() {
 
 #[test]
 fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
-    let src = "module BytesDemo { fn echo(b: bytes) -> bytes { let tmp: bytes = b; return tmp; } }";
+    let src = "module BytesDemo { fn echo(bytes b) -> bytes { let bytes tmp = b; return tmp; } }";
     let prog = parse(src).expect("parse bytes");
     let typed = analyze(&prog).expect("analyze bytes");
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
@@ -166,7 +167,7 @@ fn prediction_market_demo_compiles() {
 #[test]
 fn tuple_destructure_and_field_access() {
     // Destructure a tuple literal into (a,b) and sum; also exercise direct field access `(1,2).1`
-    let src = "seiyaku TupleDestructure { fn sum() -> i64 { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }";
+    let src = "seiyaku TupleDestructure { fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile tuple destructure");
@@ -186,7 +187,7 @@ fn tuple_destructure_and_field_access() {
 #[test]
 fn tuple_var_member_access() {
     // Bind a tuple to a name and use member access on it.
-    let src = "seiyaku TupleMember { fn f() -> i64 { let t = (5,6); return t.0 + t.1; } }";
+    let src = "seiyaku TupleMember { fn f() -> int { let t = (5,6); return t.0 + t.1; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile tuple var member");
@@ -205,8 +206,8 @@ fn tuple_var_member_access() {
 fn call_function_with_tuple_return() {
     let src = r#"
         seiyaku TupleCall {
-            fn pair(x: i64) -> (i64, i64) { return (x, x + 1); }
-            fn main() -> i64 {
+            fn pair(int x) -> (int, int) { return (x, x + 1); }
+            fn main() -> int {
                 let (a, b) = pair(7);
                 return a * b;
             }
@@ -222,55 +223,51 @@ fn call_function_with_tuple_return() {
 }
 
 #[test]
-fn amount_arithmetic_compiles_without_implicit_conversion() {
+fn quantity_arithmetic_compiles_without_implicit_conversion() {
     let src = r#"
-        seiyaku AmountArithmetic {
-            fn main() -> Amount {
-                let a: Amount = Amount::from_i64(9_000_000_000);
-                let b: Amount = a * a;
-                let c: Amount = b / a;
+        seiyaku QuantityArithmetic {
+            fn main() -> quantity {
+                let quantity a = 9_000_000_000;
+                let quantity b = a * a;
+                let quantity c = b / a;
                 return c;
             }
         }
     "#;
     Compiler::new()
         .compile_source(src)
-        .expect("compile Amount arithmetic");
+        .expect("compile quantity arithmetic");
 }
 
 #[test]
-fn negative_amount_conversion_is_rejected() {
+fn negative_quantity_conversion_is_rejected() {
     let src = r#"
-        seiyaku NegativeAmount {
-            fn main() -> Amount {
-                let a: Amount = Amount::from_i64(-1);
+        seiyaku NegativeQuantity {
+            fn main() -> quantity {
+                let quantity a = -1;
                 return a;
             }
         }
     "#;
     let err = Compiler::new()
         .compile_source(src)
-        .expect_err("negative alias literal should fail");
-    assert!(err.to_string().contains("cannot convert a negative i64"));
+        .expect_err("negative quantity literal should fail");
+    assert!(err.to_string().contains("E_NEGATIVE_QUANTITY"), "{err}");
 }
 
 #[test]
-fn fractional_amount_literal_is_rejected() {
+fn fractional_quantity_literal_is_accepted_contextually() {
     let src = r#"
-        seiyaku DecimalAmount {
+        seiyaku DecimalQuantity {
             fn main() -> bool {
-                let a: Amount = 1.50;
+                let quantity a = 1.50;
                 return a == a;
             }
         }
     "#;
-    let err = Compiler::new()
+    Compiler::new()
         .compile_source(src)
-        .expect_err("fractional Amount literal should fail");
-    assert!(
-        !err.is_empty(),
-        "fractional Amount rejection needs a diagnostic"
-    );
+        .expect("fractional quantity literal should compile in quantity context");
 }
 
 #[test]
@@ -278,8 +275,8 @@ fn decimal_literal_rejects_int_annotation() {
     let prog = parse(
         r#"
         module InvalidDecimalAnnotation {
-            fn main() -> i64 {
-                let a: i64 = 1.5;
+            fn main() -> int {
+                let int a = 1.5;
                 return a;
             }
         }
@@ -295,21 +292,21 @@ fn decimal_literal_rejects_int_annotation() {
 }
 
 #[test]
-fn implicit_amount_to_i64_conversion_is_rejected() {
+fn implicit_quantity_to_int_conversion_is_rejected() {
     let src = r#"
-        seiyaku NoImplicitAmountCast {
-            fn main() -> i64 {
-                let a: Amount = Amount::from_i64(9_000_000_000);
-                let b: Amount = a * a;
-                let c: i64 = b;
+        seiyaku NoImplicitQuantityCast {
+            fn main() -> int {
+                let quantity a = 9_000_000_000;
+                let quantity b = a * a;
+                let int c = b;
                 return c;
             }
         }
     "#;
     let error = Compiler::new()
         .compile_source(src)
-        .expect_err("implicit Amount-to-i64 conversion must fail");
-    assert!(error.contains("expected i64, got Amount"), "{error}");
+        .expect_err("implicit quantity-to-int conversion must fail");
+    assert!(error.contains("expected int, got quantity"), "{error}");
 }
 
 #[test]
@@ -361,7 +358,7 @@ fn pointer_constructors_compile() {
                 let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
                 let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
                 ledger::account::set_detail(account: context::authority(), key: Name::parse("cursor"), value: Json::parse("{\"query\":\"sc_dummy\",\"cursor\":1}"));
-                ledger::asset::transfer(source: alice, destination: bob, asset_definition: asset, amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: alice, destination: bob, asset_definition: asset, amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -375,7 +372,7 @@ fn public_function_without_authorization_rejected() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn run() {
-                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -448,7 +445,7 @@ fn public_function_with_permission_is_allowed() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn run() authorize("Admin") {
-                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -461,7 +458,7 @@ fn public_function_with_permission_is_allowed() {
 fn removed_in_memory_map_type_is_rejected() {
     let src = r#"
         seiyaku Demo {
-            state detail: Map<string, i64>;
+            state Map<string, int> detail;
 
             view fn main() {}
         }
@@ -480,7 +477,7 @@ fn removed_in_memory_map_type_is_rejected() {
 fn parse_for_each_map_and_builtins() {
     let src = r#"
         seiyaku StateIteration {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (k, v) in values { debug::info("kv"); } }
         }
     "#;
@@ -511,7 +508,7 @@ fn literal_range_for_loop_is_bounded() {
 fn state_map_take_two_is_bounded() {
     let src = r#"
         seiyaku StateIteration {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (k, v) in values.take(2) { let z = k; } }
         }
     "#;
@@ -523,7 +520,7 @@ fn state_map_take_two_is_bounded() {
 fn removed_bounded_attribute_is_rejected() {
     let src = r#"
         seiyaku StateIteration {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (k, v) in values #[bounded(1)] { let z = k; } }
         }
     "#;
@@ -534,7 +531,7 @@ fn removed_bounded_attribute_is_rejected() {
 fn parse_and_type_bounded_map_take_one_ok() {
     let src = r#"
         seiyaku StateIteration {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (k, v) in values.take(1) { let z = k; } }
         }
     "#;
@@ -654,7 +651,7 @@ fn compile_emits_get_authority_syscall() {
 
 #[test]
 fn compile_emits_current_time_syscall() {
-    let src = r#"seiyaku Time { view fn f() -> i64 { return context::current_time_ms(); } }"#;
+    let src = r#"seiyaku Time { view fn f() -> int { return context::current_time_ms(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();
@@ -670,7 +667,7 @@ fn compile_emits_current_time_syscall() {
 
 #[test]
 fn compile_emits_block_height_syscall() {
-    let src = r#"seiyaku Height { view fn f() -> i64 { return context::block_height(); } }"#;
+    let src = r#"seiyaku Height { view fn f() -> int { return context::block_height(); } }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let code_region = &code[off..];
@@ -1048,7 +1045,7 @@ fn semantic_rejects_state_introspection_helper_args() {
     let err = analyze(&prog).expect_err("expected state_keys type error");
     assert!(
         err.message
-            .contains("state::keys expects (Name, i64 offset, i64 limit)"),
+            .contains("state_keys expects (Name, int offset, int limit)"),
         "unexpected error: {}",
         err.message
     );
@@ -1058,7 +1055,7 @@ fn semantic_rejects_state_introspection_helper_args() {
 fn compile_emits_extended_hash_syscalls() {
     let src = r#"
         seiyaku HashFunctions {
-        fn f(payload: bytes) {
+        fn f(bytes payload) {
             let b = crypto::blake2b256(payload);
             let k = crypto::keccak256(payload);
             let i = crypto::iroha_hash(payload);
@@ -1122,7 +1119,7 @@ fn compile_emits_resolve_account_alias_syscall() {
 fn parse_and_type_bounded_map_take_one() {
     let src = r#"
         seiyaku BoundedStateIteration {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (key, value) in values.take(1) { let seen = key; } }
         }
     "#;
@@ -1137,7 +1134,7 @@ fn for_each_map_mutation_is_rejected() {
     // Mutation of the iterated map inside the loop must be rejected.
     let src = r#"
         seiyaku MutatingStateIteration {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (key, value) in values.take(1) { values[0] = 1; } }
         }
     "#;
@@ -1156,7 +1153,7 @@ fn parse_error() {
 
 #[test]
 fn semantic_simple_add() {
-    let src = "module Arithmetic { fn add(a: i64, b: i64) { let c = a + b; } }";
+    let src = "module Arithmetic { fn add(int a, int b) { let c = a + b; } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ivm::kotodama::semantic::TypedItem::Function(func) = &typed.items[0];
@@ -1173,7 +1170,12 @@ fn semantic_type_error() {
     let src = "module InvalidArithmetic { fn bad() { let a = 1 + \"hi\"; } }";
     let prog = parse(src).expect("parse failed");
     let err = analyze(&prog).unwrap_err();
-    assert!(err.message.contains("expects i64 operands"));
+    assert!(
+        err.message
+            .contains("operator Add is not defined for int and string"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -1189,7 +1191,7 @@ fn encode_helpers() {
 
 #[test]
 fn compile_and_run_add() {
-    let src = "seiyaku Add { fn add(a: i64, b: i64) -> i64 { return a + b; } }";
+    let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } }";
     let compiler = Compiler::new();
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
@@ -1213,8 +1215,8 @@ fn compile_and_run_add() {
 fn state_allocations_do_not_clobber_params() {
     let src = r#"
         seiyaku StateAllocation {
-            state values: StateMap<i64, i64>;
-            fn id(x: i64) -> i64 { return x; }
+            state StateMap<int, int> values;
+            fn id(int x) -> int { return x; }
         }
     "#;
     let code = Compiler::new().compile_source(src).expect("compile failed");
@@ -1323,15 +1325,15 @@ fn triple_nested_struct_field_access() {
     // Deeply nested struct fields: d.c.b.a.x
     let src = r#"
         seiyaku NestedStructFields {
-        struct A { x: i64; }
-        struct B { a: A; }
-        struct C { b: B; }
-        struct D { c: C; }
-        fn f() -> i64 {
-            let a = A(5);
-            let b = B(a);
-            let c = C(b);
-            let d = D(c);
+        struct A { int x }
+        struct B { A a }
+        struct C { B b }
+        struct D { C c }
+        fn f() -> int {
+            let a = A { x: 5 };
+            let b = B { a };
+            let c = C { b };
+            let d = D { c };
             return d.c.b.a.x;
         }
         }
@@ -1347,16 +1349,16 @@ fn triple_nested_struct_field_access() {
 
 #[test]
 fn triple_nested_struct_field_mixed_named_numeric_access() {
-    // Mixed access: d.c.0.a.x where D { c: (B, i64) }
+    // Mixed access: d.c.0.a.x where D { (B, int) c }
     let src = r#"
         seiyaku MixedStructTupleFields {
-        struct A { x: i64; }
-        struct B { a: A; }
-        struct D { c: (B, i64); }
-        fn f() -> i64 {
-            let a = A(7);
-            let b = B(a);
-            let d = D((b, 99));
+        struct A { int x }
+        struct B { A a }
+        struct D { (B, int) c }
+        fn f() -> int {
+            let a = A { x: 7 };
+            let b = B { a };
+            let d = D { c: (b, 99) };
             return d.c.0.a.x;
         }
         }
@@ -1374,8 +1376,8 @@ fn triple_nested_struct_field_mixed_named_numeric_access() {
 fn invalid_numeric_on_struct_reports_error() {
     let src = r#"
         module InvalidStructIndex {
-        struct A { x: i64; }
-        fn f() { let a = A(1); let v = a.0; }
+        struct A { int x }
+        fn f() { let a = A { x: 1 }; let v = a.0; }
         }
     "#;
     let prog = parse(src).expect("parse ok");
@@ -1411,8 +1413,8 @@ fn invalid_numeric_tuple_index_reports_error() {
 fn tuple_index_on_non_tuple_reports_type() {
     let src = r#"
         module InvalidStructTupleIndex {
-        struct A { x: i64; }
-        fn f() { let s = A(1); let v = s.0; }
+        struct A { int x }
+        fn f() { let s = A { x: 1 }; let v = s.0; }
         }
     "#;
     let prog = parse(src).expect("parse ok");
@@ -1432,15 +1434,15 @@ fn tuple_index_on_non_tuple_int_reports_type() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("tuple index on non-tuple type i64"));
+    assert!(err.message.contains("tuple index on non-tuple type int"));
 }
 
 #[test]
 fn unknown_field_on_struct_reports_available_fields() {
     let src = r#"
         module UnknownStructField {
-        struct A { x: i64; y: i64; }
-        fn f() { let a = A(1,2); let v = a.z; }
+        struct A { int x, int y }
+        fn f() { let a = A { x: 1, y: 2 }; let v = a.z; }
         }
     "#;
     let prog = parse(src).expect("parse ok");
@@ -1460,15 +1462,15 @@ fn invalid_named_on_non_struct_reports_error() {
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected error");
-    assert!(err.message.contains("unknown field 'foo' on type i64"));
+    assert!(err.message.contains("unknown field 'foo' on type int"));
 }
 
 #[test]
 fn invalid_indexing_on_non_map_reports_error() {
     let src = r#"
         module InvalidStructIndexing {
-        struct A { x: i64; }
-        fn f() { let a = A(1); let v = a[0]; }
+        struct A { int x }
+        fn f() { let a = A { x: 1 }; let v = a[0]; }
         }
     "#;
     let prog = parse(src).expect("parse ok");
@@ -1481,8 +1483,8 @@ fn method_call_sugar_receiver_and_arg() {
     // a.method(b) sugar: receiver prepended as first arg
     let src = r#"
         seiyaku MethodCallSugar {
-        fn add(x: i64, y: i64) -> i64 { return x + y; }
-        fn main() -> i64 { return (5).add(7); }
+        fn add(int x, int y) -> int { return x + y; }
+        fn main() -> int { return (5).add(7); }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()
@@ -1499,7 +1501,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     use ivm::kotodama::parser::parse;
     // Wrong types should fail
     let bad = parse(
-        "module InvalidMint { fn f() { ledger::asset::mint(account: Name::parse(\"x\"), asset_definition: AssetDefinitionId::parse(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), amount: Amount::from_i64(1)); } }",
+        "module InvalidMint { fn f() { ledger::asset::mint(account: Name::parse(\"x\"), asset_definition: AssetDefinitionId::parse(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), amount: 1); } }",
     )
     .unwrap();
     assert!(analyze(&bad).is_err());
@@ -1511,7 +1513,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
 fn range_end_less_than_start_rejected() {
     let src = r#"
         seiyaku InvalidStateRange {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (key, value) in values.range(5, 2) { let seen = value; } }
         }
     "#;
@@ -1524,7 +1526,7 @@ fn range_end_less_than_start_rejected() {
 fn range_non_integer_args_rejected() {
     let src = r#"
         seiyaku InvalidStateRangeTypes {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (key, value) in values.range("a", "b") { let seen = value; } }
         }
     "#;
@@ -1537,8 +1539,8 @@ fn range_non_integer_args_rejected() {
 fn dynamic_state_map_take_is_rejected() {
     let src = r#"
         seiyaku DynamicTake {
-        state values: StateMap<i64, i64>;
-        fn bounded_take_sum(n: i64) -> i64 {
+        state StateMap<int, int> values;
+        fn bounded_take_sum(int n) -> int {
             var acc = 0;
             for (key, value) in values.take(n) { acc = acc + value; }
             return acc;
@@ -1558,8 +1560,8 @@ fn dynamic_state_map_take_is_rejected() {
 fn dynamic_state_map_range_is_rejected() {
     let src = r#"
         seiyaku DynamicRange {
-        state values: StateMap<i64, i64>;
-        fn bounded_range_sum(start: i64, end: i64) -> i64 {
+        state StateMap<int, int> values;
+        fn bounded_range_sum(int start, int end) -> int {
             var acc = 0;
             for (key, value) in values.range(start, end) { acc = acc + value; }
             return acc;
@@ -1592,7 +1594,7 @@ fn compile_typed_nft_syscalls() {
 #[test]
 fn compile_and_run_modulo() {
     // Return a % b
-    let src = "seiyaku Modulo { fn r(a: i64, b: i64) -> i64 { return a % b; } }";
+    let src = "seiyaku Modulo { fn r(int a, int b) -> int { return a % b; } }";
     let code = Compiler::new().compile_source(src).expect("compile modulo");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
@@ -1605,7 +1607,7 @@ fn compile_and_run_modulo() {
 #[test]
 fn compiler_owns_first_release_abi_metadata() {
     let code = Compiler::new()
-        .compile_source("seiyaku FixedAbi { view fn f() -> i64 { return 3; } }")
+        .compile_source("seiyaku FixedAbi { view fn f() -> int { return 3; } }")
         .expect("compile");
     let (meta, _off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.abi_version, 1);
@@ -1651,7 +1653,7 @@ fn manifest_includes_entrypoints_and_features() {
 
     let src = r#"
         seiyaku Demo {
-            state counter: i64;
+            state int counter;
 
             hajimari() {
                 counter = 0;
@@ -1740,8 +1742,8 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         kotoage fn main() authorize("MintAndBurn") {
             let acc = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
             let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
-            ledger::asset::mint(account: acc, asset_definition: asset, amount: Amount::from_i64(1));
-            ledger::asset::burn(account: acc, asset_definition: asset, amount: Amount::from_i64(1));
+            ledger::asset::mint(account: acc, asset_definition: asset, amount: 1);
+            ledger::asset::burn(account: acc, asset_definition: asset, amount: 1);
         }
         }
     "#;
@@ -1840,7 +1842,7 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
 fn production_manifest_rejects_parameter_dependent_isi_access() {
     let src = r#"
         seiyaku Test {
-            kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: Amount, space: DataSpaceId) authorize("Admin") {
+            kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount, DataSpaceId space) authorize("Admin") {
                 ledger::asset::transfer(source: from, destination: to, asset_definition: asset, amount: amount, dataspace: space);
             }
         }
@@ -1906,14 +1908,14 @@ fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     let src = r#"
         seiyaku Transfer {
           kotoage fn f() authorize("Admin") {
-            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
           }
         }
     "#;
     let prog = parse(src).expect("parse ledger::asset::transfer");
     analyze(&prog).expect("analyze ledger::asset::transfer");
 
-    let src2 = "module RemovedMap { fn make() -> i64 { return std::map::new(); } }";
+    let src2 = "module RemovedMap { fn make() -> int { return std::map::new(); } }";
     let prog2 = parse(src2).expect("parse std::map::new");
     analyze(&prog2).expect_err("in-memory map constructors are removed from V1");
 }
@@ -1923,7 +1925,7 @@ fn indirect_sensitive_calls_require_permission() {
     let src = r#"
         seiyaku Permission {
           fn helper() {
-            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1), dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
         }
 
         kotoage fn public_entry() {
@@ -1942,13 +1944,13 @@ fn indirect_sensitive_calls_require_permission() {
 fn while_loops_are_rejected_in_v1() {
     let src = r#"
         seiyaku Counter {
-            state counter: i64;
+            state int counter;
 
             hajimari() {
                 counter = 0;
             }
 
-            kotoage fn bump(times: i64) authorize("Admin") {
+            kotoage fn bump(int times) authorize("Admin") {
                 var i = 0;
                 while i < times {
                     counter = counter + 1;
@@ -1965,8 +1967,7 @@ fn while_loops_are_rejected_in_v1() {
 
 #[test]
 fn ternary_parses_and_types() {
-    let src =
-        "module Ternary { fn f(a: i64, b: i64) -> i64 { let x = (1 < 2) ? a : b; return x; } }";
+    let src = "module Ternary { fn f(int a, int b) -> int { let x = (1 < 2) ? a : b; return x; } }";
     let prog = parse(src).expect("parse ternary");
     let typed = analyze(&prog).expect("type ternary");
     let ivm::kotodama::semantic::TypedItem::Function(f) = &typed.items[0];
@@ -1975,7 +1976,7 @@ fn ternary_parses_and_types() {
 
 #[test]
 fn ternary_min_types() {
-    let src = "module Ternary { fn min(a: i64, b: i64) -> i64 { return (a < b) ? a : b; } }";
+    let src = "module Ternary { fn min(int a, int b) -> int { return (a < b) ? a : b; } }";
     let typed = analyze(&parse(src).expect("parse ternary")).expect("type ternary");
     assert!(typed.items.iter().any(|item| {
         matches!(item, ivm::kotodama::semantic::TypedItem::Function(function) if function.name == "min")
@@ -1984,7 +1985,7 @@ fn ternary_min_types() {
 
 #[test]
 fn nested_ternary_types() {
-    let src = "module Ternary { fn f(a: i64, b: i64, c: i64) -> i64 { return (a < b) ? ((b < c) ? b : c) : a; } }";
+    let src = "module Ternary { fn f(int a, int b, int c) -> int { return (a < b) ? ((b < c) ? b : c) : a; } }";
     analyze(&parse(src).expect("parse nested ternary")).expect("type nested ternary");
 }
 
@@ -2014,7 +2015,7 @@ seiyaku MyC {
 
 #[test]
 fn removed_in_memory_map_indexing_is_rejected() {
-    let src = "module RemovedMap { fn f(m: Map<i64, i64>, k: i64) -> i64 { return m[k]; } }";
+    let src = "module RemovedMap { fn f(Map<int, int> m, int k) -> int { return m[k]; } }";
     let error = Compiler::new()
         .compile_source(src)
         .expect_err("in-memory Map must not compile in V1");
@@ -2025,7 +2026,7 @@ fn removed_in_memory_map_indexing_is_rejected() {
 fn branch_lowering_uses_compact_bne_and_one_relaxed_transfer() {
     let src = r#"
 seiyaku Branches {
-    view fn branch(b: bool) -> i64 {
+    view fn branch(bool b) -> int {
         if b {
             return 1;
         } else {
@@ -2082,14 +2083,15 @@ seiyaku Branches {
 #[test]
 fn compile_poseidon2_and_assert_eq() {
     // poseidon2 computation
-    let src = "module Poseidon { fn f(a: i64, b: i64) { let h = crypto::poseidon2(left: a, right: b); } }";
+    let src =
+        "module Poseidon { fn f(int a, int b) { let h = crypto::poseidon2(left: a, right: b); } }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
     assert!(!code.is_empty());
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_ne!(meta.mode & 0x01, 0, "poseidon2 should enable ZK mode");
 
     // assert_eq succeeds without enabling ZK mode
-    let src = "seiyaku Assertions { view fn g(a: i64, b: i64) { test::assert_eq(actual: a, expected: b); } }";
+    let src = "seiyaku Assertions { view fn g(int a, int b) { test::assert_eq(actual: a, expected: b); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
@@ -2114,7 +2116,7 @@ fn compile_poseidon2_and_assert_eq() {
 
 #[test]
 fn compile_pubkgen_and_valcom() {
-    let src = "module Commitments { fn f(a: i64, b: i64) -> (i64, i64) { let p = crypto::pubkgen(a); let c = crypto::valcom(left: a, right: b); return (p, c); } }";
+    let src = "module Commitments { fn f(int a, int b) -> (int, int) { let p = crypto::pubkgen(a); let c = crypto::valcom(left: a, right: b); return (p, c); } }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
@@ -2138,7 +2140,7 @@ fn pubkgen_valcom_spills_are_handled() {
     use ivm::kotodama::regalloc;
 
     let build_src = |count: usize| {
-        let mut src = String::from("module CommitmentSpills {\nfn main(a: i64, b: i64) -> i64 {\n");
+        let mut src = String::from("module CommitmentSpills {\nfn main(int a, int b) -> int {\n");
         for i in 0..count {
             let value = (i + 1) as i64;
             src.push_str(&format!("  let v{i} = {value};\n"));
@@ -2204,7 +2206,7 @@ fn typed_json_access_spills_are_handled() {
     use ivm::kotodama::regalloc;
 
     let build_src = |count: usize| {
-        let mut src = String::from("module JsonSpills {\nfn main(j: Json) -> i64 {\n");
+        let mut src = String::from("module JsonSpills {\nfn main(Json j) -> int {\n");
         for i in 0..count {
             let value = (i + 1) as i64;
             src.push_str(&format!("  let v{i} = {value};\n"));
@@ -2213,7 +2215,7 @@ fn typed_json_access_spills_are_handled() {
         for i in 0..count {
             src.push_str(&format!("  sum = sum + v{i};\n"));
         }
-        src.push_str("  let val = json::get_i64(j, Name::parse(\"value\")).unwrap_or(0);\n");
+        src.push_str("  let val = match j.get_int(Name::parse(\"value\")) { Option::some(value) => value, Option::none => 0 };\n");
         src.push_str("  return sum + val;\n}\n}\n");
         src
     };
@@ -2262,7 +2264,7 @@ fn typed_json_access_spills_are_handled() {
 fn raw_json_codec_aliases_are_rejected() {
     let src = r#"
         module RemovedCodecAliases {
-            fn main(payload: bytes) -> Json {
+            fn main(bytes payload) -> Json {
                 return decode_json(payload);
             }
         }
@@ -2280,7 +2282,7 @@ fn raw_json_codec_aliases_are_rejected() {
 fn compile_and_run_poseidon_register_forms() {
     let src = r#"
 module PoseidonForms {
-    fn main() -> (i64, i64) {
+    fn main() -> (int, int) {
         let pair = crypto::poseidon2(left: 123456789, right: 987654321);
         let sextet = crypto::poseidon6(a: 3, b: 5, c: 8, d: 13, e: 21, f: 34);
         return (pair, sextet);
@@ -2312,7 +2314,7 @@ module PoseidonForms {
 fn unbounded_state_map_iteration_is_rejected() {
     let src = r#"
         seiyaku UnboundedStateIteration {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn f() { for (key, value) in values { let seen = value; } }
         }
     "#;
@@ -2324,7 +2326,7 @@ fn unbounded_state_map_iteration_is_rejected() {
 fn unbounded_state_map_iteration_cannot_infer_a_limit() {
     let src = r#"
         seiyaku MissingStateIterationLimit {
-            state values: StateMap<i64, i64>;
+            state StateMap<int, int> values;
             fn sum() { for (key, value) in values { let seen = key; } }
         }
     "#;
@@ -2334,7 +2336,7 @@ fn unbounded_state_map_iteration_cannot_infer_a_limit() {
 
 #[test]
 fn map_new_is_rejected_in_v1() {
-    let src = "module RemovedMap { fn make() -> i64 { return Map::new(); } }";
+    let src = "module RemovedMap { fn make() -> int { return Map::new(); } }";
     let error = Compiler::new()
         .compile_source(src)
         .expect_err("in-memory Map allocation must not compile in V1");
@@ -2424,7 +2426,7 @@ fn parse_dai_clone() {
 #[test]
 fn parse_mint_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "module MintHelpers { fn f(a: AccountId, b: AssetDefinitionId, c: Amount) { ledger::asset::mint(account: a, asset_definition: b, amount: c); } }";
+    let src = "module MintHelpers { fn f(AccountId a, AssetDefinitionId b, quantity c) { ledger::asset::mint(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2435,7 +2437,7 @@ fn parse_mint_asset_builtin() {
 #[test]
 fn parse_transfer_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "module TransferHelpers { fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: Amount, e: DataSpaceId) { ledger::asset::transfer(source: a, destination: b, asset_definition: c, amount: d, dataspace: e); } }";
+    let src = "module TransferHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d, DataSpaceId e) { ledger::asset::transfer(source: a, destination: b, asset_definition: c, amount: d, dataspace: e); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2450,7 +2452,7 @@ fn parse_transfer_asset_builtin() {
 #[test]
 fn parse_transfer_batch_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "module BatchHelpers { fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: Amount) { ledger::asset::transfer_batch((a, b, c, d), (b, a, c, d)); } }";
+    let src = "module BatchHelpers { fn f(AccountId a, AccountId b, AssetDefinitionId c, quantity d) { ledger::asset::transfer_batch((a, b, c, d), (b, a, c, d)); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2494,7 +2496,7 @@ fn transfer_batch_requires_tuple_entries() {
 #[test]
 fn parse_burn_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "module BurnHelpers { fn f(a: AccountId, b: AssetDefinitionId, c: Amount) { ledger::asset::burn(account: a, asset_definition: b, amount: c); } }";
+    let src = "module BurnHelpers { fn f(AccountId a, AssetDefinitionId b, quantity c) { ledger::asset::burn(account: a, asset_definition: b, amount: c); } }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2623,7 +2625,7 @@ fn compile_kotodama_samples_supported() {
 
 #[test]
 fn compile_unary_ops() {
-    let src = "module UnaryOps { fn f(a: i64, b: bool) { let c = -a; let d = !b; } }";
+    let src = "module UnaryOps { fn f(int a, bool b) { let c = -a; let d = !b; } }";
     Compiler::new()
         .compile_source(src)
         .expect("compile unary ops");
@@ -2633,7 +2635,7 @@ fn compile_unary_ops() {
 fn in_memory_map_methods_are_rejected() {
     let src = r#"
         module RemovedMapMethods {
-            fn f(m: Map<i64, i64>) {
+            fn f(Map<int, int> m) {
                 let a = m.contains(1);
                 let b = m.ensure(2);
             }
@@ -2649,8 +2651,8 @@ fn ir_lower_contains_method_state_map() {
     use ivm::kotodama::ir::Instr;
     let src = r#"
         seiyaku StateContains {
-            state m: StateMap<i64, i64>;
-            view fn f(k: i64) -> bool { return m.contains(k); }
+            state StateMap<int, int> m;
+            view fn f(int k) -> bool { return m.contains(k); }
         }
     "#;
     let prog = parse(src).expect("parse contains");
@@ -2677,7 +2679,7 @@ fn ir_lower_contains_method_state_map() {
 fn ephemeral_keys_take2_helper_is_rejected() {
     let src = r#"
         module RemovedMapIteration {
-            fn g(m: Map<i64, i64>) -> i64 { return keys_take2(m, 0, 1); }
+            fn g(Map<int, int> m) -> int { return keys_take2(m, 0, 1); }
         }
     "#;
     let prog = parse(src).expect("parse keys_take2");
@@ -2689,7 +2691,7 @@ fn ephemeral_keys_take2_helper_is_rejected() {
 fn ephemeral_keys_values_take2_helper_is_rejected() {
     let src = r#"
         module RemovedMapEntries {
-            fn f(m: Map<i64, i64>) {
+            fn f(Map<int, int> m) {
                 let t = std::map::keys_values_take2(m, 0, 1);
                 let a = t.0;
                 let b = t.1;
@@ -2706,7 +2708,7 @@ fn ir_tuple_pack_and_get_general() {
     use ivm::kotodama::ir::Instr;
     let src = r#"
         module Tuples {
-            fn f(a: i64, b: i64) {
+            fn f(int a, int b) {
                 let t = (a, b);
                 let x = t.0;
                 let y = t.1;

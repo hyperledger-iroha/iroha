@@ -50,7 +50,7 @@ public final class NumericV1 {
     }
   }
 
-  /** Lossless signed 4,096-bit integer. */
+  /** Lossless signed 512-bit integer. */
   public static final class IntValue {
     private final BigInteger value;
 
@@ -68,6 +68,9 @@ public final class NumericV1 {
       requireNonNull(value, "value");
       if (!CANONICAL_INTEGER.matcher(value).matches() || "-0".equals(value)) {
         fail(ErrorCode.INVALID_TEXT, "int must use canonical base-10 syntax");
+      }
+      if (value.length() > MAX_INT_TEXT_BYTES) {
+        fail(ErrorCode.MANTISSA_OVERFLOW, "integer text exceeds the signed 512-bit input bound");
       }
       return of(new BigInteger(value));
     }
@@ -194,13 +197,47 @@ public final class NumericV1 {
   }
 
   /** Minimum signed V1 integer. */
-  public static final BigInteger INT_MIN = BigInteger.ONE.shiftLeft(4095).negate();
+  public static final BigInteger INT_MIN = BigInteger.ONE.shiftLeft(511).negate();
   /** Maximum signed V1 integer. */
-  public static final BigInteger INT_MAX = BigInteger.ONE.shiftLeft(4095).subtract(BigInteger.ONE);
+  public static final BigInteger INT_MAX = BigInteger.ONE.shiftLeft(511).subtract(BigInteger.ONE);
   /** Maximum canonical decimal scale. */
   public static final int MAX_SCALE = 28;
 
   private NumericV1() {}
+
+  /** Encode an integer as its canonical lossless JSON string value. */
+  public static String encodeIntJson(final IntValue value) {
+    return requireNonNull(value, "value").toString();
+  }
+
+  /** Encode a decimal as its canonical lossless JSON string value. */
+  public static String encodeDecimalJson(final DecimalValue value) {
+    return requireNonNull(value, "value").toString();
+  }
+
+  /** Encode a quantity as its canonical lossless JSON string value. */
+  public static String encodeQuantityJson(final QuantityValue value) {
+    return requireNonNull(value, "value").toString();
+  }
+
+  /** Decode a canonical integer JSON string. */
+  public static IntValue decodeIntJson(final String value) {
+    return IntValue.parse(value);
+  }
+
+  /** Decode a canonical decimal JSON string, rejecting alternate spellings. */
+  public static DecimalValue decodeDecimalJson(final String value) {
+    final DecimalValue decoded = DecimalValue.parse(value);
+    if (!decoded.toString().equals(value)) fail(ErrorCode.INVALID_TEXT, "decimal JSON must use canonical spelling");
+    return decoded;
+  }
+
+  /** Decode a canonical quantity JSON string, rejecting alternate spellings. */
+  public static QuantityValue decodeQuantityJson(final String value) {
+    final QuantityValue decoded = QuantityValue.parse(value);
+    if (!decoded.toString().equals(value)) fail(ErrorCode.INVALID_TEXT, "quantity JSON must use canonical spelling");
+    return decoded;
+  }
 
   /** Encode a canonical integer Norito frame. */
   public static byte[] encodeIntFrame(final IntValue value) {
@@ -312,7 +349,7 @@ public final class NumericV1 {
     if (body.length < 4) fail(ErrorCode.LENGTH_MISMATCH, "body has no mantissa length");
     final int mantissaLength = ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN).getInt();
     if (mantissaLength < 0 || mantissaLength > MAX_MANTISSA_BYTES) {
-      fail(ErrorCode.MANTISSA_OVERFLOW, "mantissa length exceeds 512 bytes");
+      fail(ErrorCode.MANTISSA_OVERFLOW, "mantissa length exceeds 64 bytes");
     }
     final int expected = 4 + mantissaLength + (kind.scaled ? 1 : 0);
     if (expected != body.length) fail(ErrorCode.LENGTH_MISMATCH, "body length is inconsistent");
@@ -337,7 +374,7 @@ public final class NumericV1 {
         .put((byte) 1)
         .putInt(frame.length)
         .put(frame)
-        .put(Blake2b.digest256(frame))
+        .put(payloadHash(frame))
         .array();
   }
 
@@ -348,8 +385,13 @@ public final class NumericV1 {
     }
     final ByteBuffer header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN);
     final int pointerType = header.getShort() & 0xFFFF;
-    if (pointerType < 0x0010 || pointerType > 0x0013) fail(ErrorCode.UNKNOWN_TYPE, "unknown pointer type");
-    if (pointerType == 0x0010) fail(ErrorCode.TYPE_NOT_ALLOWED, "retired Amount type is forbidden");
+    if (pointerType == 0x0010) {
+      fail(ErrorCode.TYPE_NOT_ALLOWED, "retired Amount pointer type is permanently reserved");
+    }
+    final boolean knownAllowedType =
+        (pointerType >= 0x0001 && pointerType <= 0x000F)
+            || (pointerType >= 0x0011 && pointerType <= 0x0013);
+    if (!knownAllowedType) fail(ErrorCode.UNKNOWN_TYPE, "unknown pointer type");
     if (pointerType != kind.pointerType) fail(ErrorCode.WRONG_TYPE, "pointer type does not match");
     if ((header.get() & 0xFF) != 1) fail(ErrorCode.INVALID_ENVELOPE_VERSION, "version must be 1");
     final int frameLength = header.getInt();
@@ -362,7 +404,7 @@ public final class NumericV1 {
     }
     final byte[] frame = Arrays.copyOfRange(envelope, ENVELOPE_HEADER_BYTES, ENVELOPE_HEADER_BYTES + frameLength);
     final byte[] suppliedHash = Arrays.copyOfRange(envelope, ENVELOPE_HEADER_BYTES + frameLength, envelope.length);
-    if (!constantTimeEquals(Blake2b.digest256(frame), suppliedHash)) {
+    if (!constantTimeEquals(payloadHash(frame), suppliedHash)) {
       fail(ErrorCode.PAYLOAD_HASH_MISMATCH, "payload hash failed");
     }
     return frame;
@@ -375,6 +417,12 @@ public final class NumericV1 {
     final byte[] littleEndian = reverse(bigEndian);
     if (littleEndian.length > MAX_MANTISSA_BYTES) fail(ErrorCode.MANTISSA_OVERFLOW, "mantissa is too wide");
     return littleEndian;
+  }
+
+  private static byte[] payloadHash(final byte[] frame) {
+    final byte[] digest = Blake2b.digest256(frame);
+    digest[digest.length - 1] |= 1;
+    return digest;
   }
 
   private static BigInteger decodeTwos(final byte[] bytes) {
@@ -400,14 +448,29 @@ public final class NumericV1 {
       fail(ErrorCode.INVALID_TEXT, "value must use exact decimal syntax");
     }
     final String fraction = match.group(3) == null ? "" : match.group(3);
-    if (fraction.length() > MAX_SCALE) fail(ErrorCode.INVALID_SCALE, "scale exceeds 28");
-    return normalizeScaled(new BigInteger(match.group(1) + match.group(2) + fraction), fraction.length(), quantity);
+    final String rawDigits = match.group(2) + fraction;
+    int first = 0;
+    while (first < rawDigits.length() && rawDigits.charAt(first) == '0') first++;
+    if (first == rawDigits.length()) return normalizeScaled(BigInteger.ZERO, 0, quantity);
+    int end = rawDigits.length();
+    int scale = fraction.length();
+    while (scale > 0 && rawDigits.charAt(end - 1) == '0') {
+      end--;
+      scale--;
+    }
+    if (scale > MAX_SCALE) fail(ErrorCode.INVALID_SCALE, "canonical scale exceeds 28");
+    if (end - first > MAX_SIGNIFICANT_DIGITS) {
+      fail(ErrorCode.MANTISSA_OVERFLOW, "decimal mantissa exceeds the signed 512-bit input bound");
+    }
+    final BigInteger magnitude = new BigInteger(rawDigits.substring(first, end));
+    final BigInteger mantissa = "-".equals(match.group(1)) ? magnitude.negate() : magnitude;
+    return normalizeScaled(mantissa, scale, quantity);
   }
 
   private static Scaled normalizeScaled(
       final BigInteger rawMantissa, final int rawScale, final boolean quantity) {
-    if (rawScale < 0 || rawScale > MAX_SCALE) fail(ErrorCode.INVALID_SCALE, "scale must be in 0..28");
-    BigInteger mantissa = checkedMantissa(rawMantissa);
+    if (rawScale < 0) fail(ErrorCode.INVALID_SCALE, "scale cannot be negative");
+    BigInteger mantissa = rawMantissa;
     int scale = rawScale;
     if (mantissa.signum() == 0) {
       scale = 0;
@@ -417,6 +480,8 @@ public final class NumericV1 {
         scale--;
       }
     }
+    if (scale > MAX_SCALE) fail(ErrorCode.INVALID_SCALE, "canonical scale exceeds 28");
+    checkedMantissa(mantissa);
     if (quantity && mantissa.signum() < 0) fail(ErrorCode.NEGATIVE_QUANTITY, "quantity cannot be negative");
     return new Scaled(mantissa, scale);
   }
@@ -434,7 +499,7 @@ public final class NumericV1 {
 
   private static BigInteger checkedMantissa(final BigInteger value) {
     if (value.compareTo(INT_MIN) < 0 || value.compareTo(INT_MAX) > 0) {
-      fail(ErrorCode.MANTISSA_OVERFLOW, "mantissa is outside the signed 4096-bit domain");
+      fail(ErrorCode.MANTISSA_OVERFLOW, "mantissa is outside the signed 512-bit domain");
     }
     return value;
   }
@@ -513,7 +578,9 @@ public final class NumericV1 {
 
   private static final Pattern CANONICAL_INTEGER = Pattern.compile("-?(?:0|[1-9][0-9]*)");
   private static final Pattern EXACT_DECIMAL = Pattern.compile("(-?)(0|[1-9][0-9]*)(?:\\.([0-9]+))?");
-  private static final int MAX_MANTISSA_BYTES = 512;
+  private static final int MAX_MANTISSA_BYTES = 64;
+  private static final int MAX_INT_TEXT_BYTES = 155;
+  private static final int MAX_SIGNIFICANT_DIGITS = 154;
   private static final int FRAME_HEADER_BYTES = 40;
   private static final int ENVELOPE_HEADER_BYTES = 7;
   private static final int HASH_BYTES = 32;

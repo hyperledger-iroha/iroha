@@ -7,7 +7,7 @@ mod common;
 fn break_exits_bounded_for_loop() {
     let src = r#"
         seiyaku BreakLoop {
-            view fn main() -> i64 {
+            view fn main() -> int {
                 var last = 0;
                 for i in range(10) {
                     last = i;
@@ -34,7 +34,7 @@ fn break_exits_bounded_for_loop() {
 fn continue_skips_range_iteration() {
     let src = r#"
         seiyaku ContinueLoop {
-            view fn main() -> i64 {
+            view fn main() -> int {
                 var sum = 0;
                 for i in range(5) {
                     if i == 2 {

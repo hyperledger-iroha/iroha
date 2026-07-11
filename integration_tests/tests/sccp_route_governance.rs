@@ -7,6 +7,7 @@ use integration_tests::sandbox;
 use iroha::data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinition, AssetId},
+    block::consensus_v2::PROTOCOL_VERSION,
     bridge::{
         BridgeNativeProofBackendV1, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
         SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
@@ -19,7 +20,6 @@ use iroha::data_model::{
         sccp_groth16_bn254_verifying_key_hash_v1, sccp_sora_taira_chain_id_hash_v1,
         sccp_v1_taira_xor_asset_definition_id,
     },
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
     domain::Domain,
     isi::{
         Grant, Mint, Register,
@@ -109,12 +109,12 @@ fn integration_outbound_policy() -> SccpOutboundProofPolicyV1 {
         sora_finality_anchor: SccpSoraFinalityAnchorV1 {
             version: 1,
             source_network: SccpNetworkV1::SoraTaira,
+            protocol_version: PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
             checkpoint_height: 5,
             checkpoint_block_hash: [0x73; 32],
-            validator_set_epoch: 1,
-            validator_set_hash: [0x74; 32],
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            checkpoint_context_id: [0x74; 32],
+            checkpoint_finality_artifact_hash: [0x75; 32],
         },
     }
 }

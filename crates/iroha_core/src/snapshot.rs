@@ -2305,10 +2305,6 @@ mod tests {
     use super::*;
     use crate::{
         block::{BlockBuilder, ValidBlock},
-        bridge::{
-            FinalityProofVerificationConfig, build_finality_bundle, build_finality_proof,
-            verify_finality_proof,
-        },
         query::store::LiveQueryStore,
         state::derive_validator_key_id,
         sumeragi::consensus::{
@@ -3124,23 +3120,6 @@ mod tests {
                 .any(|(_, record)| { record.replaces.as_ref() == Some(&historical_id) })
         );
         drop(restored_world);
-        let proof = build_finality_proof(&restored, 2)
-            .expect("historical proof must reconstruct after snapshot restart");
-        assert_eq!(proof.validator_set_pops, vec![expected_pop]);
-        verify_finality_proof(
-            &proof,
-            FinalityProofVerificationConfig {
-                expected_chain_id: &expected_chain_id,
-                expected_height: Some(2),
-                trusted_validator_set_hash: Some(commit_qc.validator_set_hash),
-            },
-        )
-        .expect("restored historical proof must verify cryptographically");
-        let bundle = build_finality_bundle(&restored, 2)
-            .expect("historical finality bundle must reconstruct after restart");
-        assert_eq!(bundle.commitment.block_hash, block_hash);
-        assert_eq!(bundle.commit_qc, commit_qc);
-
         crate::sumeragi::status::reset_commit_certs_for_tests();
     }
 

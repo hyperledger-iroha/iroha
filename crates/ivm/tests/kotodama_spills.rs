@@ -16,7 +16,7 @@ fn many_locals_force_spills_and_compute() {
         body.push_str(&format!("let a{} = a{} + 1;\n", i, i - 1));
     }
     body.push_str("return a39;\n");
-    let src = format!("seiyaku SpillChain {{ view fn main() -> i64 {{\n{body}\n}} }}");
+    let src = format!("seiyaku SpillChain {{ view fn main() -> int {{\n{body}\n}} }}");
     let code = KotodamaCompiler::new()
         .compile_source(&src)
         .expect("compile spills");
@@ -85,16 +85,16 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
     const LIVE_VALUES: usize = 700;
     const BLOCK_HEIGHT: u64 = 3;
 
-    let mut body = String::from("let seed: i64 = context::block_height();\n");
+    let mut body = String::from("let int seed = context::block_height();\n");
     for index in 0..LIVE_VALUES {
-        body.push_str(&format!("let value{index}: i64 = seed + {index};\n"));
+        body.push_str(&format!("let int value{index} = seed + {index};\n"));
     }
-    body.push_str("var total: i64 = 0;\n");
+    body.push_str("var int total = 0;\n");
     for index in 0..LIVE_VALUES {
         body.push_str(&format!("total = total + value{index};\n"));
     }
     body.push_str("return total;\n");
-    let source = format!("seiyaku WideFrame {{ view fn main() -> i64 {{\n{body}}}\n}}");
+    let source = format!("seiyaku WideFrame {{ view fn main() -> int {{\n{body}}}\n}}");
 
     let compiler = KotodamaCompiler::new();
     let (artifact, _manifest, report) = compiler

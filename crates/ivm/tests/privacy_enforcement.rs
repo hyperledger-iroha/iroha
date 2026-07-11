@@ -807,24 +807,38 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
             host.prepares.get(),
             host.calls.get(),
             envelope.len(),
+            vm.remaining_gas(),
         )
     };
 
-    let (public_result, public_prepares, public_calls, envelope_len) = run(None);
+    let (public_result, public_prepares, public_calls, envelope_len, public_gas) = run(None);
     assert_eq!(public_result, Err(VMError::OutOfGas));
     assert_eq!(public_prepares, 1);
     assert_eq!(public_calls, 0);
 
-    let (unrelated_result, unrelated_prepares, unrelated_calls, _) = run(Some(envelope_len));
+    let (unrelated_result, unrelated_prepares, unrelated_calls, _, unrelated_gas) =
+        run(Some(envelope_len));
     assert_eq!(unrelated_result, Err(VMError::OutOfGas));
     assert_eq!(unrelated_prepares, 1);
     assert_eq!(unrelated_calls, 0);
+    assert_eq!(unrelated_gas, public_gas);
 
     let overlapping_offset = 7 + 512 * 1024;
-    let (overlap_result, overlap_prepares, overlap_calls, _) = run(Some(overlapping_offset));
+    let (overlap_result, overlap_prepares, overlap_calls, _, overlap_gas) =
+        run(Some(overlapping_offset));
     assert_eq!(overlap_result, Err(VMError::PrivacyViolation));
     assert_eq!(overlap_prepares, 0);
     assert_eq!(overlap_calls, 0);
+    assert_eq!(overlap_gas, public_gas);
+
+    for boundary_offset in [0, envelope_len - 1] {
+        let (boundary_result, boundary_prepares, boundary_calls, _, boundary_gas) =
+            run(Some(boundary_offset));
+        assert_eq!(boundary_result, Err(VMError::PrivacyViolation));
+        assert_eq!(boundary_prepares, 0);
+        assert_eq!(boundary_calls, 0);
+        assert_eq!(boundary_gas, public_gas);
+    }
 }
 
 #[test]

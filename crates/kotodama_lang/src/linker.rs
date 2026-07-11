@@ -2801,7 +2801,7 @@ mod tests {
         SourceLinkRequest {
             root: SourceModuleUnit {
                 source_name: "app.ko".to_owned(),
-                source: "seiyaku App { view fn run() -> i64 { return derived::value(); } }"
+                source: "seiyaku App { view fn run() -> int { return derived::value(); } }"
                     .to_owned(),
             },
             imports: vec![ImportBinding {
@@ -2823,7 +2823,7 @@ mod tests {
                     modules: vec![SourceModuleUnit {
                         source_name: "derived.ko".to_owned(),
                         source:
-                            "module Derived { fn value() -> i64 { return base::value() + 1; } }"
+                            "module Derived { fn value() -> int { return base::value() + 1; } }"
                                 .to_owned(),
                     }],
                     exports: BTreeSet::from(["value".to_owned()]),
@@ -2842,12 +2842,12 @@ mod tests {
             .link(request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run() -> i64 { return arith::add(right: 3, left: 2); } }",
+                    "seiyaku App { view fn run() -> int { return arith::add(right: 3, left: 2); } }",
                 ),
                 package(
                     vec![source(
                         "math.ko",
-                        "module Math { fn add(left: i64, right: i64) -> i64 { return left + right; } }",
+                        "module Math { fn add(int left, int right) -> int { return left + right; } }",
                     )],
                     &["add"],
                 ),
@@ -2881,7 +2881,7 @@ mod tests {
             package(
                 vec![source(
                     "math.ko",
-                    "module Math { fn choose(left: i64, right: i64) -> i64 { return left; } }",
+                    "module Math { fn choose(int left, int right) -> int { return left; } }",
                 )],
                 &["choose"],
             )
@@ -2891,7 +2891,7 @@ mod tests {
             .link(request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run() -> i64 { return arith::choose(1, 2); } }",
+                    "seiyaku App { view fn run() -> int { return arith::choose(1, 2); } }",
                 ),
                 dependency(),
             ))
@@ -2909,7 +2909,7 @@ mod tests {
             .link(request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run() -> i64 { return arith::choose(right: 2, left: 1); } }",
+                    "seiyaku App { view fn run() -> int { return arith::choose(right: 2, left: 1); } }",
                 ),
                 dependency(),
             ))
@@ -2936,7 +2936,7 @@ mod tests {
         let dependency = package(
             vec![source(
                 "math.ko",
-                "module Math { fn hidden() -> i64 { return 1; } }",
+                "module Math { fn hidden() -> int { return 1; } }",
             )],
             &[],
         );
@@ -2944,7 +2944,7 @@ mod tests {
             .link(request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run() -> i64 { return arith::hidden(); } }",
+                    "seiyaku App { view fn run() -> int { return arith::hidden(); } }",
                 ),
                 dependency,
             ))
@@ -2955,12 +2955,12 @@ mod tests {
             .link(request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run() -> i64 { return other::add(); } }",
+                    "seiyaku App { view fn run() -> int { return other::add(); } }",
                 ),
                 package(
                     vec![source(
                         "math.ko",
-                        "module Math { fn add() -> i64 { return 1; } }",
+                        "module Math { fn add() -> int { return 1; } }",
                     )],
                     &["add"],
                 ),
@@ -2974,15 +2974,15 @@ mod tests {
         let dependency = package(
             vec![source(
                 "hash.ko",
-                "module Hash { fn sha256(value: bytes) -> bytes { return value; } }",
+                "module Hash { fn sha256(bytes value) -> bytes { return value; } }",
             )],
             &["sha256"],
         );
-        for alias in ["crypto", "Amount"] {
+        for alias in ["crypto", "quantity"] {
             let mut request = request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run(value: bytes) -> bytes { return crypto::sha256(value); } }",
+                    "seiyaku App { view fn run(bytes value) -> bytes { return crypto::sha256(value); } }",
                 ),
                 dependency.clone(),
             );
@@ -3010,12 +3010,12 @@ mod tests {
             .link(request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run() -> i64 { return arith::value(); } }",
+                    "seiyaku App { view fn run() -> int { return arith::value(); } }",
                 ),
                 package(
                     vec![
-                        source("a.ko", "module A { fn value() -> i64 { return 1; } }"),
-                        source("b.ko", "module B { fn value() -> i64 { return 2; } }"),
+                        source("a.ko", "module A { fn value() -> int { return 1; } }"),
+                        source("b.ko", "module B { fn value() -> int { return 2; } }"),
                     ],
                     &["value"],
                 ),
@@ -3030,17 +3030,17 @@ mod tests {
             .link(request(
                 source(
                     "app.ko",
-                    "seiyaku App { view fn run() -> i64 { return arith::left() + arith::right(); } }",
+                    "seiyaku App { view fn run() -> int { return arith::left() + arith::right(); } }",
                 ),
                 package(
                     vec![
                         source(
                             "left.ko",
-                            "module Left { fn helper() -> i64 { return 1; } fn left() -> i64 { return helper(); } }",
+                            "module Left { fn helper() -> int { return 1; } fn left() -> int { return helper(); } }",
                         ),
                         source(
                             "right.ko",
-                            "module Right { fn helper() -> i64 { return 2; } fn right() -> i64 { return helper(); } }",
+                            "module Right { fn helper() -> int { return 2; } fn right() -> int { return helper(); } }",
                         ),
                     ],
                     &["left", "right"],
@@ -3074,7 +3074,7 @@ mod tests {
                     root: SourceModuleUnit {
                         source_name: "app.ko".to_owned(),
                         source:
-                            "seiyaku App { view fn run() -> i64 { return math::ok(); } }"
+                            "seiyaku App { view fn run() -> int { return math::ok(); } }"
                                 .to_owned(),
                     },
                     imports: vec![ImportBinding {
@@ -3085,7 +3085,7 @@ mod tests {
                         identity: package_identity,
                         modules: vec![SourceModuleUnit {
                             source_name: "reserved.ko".to_owned(),
-                            source: "module Reserved { fn __kotodama_link_private() -> i64 { return 1; } fn ok() -> i64 { return 1; } }".to_owned(),
+                            source: "module Reserved { fn __kotodama_link_private() -> int { return 1; } fn ok() -> int { return 1; } }".to_owned(),
                         }],
                         exports: BTreeSet::from(["ok".to_owned()]),
                         imports: Vec::new(),
@@ -3103,11 +3103,11 @@ mod tests {
         let modules = vec![
             SourceModuleUnit {
                 source_name: "first.ko".to_owned(),
-                source: "module Shared { fn value() -> i64 { return 1; } }".to_owned(),
+                source: "module Shared { fn value() -> int { return 1; } }".to_owned(),
             },
             SourceModuleUnit {
                 source_name: "second.ko".to_owned(),
-                source: "module Shared { fn value() -> i64 { return 1; } }".to_owned(),
+                source: "module Shared { fn value() -> int { return 1; } }".to_owned(),
             },
         ];
         let source_ids = stable_source_ids(
@@ -3218,7 +3218,7 @@ mod tests {
         let graph = ModuleBuildGraph::default();
         let first = graph
             .link(
-                transitive_source_request("module Base { fn value() -> i64 { return 1; } }"),
+                transitive_source_request("module Base { fn value() -> int { return 1; } }"),
                 LinkerOptions::default(),
             )
             .expect("link initial transitive graph");
@@ -3227,7 +3227,7 @@ mod tests {
 
         let implementation_changed = graph
             .link(
-                transitive_source_request("module Base { fn value() -> i64 { return 2; } }"),
+                transitive_source_request("module Base { fn value() -> int { return 2; } }"),
                 LinkerOptions::default(),
             )
             .expect("implementation-only dependency change remains valid");
@@ -3250,7 +3250,7 @@ mod tests {
         let error = graph
             .link(
                 transitive_source_request(
-                    "module Base { fn value(input: i64) -> i64 { return input; } }",
+                    "module Base { fn value(int input) -> int { return input; } }",
                 ),
                 LinkerOptions::default(),
             )
@@ -3277,7 +3277,7 @@ mod tests {
 
     #[test]
     fn linked_typed_hir_retains_path_and_order_stable_distinct_source_ids() {
-        let request = transitive_source_request("module Base { fn value() -> i64 { return 1; } }");
+        let request = transitive_source_request("module Base { fn value() -> int { return 1; } }");
         let mut reordered = request.clone();
         reordered.packages.reverse();
         reordered.root.source_name = r".\app.ko".to_owned();
@@ -3328,11 +3328,11 @@ mod tests {
         let modules = vec![
             SourceModuleUnit {
                 source_name: "left.ko".to_owned(),
-                source: "module Left { fn value() -> i64 { return 1; } }".to_owned(),
+                source: "module Left { fn value() -> int { return 1; } }".to_owned(),
             },
             SourceModuleUnit {
                 source_name: "right.ko".to_owned(),
-                source: "module Right { fn value() -> i64 { return 2; } }".to_owned(),
+                source: "module Right { fn value() -> int { return 2; } }".to_owned(),
             },
         ];
         let source_ids = stable_source_ids(
@@ -3355,7 +3355,7 @@ mod tests {
 
     #[test]
     fn parsed_source_cache_is_bounded_and_uses_lru_eviction() {
-        let program = spanned("module Cached { fn value() -> i64 { return 1; } }");
+        let program = spanned("module Cached { fn value() -> int { return 1; } }");
         let mut cache = ParsedSourceCache::default();
         for index in 0..MAX_PARSED_CACHE_ENTRIES {
             cache.insert(
@@ -3376,7 +3376,7 @@ mod tests {
 
     #[test]
     fn parsed_source_cache_enforces_aggregate_source_budget() {
-        let program = spanned("module Cached { fn value() -> i64 { return 1; } }");
+        let program = spanned("module Cached { fn value() -> int { return 1; } }");
         let mut cache = ParsedSourceCache::default();
         for index in 0..5 {
             let suffix = u8::try_from(index).expect("test index fits in u8");
@@ -3444,13 +3444,13 @@ mod tests {
     fn graph_fingerprint_is_order_stable_and_binds_exports() {
         let root = SourceModuleUnit {
             source_name: "app.ko".to_owned(),
-            source: "seiyaku App { view fn run() -> i64 { return arith::value(); } }".to_owned(),
+            source: "seiyaku App { view fn run() -> int { return arith::value(); } }".to_owned(),
         };
         let package = SourcePackageUnit {
             identity: "std/math@1.0.0".to_owned(),
             modules: vec![SourceModuleUnit {
                 source_name: "math.ko".to_owned(),
-                source: "module Math { fn value() -> i64 { return 1; } }".to_owned(),
+                source: "module Math { fn value() -> int { return 1; } }".to_owned(),
             }],
             exports: ["value".to_owned()].into_iter().collect(),
             imports: Vec::new(),
@@ -3570,7 +3570,7 @@ mod tests {
         let mut local = publish_package(
             vec![source_module(
                 "src/lib.ko",
-                "module Quotes { fn quote(value: i64) -> i64 { return arith::add(left: value, right: 1); } }",
+                "module Quotes { fn quote(int value) -> int { return arith::add(left: value, right: 1); } }",
             )],
             &["quote"],
         );
@@ -3584,7 +3584,7 @@ mod tests {
                 identity: dependency_identity,
                 modules: vec![source_module(
                     "src/lib.ko",
-                    "module Math { fn add(left: i64, right: i64) -> i64 { return left + right; } }",
+                    "module Math { fn add(int left, int right) -> int { return left + right; } }",
                 )],
                 exports: BTreeSet::from(["add".to_owned()]),
                 imports: Vec::new(),
@@ -3606,7 +3606,7 @@ mod tests {
                     package: publish_package(
                         vec![source_module(
                             "quotes.ko",
-                            "module Quotes { fn quote() -> i64 { return 1; } }",
+                            "module Quotes { fn quote() -> int { return 1; } }",
                         )],
                         &["missing"],
                     ),
@@ -3629,8 +3629,8 @@ mod tests {
                 SourcePackageGraphRequest {
                     package: publish_package(
                         vec![
-                            source_module("a.ko", "module A { fn quote() -> i64 { return 1; } }"),
-                            source_module("b.ko", "module B { fn quote() -> i64 { return 2; } }"),
+                            source_module("a.ko", "module A { fn quote() -> int { return 1; } }"),
+                            source_module("b.ko", "module B { fn quote() -> int { return 2; } }"),
                         ],
                         &["quote"],
                     ),
@@ -3652,8 +3652,8 @@ mod tests {
     #[test]
     fn package_graph_rejects_invalid_types_and_bodies() {
         for source in [
-            "module Quotes { fn quote(value: MissingType) -> i64 { return 1; } }",
-            "module Quotes { fn quote() -> i64 { return true; } }",
+            "module Quotes { fn quote(MissingType value) -> int { return 1; } }",
+            "module Quotes { fn quote() -> int { return true; } }",
         ] {
             let error = ModuleBuildGraph::default()
                 .validate_package(
@@ -3683,7 +3683,7 @@ mod tests {
                     package: publish_package(
                         vec![source_module(
                             "duplicate.ko",
-                            "module Quotes { fn quote() -> i64 { return 1; } fn quote() -> i64 { return 2; } }",
+                            "module Quotes { fn quote() -> int { return 1; } fn quote() -> int { return 2; } }",
                         )],
                         &["quote"],
                     ),
@@ -3705,11 +3705,11 @@ mod tests {
                         vec![
                             source_module(
                                 "a.ko",
-                                "module Quotes { fn quote() -> i64 { return 1; } }",
+                                "module Quotes { fn quote() -> int { return 1; } }",
                             ),
                             source_module(
                                 "b.ko",
-                                "module Quotes { fn other() -> i64 { return 2; } }",
+                                "module Quotes { fn other() -> int { return 2; } }",
                             ),
                         ],
                         &["quote"],
@@ -3736,7 +3736,7 @@ mod tests {
                     package: publish_package(
                         vec![source_module(
                             "app.ko",
-                            "seiyaku Quotes { view fn quote() -> i64 { return 1; } }",
+                            "seiyaku Quotes { view fn quote() -> int { return 1; } }",
                         )],
                         &["quote"],
                     ),
@@ -3759,7 +3759,7 @@ mod tests {
                     package: publish_package(
                         vec![source_module(
                             "test.ko",
-                            "module Quotes { #[test] fn quote() -> i64 { return 1; } }",
+                            "module Quotes { #[test] fn quote() -> int { return 1; } }",
                         )],
                         &["quote"],
                     ),
@@ -3783,7 +3783,7 @@ mod tests {
         let mut local = publish_package(
             vec![source_module(
                 "quotes.ko",
-                "module Quotes { fn quote() -> i64 { return arith::hidden(); } }",
+                "module Quotes { fn quote() -> int { return arith::hidden(); } }",
             )],
             &["quote"],
         );
@@ -3800,7 +3800,7 @@ mod tests {
                         identity: dependency_identity,
                         modules: vec![source_module(
                             "math.ko",
-                            "module Math { fn hidden() -> i64 { return 1; } fn visible() -> i64 { return 2; } }",
+                            "module Math { fn hidden() -> int { return 1; } fn visible() -> int { return 2; } }",
                         )],
                         exports: BTreeSet::from(["visible".to_owned()]),
                         imports: Vec::new(),
@@ -3826,7 +3826,7 @@ mod tests {
         let mut local = publish_package(
             vec![source_module(
                 "quotes.ko",
-                "module Quotes { fn quote() -> i64 { return 1; } }",
+                "module Quotes { fn quote() -> int { return 1; } }",
             )],
             &["quote"],
         );
@@ -3843,7 +3843,7 @@ mod tests {
                         identity: dependency_identity,
                         modules: vec![source_module(
                             "math.ko",
-                            "module Math { fn value() -> i64 { return 2; } }",
+                            "module Math { fn value() -> int { return 2; } }",
                         )],
                         exports: BTreeSet::from(["value".to_owned()]),
                         imports: vec![ImportBinding {
@@ -3896,7 +3896,7 @@ mod tests {
             package: publish_package(
                 vec![source_module(
                     "src/lib.ko",
-                    "module Quotes { fn quote() -> i64 { return 1; } }",
+                    "module Quotes { fn quote() -> int { return 1; } }",
                 )],
                 &["quote"],
             ),

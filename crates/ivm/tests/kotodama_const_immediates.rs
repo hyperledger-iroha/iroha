@@ -10,8 +10,8 @@ mod common;
 fn compile_large_positive_constant_executes() {
     let src = r#"
         seiyaku LargePositiveConstant {
-            view fn main() -> i64 {
-                let x = 123_456_789_012i64;
+            view fn main() -> int {
+                let int x = 123_456_789_012;
                 return x;
             }
         }
@@ -32,8 +32,8 @@ fn compile_large_positive_constant_executes() {
 fn compile_large_negative_constant_executes() {
     let src = r#"
         seiyaku LargeNegativeConstant {
-            view fn main() -> i64 {
-                let x = -987_654_321_098i64;
+            view fn main() -> int {
+                let int x = -987_654_321_098;
                 return x;
             }
         }
@@ -54,9 +54,9 @@ fn compile_large_negative_constant_executes() {
 fn signed_boundary_constants_are_one_word_deduplicated_and_deterministic() {
     let source = r#"
         seiyaku IndexedConstants {
-            view fn minimum() -> i64 { return -9223372036854775808i64; }
-            view fn maximum() -> i64 { return 9223372036854775807i64; }
-            view fn maximum_again() -> i64 { return 9223372036854775807i64; }
+            view fn minimum() -> int { return -9223372036854775808; }
+            view fn maximum() -> int { return 9223372036854775807; }
+            view fn maximum_again() -> int { return 9223372036854775807; }
         }
     "#;
     let compiler = KotodamaCompiler::new();

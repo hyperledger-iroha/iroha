@@ -1063,24 +1063,24 @@ mod tests {
     #[test]
     fn canonicalizes_blocks_operators_and_declarations() {
         let formatted = format(
-            "seiyaku Demo{state count:i64;hajimari(){count=0;}kotoage fn bump(value:i64)->i64 authorize(\"Write\"){var total:i64=count+value;if total>10{total=10;}return total;}view fn read()->i64{return count;}}",
+            "seiyaku Demo{state int count;hajimari(){count=0;}kotoage fn bump(int value)->int authorize(\"Write\"){var int total=count+value;if total>10{total=10;}return total;}view fn read()->int{return count;}}",
         );
         assert_eq!(
             formatted,
             concat!(
                 "seiyaku Demo {\n",
-                "    state count: i64;\n",
+                "    state int count;\n",
                 "    hajimari() {\n",
                 "        count = 0;\n",
                 "    }\n\n",
-                "    kotoage fn bump(value: i64) -> i64 authorize(\"Write\") {\n",
-                "        var total: i64 = count + value;\n",
+                "    kotoage fn bump(int value) -> int authorize(\"Write\") {\n",
+                "        var int total = count + value;\n",
                 "        if total > 10 {\n",
                 "            total = 10;\n",
                 "        }\n",
                 "        return total;\n",
                 "    }\n\n",
-                "    view fn read() -> i64 {\n",
+                "    view fn read() -> int {\n",
                 "        return count;\n",
                 "    }\n",
                 "}\n",
@@ -1102,21 +1102,21 @@ mod tests {
     }
 
     #[test]
-    fn preserves_amount_literal_spelling_idempotently() {
-        let formatted = format("seiyaku Demo{view fn amount()->Amount{return 1.250_0amt;}}");
-        assert!(formatted.contains("return 1.250_0amt;"));
+    fn preserves_decimal_literal_spelling_idempotently() {
+        let formatted = format("seiyaku Demo{view fn value()->decimal{return 1.250_0;}}");
+        assert!(formatted.contains("return 1.250_0;"));
         assert_eq!(format(&formatted), formatted);
     }
 
     #[test]
     fn formats_named_struct_literals_with_multiline_trailing_commas() {
         let formatted = format(
-            "seiyaku Demo{struct Transfer{source:i64,destination:string,amount:Amount}fn build(source:i64,destination:string)->Transfer{return Transfer{amount:10amt,source,destination};}}",
+            "seiyaku Demo{struct Transfer{int source,string destination,quantity amount}fn build(int source,string destination)->Transfer{return Transfer{amount:10,source,destination};}}",
         );
         assert!(
             formatted.contains(concat!(
                 "return Transfer {\n",
-                "            amount: 10amt,\n",
+                "            amount: 10,\n",
                 "            source,\n",
                 "            destination,\n",
                 "        };",
@@ -1129,7 +1129,7 @@ mod tests {
     #[test]
     fn wraps_long_named_calls_at_one_hundred_columns_with_trailing_comma() {
         let formatted = format(
-            "seiyaku Demo{fn target(first:string,second:string,third:string){}fn run(){target(first:\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",second:\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",third:\"cccccccccccccccccccccccccccccccccccccccc\");}}",
+            "seiyaku Demo{fn target(string first,string second,string third){}fn run(){target(first:\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",second:\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",third:\"cccccccccccccccccccccccccccccccccccccccc\");}}",
         );
         assert!(formatted.contains("target(\n"), "{formatted}");
         assert!(formatted.contains("third: \"cccccccccccccccccccccccccccccccccccccccc\",\n"));
@@ -1142,7 +1142,7 @@ mod tests {
         // column 100 exactly. Canonical spaces after the two commas and three
         // colons take the inline rendering to column 105.
         let formatted = format(
-            "seiyaku Demo{fn target(first:string,second:string,third:string){}fn run(){target(first:\"aaaaaaaaaaaaaaaaaaa\",second:\"bbbbbbbbbbbbbbbbbbb\",third:\"ccccccccccccccccccc\");}}",
+            "seiyaku Demo{fn target(string first,string second,string third){}fn run(){target(first:\"aaaaaaaaaaaaaaaaaaa\",second:\"bbbbbbbbbbbbbbbbbbb\",third:\"ccccccccccccccccccc\");}}",
         );
 
         assert!(formatted.contains("target(\n"), "{formatted}");
@@ -1159,7 +1159,7 @@ mod tests {
     fn unicode_literal_bytes_do_not_cause_spurious_wrapping() {
         let snow = "雪".repeat(30);
         let source = format!(
-            "seiyaku Demo{{fn target(value:string){{}}fn run(){{target(value:\"{snow}\");}}}}"
+            "seiyaku Demo{{fn target(string value){{}}fn run(){{target(value:\"{snow}\");}}}}"
         );
         let formatted = format(&source);
 
@@ -1216,7 +1216,7 @@ mod tests {
 
     #[test]
     fn preserves_list_comprehension_comments_and_literal_spelling() {
-        let source = "seiyaku Lists{fn values()->List<i64,4>{let source:List<i64,4> = [1,2];[value*10 for value in source if value>0]// stable\n}}";
+        let source = "seiyaku Lists{fn values()->List<int,4>{let List<int,4> source = [1,2];[value*10 for value in source if value>0]// stable\n}}";
         let formatted = format(source);
         assert!(
             formatted.contains("[value * 10 for value in source if value > 0]"),
@@ -1229,14 +1229,14 @@ mod tests {
     #[test]
     fn formats_native_json_with_stable_keys_literals_and_trailing_commas() {
         let formatted = format(
-            r#"seiyaku JsonDemo{fn build(label:string)->Json{json{owner:"alice","exact-key":label,amount:1.250_0amt,labels:json["primary",label]}}}"#,
+            r#"seiyaku JsonDemo{fn build(string label)->Json{json{owner:"alice","exact-key":label,amount:1.250_0,labels:json["primary",label]}}}"#,
         );
         assert!(
             formatted.contains(concat!(
                 "json {\n",
                 "            owner: \"alice\",\n",
                 "            \"exact-key\": label,\n",
-                "            amount: 1.250_0amt,\n",
+                "            amount: 1.250_0,\n",
                 "            labels: json [\"primary\", label],\n",
                 "        }",
             )),
@@ -1248,7 +1248,7 @@ mod tests {
     #[test]
     fn formats_amount_div_round_named_arguments_within_the_target() {
         let formatted = format(
-            "seiyaku Amounts{fn rounded(very_long_dividend_value:Amount,very_long_divisor_value:Amount)->Amount{very_long_dividend_value.div_round(divisor:very_long_divisor_value,scale:28,mode:Rounding::nearest_even)}}",
+            "seiyaku Amounts{fn rounded(quantity very_long_dividend_value,quantity very_long_divisor_value)->quantity{very_long_dividend_value.div_round(divisor:very_long_divisor_value,scale:28,mode:Rounding::nearest_even)}}",
         );
         assert!(formatted.contains(".div_round(\n"), "{formatted}");
         assert!(
@@ -1282,9 +1282,9 @@ mod tests {
     #[test]
     fn distinguishes_generic_delimiters_from_comparisons() {
         let formatted = format(
-            "seiyaku Demo{state values:StateMap<string,Option<i64>>;view fn less(a:i64,b:i64)->bool{return a<b;}}",
+            "seiyaku Demo{state StateMap<string,Option<int>> values;view fn less(int a,int b)->bool{return a<b;}}",
         );
-        assert!(formatted.contains("StateMap<string, Option<i64>>"));
+        assert!(formatted.contains("StateMap<string, Option<int>>"));
         assert!(formatted.contains("return a < b;"));
         assert_eq!(format(&formatted), formatted);
     }
@@ -1292,7 +1292,7 @@ mod tests {
     #[test]
     fn formats_tail_match_and_postfix_propagation_idempotently() {
         let formatted = format(
-            "seiyaku Demo{fn unwrap(value:Option<i64>)->i64{match value{Option::some(item)=>item,Option::none=>0}}fn choose(flag:bool,value:Option<i64>,fallback:i64)->i64{flag?value?:fallback}}",
+            "seiyaku Demo{fn unwrap(Option<int> value)->int{match value{Option::some(item)=>item,Option::none=>0}}fn choose(bool flag,Option<int> value,int fallback)->int{flag?value?:fallback}}",
         );
         assert!(
             formatted.contains(concat!(

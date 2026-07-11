@@ -36,7 +36,7 @@ seiyaku TransferDemo {
                 "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
             ),
             asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-            amount: Amount::from_i64(10),
+            amount: 10,
             dataspace: DataSpaceId::parse("0"),
         );
     }

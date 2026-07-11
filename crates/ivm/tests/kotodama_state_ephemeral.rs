@@ -8,8 +8,8 @@ fn state_map_set_get_roundtrip() {
     // Declare state map and perform set/get within a single run.
     let src = r#"
         seiyaku C {
-            state M: StateMap<i64, i64>;
-            kotoage fn main() -> i64 authorize("WriteState") {
+            state StateMap<int, int> M;
+            kotoage fn main() -> int authorize("WriteState") {
                 M[1] = 7;
                 let x = M.get(1).unwrap_or(0);
                 return x;
@@ -31,9 +31,9 @@ fn state_map_with_struct_value_roundtrip() {
     // Store and load a struct through a durable state map.
     let src = r#"
         seiyaku C {
-            struct S { value: i64; }
-            state values: StateMap<i64, S>;
-            kotoage fn main() -> i64 authorize("WriteState") {
+            struct S { int value }
+            state StateMap<int, S> values;
+            kotoage fn main() -> int authorize("WriteState") {
                 values[3] = S { value: 9 };
                 let y = values.get(3).unwrap_or(S { value: 0 }).value;
                 return y;

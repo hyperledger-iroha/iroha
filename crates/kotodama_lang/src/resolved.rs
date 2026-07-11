@@ -552,8 +552,8 @@ mod tests {
     fn identical_spellings_keep_distinct_cst_ranges() {
         let text = r#"
 seiyaku Same {
-    struct Packet { left: Missing; right: Missing; }
-    fn repeated(first: Missing, first: i64) {
+    struct Packet { Missing left; Missing right; }
+    fn repeated(Missing first, int first) {
         absent();
         absent();
     }
@@ -612,10 +612,10 @@ seiyaku Same {
     fn diagnostic_targets_bind_to_exact_nested_source_nodes() {
         let text = r#"
 module Origins {
-    fn mutate(values: List<i64, 4>, outer: i64, inner: i64) {
+    fn mutate(List<int, 4> values, int outer, int inner) {
         values[outer][inner] = 1;
         let selected = values[inner];
-        let price: Amount = 1.250_0amt;
+        let quantity price = 1.250_0;
         let copy = [item for item in values if true];
     }
 }
@@ -706,14 +706,14 @@ module Origins {
         assert_eq!(source.slice(read_receiver_node.range), Some("values"));
 
         let Statement::Let { value: amount, .. } = function.body.statements[2].kind() else {
-            panic!("Amount binding")
+            panic!("quantity binding")
         };
         let amount_id = amount
             .source_node()
-            .expect("Amount literal source identity");
-        let amount_node = ast.facts.source_map.node(amount_id).expect("Amount node");
+            .expect("quantity literal source identity");
+        let amount_node = ast.facts.source_map.node(amount_id).expect("quantity node");
         assert_eq!(amount_node.kind, AstNodeKind::DecimalLiteral);
-        assert_eq!(source.slice(amount_node.range), Some("1.250_0amt"));
+        assert_eq!(source.slice(amount_node.range), Some("1.250_0"));
 
         let Statement::Let {
             value: comprehension,
@@ -741,9 +741,9 @@ module Origins {
     fn successful_resolution_retains_declarations_types_and_calls() {
         let text = r#"
 誓約 Sample {
-    struct Pair { left: i64; right: i64; }
-    fn helper(value: i64) -> i64 { value }
-    言挙げ fn run(value: i64) -> i64 authorize("CanRun") {
+    struct Pair { int left; int right; }
+    fn helper(int value) -> int { value }
+    言挙げ fn run(int value) -> int authorize("CanRun") {
         helper(value)
     }
 }
@@ -755,7 +755,7 @@ module Origins {
 
         assert_eq!(resolved.source_map().source(), SourceId(9));
         assert!(resolved.symbols().any(|symbol| symbol.name == "helper"));
-        assert!(resolved.types().all(|ty| ty.name == "i64"));
+        assert!(resolved.types().all(|ty| ty.name == "int"));
         assert!(resolved.calls().any(|call| {
             call.name == "helper" && matches!(call.target, ResolvedCallTarget::Function(_))
         }));
@@ -769,13 +769,13 @@ module Origins {
     fn parser_binding_facts_have_direct_owners_and_exact_utf8_ranges() {
         let text = r#"
 誓約 ExactFacts {
-    fn inspect(input: Option<i64>, values: List<i64, 4>) {
+    fn inspect(Option<int>, values: List<int, 4> input) {
         // 雪 before every repeated ASCII binding makes character and byte offsets differ.
-        let repeated: i64 = 1;
+        let int repeated = 1;
         if let Option::some(repeated) = input {
-            let repeated: i64 = 2;
+            let int repeated = 2;
         }
-        let mapped: List<i64, 4> = [repeated for repeated in values if true];
+        let List<int, 4> mapped = [repeated for repeated in values if true];
         match input {
             Option::some(repeated) => { repeated },
             Option::none => { 0 },
@@ -850,7 +850,7 @@ module Origins {
     fn parenthesized_if_let_keeps_its_direct_binding_owner_when_becoming_a_statement() {
         let text = r#"
 module Parenthesized {
-    fn inspect(input: Option<i64>) {
+    fn inspect(Option<int> input) {
         (if let Option::some(payload) = input { return; })
     }
 }
@@ -883,11 +883,11 @@ module Parenthesized {
     fn binding_fact_fixture() -> (SourceFile, SpannedProgram) {
         let text = r#"
 誓約 BindingIntegrity {
-    fn inspect(input: Option<i64>, values: List<i64, 4>) -> i64 {
-        let base: i64 = 1;
+    fn inspect(Option<int>, values: List<int, 4> input) -> int {
+        let int base = 1;
         if let Option::some(payload) = input { return payload; }
         if let Option::some(payload) = input { return payload; }
-        let mapped: List<i64, 4> = [item for item in values if true];
+        let List<int, 4> mapped = [item for item in values if true];
         return base;
     }
 }
@@ -974,7 +974,7 @@ module Parenthesized {
 
     #[test]
     fn shadowing_diagnostic_labels_both_exact_names_after_utf8_prefix() {
-        let text = "誓約 Shadow { fn run(value: i64) { /* 雪 */ let value: i64 = 1; } }";
+        let text = "誓約 Shadow { fn run(int value) { /* 雪 */ let int value = 1; } }";
         let source = SourceFile::new(SourceId(77), "utf8-shadow.ko", text);
         let (ast, _) = crate::parser::parse_source_spanned(&source, FrontendBudget::v1())
             .expect("shadowing source parses");
@@ -1010,8 +1010,8 @@ module Parenthesized {
     fn state_and_lifecycle_diagnostic_ranges_come_from_resolved_nodes() {
         let text = r#"
 seiyaku Init {
-    state entries: StateMap<AccountId, i64>;
-    state count: i64;
+    state StateMap<AccountId, int> entries;
+    state int count;
     始まり() { count = 0; }
 }
 "#;
@@ -1033,11 +1033,11 @@ seiyaku Init {
     fn resolved_local_program() -> (SourceFile, ResolvedProgram) {
         let text = r#"
 seiyaku Stable {
-    fn helper(value: i64) -> i64 {
-        let copy: i64 = value;
+    fn helper(int value) -> int {
+        let int copy = value;
         return copy;
     }
-    view fn read(value: i64) -> i64 {
+    view fn read(int value) -> int {
         return helper(value: value);
     }
 }
@@ -1202,7 +1202,7 @@ seiyaku Stable {
     fn resolved_type_program() -> (SourceFile, ResolvedProgram) {
         let text = r#"
 module ResolvedTypes {
-    fn inspect(pair: (i64, bool), values: List<i64, 4>) { return; }
+    fn inspect((int, bool) pair, List<int, 4> values) { return; }
 }
 "#;
         let source = SourceFile::new(SourceId(80), "resolved-types.ko", text);
@@ -1309,10 +1309,10 @@ module ResolvedTypes {
     fn resolver_reports_shadowing_and_multiple_unknown_values_with_locations() {
         let text = r#"
 module BadLocals {
-    fn broken(value: i64) {
-        let value: i64 = 1;
-        let first: i64 = missing_one;
-        let second: i64 = missing_two;
+    fn broken(int value) {
+        let int value = 1;
+        let int first = missing_one;
+        let int second = missing_two;
     }
 }
 "#;
@@ -1337,12 +1337,40 @@ module BadLocals {
                 .is_some()
         }));
     }
+
+    #[test]
+    fn only_canonical_numeric_conversions_are_resolver_intrinsics() {
+        for canonical in [
+            "decimal::from_int",
+            "decimal::to_int_exact",
+            "decimal::to_int_trunc",
+            "decimal::to_int_round",
+            "quantity::try_from_int",
+            "quantity::try_from_decimal",
+            "decimal::from_quantity",
+        ] {
+            assert!(intrinsic_call(canonical), "missing intrinsic `{canonical}`");
+        }
+        for retired in [
+            "int::from_i64",
+            "quantity::from_i64",
+            "quantity::from_u128",
+        ] {
+            assert!(!intrinsic_call(retired), "retired intrinsic `{retired}` leaked into V1");
+        }
+    }
 }
 
 fn intrinsic_call(name: &str) -> bool {
     matches!(
         name,
-        "u128::from_i64" | "Amount::from_i64" | "Amount::from_u128"
+        "decimal::from_int"
+            | "decimal::to_int_exact"
+            | "decimal::to_int_trunc"
+            | "decimal::to_int_round"
+            | "quantity::try_from_int"
+            | "quantity::try_from_decimal"
+            | "decimal::from_quantity"
     )
 }
 

@@ -14,6 +14,7 @@ use std::{
     process::ExitCode,
 };
 
+use iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as SUMERAGI_V2_PROTOCOL_VERSION;
 use iroha_data_model::bridge::{
     BridgeSccpDestinationProofBackendV1, SccpDestinationDeploymentV1,
     SccpEvmDestinationDeploymentV1, SccpGovernedRouteV1, SccpGroth16Bn254SemanticCircuitV1,
@@ -128,12 +129,13 @@ const FORBIDDEN_ALGEBRAIC_SMOKE_VK: [u8; 32] = [
     0x8f, 0xc4, 0x6b, 0x9c, 0x24, 0x2d, 0xe1, 0x8f, 0xc9, 0x1b, 0xa6, 0x46, 0xe0, 0x85, 0x7f, 0xc4,
 ];
 const OUTBOUND_UNAVAILABLE_REASON: &str = "authenticated-destination-state-is-unavailable";
-const REQUIRED_SEMANTICS: [&str; 6] = [
+const REQUIRED_SEMANTICS: [&str; 7] = [
     "sccp-canonical-transfer-v1",
     "sccp-message-leaf-v1",
     "sccp-merkle-inclusion-v1",
     "sora-taira-block-commitment-v1",
-    "sora-taira-commit-qc-v1",
+    "sora-taira-v2-finality-artifact-v1",
+    "sora-taira-v2-dual-quorum-v1",
     "sora-taira-anchor-continuity-v1",
 ];
 const RELEASE_CIRCUIT_IDS: [&str; 3] = [
@@ -141,9 +143,15 @@ const RELEASE_CIRCUIT_IDS: [&str; 3] = [
     "sccp-sora-taira-to-bsc-mainnet-groth16-bn254-v1",
     "sccp-sora-taira-to-tron-mainnet-groth16-bn254-v1",
 ];
-const NON_PRODUCTION_SIGNAL_BINDING_CIRCUIT: &[u8] = include_bytes!(
-    "../../../../artifacts/sccp-bsc/circuits/sccp-bsc-labeled-signal-binding-v1.circom"
-);
+/// Exact SHA-256 of the diagnostic-only labeled-signal-binding circuit.
+///
+/// Keep this literal independent of the current repository artifact: a future
+/// edit to that diagnostic source must not make the already-published unsafe
+/// digest acceptable to a production release validator.
+const FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256: [u8; 32] = [
+    0xd7, 0x04, 0x9d, 0xe0, 0xf0, 0xb0, 0xec, 0xb7, 0xec, 0x4f, 0x64, 0xb8, 0x85, 0x64, 0x6a, 0xb9,
+    0x9f, 0x85, 0xfc, 0xba, 0xb0, 0x5d, 0xfa, 0xf7, 0x10, 0xd3, 0x00, 0x2f, 0x17, 0x63, 0x2b, 0xb9,
+];
 const VALIDATOR_SOURCE: &[u8] = include_bytes!("sccp_release_evidence.rs");
 const SCCP_CRATE_MANIFEST: &[u8] = include_bytes!("../../Cargo.toml");
 const SCCP_BUILD_SCRIPT: &[u8] = include_bytes!("../../build.rs");
@@ -352,12 +360,22 @@ struct TrustedCircuitAuditorV1 {
 struct SoraFinalityAnchorPolicyV1 {
     version: u8,
     source_profile: String,
+    protocol_version: u16,
     chain_id_hash_hex: String,
     checkpoint_height: u64,
     checkpoint_block_hash_hex: String,
-    validator_set_epoch: u64,
-    validator_set_hash_hex: String,
-    validator_set_hash_version: u16,
+    checkpoint_context_id_hex: String,
+    checkpoint_finality_artifact_hash_hex: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ValidatedSoraFinalityAnchorPolicyV1 {
+    anchor: SccpSoraFinalityAnchorV1,
+    anchor_hash: [u8; 32],
+    chain_id_hash: [u8; 32],
+    checkpoint_block_hash: [u8; 32],
+    checkpoint_context_id: [u8; 32],
+    checkpoint_finality_artifact_hash: [u8; 32],
 }
 
 #[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
@@ -1022,6 +1040,53 @@ fn register_audit_report(reports: &mut BTreeSet<[u8; 32]>, digest: [u8; 32]) -> 
     Ok(())
 }
 
+fn validate_sora_finality_anchor_policy(
+    policy: &SoraFinalityAnchorPolicyV1,
+) -> Result<ValidatedSoraFinalityAnchorPolicyV1, String> {
+    if policy.version != 1
+        || policy.source_profile != "sora-taira"
+        || policy.protocol_version != SUMERAGI_V2_PROTOCOL_VERSION
+    {
+        return Err("SORA finality anchor must select exact Taira Sumeragi-v2".to_owned());
+    }
+    let chain_id_hash = require_hash(&policy.chain_id_hash_hex, "SORA finality anchor chain id")?;
+    let checkpoint_block_hash = require_hash(
+        &policy.checkpoint_block_hash_hex,
+        "SORA finality checkpoint block",
+    )?;
+    let checkpoint_context_id = require_hash(
+        &policy.checkpoint_context_id_hex,
+        "SORA finality checkpoint context id",
+    )?;
+    let checkpoint_finality_artifact_hash = require_hash(
+        &policy.checkpoint_finality_artifact_hash_hex,
+        "SORA finality checkpoint artifact",
+    )?;
+    let anchor = SccpSoraFinalityAnchorV1 {
+        version: policy.version,
+        source_network: SccpNetworkV1::SoraTaira,
+        protocol_version: policy.protocol_version,
+        chain_id_hash,
+        checkpoint_height: policy.checkpoint_height,
+        checkpoint_block_hash,
+        checkpoint_context_id,
+        checkpoint_finality_artifact_hash,
+    };
+    anchor
+        .validate()
+        .map_err(|_| "SORA finality anchor is invalid or aliases consensus roles".to_owned())?;
+    let anchor_hash = sccp_sora_finality_anchor_hash_v1(anchor)
+        .map_err(|_| "SORA finality anchor cannot be canonically hashed".to_owned())?;
+    Ok(ValidatedSoraFinalityAnchorPolicyV1 {
+        anchor,
+        anchor_hash,
+        chain_id_hash,
+        checkpoint_block_hash,
+        checkpoint_context_id,
+        checkpoint_finality_artifact_hash,
+    })
+}
+
 struct ValidatedReleaseTrustV1 {
     release_keys: [[u8; 32]; 2],
 }
@@ -1140,7 +1205,7 @@ fn validate_release_trust_policy(
             &proof.circuit_artifact_sha256_hex,
             "circuit artifact digest",
         )?;
-        if circuit_artifact == sha256(NON_PRODUCTION_SIGNAL_BINDING_CIRCUIT) {
+        if circuit_artifact == FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256 {
             return Err("labeled-signal-only circuit is forbidden in release policy".to_owned());
         }
         let witness_generator = require_hash(
@@ -1171,42 +1236,11 @@ fn validate_release_trust_policy(
         {
             return Err("semantic proof profile hash does not match its commitments".to_owned());
         }
-        if proof.sora_finality_anchor.version != 1
-            || proof.sora_finality_anchor.source_profile != "sora-taira"
-        {
-            return Err("SORA finality anchor profile is invalid".to_owned());
-        }
-        let anchor_chain_id = require_hash(
-            &proof.sora_finality_anchor.chain_id_hash_hex,
-            "SORA finality anchor chain id",
-        )?;
-        let anchor_checkpoint_block = require_hash(
-            &proof.sora_finality_anchor.checkpoint_block_hash_hex,
-            "SORA finality checkpoint block",
-        )?;
-        let anchor_validator_set = require_hash(
-            &proof.sora_finality_anchor.validator_set_hash_hex,
-            "SORA finality validator set",
-        )?;
-        let finality_anchor = SccpSoraFinalityAnchorV1 {
-            version: proof.sora_finality_anchor.version,
-            source_network: SccpNetworkV1::SoraTaira,
-            chain_id_hash: anchor_chain_id,
-            checkpoint_height: proof.sora_finality_anchor.checkpoint_height,
-            checkpoint_block_hash: anchor_checkpoint_block,
-            validator_set_epoch: proof.sora_finality_anchor.validator_set_epoch,
-            validator_set_hash: anchor_validator_set,
-            validator_set_hash_version: proof.sora_finality_anchor.validator_set_hash_version,
-        };
-        finality_anchor
-            .validate()
-            .map_err(|_| "SORA finality anchor is invalid".to_owned())?;
-        let finality_anchor_hash = sccp_sora_finality_anchor_hash_v1(finality_anchor)
-            .map_err(|_| "SORA finality anchor is invalid".to_owned())?;
+        let finality_anchor = validate_sora_finality_anchor_policy(&proof.sora_finality_anchor)?;
         if require_hash(
             &proof.sora_finality_anchor_hash_hex,
             "SORA finality anchor hash",
-        )? != finality_anchor_hash
+        )? != finality_anchor.anchor_hash
         {
             return Err("SORA finality anchor hash does not match its checkpoint".to_owned());
         }
@@ -1229,10 +1263,20 @@ fn validate_release_trust_policy(
             ("witness_generator_sha256_hex", witness_generator),
             ("public_signal_schema_hash_hex", public_signal_schema),
             ("semantic_proof_profile_hash_hex", semantic_profile_hash),
-            ("sora_finality_anchor_hash_hex", finality_anchor_hash),
-            ("anchor_chain_id_hash_hex", anchor_chain_id),
-            ("anchor_checkpoint_block_hash_hex", anchor_checkpoint_block),
-            ("anchor_validator_set_hash_hex", anchor_validator_set),
+            ("sora_finality_anchor_hash_hex", finality_anchor.anchor_hash),
+            ("anchor_chain_id_hash_hex", finality_anchor.chain_id_hash),
+            (
+                "anchor_checkpoint_block_hash_hex",
+                finality_anchor.checkpoint_block_hash,
+            ),
+            (
+                "anchor_checkpoint_context_id_hex",
+                finality_anchor.checkpoint_context_id,
+            ),
+            (
+                "anchor_checkpoint_finality_artifact_hash_hex",
+                finality_anchor.checkpoint_finality_artifact_hash,
+            ),
             ("verifier_key_hash_hex", verifier_key),
             ("verifying_key_sha256_hex", verifying_key),
             ("prover_build_sha256_hex", prover_build),
@@ -1661,34 +1705,14 @@ fn semantic_proof_claim(
         return Err("honest proof does not bind the audited semantic circuit".to_owned());
     }
 
-    let expected_anchor = SccpSoraFinalityAnchorV1 {
-        version: policy.sora_finality_anchor.version,
-        source_network: SccpNetworkV1::SoraTaira,
-        chain_id_hash: require_hash(
-            &policy.sora_finality_anchor.chain_id_hash_hex,
-            "SORA finality anchor chain id",
-        )?,
-        checkpoint_height: policy.sora_finality_anchor.checkpoint_height,
-        checkpoint_block_hash: require_hash(
-            &policy.sora_finality_anchor.checkpoint_block_hash_hex,
-            "SORA finality checkpoint block",
-        )?,
-        validator_set_epoch: policy.sora_finality_anchor.validator_set_epoch,
-        validator_set_hash: require_hash(
-            &policy.sora_finality_anchor.validator_set_hash_hex,
-            "SORA finality validator set",
-        )?,
-        validator_set_hash_version: policy.sora_finality_anchor.validator_set_hash_version,
-    };
-    let expected_anchor_hash = sccp_sora_finality_anchor_hash_v1(expected_anchor)
-        .map_err(|_| "semantic proof policy finality anchor is invalid".to_owned())?;
-    if expected_anchor_hash
+    let expected_anchor = validate_sora_finality_anchor_policy(&policy.sora_finality_anchor)?;
+    if expected_anchor.anchor_hash
         != require_hash(
             &policy.sora_finality_anchor_hash_hex,
             "SORA finality anchor hash",
         )?
-        || artifact.request.sora_finality_anchor != expected_anchor
-        || artifact.request.sora_finality_anchor_hash != expected_anchor_hash
+        || artifact.request.sora_finality_anchor != expected_anchor.anchor
+        || artifact.request.sora_finality_anchor_hash != expected_anchor.anchor_hash
     {
         return Err("honest proof does not bind the governed SORA finality anchor".to_owned());
     }
@@ -2208,7 +2232,7 @@ fn validate_approved_proof_system(
         || approved.circuit_id.contains("test")
         || approved.circuit_id.contains("signal-binding")
         || approved.circuit_id.contains("labeled-signal")
-        || approved.circuit_artifact_sha256 == sha256(NON_PRODUCTION_SIGNAL_BINDING_CIRCUIT)
+        || approved.circuit_artifact_sha256 == FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256
         || approved.verifier_key_hash == FORBIDDEN_ALGEBRAIC_SMOKE_VK
         || validated.verifier_key_hash != approved.verifier_key_hash
         || validated.route_revision != approved.route_revision
@@ -3080,6 +3104,101 @@ mod tests {
     }
 
     #[test]
+    fn sumeragi_v2_finality_anchor_policy_is_exact_and_role_separated() {
+        let anchor = SoraFinalityAnchorPolicyV1 {
+            version: 1,
+            source_profile: "sora-taira".to_owned(),
+            protocol_version: SUMERAGI_V2_PROTOCOL_VERSION,
+            chain_id_hash_hex: "cf1cfc0f57b0bfa4c21882a9870317a1f4812f86533897095e3944be34c5bba7"
+                .to_owned(),
+            checkpoint_height: 5,
+            checkpoint_block_hash_hex: lowercase_hex(&[0x73; 32]),
+            checkpoint_context_id_hex: lowercase_hex(&[0x74; 32]),
+            checkpoint_finality_artifact_hash_hex: lowercase_hex(&[0x75; 32]),
+        };
+        let validated = validate_sora_finality_anchor_policy(&anchor).unwrap();
+        assert_eq!(
+            lowercase_hex(&validated.anchor_hash),
+            "690888c1b9a1409ea47fc682be915184e86a817a2f0b3439eef82e64e08e990b"
+        );
+
+        for mutation in 0..=10 {
+            let mut candidate = anchor.clone();
+            match mutation {
+                0 => candidate.protocol_version = 1,
+                1 => candidate.protocol_version = 3,
+                2 => candidate.checkpoint_context_id_hex = lowercase_hex(&[0; 32]),
+                3 => {
+                    candidate.checkpoint_finality_artifact_hash_hex = lowercase_hex(&[0; 32]);
+                }
+                4 => {
+                    candidate.checkpoint_context_id_hex = candidate.chain_id_hash_hex.clone();
+                }
+                5 => {
+                    candidate.checkpoint_context_id_hex =
+                        candidate.checkpoint_block_hash_hex.clone();
+                }
+                6 => {
+                    candidate.checkpoint_context_id_hex =
+                        candidate.checkpoint_finality_artifact_hash_hex.clone();
+                }
+                7 => {
+                    candidate.checkpoint_finality_artifact_hash_hex =
+                        candidate.checkpoint_context_id_hex.clone();
+                }
+                8 => {
+                    candidate.checkpoint_finality_artifact_hash_hex =
+                        candidate.checkpoint_block_hash_hex.clone();
+                }
+                9 => {
+                    candidate.checkpoint_finality_artifact_hash_hex =
+                        candidate.chain_id_hash_hex.clone();
+                }
+                10 => candidate.checkpoint_height = 0,
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_sora_finality_anchor_policy(&candidate).is_err(),
+                "accepted malformed v2 finality anchor mutation {mutation}"
+            );
+        }
+
+        fn matches_exact_anchor_schema(json: &str) -> bool {
+            let Ok(value) = norito::json::parse_value(json) else {
+                return false;
+            };
+            let Ok(decoded) = norito::json::from_str::<SoraFinalityAnchorPolicyV1>(json) else {
+                return false;
+            };
+            norito::json::to_value(&decoded).ok().as_ref() == Some(&value)
+        }
+
+        let json = norito::json::to_json(&anchor).unwrap();
+        assert!(matches_exact_anchor_schema(&json));
+        for confused in [
+            json.replace("\"protocol_version\":2", "\"protocol_version\":true"),
+            json.replace("\"protocol_version\":2", "\"protocol_version\":\"2\""),
+            json.replace("\"checkpoint_height\":5", "\"checkpoint_height\":true"),
+        ] {
+            assert!(
+                !matches_exact_anchor_schema(&confused),
+                "accepted type-confused v2 finality anchor: {confused}"
+            );
+        }
+        for legacy_field in [
+            "\"validator_set_epoch\":17,",
+            "\"validator_set_hash_hex\":\"7676767676767676767676767676767676767676767676767676767676767676\",",
+            "\"validator_set_hash_version\":1,",
+        ] {
+            let injected = json.replacen('{', &format!("{{{legacy_field}"), 1);
+            assert!(
+                !matches_exact_anchor_schema(&injected),
+                "accepted retired validator-set field: {legacy_field}"
+            );
+        }
+    }
+
+    #[test]
     fn release_lane_fixtures_match_the_production_typed_schema() {
         for fixture in [
             include_str!(
@@ -3219,22 +3338,33 @@ mod tests {
         let approved = approved_proof_system();
         validate_approved_proof_system(&validated, &approved).unwrap();
 
-        for mutation in 0..=10 {
+        assert_eq!(
+            lowercase_hex(&FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256),
+            "d7049de0f0b0ecb7ec4f64b885646ab99f85fcbab05dfaf710d3002f17632bb9"
+        );
+
+        for mutation in 0..=12 {
             let mut candidate = approved.clone();
             match mutation {
                 0 => candidate.circuit_id = "algebraic-smoke-v1".to_owned(),
-                1 => candidate.verifier_key_hash = FORBIDDEN_ALGEBRAIC_SMOKE_VK,
-                2 => candidate.verifier_key_hash[0] ^= 1,
-                3 => candidate.token_runtime_hash[0] ^= 1,
-                4 => candidate.verifier_runtime_hash[0] ^= 1,
-                5 => candidate.route_runtime_hash[0] ^= 1,
-                6 => candidate.route_revision = 2,
-                7 => candidate.verifying_key_sha256[0] ^= 1,
-                8 => candidate.semantic_proof_profile_hash[0] ^= 1,
-                9 => candidate.sora_finality_anchor_hash[0] ^= 1,
-                10 => {
+                1 => {
+                    candidate.circuit_id = "sccp-bsc-labeled-signal-binding-v1".to_owned();
+                }
+                2 => {
+                    candidate.circuit_id = "public-signal-binding-material-only".to_owned();
+                }
+                3 => candidate.verifier_key_hash = FORBIDDEN_ALGEBRAIC_SMOKE_VK,
+                4 => candidate.verifier_key_hash[0] ^= 1,
+                5 => candidate.token_runtime_hash[0] ^= 1,
+                6 => candidate.verifier_runtime_hash[0] ^= 1,
+                7 => candidate.route_runtime_hash[0] ^= 1,
+                8 => candidate.route_revision = 2,
+                9 => candidate.verifying_key_sha256[0] ^= 1,
+                10 => candidate.semantic_proof_profile_hash[0] ^= 1,
+                11 => candidate.sora_finality_anchor_hash[0] ^= 1,
+                12 => {
                     candidate.circuit_artifact_sha256 =
-                        sha256(NON_PRODUCTION_SIGNAL_BINDING_CIRCUIT);
+                        FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256;
                 }
                 _ => unreachable!(),
             }
@@ -3272,12 +3402,14 @@ mod tests {
                 sora_finality_anchor: SoraFinalityAnchorPolicyV1 {
                     version: anchor.version,
                     source_profile: "sora-taira".to_owned(),
+                    protocol_version: anchor.protocol_version,
                     chain_id_hash_hex: lowercase_hex(&anchor.chain_id_hash),
                     checkpoint_height: anchor.checkpoint_height,
                     checkpoint_block_hash_hex: lowercase_hex(&anchor.checkpoint_block_hash),
-                    validator_set_epoch: anchor.validator_set_epoch,
-                    validator_set_hash_hex: lowercase_hex(&anchor.validator_set_hash),
-                    validator_set_hash_version: anchor.validator_set_hash_version,
+                    checkpoint_context_id_hex: lowercase_hex(&anchor.checkpoint_context_id),
+                    checkpoint_finality_artifact_hash_hex: lowercase_hex(
+                        &anchor.checkpoint_finality_artifact_hash,
+                    ),
                 },
                 sora_finality_anchor_hash_hex: lowercase_hex(
                     &fixture.artifact.request.sora_finality_anchor_hash,

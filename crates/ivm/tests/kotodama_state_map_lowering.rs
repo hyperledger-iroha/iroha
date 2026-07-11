@@ -1,4 +1,4 @@
-//! Verify Kotodama lowering of `StateMap<i64, i64>` into durable host state.
+//! Verify Kotodama lowering of `StateMap<int, int>` into durable host state.
 
 use std::{collections::HashMap, str::FromStr};
 
@@ -38,7 +38,7 @@ fn account(_domain: &str, public_key: &str) -> AccountId {
 fn kotodama_state_map_set_writes_corehost_state() {
     let src = r#"
         seiyaku C {
-            state M: StateMap<i64, i64>;
+            state StateMap<int, int> M;
             kotoage fn main() authorize("WriteState") {
                 M[1] = 7;
                 let _x = M.get(1);
@@ -79,10 +79,10 @@ fn kotodama_state_map_set_writes_corehost_state() {
 fn kotodama_nested_struct_map_roundtrip() {
     let src = r#"
         seiyaku C {
-            struct Inner { value: i64; }
-            struct Outer { inner: Inner; }
-            state state_outer: StateMap<i64, Outer>;
-            kotoage fn main() -> i64 authorize("WriteState") {
+            struct Inner { int value }
+            struct Outer { Inner inner }
+            state StateMap<int, Outer> state_outer;
+            kotoage fn main() -> int authorize("WriteState") {
                 state_outer[7] = Outer { inner: Inner { value: 33 } };
                 return state_outer.get(7).unwrap_or(Outer { inner: Inner { value: 0 } }).inner.value;
             }
@@ -103,7 +103,7 @@ fn kotodama_nested_struct_map_roundtrip() {
 fn kotodama_foreach_map_lowering_uses_compact_loop() {
     let src = r#"
         seiyaku LoopDemo {
-            state M: StateMap<i64, i64>;
+            state StateMap<int, int> M;
             view fn main() {
                 for (k, v) in M.take(16) {
                     let _tmp = k + v;
@@ -147,8 +147,8 @@ fn kotodama_foreach_map_lowering_uses_compact_loop() {
 fn kotodama_foreach_reads_durable_state_map_entries() {
     let src = r#"
         seiyaku LoopDemo {
-            state M: StateMap<i64, i64>;
-            state Mirror: StateMap<i64, i64>;
+            state StateMap<int, int> M;
+            state StateMap<int, int> Mirror;
             kotoage fn main() authorize("WriteState") {
                 for (k, v) in M.take(4) {
                     Mirror[k] = v;

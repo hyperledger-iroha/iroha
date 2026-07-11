@@ -24,6 +24,7 @@ from sccp_release_common import (
     require_canonical_json_file,
     sha256_hex,
     validate_bundle_index,
+    validate_bundle_index_against_evidence,
     validate_evidence,
     verify_production_semantic_artifacts,
     verify_rust_lane_evidence,
@@ -87,24 +88,7 @@ def verify_bundle(
     )
     require_canonical_json_file(evidence_bytes, evidence_value, label="bundled release evidence")
     evidence = validate_evidence(evidence_value, trust_policy)
-    if evidence["release_id"] != index["release_id"]:
-        raise SccpReleaseError("bundle release_id does not match signed release evidence")
-    if evidence["validator"] != index["validator"]:
-        raise SccpReleaseError("bundle validator identity does not match signed release evidence")
-    if (
-        index["validator_executable_sha256_hex"]
-        != evidence["validator"]["executable_sha256_hex"]
-    ):
-        raise SccpReleaseError(
-            "bundle executable commitment does not match signed release evidence"
-        )
-
-    indexed_artifacts = {
-        entry["path"]: entry for entry in index["entries"] if entry["kind"] != "release-evidence"
-    }
-    signed_artifacts = {entry["path"]: entry for entry in evidence["artifacts"]}
-    if indexed_artifacts != signed_artifacts:
-        raise SccpReleaseError("bundle artifact inventory does not equal the signed evidence inventory")
+    validate_bundle_index_against_evidence(index, evidence, evidence_bytes)
     semantic_records = verify_production_semantic_artifacts(
         evidence, entry_bytes, trust_policy
     )

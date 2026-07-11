@@ -861,8 +861,14 @@ public sealed class SccpExactTests
         var parsed = SccpGroth16ProofRequestV1.Parse(Json(valid));
         Assert.Equal(SccpDestinationProofBackendV1.EvmGroth16Bn254, parsed.Backend);
         Assert.Equal(SccpNetworkV1.BscMainnet, parsed.TargetNetwork);
-        Assert.Equal("0x3668dc065b23e51605e5c58bcde5264a1a89297418dae3096f55db6dde95719e", parsed.StatementHash);
-        Assert.Equal("0xabccf908b615899f25dcbb0f12e4c35dcbe88013e6ac59c7487b1b534bfb89c4", parsed.RequestHash);
+        Assert.Equal((ushort)2, parsed.SoraFinalityAnchor.ProtocolVersion);
+        Assert.Equal(Upper(0xa2, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointContextId));
+        Assert.Equal(Upper(0xa3, 32), Convert.ToHexString(parsed.SoraFinalityAnchor.CheckpointFinalityArtifactHash));
+        Assert.Equal(
+            "4CE87BF7CF5AEFD0B3D41F9F26490BFE4465128F7E99A7DBB06F5B03C273B671",
+            Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
+        Assert.Equal("0x6c008ce81c03c78432807cd79dd7be4d62314fe3f00839df9a936179ac22e570", parsed.StatementHash);
+        Assert.Equal("0x3891aa1769002894a459b09198d256bcce064b4ba2709bf417bb3c02ffaee288", parsed.RequestHash);
         var mutations = new Action<Dictionary<string, object?>>[]
         {
             value => value["allow_unready"] = true,
@@ -879,6 +885,13 @@ public sealed class SccpExactTests
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)value["verifying_key"]!)["ic"]!)["signal_11"] = G1(),
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)value["semantic_proof_profile"]!)["commitments"]!)["circuit_commitment"] = Upper(0xc2, 32),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_height"] = 0,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 1,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "2",
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["validator_set_epoch"] = 2,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_context_id"] = Upper(0, 32),
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_finality_artifact_hash"] =
+                ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_block_hash"],
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!).Remove("checkpoint_finality_artifact_hash"),
             value => value["bundle_bytes"] = "0x",
             value => value["bundle_bytes"] = "0x0A",
             TamperProofRequestBundleRevision,
@@ -1578,12 +1591,12 @@ public sealed class SccpExactTests
             Convert.FromHexString((string)commitments["public_signal_schema_hash"]!),
             semanticHash);
         var anchorModel = new SccpSoraFinalityAnchorV1(
+            2,
             Convert.FromHexString((string)anchor["chain_id_hash"]!),
             7,
             Convert.FromHexString((string)anchor["checkpoint_block_hash"]!),
-            2,
-            Convert.FromHexString((string)anchor["validator_set_hash"]!),
-            1,
+            Convert.FromHexString((string)anchor["checkpoint_context_id"]!),
+            Convert.FromHexString((string)anchor["checkpoint_finality_artifact_hash"]!),
             anchorHash);
         var finalityHash = Enumerable.Repeat((byte)0x14, 32).ToArray();
         var binding = bundle.Commitment.Context.DestinationBindingHash;
@@ -2162,12 +2175,12 @@ public sealed class SccpExactTests
         {
             ["version"] = 1,
             ["source_network"] = Network("sora-taira"),
+            ["protocol_version"] = 2,
             ["chain_id_hash"] = Convert.ToHexString(chainHash),
             ["checkpoint_height"] = 7,
             ["checkpoint_block_hash"] = Upper(0xa1, 32),
-            ["validator_set_epoch"] = 2,
-            ["validator_set_hash"] = Upper(0xa2, 32),
-            ["validator_set_hash_version"] = 1,
+            ["checkpoint_context_id"] = Upper(0xa2, 32),
+            ["checkpoint_finality_artifact_hash"] = Upper(0xa3, 32),
         };
     }
 
@@ -2261,14 +2274,18 @@ public sealed class SccpExactTests
         using var canonical = new MemoryStream();
         canonical.WriteByte(1);
         canonical.WriteByte((byte)SccpNetworkV1.SoraTaira);
+        Span<byte> protocol = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            protocol,
+            Convert.ToUInt16(anchor["protocol_version"], System.Globalization.CultureInfo.InvariantCulture));
+        canonical.Write(protocol);
         canonical.Write(Convert.FromHexString((string)anchor["chain_id_hash"]!));
-        WriteUInt64(canonical, 7);
+        WriteUInt64(
+            canonical,
+            Convert.ToUInt64(anchor["checkpoint_height"], System.Globalization.CultureInfo.InvariantCulture));
         canonical.Write(Convert.FromHexString((string)anchor["checkpoint_block_hash"]!));
-        WriteUInt64(canonical, 2);
-        canonical.Write(Convert.FromHexString((string)anchor["validator_set_hash"]!));
-        Span<byte> version = stackalloc byte[2];
-        BinaryPrimitives.WriteUInt16LittleEndian(version, 1);
-        canonical.Write(version);
+        canonical.Write(Convert.FromHexString((string)anchor["checkpoint_context_id"]!));
+        canonical.Write(Convert.FromHexString((string)anchor["checkpoint_finality_artifact_hash"]!));
         return SccpV1.Keccak256(Concat("sccp:sora-finality-anchor:v1"u8.ToArray(), canonical.ToArray()));
     }
 

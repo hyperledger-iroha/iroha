@@ -2,9 +2,10 @@
 seiyaku PerpFunding {
     // Compute an unsigned funding-payment magnitude. Direction is selected by
     // comparing mark and index prices before any checked subtraction.
-    fn funding_payment(quantity position_size_magnitude, quantity price_delta, quantity funding_bps) -> quantity {
+    fn funding_payment(quantity position_size_magnitude, decimal price_delta, decimal funding_bps) -> quantity {
         let num = position_size_magnitude * price_delta * funding_bps;
-        let pay = num / 10_000;
+        let decimal bps_scale = 10_000;
+        let pay = num / bps_scale;
         return pay;
     }
 
@@ -16,9 +17,9 @@ seiyaku PerpFunding {
         AccountId insurance_fund,
         AssetDefinitionId stable_asset,
         quantity position_size_magnitude,
-        quantity mark_price,
-        quantity index_price,
-        quantity funding_bps,
+        decimal mark_price,
+        decimal index_price,
+        decimal funding_bps,
     ) authorize("Admin") {
         if mark_price >= index_price {
             let premium_delta = mark_price - index_price;
@@ -52,12 +53,13 @@ seiyaku PerpFunding {
     }
 
     // Basic liquidation check: equity_bps = (equity * 10_000) / notional
-    view fn is_liquidatable(quantity equity, quantity notional, quantity maintenance_bps) -> bool {
+    view fn is_liquidatable(quantity equity, quantity notional, decimal maintenance_bps) -> bool {
         if notional == 0 {
             return false;
         }
         // not liquidatable if no position
-        let equity_bps = (equity * 10_000) / notional;
+        let decimal bps_scale = 10_000;
+        let equity_bps = (equity * bps_scale) / notional;
         let liq = (equity_bps < maintenance_bps);
         return liq;
     }

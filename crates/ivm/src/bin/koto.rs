@@ -1195,14 +1195,7 @@ fn lsp_completion_items() -> norito::json::Value {
             BuiltinSurface::MethodOnly => push(builtin.name(), 2),
             BuiltinSurface::FunctionOrMethod => {
                 push(spec.name, 3);
-                // `get_numeric` is the compiler-internal lowering name. The
-                // sole V1 Amount getter spelling is `get_amount`.
-                let method_name = if builtin == Builtin::GetNumeric {
-                    "get_amount"
-                } else {
-                    builtin.name()
-                };
-                push(method_name, 2);
+                push(builtin.name(), 2);
             }
             BuiltinSurface::CompilerInternal => continue,
         }
@@ -1564,7 +1557,9 @@ mod tests {
         }
         for current in [
             "json",
-            "Amount",
+            "int",
+            "decimal",
+            "quantity",
             "List",
             "AccountView",
             "AssetDefinitionView",
@@ -1576,7 +1571,8 @@ mod tests {
             "try_push",
             "enumerate",
             "get_int",
-            "get_amount",
+            "get_decimal",
+            "get_quantity",
             "get_json",
             "get_name",
             "get_account_id",
@@ -1614,6 +1610,8 @@ mod tests {
             "option::none",
             "result::ok",
             "result::err",
+            "Amount",
+            "get_amount",
             "get_numeric",
             "json_get_int",
             "json_get_numeric",

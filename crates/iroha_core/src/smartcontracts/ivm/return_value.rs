@@ -16,7 +16,12 @@ use iroha_data_model::{
         entrypoint_return_schema_hash_v1, entrypoint_value_subtree_range_v1,
     },
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    bigint::BigInt,
+    json::Json,
+    numeric::{Numeric, Quantity},
+    numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
+};
 use ivm::{IVM, PointerType, list::ListLayoutV1, sum::SumLayoutV1};
 use norito::{
     codec::{Decode, Encode},
@@ -281,9 +286,10 @@ where
 
 fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
     Some(match kind {
-        EntrypointValueKindV1::Int | EntrypointValueKindV1::Bool => return None,
-        EntrypointValueKindV1::U128 => PointerType::NoritoBytes,
-        EntrypointValueKindV1::Amount => PointerType::Quantity,
+        EntrypointValueKindV1::Int => PointerType::Int,
+        EntrypointValueKindV1::Decimal => PointerType::Decimal,
+        EntrypointValueKindV1::Quantity => PointerType::Quantity,
+        EntrypointValueKindV1::Bool => return None,
         EntrypointValueKindV1::String | EntrypointValueKindV1::Blob => PointerType::Blob,
         EntrypointValueKindV1::Json => PointerType::Json,
         EntrypointValueKindV1::Name => PointerType::Name,
@@ -298,11 +304,11 @@ fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
 
 fn kind_name(kind: EntrypointValueKindV1) -> &'static str {
     match kind {
-        EntrypointValueKindV1::Int => "i64",
-        EntrypointValueKindV1::U128 => "u128",
+        EntrypointValueKindV1::Int => "int",
+        EntrypointValueKindV1::Decimal => "decimal",
+        EntrypointValueKindV1::Quantity => "quantity",
         EntrypointValueKindV1::Bool => "bool",
         EntrypointValueKindV1::String => "string",
-        EntrypointValueKindV1::Amount => "Amount",
         EntrypointValueKindV1::Json => "Json",
         EntrypointValueKindV1::Name => "Name",
         EntrypointValueKindV1::AccountId => "AccountId",
@@ -321,29 +327,34 @@ fn validate_pointer_payload(
     register: usize,
 ) -> Result<(), EntrypointReturnDecodeError> {
     match kind {
-        EntrypointValueKindV1::Int | EntrypointValueKindV1::Bool => {
+        EntrypointValueKindV1::Bool => {
             return Err(EntrypointReturnDecodeError::InvalidSchema);
         }
-        EntrypointValueKindV1::U128 => {
-            let value: Numeric = decode_canonical(payload, register, "u128")?;
-            if value.scale() != 0 || value.try_mantissa_u128().is_none() {
-                return Err(EntrypointReturnDecodeError::InvalidValue {
-                    register,
-                    kind: "u128",
-                    reason: "expected a non-negative scale-zero Numeric fitting u128".to_owned(),
-                });
-            }
-        }
-        EntrypointValueKindV1::Amount => {
-            let value: Numeric = decode_canonical(payload, register, "Amount")?;
-            value
-                .validate_amount()
+        EntrypointValueKindV1::Int => {
+            IntValueV1::decode_frame(payload)
+                .map(drop)
                 .map_err(|error| EntrypointReturnDecodeError::InvalidValue {
                     register,
-                    kind: "Amount",
+                    kind: "int",
                     reason: error.to_string(),
-                })?;
+                })?
         }
+        EntrypointValueKindV1::Decimal => {
+            DecimalValueV1::decode_frame(payload)
+                .map(drop)
+                .map_err(|error| EntrypointReturnDecodeError::InvalidValue {
+                    register,
+                    kind: "decimal",
+                    reason: error.to_string(),
+                })?
+        }
+        EntrypointValueKindV1::Quantity => QuantityValueV1::decode_frame(payload)
+            .map(drop)
+            .map_err(|error| EntrypointReturnDecodeError::InvalidValue {
+                register,
+                kind: "quantity",
+                reason: error.to_string(),
+            })?,
         EntrypointValueKindV1::String => {
             str::from_utf8(payload).map_err(|error| EntrypointReturnDecodeError::InvalidValue {
                 register,
@@ -386,14 +397,6 @@ fn collect_leaf(
     atoms: &mut Vec<EntrypointValueAtomV1>,
 ) -> Result<(), EntrypointReturnDecodeError> {
     match kind {
-        EntrypointValueKindV1::Int => {
-            let (_, value) = cursor.public_scalar()?;
-            push_atom(
-                atoms,
-                cursor.budget,
-                EntrypointValueAtomV1::Int(value as i64),
-            )?;
-        }
         EntrypointValueKindV1::Bool => {
             let (register, value) = cursor.public_scalar()?;
             let value = match value {
@@ -548,9 +551,6 @@ fn collect_leaf_from_words(
         .ok_or_else(|| list_shape_error(register, "list item is missing an active word"))?;
     *word_index = word_index.saturating_add(1);
     match kind {
-        EntrypointValueKindV1::Int => {
-            push_atom(atoms, budget, EntrypointValueAtomV1::Int(word as i64))?;
-        }
         EntrypointValueKindV1::Bool => {
             let value = match word {
                 0 => false,
@@ -1361,6 +1361,10 @@ fn pointer_payload<'a>(
     Ok(tlv.payload)
 }
 
+fn int_json_value(value: &BigInt) -> Value {
+    Value::from(value.to_string())
+}
+
 fn render_leaf(
     atoms: &[EntrypointValueAtomV1],
     atom_index: &mut usize,
@@ -1372,36 +1376,40 @@ fn render_leaf(
         .ok_or(EntrypointReturnDecodeError::InvalidSchema)?;
     *atom_index = atom_index.saturating_add(1);
     match (kind, atom) {
-        (EntrypointValueKindV1::Int, EntrypointValueAtomV1::Int(value)) => Ok(Value::from(*value)),
         (EntrypointValueKindV1::Bool, EntrypointValueAtomV1::Bool(value)) => {
             Ok(Value::Bool(*value))
         }
         (pointer_kind, EntrypointValueAtomV1::Pointer(_)) if pointer_kind.is_pointer() => {
             let payload = pointer_payload(atom, pointer_kind, register)?;
             Ok(match pointer_kind {
-                EntrypointValueKindV1::U128 => {
-                    let value: Numeric = decode_canonical(payload, register, "u128")?;
-                    Value::from(
-                        value
-                            .try_mantissa_u128()
-                            .filter(|_| value.scale() == 0)
-                            .ok_or_else(|| EntrypointReturnDecodeError::InvalidValue {
-                                register,
-                                kind: "u128",
-                                reason: "expected scale-zero u128".to_owned(),
-                            })?
-                            .to_string(),
-                    )
-                }
-                EntrypointValueKindV1::Amount => {
-                    let value: Numeric = decode_canonical(payload, register, "Amount")?;
-                    value.validate_amount().map_err(|error| {
-                        EntrypointReturnDecodeError::InvalidValue {
+                EntrypointValueKindV1::Int => {
+                    let value = IntValueV1::decode_frame(payload)
+                        .map(IntValueV1::into_int)
+                        .map_err(|error| EntrypointReturnDecodeError::InvalidValue {
                             register,
-                            kind: "Amount",
+                            kind: "int",
                             reason: error.to_string(),
-                        }
-                    })?;
+                        })?;
+                    int_json_value(&value)
+                }
+                EntrypointValueKindV1::Decimal => {
+                    let value = DecimalValueV1::decode_frame(payload)
+                        .map(DecimalValueV1::into_numeric)
+                        .map_err(|error| EntrypointReturnDecodeError::InvalidValue {
+                            register,
+                            kind: "decimal",
+                            reason: error.to_string(),
+                        })?;
+                    Value::from(value.to_string())
+                }
+                EntrypointValueKindV1::Quantity => {
+                    let value = QuantityValueV1::decode_frame(payload)
+                        .map(QuantityValueV1::into_quantity)
+                        .map_err(|error| EntrypointReturnDecodeError::InvalidValue {
+                            register,
+                            kind: "quantity",
+                            reason: error.to_string(),
+                        })?;
                     Value::from(value.to_string())
                 }
                 EntrypointValueKindV1::String => Value::from(
@@ -1446,7 +1454,7 @@ fn render_leaf(
                     decode_canonical::<DataSpaceId>(payload, register, "DataSpaceId")?.as_u64(),
                 ),
                 EntrypointValueKindV1::Blob => Value::from(format!("0x{}", hex::encode(payload))),
-                EntrypointValueKindV1::Int | EntrypointValueKindV1::Bool => {
+                EntrypointValueKindV1::Bool => {
                     return Err(EntrypointReturnDecodeError::InvalidSchema);
                 }
             })
@@ -1898,6 +1906,28 @@ mod tests {
         vm.alloc_input_tlv(&envelope).expect("allocate test TLV")
     }
 
+    fn int_envelope(value: i64) -> Vec<u8> {
+        ivm::numeric_tlv::encode_int(&BigInt::from_i128(i128::from(value)))
+            .expect("encode V1 int envelope")
+    }
+
+    fn int_atom(value: i64) -> EntrypointValueAtomV1 {
+        EntrypointValueAtomV1::Pointer(int_envelope(value))
+    }
+
+    fn input_int(vm: &mut IVM, value: i64) -> u64 {
+        let envelope = int_envelope(value);
+        vm.alloc_input_tlv(&envelope).expect("allocate V1 int TLV")
+    }
+
+    fn input_quantity(vm: &mut IVM, value: &str) -> u64 {
+        let quantity: Quantity = value.parse().expect("canonical quantity");
+        let envelope = ivm::numeric_tlv::encode_quantity(&quantity)
+            .expect("encode V1 quantity envelope");
+        vm.alloc_input_tlv(&envelope)
+            .expect("allocate V1 quantity TLV")
+    }
+
     fn nested_schema() -> EntrypointValueTypeV1 {
         EntrypointValueTypeV1 {
             nodes: vec![
@@ -1918,6 +1948,20 @@ mod tests {
     }
 
     #[test]
+    fn entrypoint_int_json_is_a_canonical_string_at_every_width() {
+        for value in [
+            BigInt::from_i128(-7),
+            BigInt::from_i128(0),
+            BigInt::from_i128(i128::MAX),
+            "1606938044258990275541962092341162602522202993782792835301376"
+                .parse::<BigInt>()
+                .expect("2^200 fits the int domain"),
+        ] {
+            assert_eq!(int_json_value(&value), Value::from(value.to_string()));
+        }
+    }
+
+    #[test]
     fn flat_list_element_cursor_consumes_exactly_one_bounded_subtree() {
         let nodes = vec![
             EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 { capacity: 4 }),
@@ -1927,7 +1971,7 @@ mod tests {
             }),
             EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int),
             EntrypointValueTypeNodeV1::Option,
-            EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Amount),
+            EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Quantity),
         ];
         let mut list_element = 1;
         let subtree = take_return_subtree(&nodes, &mut list_element)
@@ -1958,7 +2002,7 @@ mod tests {
 
         let mut atoms = Vec::with_capacity(levels.saturating_add(1));
         atoms.extend((0..levels).map(|_| EntrypointValueAtomV1::List(1)));
-        atoms.push(EntrypointValueAtomV1::Int(7));
+        atoms.push(int_atom(7));
         let record = EntrypointReturnRecordV1 {
             schema_hash: schema_hash(&schema).expect("hash the exact boundary schema"),
             atoms,
@@ -1971,7 +2015,7 @@ mod tests {
             assert_eq!(items.len(), 1);
             cursor = &items[0];
         }
-        assert_eq!(cursor, &Value::from(7));
+        assert_eq!(cursor, &Value::from("7"));
 
         let over_limit = nested_list_schema(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH);
         assert!(!over_limit.validate());
@@ -1989,19 +2033,20 @@ mod tests {
 
         let tuple_schema = nested_tuple_schema(levels);
         assert!(tuple_schema.validate());
-        vm.set_register(FIRST_RETURN_REGISTER, 7);
+        let seven = input_int(&mut vm, 7);
+        vm.set_register(FIRST_RETURN_REGISTER, seven);
         let tuple_record = collect_entrypoint_return_record(
             &vm,
             &tuple_schema,
             MAX_ENTRYPOINT_RETURN_RECORD_BYTES,
         )
         .expect("collect the maximum-depth product without native recursion");
-        assert_eq!(tuple_record.atoms, vec![EntrypointValueAtomV1::Int(7)]);
+        assert_eq!(tuple_record.atoms, vec![int_atom(7)]);
 
         let list_schema = nested_list_schema(levels);
         assert!(list_schema.validate());
         let list_layout = ListLayoutV1::try_new(1, 1).expect("one-word list layout");
-        let mut list_word = 9_u64;
+        let mut list_word = input_int(&mut vm, 9);
         for _ in 0..levels {
             list_word = ivm::list::allocate_words(&mut vm, list_layout, &[vec![list_word]])
                 .expect("allocate one nested active list item");
@@ -2018,13 +2063,13 @@ mod tests {
         );
         assert_eq!(
             list_record.atoms.last(),
-            Some(&EntrypointValueAtomV1::Int(9))
+            Some(&int_atom(9))
         );
 
         let option_schema = nested_option_schema(levels);
         assert!(option_schema.validate());
         let option_layout = SumLayoutV1::option(1).expect("one-word Option layout");
-        let mut option_word = 11_u64;
+        let mut option_word = input_int(&mut vm, 11);
         for _ in 0..levels {
             option_word = ivm::sum::allocate_words(&mut vm, option_layout, 1, &[option_word])
                 .expect("allocate one nested active Option payload");
@@ -2044,7 +2089,7 @@ mod tests {
         );
         assert_eq!(
             option_record.atoms.last(),
-            Some(&EntrypointValueAtomV1::Int(11))
+            Some(&int_atom(11))
         );
     }
 
@@ -2192,7 +2237,7 @@ mod tests {
             schema_hash,
             atoms: vec![
                 EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(7),
+                int_atom(7),
             ],
         })
         .expect("encode canonical flat shape");
@@ -2386,7 +2431,7 @@ mod tests {
             schema_hash: schema_hash(&result_schema).expect("Result schema hash"),
             atoms: vec![
                 EntrypointValueAtomV1::Tag(true),
-                EntrypointValueAtomV1::Int(7),
+                int_atom(7),
                 EntrypointValueAtomV1::Pointer(test_tlv(PointerType::Blob, b"private-error")),
             ],
         };
@@ -2403,13 +2448,13 @@ mod tests {
             schema_hash: schema_hash(&schema).expect("List schema hash"),
             atoms: vec![
                 EntrypointValueAtomV1::List(2),
-                EntrypointValueAtomV1::Int(1),
-                EntrypointValueAtomV1::Int(2),
+                int_atom(1),
+                int_atom(2),
             ],
         };
         assert_eq!(
             render_entrypoint_return_record(&schema, &valid).expect("canonical flat list tape"),
-            norito::json!([1, 2])
+            norito::json!(["1", "2"])
         );
 
         for atoms in [
@@ -2419,23 +2464,23 @@ mod tests {
             ],
             vec![
                 EntrypointValueAtomV1::List(1),
-                EntrypointValueAtomV1::Int(1),
-                EntrypointValueAtomV1::Int(2),
+                int_atom(1),
+                int_atom(2),
             ],
             vec![EntrypointValueAtomV1::List(1)],
             vec![
                 EntrypointValueAtomV1::List(2),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
             ],
             vec![
                 EntrypointValueAtomV1::List(0),
-                EntrypointValueAtomV1::Int(1),
+                int_atom(1),
             ],
             vec![
                 EntrypointValueAtomV1::List(3),
-                EntrypointValueAtomV1::Int(1),
-                EntrypointValueAtomV1::Int(2),
-                EntrypointValueAtomV1::Int(3),
+                int_atom(1),
+                int_atom(2),
+                int_atom(3),
             ],
         ] {
             let record = EntrypointReturnRecordV1 {
@@ -2542,11 +2587,10 @@ mod tests {
     }
 
     #[test]
-    fn nested_amount_list_roundtrips_as_one_return_word() {
-        let schema = list(2, list(2, leaf(EntrypointValueKindV1::Amount)));
+    fn nested_quantity_list_roundtrips_as_one_return_word() {
+        let schema = list(2, list(2, leaf(EntrypointValueKindV1::Quantity)));
         let mut vm = IVM::new(10_000);
-        let amount_payload = norito::to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount_pointer = input_tlv(&mut vm, PointerType::Quantity, &amount_payload);
+        let amount_pointer = input_quantity(&mut vm, "1.25");
         let inner_layout = ListLayoutV1::try_new(2, 1).expect("inner layout");
         let first = ivm::list::allocate_words(&mut vm, inner_layout, &[vec![amount_pointer]])
             .expect("first inner list");
@@ -2557,7 +2601,7 @@ mod tests {
             .expect("outer list");
         vm.set_register(FIRST_RETURN_REGISTER, list);
         assert_eq!(
-            decode_entrypoint_return(&vm, &schema).expect("decode nested Amount list"),
+            decode_entrypoint_return(&vm, &schema).expect("decode nested quantity list"),
             norito::json!([["1.25"], ["1.25"]])
         );
 
@@ -2572,7 +2616,7 @@ mod tests {
             Err(EntrypointReturnDecodeError::InvalidValue { kind: "List", .. })
         ));
 
-        let wrong = input_tlv(&mut vm, PointerType::Blob, &amount_payload);
+        let wrong = input_tlv(&mut vm, PointerType::Blob, b"not a quantity frame");
         let wrong_inner = ivm::list::allocate_words(&mut vm, inner_layout, &[vec![wrong]])
             .expect("inner list with wrong pointer type");
         let wrong_outer = ivm::list::allocate_words(&mut vm, outer_layout, &[vec![wrong_inner]])
@@ -2594,14 +2638,13 @@ mod tests {
             nodes: vec![
                 EntrypointValueTypeNodeV1::Option,
                 EntrypointValueTypeNodeV1::Result,
-                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Amount),
+                EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Quantity),
                 EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool),
             ],
         };
         let schema = list(3, element);
         let mut vm = IVM::new(10_000);
-        let amount_payload = norito::to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount = input_tlv(&mut vm, PointerType::Quantity, &amount_payload);
+        let amount = input_quantity(&mut vm, "1.25");
         let result_layout = SumLayoutV1::try_new(1, 1).expect("Result layout");
         let option_layout = SumLayoutV1::option(1).expect("Option layout");
         let ok =

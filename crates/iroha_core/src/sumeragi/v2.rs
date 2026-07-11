@@ -154,7 +154,7 @@ impl VerifiedHeightContext {
         {
             return Err(AdapterError::ParentContextMismatch);
         }
-        if let Some(snapshot) = &parent_artifact.next_epoch_snapshot {
+        if let Some(snapshot) = &parent_artifact.height_context.next_epoch_snapshot {
             if context.epoch != snapshot.epoch
                 || context.mode != snapshot.mode
                 || context.roster != snapshot.roster
@@ -2698,26 +2698,15 @@ fn verify_roster_proofs(
     context: &wire::HeightContext,
     proofs_of_possession: &[Vec<u8>],
 ) -> Result<(), AdapterError> {
-    validate_bls_roster(context)?;
-    if proofs_of_possession.len() != context.roster.len() {
-        return Err(AdapterError::ProofOfPossessionCount {
-            expected: context.roster.len(),
-            actual: proofs_of_possession.len(),
-        });
-    }
-    #[cfg(feature = "bls")]
-    for (entry, proof) in context.roster.iter().zip(proofs_of_possession) {
-        iroha_crypto::bls_normal_pop_verify(entry.validator.public_key(), proof)
-            .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
-    }
-    #[cfg(not(feature = "bls"))]
-    {
-        let _ = proofs_of_possession;
-        return Err(AdapterError::Cryptography(
-            "the iroha_core `bls` feature is required by Sumeragi v2".to_owned(),
-        ));
-    }
-    Ok(())
+    wire::finality::verify_validator_roster_pops(context, proofs_of_possession).map_err(|error| {
+        match error {
+            wire::finality::V2QuorumCertificateVerificationError::ProofOfPossessionCount {
+                expected,
+                actual,
+            } => AdapterError::ProofOfPossessionCount { expected, actual },
+            other => AdapterError::Cryptography(other.to_string()),
+        }
+    })
 }
 
 fn verify_individual_signature(
@@ -2742,20 +2731,21 @@ fn verify_quorum_certificate(
     certificate: &wire::QuorumCertificate,
     proofs_of_possession: &[Vec<u8>],
 ) -> Result<(), AdapterError> {
-    certificate.validate(context)?;
-    let signer = certificate
-        .signers
-        .first()
-        .copied()
-        .ok_or(wire::ValidationError::InsufficientSignerCount)?;
-    let preimage = certificate.signer_preimage(context, signer)?;
-    verify_aggregate_signature(
+    wire::finality::verify_quorum_certificate_with_validator_pops(
         context,
-        &certificate.signers,
-        &certificate.aggregate_signature,
-        &preimage,
+        certificate,
         proofs_of_possession,
     )
+    .map_err(|error| match error {
+        wire::finality::V2QuorumCertificateVerificationError::InvalidCertificate(error) => {
+            AdapterError::WireValidation(error)
+        }
+        wire::finality::V2QuorumCertificateVerificationError::ProofOfPossessionCount {
+            expected,
+            actual,
+        } => AdapterError::ProofOfPossessionCount { expected, actual },
+        other => AdapterError::Cryptography(other.to_string()),
+    })
 }
 
 /// Verify one certificate against an immutable context record reopened for

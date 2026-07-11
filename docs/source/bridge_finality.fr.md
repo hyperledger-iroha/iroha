@@ -4,119 +4,117 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-01-08
+source_hash: 4fba587c1baea74a2af3829c89a9aea82699ebf8837e2ed397d32e54b792ac72
+source_last_modified: "2026-07-11T18:13:35+00:00"
+translation_last_reviewed: 2026-07-11
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Preuves de finalite bridge
+# Preuves de finalité du bridge
 
-Ce document decrit la surface initiale des preuves de finalite bridge pour Iroha.
-L objectif est de permettre aux chaines externes ou aux light clients de verifier
-qu un bloc Iroha est finalise sans calcul off-chain ni relays de confiance.
+Ce document définit le format de la première version. Il transporte la preuve
+durable exacte produite par Sumeragi v2. L'enveloppe de preuve a la version de
+schéma `1`, mais le protocole de consensus qu'elle contient est la version `2`.
+Il n'existe ni projection, ni décodeur, ni solution de repli Sumeragi v1.
 
-## Format de preuve
+## Format exact
 
-`BridgeFinalityProof` (Norito/JSON) contient:
+`BridgeFinalityProof` (Norito ou Norito JSON) contient exactement :
 
-- `height`: hauteur de bloc.
-- `chain_id`: identifiant de chaine Iroha pour prevenir les replays inter-chain.
-- `block_header`: `BlockHeader` canonique.
-- `block_hash`: hash du header (les clients le recomputent pour valider).
-- `commit_certificate`: ensemble des validateurs + signatures qui finalisent le bloc.
-- `validator_set_pops`: preuves de possession (PoP) alignees avec l ordre du validator set
-  (requises pour la verification BLS agregée).
+```text
+{ version, block_header, finality_artifact, validator_set_pops }
+```
 
-La preuve est auto-contenue; aucun manifest externe ou blob opaque n est requis.
-Retention: Torii sert les preuves de finalite pour la fenetre recente des commit certificates
-(borne par le cap d historique configure; 512 entrees par defaut via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Les clients
-devraient mettre en cache ou ancrer les preuves s ils ont besoin d horizons plus longs.
-Le tuple canonique est `(block_header, block_hash, commit_certificate)`: le hash du header
-doit correspondre au hash dans le commit certificate, et le chain id lie la preuve a un
-seul ledger. Les serveurs rejettent et journalisent un `CommitCertificateHashMismatch`
-lorsque le certificate pointe vers un hash de bloc different.
+- `version` vaut `1` ;
+- `block_header` est le `BlockHeader` canonique ;
+- `finality_artifact` est le `V2FinalityArtifact` exact et immuable stocké par
+  le chemin d'application Sumeragi v2 ;
+- `validator_set_pops` contient un PoP BLS-normal par entrée, dans l'ordre de
+  `finality_artifact.height_context.roster`.
 
-## Commitment bundle
+L'artéfact est l'unique source des faits de consensus. Il contient les versions
+de format et de protocole, la hauteur, le `HeightContext` immuable complet, le
+`BlockSubject` exact, le hash du bloc, le CommitQC et, uniquement à une fin
+d'époque, le snapshot authentifié de l'époque suivante. Le contexte fige le
+chain id, les bornes d'époque, le mode, le CommitQC parent, le roster ordonné de
+`ValidatorPower`, le `DualQuorum`, l'engagement Nexus/AMX, les paramètres DA et
+la graine de leader. Le sujet lie `parent_block_hash`, `block_hash` et
+`payload_hash`. Aucun champ dupliqué de hauteur, chaîne, hash, roster ou
+certificat n'est accepté au niveau de la preuve.
 
-`BridgeFinalityBundle` (Norito/JSON) etend la preuve de base avec un commitment et une
-justification explicites:
+## Source durable et vérification
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: signatures du authority set sur le payload de commitment
-  (reutilise les signatures du commit certificate).
-- `block_header`, `commit_certificate`: identiques a la preuve de base.
+Après application du bloc, Sumeragi v2 valide puis écrit l'artéfact comme
+sidecar Kura immuable. L'écriture est idempotente et Kura refuse un artéfact
+conflictuel à la même hauteur. La reprise peut compléter un sidecar absent sans
+réexécuter le bloc. Le constructeur lit le bloc et ce sidecar par hauteur,
+vérifie leur association, récupère les PoP depuis l'état commité et exécute le
+vérificateur canonique. Il ne reconstruit pas l'historique depuis un état
+mutable et ne dépend pas d'une fenêtre récente de certificats.
 
-Placeholder actuel: `mmr_root`/`mmr_peaks` sont derives en recomputant en memoire un MMR de
-block-hash; les preuves d inclusion ne sont pas encore retournees. Les clients peuvent
-encore verifier le meme hash via le payload de commitment aujourd hui.
+`verify_bridge_finality_proof` impose :
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+1. le schéma `1`, le format d'artéfact `1` et le protocole Sumeragi `2` ;
+2. un contexte, un roster pondéré, un quorum, un parent et une transition
+   d'époque structurellement valides ;
+3. l'égalité exacte entre hauteur, context id, sujet, hash répété et CommitQC,
+   avec phase `Commit` ;
+4. le chain id attendu et la hauteur/hash recalculés du header ;
+5. un PoP BLS-normal valide pour chaque membre du roster ;
+6. des indices de signataires strictement croissants et dans les limites ;
+7. simultanément au moins `floor(2n/3) + 1` signataires distincts et une
+   puissance signée strictement supérieure aux deux tiers du total ;
+8. la signature BLS agrégée sur le préimage de vote v2 exact.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+Le préimage est séparé par le domaine `iroha:sumeragi:v2:vote` et encode en
+Norito `{ protocol_version: 2, round: { context_id, height, view }, phase:
+Commit, subject: { parent_block_hash, block_hash, payload_hash } }`. L'indice et
+la signature individuelle n'en font pas partie ; la liste ordonnée du CommitQC
+sélectionne les clés et PoP. La vérification BLS/PoP est toujours obligatoire.
 
-La verification est analogue a la preuve de base: recomputer `block_hash` depuis le header,
-verifier les signatures du commit certificate, et verifier que les champs du commitment
-correspondent au certificate et au hash du bloc. Le bundle ajoute un wrapper commitment/
-justification pour les protocoles bridge qui preferent la separation.
+## Ancre de confiance et successeurs
 
-## Etapes de verification
+Une preuve isolée établit sa cohérence cryptographique sous le roster qu'elle
+transporte, mais ne prouve pas que ce roster est canonique. Le
+`BridgeFinalityVerifier` exige donc un `HeightContextId` explicitement approuvé
+avant la première preuve ; il ne déduit jamais la confiance de cette preuve.
+Il n'accepte ensuite que la hauteur immédiatement suivante, vérifie le CommitQC
+parent sous le contexte et les PoP précédents, puis impose les règles v2 de
+transition. Hors fin d'époque, époque, roster, quorum et graine restent figés ;
+à la frontière, ils doivent correspondre au `next_epoch_snapshot` authentifié.
+Les hauteurs anciennes, sautées ou non liées sont rejetées.
 
-1. Recompute `block_hash` depuis `block_header`; rejeter en cas de mismatch.
-2. Verifier que `commit_certificate.block_hash` correspond au `block_hash` recompute;
-   rejeter les paires header/commit certificate non correspondantes.
-3. Verifier que `chain_id` correspond a la chaine Iroha attendue.
-4. Recompute `validator_set_hash` depuis `commit_certificate.validator_set` et verifier
-   qu il correspond au hash/version enregistres.
-5. Verifier que la longueur de `validator_set_pops` correspond au validator set et valider
-   chaque PoP contre sa cle publique BLS.
-6. Verifier les signatures du commit certificate contre le hash du header en utilisant les
-   cles publiques et indices de validateurs references; appliquer le quorum
-   (`2f+1` quand `n>3`, sinon `n`) et rejeter les indices dupliques/hors plage.
-7. Optionnellement lier a un checkpoint de confiance en comparant le hash du validator set
-   a une valeur ancree (anchor de weak-subjectivity).
-8. Optionnellement lier a un anchor d epoch attendu pour rejeter les preuves d epochs
-   plus anciens/nouveaux jusqu a rotation intentionnelle de l anchor.
+## Frontière de confiance SCCP
 
-`BridgeFinalityVerifier` (dans `iroha_data_model::bridge`) applique ces controles, rejetant
-chain-id/height drift, mismatch hash/version du validator set, PoPs manquantes ou invalides,
-signataires dupliques/hors plage, signatures invalides, et epochs inattendus avant de
-compter le quorum, afin que les light clients puissent reutiliser un seul verificateur.
+`TairaSccpMessageProofV1.finality_proof` est l'encodage Norito du même type ;
+SCCP n'a pas de second transcript ni de second calcul de quorum. Le header, la
+racine SCCP et la branche Merkle authentifient le message, tandis que la preuve
+brute n'établit que la cohérence sous son roster figé.
 
-## Verificateur de reference
+La confiance vient du `SccpSoraFinalityAnchorV1` gouverné : réseau Taira exact,
+protocole `2`, hash du chain id, hauteur/hash du checkpoint,
+`checkpoint_context_id` et hash séparé par domaine de l'artéfact durable. Le
+circuit sémantique expose le hash de cette ancre comme dernier signal public.
+L'admission doit authentifier l'artéfact du checkpoint et vérifier chaque
+successeur immédiat jusqu'à l'artéfact du message, ou comparer les mêmes
+artéfacts locaux approuvés. Une signature valide sous un roster fourni par le
+message ne suffit pas à établir la finalité Taira.
 
-`BridgeFinalityVerifier` accepte un `chain_id` attendu plus des anchors optionnels de
-validator set et d epoch. Il applique le tuple header/block-hash/commit-certificate,
-valide le hash/version du validator set, verifie signatures/quorum contre le roster de
-validateurs annonce, et suit la derniere hauteur pour rejeter les preuves stale/sautees.
-Lorsque des anchors sont fournis il rejette les replays entre epochs/rosters avec des
-erreurs `UnexpectedEpoch`/`UnexpectedValidatorSet`; sans anchors il adopte le hash de
-validator set et l epoch de la premiere preuve avant de continuer a appliquer des
-erreurs deterministes pour signatures dupliquees/hors plage/insuffisantes.
+## Bundle et API
 
-## Surface API
+`BridgeFinalityBundle` contient le proof exact, un engagement
+`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
+mmr_leaf_index?, mmr_peaks? }` et une liste séparée de signatures historiques,
+actuellement vide. Le MMR optionnel est une aide de checkpoint racine, pas une
+preuve de finalité ni un chemin d'inclusion. SCCP utilise sa propre branche
+Merkle typée et son ancre gouvernée.
 
-- `GET /v1/bridge/finality/{height}` - renvoie `BridgeFinalityProof` pour la hauteur de bloc
-  demandee. La negociation de contenu via `Accept` supporte Norito ou JSON.
-- `GET /v1/bridge/finality/bundle/{height}` - renvoie `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) pour la hauteur demandee.
+- `GET /v1/bridge/finality/{height}` renvoie `BridgeFinalityProof`.
+- `GET /v1/bridge/finality/bundle/{height}` renvoie `BridgeFinalityBundle`.
 
-## Notes et suites
-
-- Les preuves sont actuellement derivees des commit certificates stockes. L historique borne
-  suit la fenetre de retention des commit certificates; les clients doivent mettre en cache
-  des preuves d ancrage s ils ont besoin d horizons plus longs. Les requetes hors fenetre
-  renvoient `CommitCertificateNotFound(height)`; exposez l erreur et revenez a un checkpoint
-  ancre.
-- Une preuve rejouee ou forgee avec un `block_hash` mismatch (header vs. certificate) est
-  rejetee avec `CommitCertificateHashMismatch`; les clients doivent effectuer la meme
-  verification de tuple avant la verification des signatures et rejeter les payloads
-  mismatch.
-- Le travail futur peut ajouter des chains de commitment MMR/authority-set pour reduire la
-  taille des preuves pour de tres longues histories. Le commit certificate est enveloppe
-  dans des enveloppes de commitment plus riches.
+Les deux routes échouent si le bloc ou le sidecar v2 exact est absent ou
+invalide. Les consommateurs de première version doivent rejeter toute forme ou
+version inconnue ; aucune compatibilité de repli n'est prévue.

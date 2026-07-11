@@ -7,9 +7,9 @@ mod common;
 fn kotodama_state_scalar_reads_durable() {
     let src = r#"
         seiyaku ScalarState {
-            state counter: i64;
+            state int counter;
             hajimari() { counter = 0; }
-            view fn main() -> i64 {
+            view fn main() -> int {
                 return counter;
             }
         }
@@ -33,18 +33,18 @@ fn kotodama_state_scalar_reads_durable() {
 fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     let src = r#"
         seiyaku StructState {
-            struct Ledger { counter: i64, flag: bool }
-            state ledger: Ledger;
+            struct Ledger { int counter, bool flag }
+            state Ledger ledger;
 
             hajimari() {
                 ledger = Ledger { counter: 0, flag: false };
             }
 
-            fn read_counter(entry: Ledger) -> i64 {
+            fn read_counter(Ledger entry) -> int {
                 return entry.counter;
             }
 
-            fn score(entry: Ledger) -> i64 {
+            fn score(Ledger entry) -> int {
                 var value = read_counter(entry);
                 if (entry.flag) {
                     value = value + 1;
@@ -52,7 +52,7 @@ fn kotodama_state_struct_helper_param_reads_flattened_fields() {
                 return value;
             }
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 ledger = Ledger { counter: 7, flag: true };
                 return score(ledger);
             }

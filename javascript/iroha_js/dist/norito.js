@@ -1,4 +1,4 @@
-import { Buffer } from "node:buffer";
+import { Buffer } from "buffer";
 import { blake3 } from "@noble/hashes/blake3";
 import { sha256 } from "@noble/hashes/sha2";
 import {
@@ -6592,10 +6592,10 @@ function decodeEntrypointListTypeNodeValue(payload, context) {
 
 const ENTRYPOINT_VALUE_KIND_NAMES = Object.freeze([
   "Int",
-  "U128",
+  "Decimal",
+  "Quantity",
   "Bool",
   "String",
-  "Amount",
   "Json",
   "Name",
   "AccountId",

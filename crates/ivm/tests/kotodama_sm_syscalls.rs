@@ -157,7 +157,7 @@ fn compile_sm4_gcm_open() -> Vec<u8> {
 fn compile_sm4_ccm_seal() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4CcmSeal {
-        view fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes, tag_len: i64) -> bytes {
+        view fn seal(bytes key, bytes nonce, bytes aad, bytes pt, int tag_len) -> bytes {
             return crypto::sm4_ccm::seal(key: key, nonce: nonce, aad: aad, payload: pt, tag_length: tag_len);
         }
         }
@@ -170,7 +170,7 @@ fn compile_sm4_ccm_seal() -> Vec<u8> {
 fn compile_sm4_ccm_open() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4CcmOpen {
-        view fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes, tag_len: i64) -> bytes {
+        view fn open(bytes key, bytes nonce, bytes aad, bytes ct, int tag_len) -> bytes {
             return crypto::sm4_ccm::open(key: key, nonce: nonce, aad: aad, payload: ct, tag_length: tag_len);
         }
         }

@@ -34,9 +34,9 @@ public final class SccpClientExactTests {
   private static final String AUTHORITY = canonicalAuthority(0x11);
   private static final String OTHER_AUTHORITY = canonicalAuthority(0x12);
   private static final String BSC_ROUTE_CONFIG_HASH =
-      "368647C0EA13EBF50ADDC9CFACA0923625F12EB3A5D1D11350AFD65A2C11E683";
+      "69805AACD0B9EBAA6A2A7118A0E8275FD56C4CE801888B6F6519E4B8CB4BE09B";
   private static final String TRON_ROUTE_CONFIG_HASH =
-      "4C162A59B6A3003ADF2DBC767A6FF5E0A74B628712A51F73D4B2AA65362969F1";
+      "1B4128C2D2FF80F61DE3CA6E9DF51B53C3025EBD6E294054E0CA631207DE934F";
 
   private SccpClientExactTests() {}
 
@@ -830,7 +830,7 @@ public final class SccpClientExactTests {
     final Map<String, Object> semanticPolicy =
         object(deployment(semanticBound).get("outbound_proof_policy"));
     object(object(semanticPolicy.get("semantic_profile")).get("commitments"))
-        .put("circuit_commitment", upper(0x16, 32));
+        .put("circuit_commitment", upper(0x18, 32));
     expectFailure(() -> SccpJsonParser.parseRegistry(jsonBytes(semanticBound)));
     refreshRouteConfiguration(firstRoute(semanticBound));
     SccpJsonParser.parseRegistry(jsonBytes(semanticBound));
@@ -888,11 +888,34 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.chainIdHash.equals(tairaChainIdHash());
     assert request.soraFinalityAnchor.checkpointHeight.equals(BigInteger.valueOf(7));
     assert request.soraFinalityAnchor.checkpointBlockHash.equals(upper(0x14, 32));
-    assert request.soraFinalityAnchor.validatorSetEpoch.equals(BigInteger.valueOf(3));
-    assert request.soraFinalityAnchor.validatorSetHash.equals(upper(0x15, 32));
-    assert request.soraFinalityAnchor.validatorSetHashVersion == 1;
+    assert request.soraFinalityAnchor.protocolVersion == 2;
+    assert request.soraFinalityAnchor.checkpointContextId.equals(upper(0x15, 32));
+    assert request.soraFinalityAnchor.checkpointFinalityArtifactHash.equals(upper(0x16, 32));
+    assert request.soraFinalityAnchor.anchorHash.equals(
+        "0xa395cbdb1982da027a9af07b47c20576999d43deccd68c77e49cc38f418f4d4c");
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
+
+    final Map<String, Object> wrongProtocol = proofRequest();
+    object(wrongProtocol.get("sora_finality_anchor")).put("protocol_version", 1);
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocol)));
+    final Map<String, Object> wrongProtocolType = proofRequest();
+    object(wrongProtocolType.get("sora_finality_anchor")).put("protocol_version", "2");
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(wrongProtocolType)));
+    final Map<String, Object> legacyAnchor = proofRequest();
+    object(legacyAnchor.get("sora_finality_anchor")).put("validator_set_epoch", 3);
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(legacyAnchor)));
+    final Map<String, Object> zeroContext = proofRequest();
+    object(zeroContext.get("sora_finality_anchor")).put("checkpoint_context_id", upper(0, 32));
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(zeroContext)));
+    final Map<String, Object> aliasedArtifact = proofRequest();
+    final Map<String, Object> aliasedAnchor = object(aliasedArtifact.get("sora_finality_anchor"));
+    aliasedAnchor.put("checkpoint_finality_artifact_hash", aliasedAnchor.get("checkpoint_block_hash"));
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(aliasedArtifact)));
+    final Map<String, Object> missingArtifact = proofRequest();
+    object(missingArtifact.get("sora_finality_anchor"))
+        .remove("checkpoint_finality_artifact_hash");
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(missingArtifact)));
 
     final Map<String, Object> wrongBackend = proofRequest();
     final Map<String, Object> hostileBackend = map();
@@ -1187,12 +1210,12 @@ public final class SccpClientExactTests {
     final Map<String, Object> anchor = map();
     anchor.put("version", 1);
     anchor.put("source_network", network("sora-taira"));
+    anchor.put("protocol_version", 2);
     anchor.put("chain_id_hash", tairaChainIdHash());
     anchor.put("checkpoint_height", 7);
     anchor.put("checkpoint_block_hash", upper(0x14, 32));
-    anchor.put("validator_set_epoch", 3);
-    anchor.put("validator_set_hash", upper(0x15, 32));
-    anchor.put("validator_set_hash_version", 1);
+    anchor.put("checkpoint_context_id", upper(0x15, 32));
+    anchor.put("checkpoint_finality_artifact_hash", upper(0x16, 32));
     return anchor;
   }
 
@@ -1689,15 +1712,16 @@ public final class SccpClientExactTests {
     final ByteArrayOutputStream body = new ByteArrayOutputStream();
     body.write(1);
     body.write(parsedNetwork(object(anchor.get("source_network"))).tag());
+    writeU16(body, ((Number) anchor.get("protocol_version")).intValue());
     byte[] bytes = hexBytes((String) anchor.get("chain_id_hash"));
     body.write(bytes, 0, bytes.length);
     writeU64(body, ((Number) anchor.get("checkpoint_height")).longValue());
     bytes = hexBytes((String) anchor.get("checkpoint_block_hash"));
     body.write(bytes, 0, bytes.length);
-    writeU64(body, ((Number) anchor.get("validator_set_epoch")).longValue());
-    bytes = hexBytes((String) anchor.get("validator_set_hash"));
+    bytes = hexBytes((String) anchor.get("checkpoint_context_id"));
     body.write(bytes, 0, bytes.length);
-    writeU16(body, ((Number) anchor.get("validator_set_hash_version")).intValue());
+    bytes = hexBytes((String) anchor.get("checkpoint_finality_artifact_hash"));
+    body.write(bytes, 0, bytes.length);
     return upperHex(prefixedKeccak("sccp:sora-finality-anchor:v1", body.toByteArray()));
   }
 

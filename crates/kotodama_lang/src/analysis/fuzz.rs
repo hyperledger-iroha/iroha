@@ -212,9 +212,8 @@ fn convert_type_expr(expr: &TypeExpr) -> Result<Type, String> {
             return convert_type_expr(ty);
         }
         TypeExpr::Path(name) => match name.as_str() {
-            "i64" => Type::Int,
-            "u128" => Type::Int,
-            "Amount" => Type::Quantity,
+            "int" => Type::Int,
+            "quantity" => Type::Quantity,
             "bool" => Type::Bool,
             "()" => Type::Unit,
             other => Type::NamedStruct(other.to_string()),
@@ -820,7 +819,7 @@ mod tests {
     fn fuzz_simple_add() {
         let report = fuzz(
             r#"
-            fn add(a: i64, b: i64) -> i64 {
+            fn add(int a, int b) -> int {
                 return a + b;
             }
         "#,

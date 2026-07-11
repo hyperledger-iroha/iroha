@@ -7,7 +7,7 @@
 
 use iroha_primitives::{
     bigint::{BigInt, BigIntError},
-    numeric::{Numeric, NumericOperationError, Quantity},
+    numeric::{MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
 };
 
 use crate::{
@@ -121,7 +121,9 @@ pub(crate) fn evaluate(
     expression: &TypedExpr,
 ) -> Result<Option<ConstantNumeric>, ConstantNumericError> {
     match expression.kind() {
-        ExprKind::IntLiteral(value) => Ok(Some(ConstantNumeric::Int(value.clone()))),
+        ExprKind::IntLiteral(value) => Ok(Some(ConstantNumeric::Int(ensure_int_v1(
+            value.clone(),
+        )?))),
         ExprKind::DecimalLiteral { value, .. } => match expression.ty {
             Type::Decimal => Ok(Some(ConstantNumeric::Decimal(value.clone()))),
             Type::Quantity => Ok(Some(ConstantNumeric::Quantity(
@@ -163,7 +165,9 @@ pub(crate) fn evaluate(
                 return Ok(None);
             };
             let value = match value {
-                ConstantNumeric::Int(value) => ConstantNumeric::Int(value.checked_neg()?),
+                ConstantNumeric::Int(value) => {
+                    ConstantNumeric::Int(ensure_int_v1(value.checked_neg()?)?)
+                }
                 ConstantNumeric::Decimal(value) => {
                     ConstantNumeric::Decimal(value.try_decimal_neg()?)
                 }
@@ -203,6 +207,13 @@ fn value_type(value: &ConstantNumeric) -> Type {
     }
 }
 
+fn ensure_int_v1(value: BigInt) -> Result<BigInt, ConstantNumericError> {
+    if value.to_twos_bytes().len() > MAX_MANTISSA_BYTES {
+        return Err(ConstantNumericError::Int(BigIntError::Overflow));
+    }
+    Ok(value)
+}
+
 fn evaluate_binary(
     operation: BinaryOp,
     left: ConstantNumeric,
@@ -210,21 +221,27 @@ fn evaluate_binary(
 ) -> Result<ConstantNumeric, ConstantNumericError> {
     match (left, operation, right) {
         (ConstantNumeric::Int(left), BinaryOp::Add, ConstantNumeric::Int(right)) => {
-            Ok(ConstantNumeric::Int(left.checked_add(&right)?))
+            Ok(ConstantNumeric::Int(ensure_int_v1(
+                left.checked_add(&right)?,
+            )?))
         }
         (ConstantNumeric::Int(left), BinaryOp::Sub, ConstantNumeric::Int(right)) => {
-            Ok(ConstantNumeric::Int(left.checked_sub(&right)?))
+            Ok(ConstantNumeric::Int(ensure_int_v1(
+                left.checked_sub(&right)?,
+            )?))
         }
         (ConstantNumeric::Int(left), BinaryOp::Mul, ConstantNumeric::Int(right)) => {
-            Ok(ConstantNumeric::Int(left.checked_mul(&right)?))
+            Ok(ConstantNumeric::Int(ensure_int_v1(
+                left.checked_mul(&right)?,
+            )?))
         }
         (ConstantNumeric::Int(left), BinaryOp::Div, ConstantNumeric::Int(right)) => {
             let (quotient, _) = left.checked_div_rem(&right)?;
-            Ok(ConstantNumeric::Int(quotient))
+            Ok(ConstantNumeric::Int(ensure_int_v1(quotient)?))
         }
         (ConstantNumeric::Int(left), BinaryOp::Mod, ConstantNumeric::Int(right)) => {
             let (_, remainder) = left.checked_div_rem(&right)?;
-            Ok(ConstantNumeric::Int(remainder))
+            Ok(ConstantNumeric::Int(ensure_int_v1(remainder)?))
         }
         (ConstantNumeric::Decimal(left), BinaryOp::Add, ConstantNumeric::Decimal(right)) => {
             Ok(ConstantNumeric::Decimal(left.try_decimal_add(&right)?))

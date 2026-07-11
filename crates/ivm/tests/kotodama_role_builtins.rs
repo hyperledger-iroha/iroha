@@ -38,7 +38,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
           ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           ledger::role::grant(context::authority(), Name::parse("minter"));
           // Mint using role permission
-          ledger::asset::mint(account: context::authority(), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: Amount::from_i64(1));
+          ledger::asset::mint(account: context::authority(), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
         }
         }
     "#;

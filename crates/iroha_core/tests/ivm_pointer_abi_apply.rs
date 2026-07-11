@@ -33,6 +33,11 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     blob
 }
 
+fn quantity_tlv(value: Numeric) -> Vec<u8> {
+    let quantity = Quantity::try_from_numeric(value).expect("canonical quantity");
+    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+}
+
 fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     let metadata = ProgramMetadata::parse(program).expect("parse Kotodama V1 artifact");
     let entrypoint = metadata
@@ -70,7 +75,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount = Numeric::from(500_u64);
-    let amount_bytes = tlv_envelope(PointerType::Quantity, &amount);
+    let amount_bytes = quantity_tlv(amount);
     let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
@@ -257,7 +262,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
-    let amount_bytes = tlv_envelope(PointerType::Quantity, &amount);
+    let amount_bytes = quantity_tlv(amount);
     let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;

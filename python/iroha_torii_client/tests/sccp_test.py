@@ -192,12 +192,12 @@ def _finality_anchor() -> Dict[str, Any]:
     return {
         "version": 1,
         "source_network": _network("sora-taira"),
+        "protocol_version": 2,
         "chain_id_hash": sccp._SORA_TAIRA_CHAIN_ID_HASH.hex().upper(),  # noqa: SLF001
         "checkpoint_height": 7,
         "checkpoint_block_hash": UPPER(0xA1, 32),
-        "validator_set_epoch": 2,
-        "validator_set_hash": UPPER(0xA2, 32),
-        "validator_set_hash_version": 1,
+        "checkpoint_context_id": UPPER(0xA2, 32),
+        "checkpoint_finality_artifact_hash": UPPER(0xA3, 32),
     }
 
 
@@ -823,19 +823,46 @@ def test_registry_validates_full_key_and_rejects_retired_or_aliased_routes() -> 
 
 
 @pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (lambda anchor: anchor.update(protocol_version=1), "protocol_version"),
+        (lambda anchor: anchor.update(protocol_version=True), "integer"),
+        (lambda anchor: anchor.update(checkpoint_context_id=UPPER(0, 32)), "nonzero"),
+        (
+            lambda anchor: anchor.update(
+                checkpoint_finality_artifact_hash=anchor["checkpoint_context_id"]
+            ),
+            "consensus hash role",
+        ),
+        (lambda anchor: anchor.update(validator_set_epoch=2), "field"),
+    ),
+)
+def test_registry_rejects_legacy_or_ambiguous_v2_finality_anchor(
+    mutation, expected: str
+) -> None:
+    value = _registry()
+    anchor = value["lanes"][0]["routes"][0]["destination"]["deployment"][
+        "outbound_proof_policy"
+    ]["sora_finality_anchor"]
+    mutation(anchor)
+    with pytest.raises((TypeError, ValueError), match=expected):
+        normalize_sccp_registry(value)
+
+
+@pytest.mark.parametrize(
     ("source", "binding", "deployment", "configuration"),
     (
         (
             "bsc-mainnet",
-            "b8c0540590c95348b5234027c70e753fb2834fc22493c67079b8c14312431239",
-            "5369bb48aa1bdef7c17e3a38d8669631b93c834fd5ac4b4bd1ef08678d86f461",
-            "c5d13b32a8f0c7be668f8b4423816c927ccbb3729dd9080eec6b6061bb575016",
+            "e2ce4a5df24ee62891f0f856b3e418f5bd3e2705baefd80a5fbf5e8cc2d3de1e",
+            "2958dc4b874a166fbca91d1d1342c57c5150264c96c8d65fd64df8d57b46ab24",
+            "0fc9aacab4fda553fff88ac434294fa879b4205e723c377a82754bdc2db152c6",
         ),
         (
             "tron-nile",
-            "0f15fe67b6252648354d962c0ee184d3a55827810a5ee02419b4523f14410df0",
-            "422606bd36a4c24627689eb2ef2e937eecbc2a6686c991efca8824eabbb0dee3",
-            "e05aa92a264afffc2b9130c7764dbc356da4ec9198b17e52ff804544e7b917c8",
+            "f24976e50078da09188c4a2101facfba7b905cfd33cc895d3e12fc64e52a654a",
+            "5d9d742ae3e48271dc66edd579f23ce7dbe29c92fb3bfa1956da2ac97272fec3",
+            "a806a759ea6104c7202276811a0ac8dd8e6f40ac37d6050f93f7d0106c921f9d",
         ),
     ),
 )

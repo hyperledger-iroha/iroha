@@ -201,32 +201,32 @@ public final class SccpModels {
   public static final class SoraFinalityAnchorV1 {
     public final int version;
     public final SccpNetworkV1 sourceNetwork;
+    public final int protocolVersion;
     public final String chainIdHash;
     public final BigInteger checkpointHeight;
     public final String checkpointBlockHash;
-    public final BigInteger validatorSetEpoch;
-    public final String validatorSetHash;
-    public final int validatorSetHashVersion;
+    public final String checkpointContextId;
+    public final String checkpointFinalityArtifactHash;
     public final String anchorHash;
 
     SoraFinalityAnchorV1(
         final int version,
         final SccpNetworkV1 sourceNetwork,
+        final int protocolVersion,
         final String chainIdHash,
         final BigInteger checkpointHeight,
         final String checkpointBlockHash,
-        final BigInteger validatorSetEpoch,
-        final String validatorSetHash,
-        final int validatorSetHashVersion,
+        final String checkpointContextId,
+        final String checkpointFinalityArtifactHash,
         final String anchorHash) {
       this.version = version;
       this.sourceNetwork = sourceNetwork;
+      this.protocolVersion = protocolVersion;
       this.chainIdHash = chainIdHash;
       this.checkpointHeight = checkpointHeight;
       this.checkpointBlockHash = checkpointBlockHash;
-      this.validatorSetEpoch = validatorSetEpoch;
-      this.validatorSetHash = validatorSetHash;
-      this.validatorSetHashVersion = validatorSetHashVersion;
+      this.checkpointContextId = checkpointContextId;
+      this.checkpointFinalityArtifactHash = checkpointFinalityArtifactHash;
       this.anchorHash = anchorHash;
     }
   }

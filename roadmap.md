@@ -13,6 +13,12 @@ runtime crates no longer publish `sccp-test-fixtures` feature aliases, and
 transparent message admission requires configured production source material
 instead of accepting the local TAIRA/TRON diagnostic proof.
 
+IVM ABI-v1 hardening now uses one provenance-aware TLV decoder across ledger
+and codec hosts, canonical `QuantityValueV1` frames for every asset mutation
+caller, HEAP-capable JSON getter quotes, and optional runtime artifacts for pure
+Kotodama unit-test suites. Remaining ABI work stays limited to release
+validation and the outstanding items tracked in the engineering backlog.
+
 ## SORA Economic Constitution
 
 **Status:** specified design; implementation pending.
@@ -3807,15 +3813,15 @@ launch-scope section and are not current roadmap work.
   - C# source-level shared ABI-7 archive fixture assertions now pin the
     regenerated current `255x1` profile hashes:
     append-bundle
-    `e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0`,
+    `42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b`,
     verify-request
-    `d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43`,
+    `829be9daba04c4c928a34e1502ad2f1e467853ad2f02cdac0b6735f852fff44e`,
     verify-result
     `67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15`,
     redeem-request
-    `f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d`,
+    `de704684a72f8e79264f62337327395c3ca426cbe26da57fc133aa97f4e240c0`,
     and redeem-instruction
-    `69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6`.
+    `bcd7306e54db93a09ffb013860adaae223655205d77651201cb49dd3a5d5d980`.
   - The matrix must keep the C# managed decoder and typed preflight coverage for
     non-canonical compact lengths, invalid UTF-8 circuit ids, unsupported proof
     circuit/backend values, empty proof bytes, invalid accumulator domains and
@@ -7050,7 +7056,7 @@ launch-scope section and are not current roadmap work.
 		  SoraFS rows removed and a contract guard preventing active-marker rows
 		  for SoraFS from reappearing. Completed localized root-roadmap
 		  SoraFS/SoraNet portal translation rows use `Completed:` instead of
-		  `TODO:`, and the stale
+		  the unfinished-marker form, and the stale
 		  rollout-gate wording guard now scans canonical plus localized SoraFS
 		  plan mirrors before any `Add fail-closed ... rollout evidence gate`
 		  wording can reappear, so
@@ -18178,8 +18184,8 @@ launch-scope section and are not current roadmap work.
 	  accessors, so malformed in-memory controller keys return
 	  `MalformedPublicKey` or `InvalidPublicKey` on result-returning paths
 	  instead of reaching compatibility invariant accessors. Trusted-peer PoP
-	  config parsing, trusted-roster validation, daemon NPoS validator status
-	  counting, genesis trusted-peer PoP verification, and Torii Sumeragi
+	  config parsing, trusted-roster validation, staged Sumeragi v2 genesis voter
+	  validation, genesis trusted-peer PoP verification, and Torii Sumeragi
 	  BLS-key operator views now also classify BLS-normal keys through checked
 	  accessors, turning malformed in-memory keys into config errors or
 	  non-BLS status entries instead of compatibility accessor panics.

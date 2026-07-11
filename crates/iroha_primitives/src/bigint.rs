@@ -120,6 +120,26 @@ impl BigInt {
         }
     }
 
+    /// Exact length of [`Self::to_twos_bytes`] without allocating the byte
+    /// representation.
+    #[must_use]
+    pub fn twos_byte_len(&self) -> usize {
+        if self.inner.is_zero() {
+            return 0;
+        }
+        let magnitude = self.inner.magnitude();
+        let magnitude_bits = magnitude.bits();
+        let signed_bits =
+            if self.inner.is_negative() && magnitude.trailing_zeros() == Some(magnitude_bits - 1) {
+                // A negative power of two uses the sign bit itself as the top bit
+                // (`-128` is exactly one byte, unlike `-129`).
+                magnitude_bits
+            } else {
+                magnitude_bits + 1
+            };
+        usize::try_from(signed_bits.div_ceil(8)).expect("bounded int byte length fits usize")
+    }
+
     /// Checked addition.
     ///
     /// # Errors
@@ -153,8 +173,14 @@ impl BigInt {
         if rhs.is_zero() {
             return Err(BigIntError::DivisionByZero);
         }
+        // Compute the expensive quotient once. `%` on `num_bigint::BigInt`
+        // performs another division, which would make runtime work disagree
+        // with the VM's single quotient/remainder gas unit. Truncating division
+        // guarantees `q * rhs` is no larger in magnitude than the dividend, so
+        // deriving the remainder in the unbounded backend is exact before the
+        // signed-domain checks below.
         let q = &self.inner / &rhs.inner;
-        let r = &self.inner % &rhs.inner;
+        let r = &self.inner - (&q * &rhs.inner);
         Ok((Self::from_inner(q)?, Self::from_inner(r)?))
     }
 
@@ -448,6 +474,52 @@ mod tests {
     }
 
     #[test]
+    fn allocation_free_twos_length_matches_canonical_encoding() {
+        for value in [
+            -65_537_i128,
+            -65_536,
+            -32_769,
+            -32_768,
+            -257,
+            -256,
+            -255,
+            -129,
+            -128,
+            -127,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            127,
+            128,
+            129,
+            255,
+            256,
+            32_767,
+            32_768,
+            65_535,
+            65_536,
+        ] {
+            let value = BigInt::from_i128(value);
+            assert_eq!(value.twos_byte_len(), value.to_twos_bytes().len());
+        }
+
+        let maximum: BigInt = ((InnerBigInt::one() << (MAX_BITS - 1)) - 1_u8)
+            .to_string()
+            .parse()
+            .expect("maximum");
+        let minimum: BigInt = (-(InnerBigInt::one() << (MAX_BITS - 1)))
+            .to_string()
+            .parse()
+            .expect("minimum");
+        assert_eq!(maximum.twos_byte_len(), MAX_ENCODED_BYTES);
+        assert_eq!(minimum.twos_byte_len(), MAX_ENCODED_BYTES);
+        assert_eq!(maximum.twos_byte_len(), maximum.to_twos_bytes().len());
+        assert_eq!(minimum.twos_byte_len(), minimum.to_twos_bytes().len());
+    }
+
+    #[test]
     fn checked_add_basic() {
         let a = BigInt::from_i128(10);
         let b = BigInt::from_i128(-3);
@@ -507,6 +579,35 @@ mod tests {
             .expect_err("division by zero should be rejected");
 
         assert_eq!(err, BigIntError::DivisionByZero);
+    }
+
+    #[test]
+    fn checked_div_rem_obeys_truncating_identity_for_all_signs() {
+        for dividend in [-257_i128, -17, -1, 0, 1, 17, 257] {
+            for divisor in [-19_i128, -5, -1, 1, 5, 19] {
+                let lhs = BigInt::from_i128(dividend);
+                let rhs = BigInt::from_i128(divisor);
+                let (quotient, remainder) = lhs
+                    .checked_div_rem(&rhs)
+                    .expect("small quotient and remainder fit");
+
+                assert_eq!(
+                    quotient
+                        .checked_mul(&rhs)
+                        .and_then(|product| product.checked_add(&remainder)),
+                    Ok(lhs.clone()),
+                    "identity failed for {dividend} / {divisor}"
+                );
+                assert!(
+                    remainder.is_zero() || remainder.is_negative() == lhs.is_negative(),
+                    "remainder sign must follow the dividend for {dividend} / {divisor}"
+                );
+                assert!(
+                    remainder.inner.abs() < rhs.inner.abs(),
+                    "remainder magnitude must be below the divisor for {dividend} / {divisor}"
+                );
+            }
+        }
     }
 
     #[test]

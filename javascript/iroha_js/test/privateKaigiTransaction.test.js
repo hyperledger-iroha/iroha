@@ -286,26 +286,7 @@ test("submitTransactionEntrypoint null scope inherits client configuration", asy
 });
 
 function createResponse({ status, jsonData = {}, textBody, headers }) {
-  return {
-    status,
-    json: async () => jsonData,
-    arrayBuffer: async () =>
-      new TextEncoder().encode(textBody ?? JSON.stringify(jsonData ?? {})).buffer,
-    text: async () =>
-      typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {}),
-    headers: {
-      get(name) {
-        if (!headers) {
-          return null;
-        }
-        const normalized = name.toLowerCase();
-        for (const [key, value] of Object.entries(headers)) {
-          if (key.toLowerCase() === normalized) {
-            return value;
-          }
-        }
-        return null;
-      },
-    },
-  };
+  const body =
+    typeof textBody === "string" ? textBody : JSON.stringify(jsonData ?? {});
+  return new Response(body, { status, headers });
 }

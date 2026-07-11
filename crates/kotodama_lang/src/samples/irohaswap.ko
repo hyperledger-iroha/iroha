@@ -37,7 +37,7 @@ seiyaku IrohaSwap {
         AccountId pool_account,
         AssetDefinitionId lp_asset,
     ) authorize("Admin") {
-        let zero = 0;
+        let quantity zero = 0;
         require(asset_a != asset_b, PoolError::IdenticalAssets);
         // Refuse duplicate pool creation.
         require(!PoolAssetA.contains(pool), PoolError::PoolAlreadyExists);
@@ -58,7 +58,7 @@ seiyaku IrohaSwap {
         quantity amount_a,
         quantity amount_b,
     ) authorize("Admin") {
-        let zero = 0;
+        let quantity zero = 0;
         require(amount_a > zero, PoolError::InvalidAssetAAmount);
         require(amount_b > zero, PoolError::InvalidAssetBAmount);
         ensure_pool(pool);
@@ -74,8 +74,8 @@ seiyaku IrohaSwap {
         let reserve_b = ReserveB.ensure(pool, zero);
         let total_lp = LpSupply.ensure(pool, zero);
         let minted = (total_lp == zero) ? min_value(a: amount_a, b: amount_b) : min_value(
-            a: (amount_a * total_lp) / reserve_a,
-            b: (amount_b * total_lp) / reserve_b,
+            a: total_lp * (amount_a / reserve_a),
+            b: total_lp * (amount_b / reserve_b),
         );
         require(minted > zero, PoolError::ZeroLiquidityMinted);
         // Move tokens into the pool account.
@@ -104,7 +104,7 @@ seiyaku IrohaSwap {
     kotoage fn withdraw_liquidity(AccountId provider, Name pool, quantity lp_amount) authorize(
         "Admin"
     ) {
-        let zero = 0;
+        let quantity zero = 0;
         require(lp_amount > zero, PoolError::InvalidLiquidityAmount);
         ensure_pool(pool);
         let asset_a = PoolAssetA.get(pool).unwrap_or(
@@ -119,8 +119,8 @@ seiyaku IrohaSwap {
         let reserve_b = ReserveB.ensure(pool, zero);
         let total_lp = LpSupply.ensure(pool, zero);
         require(total_lp > zero, PoolError::EmptyPool);
-        let amount_a = (lp_amount * reserve_a) / total_lp;
-        let amount_b = (lp_amount * reserve_b) / total_lp;
+        let amount_a = reserve_a * (lp_amount / total_lp);
+        let amount_b = reserve_b * (lp_amount / total_lp);
         require(amount_a > zero, PoolError::ZeroAssetAOutput);
         require(amount_b > zero, PoolError::ZeroAssetBOutput);
         ledger::asset::burn(account: provider, asset_definition: lp_asset, amount: lp_amount);
@@ -151,7 +151,7 @@ seiyaku IrohaSwap {
         quantity amount_in,
         quantity min_output,
     ) -> quantity authorize("Admin") {
-        let zero = 0;
+        let quantity zero = 0;
         require(amount_in > zero, PoolError::InvalidSwapAmount);
         ensure_pool(pool);
         let asset_a = PoolAssetA.get(pool).unwrap_or(
@@ -168,10 +168,10 @@ seiyaku IrohaSwap {
         require(is_a_in || is_b_in, PoolError::AssetNotInPool);
         let reserve_in = (is_a_in) ? reserve_a : reserve_b;
         let reserve_out = (is_a_in) ? reserve_b : reserve_a;
-        let fee_numerator = 997;
-        let fee_denominator = 1000;
+        let decimal fee_numerator = 997;
+        let decimal fee_denominator = 1000;
         let effective = (amount_in * fee_numerator) / fee_denominator;
-        let out = (reserve_out * effective) / (reserve_in + effective);
+        let out = reserve_out * (effective / (reserve_in + effective));
         require(out >= min_output, PoolError::SlippageExceeded);
         require(out > zero, PoolError::InsufficientOutput);
         if (is_a_in) {

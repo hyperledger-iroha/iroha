@@ -1,8 +1,9 @@
 //! Native, schema-bound Kotodama JSON construction and typed getters.
 //!
-//! Small `int` values use JSON integer numbers. Wide integers, exact decimals,
-//! and quantities use canonical strings, preserving exactness without
-//! floating-point conversion.
+//! Integers, exact decimals, and quantities use canonical strings regardless
+//! of magnitude. This gives native construction and typed getters one stable,
+//! exact representation without floating-point conversion or value-dependent
+//! JSON types.
 
 use core::str::FromStr;
 
@@ -204,13 +205,7 @@ fn convert_leaf(
             let value = IntValueV1::decode_frame(payload)
                 .map_err(|_| VMError::DecodeError)?
                 .into_int();
-            if let Some(value) = value.try_to_i64() {
-                njson::Value::from(value)
-            } else if let Some(value) = value.try_to_u64() {
-                njson::Value::from(value)
-            } else {
-                njson::Value::from(value.to_string())
-            }
+            njson::Value::from(value.to_string())
         }
         StateValueKindV1::Bool => match word {
             0 => njson::Value::Bool(false),
@@ -608,7 +603,8 @@ fn getter_value(number: u32, field: &njson::Value) -> Option<GetterValue> {
             to_bytes(&canonical_asset_definition(field.as_str()?)?).ok()?,
         ),
         syscalls::SYSCALL_JSON_GET_INT => {
-            let frame = IntValueV1::new(canonical_numeric_string::<BigInt>(field)?)
+            let frame = IntValueV1::try_new(canonical_numeric_string::<BigInt>(field)?)
+                .ok()?
                 .encode_frame()
                 .ok()?;
             GetterValue::Pointer(PointerType::Int, frame)
@@ -712,6 +708,70 @@ mod tests {
         }
     }
 
+    fn quantity_frame(value: Numeric) -> Vec<u8> {
+        let quantity = Quantity::from_canonical_numeric(value).expect("canonical quantity");
+        QuantityValueV1::new(quantity)
+            .encode_frame()
+            .expect("quantity frame")
+    }
+
+    #[test]
+    fn build_json_uses_one_canonical_string_representation_for_all_int_widths() {
+        let values = [
+            BigInt::from_i128(7),
+            "1606938044258990275541962092341162602522202993782792835301376"
+                .parse::<BigInt>()
+                .expect("2^200 fits the int domain"),
+        ];
+        let schema = JsonConstructionSchemaV1 {
+            nodes: vec![
+                JsonConstructionNodeV1::Array { arity: 2 },
+                JsonConstructionNodeV1::Value {
+                    schema: leaf(StateValueKindV1::Int),
+                },
+                JsonConstructionNodeV1::Value {
+                    schema: leaf(StateValueKindV1::Int),
+                },
+            ],
+        };
+        let mut vm = IVM::new(u64::MAX);
+        let schema_ptr = vm
+            .alloc_input_tlv(&tlv(
+                PointerType::NoritoBytes,
+                &to_bytes(&schema).expect("schema"),
+            ))
+            .expect("schema TLV");
+        let table = vm.alloc_heap(16).expect("word table");
+        for (index, value) in values.iter().enumerate() {
+            let frame = IntValueV1::try_new(value.clone())
+                .expect("int is inside V1 domain")
+                .encode_frame()
+                .expect("canonical int frame");
+            let pointer = vm
+                .alloc_input_tlv(&tlv(PointerType::Int, &frame))
+                .expect("int TLV");
+            vm.store_u64(table + u64::try_from(index).unwrap() * 8, pointer)
+                .expect("table word");
+        }
+        vm.set_register(10, schema_ptr);
+        vm.set_register(11, table);
+        vm.set_register(12, 2);
+
+        build_json(&mut vm, CoreHost::resolve_code_tlv_addr).expect("build exact JSON");
+        let output = vm.validate_tlv(vm.register(10)).expect("JSON output");
+        let json: Json = decode_from_bytes(output.payload).expect("decode JSON");
+        let value: njson::Value = json.try_into_any_norito().expect("JSON value");
+        assert_eq!(
+            value,
+            njson::Value::Array(
+                values
+                    .iter()
+                    .map(|value| njson::Value::from(value.to_string()))
+                    .collect()
+            )
+        );
+    }
+
     #[test]
     fn build_json_orders_keys_and_converts_amount_and_bytes() {
         let account = AccountId::new(
@@ -721,7 +781,7 @@ mod tests {
         );
         let account_payload = to_bytes(&account).expect("encode account");
         let amount = Numeric::new(125_u32, 2);
-        let amount_payload = to_bytes(&amount).expect("encode amount");
+        let amount_payload = quantity_frame(amount);
         let schema = JsonConstructionSchemaV1 {
             nodes: vec![
                 JsonConstructionNodeV1::Object {
@@ -731,7 +791,7 @@ mod tests {
                     schema: leaf(StateValueKindV1::AccountId),
                 },
                 JsonConstructionNodeV1::Value {
-                    schema: leaf(StateValueKindV1::Amount),
+                    schema: leaf(StateValueKindV1::Quantity),
                 },
                 JsonConstructionNodeV1::Value {
                     schema: leaf(StateValueKindV1::Bytes),
@@ -783,11 +843,11 @@ mod tests {
     #[test]
     fn build_json_recurses_through_list_and_active_only_option() {
         let amount = Numeric::new(125_u32, 2);
-        let amount_payload = to_bytes(&amount).expect("encode amount");
+        let amount_payload = quantity_frame(amount);
         let element_schema = StateValueSchemaV1 {
             nodes: vec![
                 StateValueNodeV1::Option,
-                StateValueNodeV1::Leaf(StateValueKindV1::Amount),
+                StateValueNodeV1::Leaf(StateValueKindV1::Quantity),
             ],
         };
         let list_schema = StateValueSchemaV1 {
@@ -834,17 +894,17 @@ mod tests {
     }
 
     #[test]
-    fn build_json_preserves_max_u128_and_scale_28_amount_without_floats() {
+    fn build_json_preserves_wide_int_and_scale_28_quantity_without_floats() {
         let maximum = Numeric::new(u128::MAX, 0);
         let precise = Numeric::new(1_u32, 28);
         let schema = JsonConstructionSchemaV1 {
             nodes: vec![
                 JsonConstructionNodeV1::Array { arity: 2 },
                 JsonConstructionNodeV1::Value {
-                    schema: leaf(StateValueKindV1::U128),
+                    schema: leaf(StateValueKindV1::Int),
                 },
                 JsonConstructionNodeV1::Value {
-                    schema: leaf(StateValueKindV1::Amount),
+                    schema: leaf(StateValueKindV1::Quantity),
                 },
             ],
         };
@@ -857,19 +917,22 @@ mod tests {
             .expect("schema TLV");
         let maximum_ptr = vm
             .alloc_input_tlv(&tlv(
-                PointerType::NoritoBytes,
-                &to_bytes(&maximum).expect("maximum u128"),
+                PointerType::Int,
+                &IntValueV1::try_new(maximum.mantissa().clone())
+                    .expect("maximum test int is inside V1 domain")
+                    .encode_frame()
+                    .expect("maximum int frame"),
             ))
-            .expect("u128 TLV");
+            .expect("int TLV");
         let precise_ptr = vm
             .alloc_input_tlv(&tlv(
                 PointerType::Quantity,
-                &to_bytes(&precise).expect("scale-28 amount"),
+                &quantity_frame(precise),
             ))
-            .expect("Amount TLV");
+            .expect("quantity TLV");
         let table = vm.alloc_heap(16).expect("word table");
         vm.store_u64(table, maximum_ptr).expect("u128 word");
-        vm.store_u64(table + 8, precise_ptr).expect("Amount word");
+        vm.store_u64(table + 8, precise_ptr).expect("quantity word");
         vm.set_register(10, schema_ptr);
         vm.set_register(11, table);
         vm.set_register(12, 2);
@@ -888,7 +951,7 @@ mod tests {
 
     #[test]
     fn typed_getter_returns_active_only_some_and_none_handles() {
-        let json = Json::from(norito::json!({"count": 7, "wrong": true}));
+        let json = Json::from(norito::json!({"count": "7", "wrong": true}));
         let json_payload = to_bytes(&json).expect("encode JSON");
         let mut vm = IVM::new(u64::MAX);
         let json_ptr = vm
@@ -902,17 +965,24 @@ mod tests {
         vm.set_register(11, key_ptr);
         typed_getter(
             &mut vm,
-            syscalls::SYSCALL_JSON_GET_I64,
+            syscalls::SYSCALL_JSON_GET_INT,
             CoreHost::resolve_code_tlv_addr,
         )
         .expect("get count");
+        let (some, words) = crate::sum::read_words(
+            &vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(1).unwrap(),
+        )
+        .expect("read int option");
+        assert!(some);
+        let int = vm.validate_tlv(words[0]).expect("int TLV");
+        assert_eq!(int.type_id, PointerType::Int);
         assert_eq!(
-            crate::sum::read_words(
-                &vm,
-                vm.register(10),
-                crate::sum::SumLayoutV1::option(1).unwrap()
-            ),
-            Ok((true, vec![7]))
+            IntValueV1::decode_frame(int.payload)
+                .expect("int frame")
+                .into_int(),
+            BigInt::from_i128(7)
         );
 
         let missing: Name = "missing".parse().expect("missing key");
@@ -923,7 +993,7 @@ mod tests {
         vm.set_register(11, missing_ptr);
         typed_getter(
             &mut vm,
-            syscalls::SYSCALL_JSON_GET_I64,
+            syscalls::SYSCALL_JSON_GET_INT,
             CoreHost::resolve_code_tlv_addr,
         )
         .expect("missing is none");
@@ -944,7 +1014,7 @@ mod tests {
         vm.set_register(11, wrong_ptr);
         typed_getter(
             &mut vm,
-            syscalls::SYSCALL_JSON_GET_I64,
+            syscalls::SYSCALL_JSON_GET_INT,
             CoreHost::resolve_code_tlv_addr,
         )
         .expect("wrong type is none");
@@ -968,7 +1038,7 @@ mod tests {
         vm.set_register(11, key_ptr);
         typed_getter(
             &mut vm,
-            syscalls::SYSCALL_JSON_GET_I64,
+            syscalls::SYSCALL_JSON_GET_INT,
             CoreHost::resolve_code_tlv_addr,
         )
         .expect("non-object root is none");
@@ -983,10 +1053,11 @@ mod tests {
     }
 
     #[test]
-    fn typed_amount_getter_canonicalizes_valid_values_and_rejects_invalid_ones() {
+    fn typed_quantity_getter_accepts_only_canonical_string_values() {
         let oversized = "9".repeat(200);
         let json = Json::from(norito::json!({
-            "decimal": "1.2500",
+            "decimal": "1.25",
+            "trailing": "1.2500",
             "integer": 7,
             "negative": "-1",
             "oversized": oversized,
@@ -997,11 +1068,12 @@ mod tests {
         let json_ptr = vm
             .alloc_input_tlv(&tlv(PointerType::Json, &json_payload))
             .expect("JSON TLV");
-        let option_layout = crate::sum::SumLayoutV1::option(1).expect("Option<Amount> layout");
+        let option_layout = crate::sum::SumLayoutV1::option(1).expect("Option<quantity> layout");
 
         for (key, expected) in [
             ("decimal", Some(Numeric::new(125_u32, 2))),
-            ("integer", Some(Numeric::new(7_u32, 0))),
+            ("trailing", None),
+            ("integer", None),
             ("negative", None),
             ("oversized", None),
             ("wrong", None),
@@ -1018,21 +1090,21 @@ mod tests {
             vm.set_register(11, key_ptr);
             typed_getter(
                 &mut vm,
-                syscalls::SYSCALL_JSON_GET_AMOUNT,
+                syscalls::SYSCALL_JSON_GET_QUANTITY,
                 CoreHost::resolve_code_tlv_addr,
             )
-            .expect("typed Amount getter");
+            .expect("typed quantity getter");
             let (some, payload) = crate::sum::read_words(&vm, vm.register(10), option_layout)
-                .expect("read Option<Amount>");
+                .expect("read Option<quantity>");
             match expected {
                 Some(expected) => {
                     assert!(some, "{key} must produce Option::some");
-                    let amount = vm.validate_tlv(payload[0]).expect("Amount TLV");
+                    let amount = vm.validate_tlv(payload[0]).expect("quantity TLV");
                     assert_eq!(amount.type_id, PointerType::Quantity);
-                    let amount: Numeric =
-                        decode_from_bytes(amount.payload).expect("decode canonical Amount");
-                    assert_eq!(amount, expected);
-                    amount.validate_amount().expect("canonical Amount payload");
+                    let amount = QuantityValueV1::decode_frame(amount.payload)
+                        .expect("decode canonical quantity")
+                        .into_quantity();
+                    assert_eq!(amount.as_numeric(), &expected);
                 }
                 None => {
                     assert!(!some, "{key} must produce Option::none");
@@ -1075,35 +1147,35 @@ mod tests {
     }
 
     #[test]
-    fn build_json_rejects_noncanonical_amounts_and_hidden_option_payloads() {
-        let amount_schema = JsonConstructionSchemaV1 {
+    fn build_json_rejects_noncanonical_quantities_and_hidden_option_payloads() {
+        let quantity_schema = JsonConstructionSchemaV1 {
             nodes: vec![JsonConstructionNodeV1::Value {
-                schema: leaf(StateValueKindV1::Amount),
+                schema: leaf(StateValueKindV1::Quantity),
             }],
         };
         let mut vm = IVM::new(u64::MAX);
-        let amount_schema_ptr = vm
+        let quantity_schema_ptr = vm
             .alloc_input_tlv(&tlv(
                 PointerType::NoritoBytes,
-                &to_bytes(&amount_schema).expect("Amount schema"),
+                &to_bytes(&quantity_schema).expect("quantity schema"),
             ))
-            .expect("Amount schema TLV");
+            .expect("quantity schema TLV");
         let noncanonical = vm
             .alloc_input_tlv(&tlv(
                 PointerType::Quantity,
-                &to_bytes(&Numeric::new(10_u32, 1)).expect("noncanonical Amount payload"),
+                &to_bytes(&Numeric::new(10_u32, 1)).expect("noncanonical quantity payload"),
             ))
-            .expect("noncanonical Amount TLV");
-        let amount_table = vm.alloc_heap(8).expect("Amount word table");
-        vm.store_u64(amount_table, noncanonical)
-            .expect("store Amount pointer");
-        vm.set_register(10, amount_schema_ptr);
-        vm.set_register(11, amount_table);
+            .expect("noncanonical quantity TLV");
+        let quantity_table = vm.alloc_heap(8).expect("quantity word table");
+        vm.store_u64(quantity_table, noncanonical)
+            .expect("store quantity pointer");
+        vm.set_register(10, quantity_schema_ptr);
+        vm.set_register(11, quantity_table);
         vm.set_register(12, 1);
         assert_eq!(
             build_json(&mut vm, CoreHost::resolve_code_tlv_addr),
             Err(VMError::DecodeError),
-            "Amount inputs must already use their unique canonical payload",
+            "quantity inputs must already use their unique canonical frame",
         );
 
         let option_schema = JsonConstructionSchemaV1 {
@@ -1111,7 +1183,7 @@ mod tests {
                 schema: StateValueSchemaV1 {
                     nodes: vec![
                         StateValueNodeV1::Option,
-                        StateValueNodeV1::Leaf(StateValueKindV1::Amount),
+                        StateValueNodeV1::Leaf(StateValueKindV1::Quantity),
                     ],
                 },
             }],
@@ -1122,7 +1194,7 @@ mod tests {
                 &to_bytes(&option_schema).expect("Option schema"),
             ))
             .expect("Option schema TLV");
-        let option_layout = crate::sum::SumLayoutV1::option(1).expect("Option<Amount> layout");
+        let option_layout = crate::sum::SumLayoutV1::option(1).expect("Option<quantity> layout");
         let none = crate::sum::allocate_words(&mut vm, option_layout, 0, &[])
             .expect("canonical Option::none");
         vm.store_u64(none + 8, noncanonical)
@@ -1219,7 +1291,7 @@ mod tests {
         assert_eq!(
             typed_getter(
                 &mut vm,
-                syscalls::SYSCALL_JSON_GET_I64,
+                syscalls::SYSCALL_JSON_GET_INT,
                 CoreHost::resolve_code_tlv_addr,
             ),
             Err(VMError::DecodeError)
@@ -1240,7 +1312,7 @@ mod tests {
         assert_eq!(
             typed_getter(
                 &mut vm,
-                syscalls::SYSCALL_JSON_GET_I64,
+                syscalls::SYSCALL_JSON_GET_INT,
                 CoreHost::resolve_code_tlv_addr,
             ),
             Err(VMError::DecodeError)

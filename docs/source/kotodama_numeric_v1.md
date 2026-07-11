@@ -59,12 +59,16 @@ It may be checked contextually as `decimal` or `quantity`; a contextual
 `quantity` literal MUST be non-negative. A literal containing a decimal point
 or decimal exponent has type `decimal` unless a `quantity` is expected.
 Literal conversion is exact and occurs at compile time.
+Literal mantissa and scale are normalized before the canonical scale bound is
+checked. Thus a spelling with more than 28 fractional places is accepted only
+when removing trailing decimal zeroes reduces its canonical scale to at most
+28.
 
 Integer literals MAY use decimal, `0x` hexadecimal, or `0b` binary spelling.
 Decimal literals MAY use exact exponent notation. Digit separators are allowed
 only between digits. `1.`, `.5`, repeated separators, and missing exponent
 digits are invalid. Parsing MUST treat a leading sign and the following literal
-as one range-checking operation so `-2^4095` is accepted.
+as one range-checking operation so `-2^511` is accepted.
 
 ## Value domains
 
@@ -73,18 +77,18 @@ as one range-checking operation so `-2^4095` is accepted.
 An `int` is an integer `m` in the closed range:
 
 ```text
--2^4095 <= m <= 2^4095 - 1
+-2^511 <= m <= 2^511 - 1
 ```
 
-This is a signed 4,096-bit two's-complement domain. “4,096-bit” never means a
-sign plus a 4,096-bit magnitude.
+This is a signed 512-bit two's-complement domain. “512-bit” never means a sign
+plus a 512-bit magnitude.
 
 ### `decimal`
 
 A `decimal` represents the mathematical value `m * 10^-s`, where:
 
 ```text
--2^4095 <= m <= 2^4095 - 1
+-2^511 <= m <= 2^511 - 1
 0 <= s <= 28
 ```
 
@@ -144,8 +148,9 @@ Decimal multiplication forms the exact product at the sum of input scales,
 normalizes it, and rejects only when the canonical final scale remains above
 28 or its final mantissa is out of range. It never rounds implicitly.
 
-Exact division tries canonical output scales `0..=28` in ascending order. If no
-attempt is exact, it distinguishes:
+Exact division first reduces and classifies the denominator. A representable
+quotient performs exactly one division at its proven minimum scale. A failure
+performs no speculative output-scale attempts and distinguishes:
 
 - `RepeatingDecimal`: the reduced denominator contains a prime factor other
   than two or five;
@@ -169,11 +174,11 @@ conversions are available. Quantity conversion is checked and explicit.
 
 Checked negation, addition, subtraction, multiplication, division, and
 remainder fail rather than wrap. The explicit integer wrapping operations use
-modulo `2^4096` and reinterpret the result in the signed domain. V1 does not
+modulo `2^512` and reinterpret the result in the signed domain. V1 does not
 inherit an `i64` or `u128` modulus from retired source types.
 
 V1 defines no source bitwise or shift operators. A future operation must first
-specify its complete 4,096-bit two's-complement semantics, valid shift counts,
+specify its complete 512-bit two's-complement semantics, valid shift counts,
 gas, and ABI surface; host-language bigint behavior is never inherited
 implicitly.
 
@@ -197,20 +202,19 @@ and quantity bodies append one scale byte. Integer bodies do not carry a scale.
 Zero has length zero and no mantissa bytes. An empty mantissa is therefore the
 only zero encoding. Redundant `0x00` or `0xff` sign extension is invalid. A
 positive value needing a sign-preserving leading byte is valid only when the
-complete minimal encoding remains at most 512 bytes.
+complete minimal encoding remains at most 64 bytes.
 
-With the fixed 40-byte Norito header, maximum frame sizes are 556 bytes for
-`int` and 557 bytes for `decimal` and `quantity`. The pointer envelope adds a
+With the fixed 40-byte Norito header, maximum frame sizes are 108 bytes for
+`int` and 109 bytes for `decimal` and `quantity`. The pointer envelope adds a
 seven-byte type/version/length header and a 32-byte payload hash, for maxima of
-595, 596, and 596 bytes respectively.
+147, 148, and 148 bytes respectively.
 
 Pointer type IDs are:
 
 ```text
-0x0010  retired; permanently reserved and rejected
+0x0010  QuantityValueV1
 0x0011  IntValueV1
 0x0012  DecimalValueV1
-0x0013  QuantityValueV1
 ```
 
 Numeric equality, map-key hashing, and collection ordering operate on the
@@ -233,6 +237,13 @@ ABI V1 contains the unconditional numeric syscall blocks:
 0x010140..0x01014f  quantity
 ```
 
+Typed exact-number JSON getters occupy `0x010160..0x010165`: `int`, `decimal`,
+and `quantity`, followed by their direct-pointer variants. They accept only a
+canonical base-10 JSON string. A JSON number token, exponent spelling, leading
+plus or zero, negative quantity, removable fractional zero, or out-of-domain
+string returns `Option::none`; it is never rounded or converted through a host
+floating-point type.
+
 The detailed signatures live in `crates/ivm/spec/syscalls.toml`. The retired
 Numeric and Amount syscall blocks are not in the V1 allowlist. Every host MUST
 implement the allowed blocks identically or reject an unknown number with
@@ -250,6 +261,9 @@ Stable numeric fault tags are:
 7 InexactConversion
 8 NegativeQuantity
 9 QuantityUnderflow
+10 InvalidRoundingMode
+11 InvalidFailureMode
+12 ReservedRegisterNonZero
 ```
 
 Fallible arithmetic accepts failure mode `0` (trap) or `1` (return the fault in
@@ -277,8 +291,45 @@ gas = 16
 There is no implicit minimum applied to `logical_limb_work`; operations whose
 normative work is zero still pay the entry and envelope charges.
 
-Logical limbs are 64 bits. Arithmetic width uses the bit length of the unsigned
-magnitude, with zero assigned one limb. A sign-preserving byte in the canonical
+The constants are calibrated consensus weights, not host-cycle counts. The
+entry weight `16` covers syscall dispatch, staged-context initialization,
+bounded validation of at most four control/reserved registers, and completion
+bookkeeping. Pointer traversal is excluded because every traversed envelope
+byte is charged separately. The limb-work weight `4` budgets one logical
+base-`2^64` work cell for operand access, the arithmetic/carry or trial step,
+result access, and deterministic loop/control overhead. Multiplication counts
+every input-cell product; division and normalization formulas count their
+normalization, quotient-trial, remainder, and probe cells explicitly. Thus a
+backend cannot make an uncharged algorithmic pass by selecting a different
+bigint representation.
+
+Release calibration uses `cargo bench -p ivm --bench gas_calibration`. The
+`ivm-numeric-limb-cal` benchmark pins the formula's work denominator in every
+benchmark ID for one through eight input limbs, products through sixteen
+limbs, division/remainder, and scale-28 rounded division. For each supported
+baseline hardware tier, maintainers compare median time per declared work cell
+against the scalar IVM `ADD` baseline after subtracting harness overhead. The
+rounded-up worst ratio, plus a minimum 25% safety margin, MUST remain no greater
+than `4`; bounded dispatch/control overhead MUST remain no greater than `16`
+baseline gas units. A failure requires increasing the constants, changing the
+gas-formula version/hash, and regenerating gas goldens before release—it MUST
+NOT be hidden by a hardware-specific implementation. The initial reference
+run is pinned to Apple M1 Ultra (`Mac13,2`, arm64), Rust 1.93.1; release records
+retain the Criterion output alongside the build artifacts and repeat the run
+on the slowest supported tier.
+
+The fixed entry charge includes bounded register-contract checks (required-zero
+registers, failure mode, and rounding tag). It is not followed by hidden fixed
+decode, divisor, or control surcharges. Strict numeric-frame validation adds
+`ceil(frame_bytes / 8)` logical work units: the first unit covers the fixed
+Norito header/schema/length checks, and the remaining units cover minimal
+mantissa and decimal-domain canonicality. The frame bytes are still counted
+exactly once as input-envelope bytes; checksum traversal is not charged a
+second time.
+
+Logical limbs are 64 bits, so an input has at most eight limbs. Arithmetic
+width uses the bit length of the unsigned magnitude, with zero assigned one
+limb. A sign-preserving byte in the canonical
 two's-complement wire representation affects envelope-byte gas, not arithmetic
 limb work. Let `B(d)` be the exact integer bit length of `10^d` and let:
 
@@ -286,7 +337,8 @@ limb work. Let `B(d)` be the exact integer bit length of `10^d` and let:
 L(b) = max(1, ceil(b / 64))
 P(d) = L(B(d))
 S(0, d) = 1
-S(b, d) = L(b + B(d) - 1), for b > 0
+S(b, 0) = L(b), for b > 0
+S(b, d) = L(b + B(d)), for b > 0 and d > 0
 A(b, 0) = 0
 A(b, d) = L(b) * P(d), for d > 0
 ```
@@ -296,6 +348,10 @@ uses floating-point logarithms. Addition, subtraction, and comparison charge
 alignment multiplication plus the largest aligned width. Multiplication
 charges the product of input limb widths.
 
+The apparently tighter `L(b + B(d) - 1)` is not a valid consensus bound. For
+example, a 61-bit value multiplied by ten can require 65 bits. The deliberately
+conservative `S` above pins that boundary at two limbs on every implementation.
+
 For long division with dividend width `n` and divisor width `d`:
 
 ```text
@@ -303,12 +359,13 @@ q = max(1, max(n, 1) - max(d, 1) + 1), with subtraction clamped at zero
 division_work(n, d) = max(n, 1) + max(d, 1) + max(d, 1) * q
 ```
 
-Each exact output-scale attempt is charged separately immediately before it
-begins. Failure classification charges each Euclidean remainder,
-reduced-denominator division, divisibility probe, and successful factor
-division actually begun. Decimal normalization charges each divide-by-ten
-probe immediately before the probe. Conceptual scales through 56 and widths
-beyond the 64-limb input maximum are included in golden vectors.
+Exact division first charges the Euclidean reduction and denominator
+classification steps actually begun. Once classification proves a terminating
+result, it charges the single division at the proven minimum output scale
+immediately before that division. Decimal normalization charges each
+divide-by-ten probe immediately before the probe. Conceptual scales through
+56, aligned or scale-adjusted widths through ten limbs, and multiplication
+intermediates through sixteen limbs are included in golden vectors.
 
 Pointer processing is ordered and charged as follows:
 
@@ -316,9 +373,11 @@ Pointer processing is ordered and charged as follows:
 2. debit the seven-byte header charge, then validate readable provenance and
    read the header;
 3. validate the hard length cap with checked arithmetic;
-4. debit the remaining declared envelope byte charge;
-5. snapshot exactly that range;
-6. validate the payload hash, Norito frame, schema, flags, and canonical value;
+4. debit the 32 digest bytes and declared frame bytes, each exactly once;
+5. snapshot exactly that range and validate its payload hash;
+6. debit `4 * ceil(frame_bytes / 8)`, split into the frame-decode and
+   canonical-validation phases, then validate the Norito frame, schema, flags,
+   and canonical value;
 7. debit each arithmetic/normalization phase before it begins;
 8. determine the exact output envelope length and debit it;
 9. allocate and write the output, then publish result registers.
@@ -333,8 +392,13 @@ an intentional transport cost and is distinct from syscall marshalling.
 Validation follows the phase order above. Within an operand, pointer
 provenance/type/version/length precede payload hash, which precedes frame/schema
 and canonical-value validation. Operands are validated in register order.
-Scale and rounding validation precede divisor validation; divisor validation
-precedes arithmetic.
+Only after every operand is valid are the scale pointer, rounding tag,
+required-zero registers, and failure tag validated in register order. Invalid
+rounding, failure, or required-zero controls are malformed-call traps with
+their distinct fault tags; they are never converted to status-mode arithmetic
+failures. A representationally valid scale pointer whose value is outside
+`0..=28` remains the recoverable `InvalidScale` numeric fault. Control
+validation precedes divisor validation; divisor validation precedes arithmetic.
 
 If a phase is unaffordable, out-of-gas for that phase takes precedence over an
 error discoverable only by performing the phase. A phase that has not begun is

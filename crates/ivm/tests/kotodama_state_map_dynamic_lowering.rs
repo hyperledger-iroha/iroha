@@ -1,4 +1,4 @@
-//! Verify dynamic durable lowering for `StateMap<i64, i64>`.
+//! Verify dynamic durable lowering for `StateMap<int, int>`.
 
 use std::str::FromStr;
 
@@ -25,7 +25,7 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn dynamic_map_set_uses_durable_state() {
     let src = r#"
         seiyaku C {
-            state M: StateMap<i64, i64>;
+            state StateMap<int, int> M;
             kotoage fn main() authorize("WriteState") {
                 let k = 2;
                 let v = 5;

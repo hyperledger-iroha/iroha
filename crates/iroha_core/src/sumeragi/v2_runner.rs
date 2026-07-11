@@ -53,7 +53,7 @@ use super::{
     },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
-    v2_worker::ProductionV2Services,
+    v2_worker::{ProductionV2Services, V2CleanupSupervisor},
 };
 use crate::{block::BlockBuilder, kura::Kura, queue::Queue, state::State};
 
@@ -164,12 +164,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
+    let post_finality_cleanup_timeout = config.persistence.post_finality_cleanup_timeout;
+    let mut cleanup_supervisor = V2CleanupSupervisor::default();
 
     loop {
+        cleanup_supervisor.reap_finished();
         if shutdown_signal.is_sent() {
             return Ok(());
         }
         let context = verified_context.context().clone();
+        let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let block_cadence = state.sumeragi_effective_block_time();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
@@ -227,6 +231,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let mut services = ProductionV2Services::start(
             context.clone(),
+            validator_set_pops,
             local_peer.clone(),
             local_validator,
             common_config.key_pair.clone(),
@@ -288,6 +293,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )> = None;
 
         let finality = loop {
+            cleanup_supervisor.reap_finished();
             if shutdown_signal.is_sent() {
                 return Ok(());
             }
@@ -423,9 +429,16 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 if let Some(warning) = finalized.wal_retirement_warning() {
                     cleanup.record(PostFinalityCleanupTarget::SafetyWal, warning);
                 }
-                cleanup.append(services.finish_height(receipt.clone()));
+                cleanup.append(services.finish_height(
+                    receipt.clone(),
+                    post_finality_cleanup_timeout,
+                    &mut cleanup_supervisor,
+                ));
                 for warning in cleanup.warnings() {
                     iroha_logger::warn!(
+                        height = receipt.height(),
+                        context_id = ?receipt.context_id(),
+                        block_hash = %receipt.block_hash(),
                         cleanup_target = warning.target().as_str(),
                         reason = warning.reason(),
                         "Sumeragi v2 finalized with retained local cleanup state"

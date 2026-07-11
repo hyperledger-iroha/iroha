@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn phase_sequence_matches_ordinary_compilation() {
-        let source = "seiyaku Bench { view fn add(a: i64, b: i64) -> i64 { return a + b; } }";
+        let source = "seiyaku Bench { view fn add(int a, int b) -> int { return a + b; } }";
         let source_name = "bench/phase_agreement.ko";
         let ordinary = CompilerSession::new(CompilerOptions::default())
             .build(CompileRequest {
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn resolution_failure_matches_ordinary_structured_diagnostics() {
-        let source = "seiyaku Broken { view fn inspect() -> i64 { return missing; } }";
+        let source = "seiyaku Broken { view fn inspect() -> int { return missing; } }";
         let source_name = "bench/resolution_failure.ko";
         let ordinary = CompilerSession::new(CompilerOptions::default())
             .build(CompileRequest {
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn semantic_failure_matches_ordinary_structured_diagnostics() {
-        let source = "seiyaku Broken { view fn inspect() -> i64 { return true + 1; } }";
+        let source = "seiyaku Broken { view fn inspect() -> int { return true + 1; } }";
         let source_name = "bench/semantic_failure.ko";
         let ordinary = CompilerSession::new(CompilerOptions::default())
             .build(CompileRequest {

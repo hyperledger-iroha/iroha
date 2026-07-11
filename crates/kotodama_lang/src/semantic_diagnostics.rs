@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn positional_struct_fix_uses_exact_argument_spellings() {
-        let text = "Pair(1.250_0amt, nested(2))";
+        let text = "Pair(1.250_0, nested(2))";
         let source_id = SourceId(7);
         let source = SourceFile::new(source_id, "pair.ko", text);
         let primary = range(source_id, text, text);
@@ -282,7 +282,7 @@ mod tests {
                 name: "Pair".to_owned(),
                 fields: vec!["left".to_owned(), "right".to_owned()],
                 arguments: vec![
-                    range(source_id, text, "1.250_0amt"),
+                    range(source_id, text, "1.250_0"),
                     range(source_id, text, "nested(2)"),
                 ],
             },
@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(fix.span.byte_range, Some(primary.range));
         assert_eq!(
             fix.replacement,
-            "Pair { left: 1.250_0amt, right: nested(2), }"
+            "Pair { left: 1.250_0, right: nested(2), }"
         );
     }
 
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn exact_type_replacement_does_not_rewrite_surrounding_source() {
         let source_id = SourceId(13);
-        let text = "let raw: bytes = query;";
+        let text = "let bytes raw = query;";
         let source = SourceFile::new(source_id, "query.ko", text);
         let primary = range(source_id, text, "bytes");
         let fix = materialize_fix(

@@ -15,9 +15,7 @@ use iroha_primitives::{
 };
 
 use crate::{
-    IVM, PointerType, VMError,
-    numeric::PointerAbiFaultV1,
-    numeric_gas,
+    IVM, PointerType, VMError, numeric::PointerAbiFaultV1, numeric_gas,
     syscall_metering::SyscallMeteringPhase,
 };
 
@@ -107,12 +105,23 @@ fn decode_envelope_bytes<'a>(
     Ok(frame)
 }
 
+struct AuthenticatedFrame {
+    envelope: Vec<u8>,
+    frame_len: usize,
+}
+
+impl AuthenticatedFrame {
+    fn frame(&self) -> &[u8] {
+        &self.envelope[OUTER_HEADER_BYTES..OUTER_HEADER_BYTES + self.frame_len]
+    }
+}
+
 fn snapshot_metered(
     vm: &mut IVM,
     pointer: u64,
     expected: PointerType,
     maximum_frame: usize,
-) -> Result<Vec<u8>, VMError> {
+) -> Result<AuthenticatedFrame, VMError> {
     vm.charge_syscall_stage(
         SyscallMeteringPhase::PointerHeader,
         numeric_gas::POINTER_HEADER_BYTES,
@@ -194,13 +203,16 @@ fn snapshot_metered(
         SyscallMeteringPhase::CanonicalValidation,
         numeric_gas::work_gas(canonical_work)?,
     )?;
-    Ok(snapshot)
+    Ok(AuthenticatedFrame {
+        envelope: snapshot,
+        frame_len,
+    })
 }
 
 fn exact_int_frame_len(value: &BigInt) -> Result<usize, VMError> {
     NUMERIC_FRAME_HEADER_BYTES_V1
         .checked_add(4)
-        .and_then(|bytes| bytes.checked_add(value.to_twos_bytes().len()))
+        .and_then(|bytes| bytes.checked_add(value.twos_byte_len()))
         .ok_or(VMError::GasCostOverflow)
 }
 
@@ -225,7 +237,8 @@ fn charge_output(vm: &mut IVM, envelope_len: usize) -> Result<(), VMError> {
 
 /// Encode a canonical V1 integer pointer envelope.
 pub fn encode_int(value: &BigInt) -> Result<Vec<u8>, VMError> {
-    let frame = IntValueV1::new(value.clone())
+    let frame = IntValueV1::try_new(value.clone())
+        .map_err(map_frame_error)?
         .encode_frame()
         .map_err(map_frame_error)?;
     encode_envelope(PointerType::Int, &frame)
@@ -258,11 +271,7 @@ pub fn decode_int_bytes(envelope: &[u8]) -> Result<BigInt, VMError> {
 
 /// Strictly decode a decimal from a complete pointer envelope snapshot.
 pub fn decode_decimal_bytes(envelope: &[u8]) -> Result<Numeric, VMError> {
-    let frame = decode_envelope_bytes(
-        envelope,
-        PointerType::Decimal,
-        MAX_DECIMAL_FRAME_BYTES_V1,
-    )?;
+    let frame = decode_envelope_bytes(envelope, PointerType::Decimal, MAX_DECIMAL_FRAME_BYTES_V1)?;
     DecimalValueV1::decode_frame(frame)
         .map(DecimalValueV1::into_numeric)
         .map_err(map_frame_error)
@@ -270,11 +279,8 @@ pub fn decode_decimal_bytes(envelope: &[u8]) -> Result<Numeric, VMError> {
 
 /// Strictly decode a quantity from a complete pointer envelope snapshot.
 pub fn decode_quantity_bytes(envelope: &[u8]) -> Result<Quantity, VMError> {
-    let frame = decode_envelope_bytes(
-        envelope,
-        PointerType::Quantity,
-        MAX_QUANTITY_FRAME_BYTES_V1,
-    )?;
+    let frame =
+        decode_envelope_bytes(envelope, PointerType::Quantity, MAX_QUANTITY_FRAME_BYTES_V1)?;
     QuantityValueV1::decode_frame(frame)
         .map(QuantityValueV1::into_quantity)
         .map_err(map_frame_error)
@@ -283,7 +289,9 @@ pub fn decode_quantity_bytes(envelope: &[u8]) -> Result<Quantity, VMError> {
 /// Strictly decode a staged integer operand.
 pub fn decode_int_metered(vm: &mut IVM, pointer: u64) -> Result<BigInt, VMError> {
     let snapshot = snapshot_metered(vm, pointer, PointerType::Int, MAX_INT_FRAME_BYTES_V1)?;
-    decode_int_bytes(&snapshot)
+    IntValueV1::decode_frame(snapshot.frame())
+        .map(IntValueV1::into_int)
+        .map_err(map_frame_error)
 }
 
 /// Strictly decode a staged decimal operand.
@@ -294,7 +302,9 @@ pub fn decode_decimal_metered(vm: &mut IVM, pointer: u64) -> Result<Numeric, VME
         PointerType::Decimal,
         MAX_DECIMAL_FRAME_BYTES_V1,
     )?;
-    decode_decimal_bytes(&snapshot)
+    DecimalValueV1::decode_frame(snapshot.frame())
+        .map(DecimalValueV1::into_numeric)
+        .map_err(map_frame_error)
 }
 
 /// Strictly decode a staged quantity operand.
@@ -305,7 +315,9 @@ pub fn decode_quantity_metered(vm: &mut IVM, pointer: u64) -> Result<Quantity, V
         PointerType::Quantity,
         MAX_QUANTITY_FRAME_BYTES_V1,
     )?;
-    decode_quantity_bytes(&snapshot)
+    QuantityValueV1::decode_frame(snapshot.frame())
+        .map(QuantityValueV1::into_quantity)
+        .map_err(map_frame_error)
 }
 
 /// Debit, serialize, and allocate a staged integer result.
@@ -368,11 +380,17 @@ mod tests {
             Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))
         ));
 
-        let mut retired = envelope.clone();
-        retired[..2].copy_from_slice(&(PointerType::RetiredAmount as u16).to_be_bytes());
+        let mut unassigned = envelope.clone();
+        unassigned[..2].copy_from_slice(&0x0013_u16.to_be_bytes());
         assert!(matches!(
-            decode_int_bytes(&retired),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::TypeNotAllowed))
+            decode_int_bytes(&unassigned),
+            Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))
+        ));
+
+        let quantity = encode_quantity(&"1".parse().expect("quantity")).expect("quantity");
+        assert!(matches!(
+            decode_int_bytes(&quantity),
+            Err(VMError::PointerAbiFault(PointerAbiFaultV1::WrongType))
         ));
 
         let mut bad_version = envelope.clone();

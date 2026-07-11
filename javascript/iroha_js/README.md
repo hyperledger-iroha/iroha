@@ -323,6 +323,18 @@ defaults to a 30-second budget, and credentials/query/fragment components are
 rejected in the configured Torii base URL. Requests omit ambient credentials
 and referrers and reject redirects.
 
+The built-in Connect path keeps session proof keys separate from transaction
+signing keys. Browser Connect verifies the approval proof and returns its
+`accountId`, 32-byte X25519 `walletPublicKey`, and 64-byte `signature`.
+`walletPublicKey` authenticates the Connect session proof; it is not the
+Ed25519 transaction key. `NexusAppClient.awaitApproval()` validates that proof
+envelope, projects only `accountId` into the Nexus approval state, and derives
+the Ed25519 controller key from the canonical I105 account. For
+`finalizeAndSubmit(..., { wait: true, signal })`, an already-aborted signal is
+rejected before finalization, and the signal is checked again after
+finalization but before Torii submission. This cancellation behavior is scoped
+to status-waiting submissions; `wait: false` does not apply the wait signal.
+
 When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
 aliases must be exact lowercase 64-character hex and must match the returned
 payload bytes. Finalization must return canonical version-1, single-signature
@@ -1470,6 +1482,9 @@ const request = await buildCanonicalJsonRequest({
 const response = await fetch(`${toriiBaseUrl}/v1/aliases/resolve`, request);
 ```
 
+The `canonical-request` subpath ships standalone DOM declarations, so browser
+TypeScript consumers do not need ambient Node types.
+
 > **Recipe:** run `node javascript/iroha_js/recipes/iso_alias.mjs` to exercise
 > the lookup endpoints from the CLI. The script accepts `ISO_ALIAS_LABEL` and
 > `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
@@ -2533,13 +2548,21 @@ before the request reaches Torii.
 
 `submitIvmProvedContractCall` is the generic deployed-router path for networks
 that reject opaque `Executable::ContractCall` effects. It simulates the selected
-entrypoint, fetches the bytecode bound to the resolved contract address, calls
-`/v1/zk/ivm/derive`, submits that exact payload to `/v1/zk/ivm/prove`, and only
-signs after the prover echoes the same node-derived payload. The resulting user
-signature covers the complete `IvmProved` executable, including every transfer
-in its overlay.
+entrypoint and requires caller-trusted identities for both the deployed code
+body and complete artifact. Before derivation it verifies Torii's simulation
+hash, the ledger/Core code hash (BLAKE2b-256 of the artifact after its 17-byte
+IVM header, with the final digest byte ORed with `1`), and SHA-256 of every
+artifact byte. It then calls `/v1/zk/ivm/derive`, requires the derived bytecode to
+equal the fetched artifact, submits that exact payload to `/v1/zk/ivm/prove`,
+and binds the returned proof attachment and verifying-key reference to the
+requested key before signing. The resulting user signature covers the complete
+`IvmProved` executable, including every transfer in its overlay.
+Invalid polling options are rejected before any request. If proof polling later
+times out, aborts, or fails, the convenience path best-effort cancels the remote
+job without masking the original error; `ToriiClient.cancelIvmProveJob(jobId)`
+is also available for explicit lifecycle control.
 
-For an DS-fee-bearing call, use
+For a DS-fee-bearing call, use
 `submitValidationFeeIvmProvedContractCall`. The strict helper requires the
 signed active policy as `validationFeePolicy` and a `ToriiClient` provisioned
 with the governance keyset, contiguous policy registry, and ledger binding;
@@ -2552,6 +2575,7 @@ is exactly 10 minor units at scale 2 (`0.10`) per qualifying DS transfer.
 
 ```js
 import {
+  computeIvmArtifactHashes,
   ToriiClient,
   submitValidationFeeIvmProvedContractCall,
 } from "@iroha/iroha-js";
@@ -2567,11 +2591,19 @@ const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
     policyRegistry, // full contiguous registry ending at the active policy
   },
 });
+const {
+  codeHashHex: ROUTER_CODE_HASH_HEX,
+  artifactSha256Hex: ROUTER_ARTIFACT_SHA256_HEX,
+} = computeIvmArtifactHashes(trustedRouterArtifactBytes);
 const result = await submitValidationFeeIvmProvedContractCall(torii, {
   chainId: "production-chain",
   authority: AUTHORITY_ACCOUNT_ID,
   privateKey,
   vkRef: { backend: "halo2/ipa", name: "ivm-execution-v1" },
+  // Resolve this from an independently trusted deployment manifest/checkpoint,
+  // not from the Torii instance processing this request.
+  expectedCodeHashHex: ROUTER_CODE_HASH_HEX,
+  expectedArtifactSha256Hex: ROUTER_ARTIFACT_SHA256_HEX,
   contractAlias: "router::dex.universal",
   entrypoint: "route_swap",
   payload: { pool: POOL_CONTRACT_ADDRESS, amount_in: "100" },
@@ -2591,12 +2623,21 @@ The helper reserves `validation_fee_policy_version`,
 `validation_fee_transfer_entry_index`; callers cannot override them. It binds
 the verified active version/hash and exact fee coordinate before derivation.
 It decodes each real base64 Norito `InstructionBox`, resolves direct and
-`TransferAssetBatch` coordinates exactly as validator admission does, derives
-the qualifying-transfer count from the decoded overlay, and treats a caller
-count only as an optional assertion. Equivalent fixed-scale values such as
-`0.1` and `0.10` are compared as 10 minor units. Ambiguous coordinates and
-unsupported fee-bearing nested multisig contexts fail before proving or
-signing.
+`TransferAssetBatch` coordinates, derives the qualifying-transfer count from
+the decoded overlay, and treats a caller count only as an optional assertion.
+Equivalent fixed-scale values such as `0.1` and `0.10` are compared as 10 minor
+units. Ambiguous coordinates and unsupported fee-bearing nested multisig
+contexts fail before proving or signing. The client deliberately accepts only
+explicit asset transfers, transfer batches, and recursive multisig proposals
+in a fee-bearing overlay; every other or newly introduced instruction family
+fails closed until its DS effects are audited.
+
+This local check is not a replacement for stateful validator admission. In
+particular, the client has no independently trusted account-existence snapshot,
+so it cannot predict the validator's implicit account-admission fee check for a
+transfer destination. Applications that need preflight equivalence must supply
+and enforce their own trusted, height-bound state evidence before calling this
+helper; the ledger may still reject a proof as state advances.
 
 The trust anchor belongs to the `ToriiClient`, not to an individual submission.
 The constructor snapshots its registry, keysets, hashes, and byte arrays, so a
@@ -2610,6 +2651,21 @@ The generic `submitIvmProvedContractCall` remains available for non-policy,
 asset-neutral proved calls. It does not imply validation-fee enforcement when
 `validationFeePolicy` is omitted. Alias pairs are mutually exclusive on both
 helpers; supplying both camel-case and snake-case forms is rejected.
+
+Both helpers require exactly one of `expectedCodeHashHex` or
+`expected_code_hash_hex` and exactly one of `expectedArtifactSha256Hex` or
+`expected_artifact_sha256_hex`. Treat both as trust anchors: copying them from
+the same Torii simulation or code endpoint defeats substitution protection.
+Use `computeIvmArtifactHashes(trustedArtifactBytes)` (also available from the
+browser-safe `@iroha/iroha-js/ivm-artifact` export) to compute both values from
+independently obtained bytes. That subpath ships standalone DOM declarations
+and does not require ambient Node types. Complete artifacts are capped at 4 MiB
+(`IVM_ARTIFACT_MAX_BYTES`) before copying or hashing. ArrayBuffer inputs from
+other JavaScript realms are supported, but SharedArrayBuffer-backed inputs are
+rejected so concurrently mutable bytes cannot cross the identity boundary.
+Torii code-byte, simulation, derivation, and proof-job JSON responses are read
+through endpoint-specific byte caps before UTF-8 decoding or JSON parsing;
+missing or dishonest `Content-Length` headers cannot bypass the streamed limit.
 
 The optional legacy `requiredOverlayTransfer` assertion may be supplied too,
 but it must equal the policy-derived transfer and cannot redirect or change the

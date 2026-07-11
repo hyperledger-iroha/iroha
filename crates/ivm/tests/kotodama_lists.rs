@@ -44,7 +44,7 @@ fn run_main_body_with_gas(result_type: &str, body: &str) -> (IVM, u64) {
 }
 
 fn returned_list_words(vm: &IVM, capacity: u64) -> Vec<u64> {
-    let layout = ListLayoutV1::try_new(capacity, 1).expect("List<i64, N> layout");
+    let layout = ListLayoutV1::try_new(capacity, 1).expect("List<int, N> layout");
     let base = vm.register(10);
     (0..layout.allocation_bytes().expect("bounded allocation") / 8)
         .map(|word| vm.load_u64(base + word * 8).expect("returned List word"))
@@ -63,8 +63,8 @@ fn positive_gas_delta(measured: u64, control: u64, operation: &str) -> u64 {
 fn safe_mutations_execute_with_transactional_failures() {
     let vm = run(r#"
         seiyaku ListMutations {
-            view fn main() -> i64 {
-                var values: List<i64, 3> = [1, 2];
+            view fn main() -> int {
+                var List<int, 3> values = [1, 2];
                 if values.try_set(index: 8, value: 99) { return -1; }
                 if !values.try_push(3) { return -2; }
                 if values.try_push(4) { return -3; }
@@ -82,14 +82,14 @@ fn safe_mutations_execute_with_transactional_failures() {
 fn comprehension_and_take_execute_as_bounded_copies() {
     let vm = run(r#"
         seiyaku ListComprehension {
-            fn build() -> List<i64, 4> {
-                let source: List<i64, 4> = [1, 2, 3];
+            fn build() -> List<int, 4> {
+                let List<int, 4> source = [1, 2, 3];
                 [value * 2 for value in source if value > 1]
             }
 
-            view fn main() -> i64 {
+            view fn main() -> int {
                 let doubled = build();
-                let head: List<i64, 2> = doubled.take(2);
+                let List<int, 2> head = doubled.take(2);
                 head.get(1).unwrap_or(0)
             }
         }
@@ -108,9 +108,9 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
         let source = format!(
             r#"
             seiyaku ListGas {{
-                view fn main() -> i64 {{
-                    let source: List<i64, 8> = [{elements}];
-                    let copied: List<i64, 8> = [value for value in source if value > 0];
+                view fn main() -> int {{
+                    let List<int, 8> source = [{elements}];
+                    let List<int, 8> copied = [value for value in source if value > 0];
                     if copied.contains(99) {{ return -1; }}
                     copied.len()
                 }}
@@ -135,10 +135,10 @@ fn get_gas_is_constant_for_present_indices_and_cheaper_for_missing_indices() {
     let mut samples = Vec::new();
     for (index, expected) in [(0, 10), (1, 20), (3, 40), (8, 99)] {
         let (vm, gas) = run_main_body_with_gas(
-            "i64",
+            "int",
             &format!(
                 r#"
-            let values: List<i64, 8> = [10, 20, 30, 40];
+            let List<int, 8> values = [10, 20, 30, 40];
             return values.get({index}).unwrap_or(99);
             "#
             ),
@@ -164,18 +164,18 @@ fn get_gas_is_constant_for_present_indices_and_cheaper_for_missing_indices() {
 #[test]
 fn try_set_gas_and_transactionality_cover_success_and_failure() {
     let (control, control_gas) = run_main_body_with_gas(
-        "List<i64, 4>",
+        "List<int, 4>",
         r#"
-        var values: List<i64, 4> = [10, 20];
+        var List<int, 4> values = [10, 20];
         return values;
         "#,
     );
     let control_words = returned_list_words(&control, 4);
 
     let (success, success_gas) = run_main_body_with_gas(
-        "List<i64, 4>",
+        "List<int, 4>",
         r#"
-        var values: List<i64, 4> = [10, 20];
+        var List<int, 4> values = [10, 20];
         values.try_set(index: 1, value: 99);
         return values;
         "#,
@@ -183,9 +183,9 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
     assert_eq!(returned_list_words(&success, 4), [2, 4, 10, 99, 0, 0]);
 
     let (failure, failure_gas) = run_main_body_with_gas(
-        "List<i64, 4>",
+        "List<int, 4>",
         r#"
-        var values: List<i64, 4> = [10, 20];
+        var List<int, 4> values = [10, 20];
         values.try_set(index: 8, value: 99);
         return values;
         "#,
@@ -207,16 +207,16 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
 #[test]
 fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
     let (space_control, space_control_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [10, 20];
+        var List<int, 3> values = [10, 20];
         return values;
         "#,
     );
     let (success, success_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [10, 20];
+        var List<int, 3> values = [10, 20];
         values.try_push(30);
         return values;
         "#,
@@ -224,17 +224,17 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
     assert_eq!(returned_list_words(&success, 3), [3, 3, 10, 20, 30]);
 
     let (full_control, full_control_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [10, 20, 30];
+        var List<int, 3> values = [10, 20, 30];
         return values;
         "#,
     );
     let full_control_words = returned_list_words(&full_control, 3);
     let (failure, failure_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [10, 20, 30];
+        var List<int, 3> values = [10, 20, 30];
         values.try_push(40);
         return values;
         "#,
@@ -257,17 +257,17 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
 #[test]
 fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
     let (nonempty_control, nonempty_control_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [10, 20];
+        var List<int, 3> values = [10, 20];
         return values;
         "#,
     );
     assert_eq!(returned_list_words(&nonempty_control, 3), [2, 3, 10, 20, 0]);
     let (nonempty, nonempty_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [10, 20];
+        var List<int, 3> values = [10, 20];
         values.pop();
         return values;
         "#,
@@ -279,17 +279,17 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
     );
 
     let (empty_control, empty_control_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [];
+        var List<int, 3> values = [];
         return values;
         "#,
     );
     let empty_control_words = returned_list_words(&empty_control, 3);
     let (empty, empty_gas) = run_main_body_with_gas(
-        "List<i64, 3>",
+        "List<int, 3>",
         r#"
-        var values: List<i64, 3> = [];
+        var List<int, 3> values = [];
         values.pop();
         return values;
         "#,
@@ -313,10 +313,10 @@ fn contains_gas_increases_by_one_exact_scan_step_per_mismatch() {
     let mut samples = Vec::new();
     for (needle, expected) in [(10, 1), (20, 1), (30, 1), (40, 1), (99, 0)] {
         let (vm, gas) = run_main_body_with_gas(
-            "i64",
+            "int",
             &format!(
                 r#"
-            let values: List<i64, 4> = [10, 20, 30, 40];
+            let List<int, 4> values = [10, 20, 30, 40];
             if values.contains({needle}) {{ return 1; }}
             return 0;
             "#
@@ -345,21 +345,21 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
             .collect::<Vec<_>>()
             .join(", ");
         let (control, control_gas) = run_main_body_with_gas(
-            "i64",
+            "int",
             &format!(
                 r#"
-            let source: List<i64, 8> = [{elements}];
+            let List<int, 8> source = [{elements}];
             return source.len();
             "#
             ),
         );
         assert_eq!(control.register(10), active_len);
         let (copied, copied_gas) = run_main_body_with_gas(
-            "i64",
+            "int",
             &format!(
                 r#"
-            let source: List<i64, 8> = [{elements}];
-            let copied: List<i64, 8> = [value for value in source];
+            let List<int, 8> source = [{elements}];
+            let List<int, 8> copied = [value for value in source];
             return copied.len();
             "#
             ),
@@ -390,8 +390,8 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
 fn enumerate_materializes_bounded_structured_elements() {
     let vm = run(r#"
         seiyaku ListEnumerate {
-            view fn main() -> i64 {
-                let values: List<i64, 4> = [7, 8];
+            view fn main() -> int {
+                let List<int, 4> values = [7, 8];
                 let indexed = values.enumerate();
                 let pair = indexed.get(1).unwrap_or((0, 0));
                 pair.0 * 10 + pair.1
@@ -405,7 +405,7 @@ fn enumerate_materializes_bounded_structured_elements() {
 fn list_of_options_uses_one_word_per_element() {
     let vm = run(r#"
         seiyaku ListOfOptions {
-            view fn main() -> List<Option<i64>, 4> {
+            view fn main() -> List<Option<int>, 4> {
                 [Option::some(7), Option::none]
             }
         }
@@ -417,10 +417,10 @@ fn list_of_options_uses_one_word_per_element() {
         Ok(4),
         "returned List capacity header"
     );
-    let list_layout = ListLayoutV1::try_new(4, 1).expect("List<Option<i64>, 4> layout");
+    let list_layout = ListLayoutV1::try_new(4, 1).expect("List<Option<int>, 4> layout");
     let elements = ivm::list::read_words(&vm, list, list_layout).expect("read returned List");
     assert_eq!(elements.len(), 2);
-    let sum_layout = SumLayoutV1::option(1).expect("Option<i64> layout");
+    let sum_layout = SumLayoutV1::option(1).expect("Option<int> layout");
     assert_eq!(
         ivm::sum::read_words(&vm, elements[0][0], sum_layout),
         Ok((true, vec![7]))
@@ -436,12 +436,12 @@ fn contains_compares_nested_lists_sums_and_structs_by_value() {
     let vm = run(r#"
         seiyaku RecursiveContains {
             struct Envelope {
-                labels: Option<List<i64, 3>>,
-                markers: List<Option<i64>, 3>,
-                outcome: Result<(i64, bool), i64>,
+                Option<List<int, 3>> labels,
+                List<Option<int>, 3> markers,
+                Result<(int, bool), int> outcome,
             }
 
-            fn ok(last: i64, ready: bool) -> Envelope {
+            fn ok(int last, bool ready) -> Envelope {
                 Envelope {
                     labels: Option::some([1, last]),
                     markers: [Option::none, Option::some(last)],
@@ -449,7 +449,7 @@ fn contains_compares_nested_lists_sums_and_structs_by_value() {
                 }
             }
 
-            fn err(code: i64) -> Envelope {
+            fn err(int code) -> Envelope {
                 Envelope {
                     labels: Option::none,
                     markers: [Option::none, Option::some(7)],
@@ -457,8 +457,8 @@ fn contains_compares_nested_lists_sums_and_structs_by_value() {
                 }
             }
 
-            view fn main() -> i64 {
-                let values: List<Envelope, 2> = [ok(7, true), err(5)];
+            view fn main() -> int {
+                let List<Envelope, 2> values = [ok(7, true), err(5)];
 
                 // Every needle below is freshly allocated. Equality must use
                 // the declared aggregate schema rather than handle identity.
@@ -505,11 +505,11 @@ fn recursive_contains_support_does_not_admit_resource_elements() {
         .compile_source(
             r#"
             seiyaku ResourceElements {
-                fn reject(values: List<Option<StateMap<i64, i64>>, 2>) {
+                fn reject(List<Option<StateMap<int, int>>, 2> values) {
                     let _values = values;
                 }
 
-                view fn main() -> i64 { 0 }
+                view fn main() -> int { 0 }
             }
             "#,
         )
@@ -528,8 +528,8 @@ fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
             seiyaku ZeroSizedElements {
                 struct Empty {}
 
-                view fn main() -> i64 {
-                    let values: List<Empty, 1> = [Empty {}];
+                view fn main() -> int {
+                    let List<Empty, 1> values = [Empty {}];
                     values.len()
                 }
             }
@@ -549,8 +549,8 @@ fn zero_sized_elements_have_a_stable_public_compiler_diagnostic() {
         .compile_source(
             r#"
             seiyaku ContextualEmptyList {
-                view fn main() -> i64 {
-                    let values: List<i64, 4> = [];
+                view fn main() -> int {
+                    let List<int, 4> values = [];
                     values.len()
                 }
             }

@@ -76,12 +76,12 @@ data class SccpSemanticProofProfileV1(
 data class SccpSoraFinalityAnchorV1(
     val version: Int,
     val sourceNetwork: SccpNetworkV1,
+    val protocolVersion: Int,
     val chainIdHash: String,
     val checkpointHeight: BigInteger,
     val checkpointBlockHash: String,
-    val validatorSetEpoch: BigInteger,
-    val validatorSetHash: String,
-    val validatorSetHashVersion: Int,
+    val checkpointContextId: String,
+    val checkpointFinalityArtifactHash: String,
     val anchorHash: String,
 )
 
@@ -971,22 +971,22 @@ object SccpJsonParser {
         val anchorRoles = listOf(
             upperBytes(anchor, "chain_id_hash", 32),
             upperBytes(anchor, "checkpoint_block_hash", 32),
-            upperBytes(anchor, "validator_set_hash", 32),
+            upperBytes(anchor, "checkpoint_context_id", 32),
+            upperBytes(anchor, "checkpoint_finality_artifact_hash", 32),
         )
         require(anchorRoles[0] == TAIRA_CHAIN_ID_HASH) { "$label Taira chain id hash mismatch" }
+        val protocolVersion = requiredInt(anchor, "protocol_version", 2, 2)
         val checkpointHeight = requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true)
-        val validatorSetEpoch = requiredUnsignedInteger(anchor, "validator_set_epoch", MAX_U64, false)
-        val hashVersion = requiredInt(anchor, "validator_set_hash_version", 1, 1)
         requireDistinctRawHashes(anchorRoles, "$label finality anchor")
         val canonicalAnchor = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(SccpNetworkV1.SORA_TAIRA.tag)
+            writeU16(output, protocolVersion)
             output.write(anchorRoles[0].hexToBytes())
             writeU64(output, checkpointHeight)
             output.write(anchorRoles[1].hexToBytes())
-            writeU64(output, validatorSetEpoch)
             output.write(anchorRoles[2].hexToBytes())
-            writeU16(output, hashVersion)
+            output.write(anchorRoles[3].hexToBytes())
         }.toByteArray()
         val anchorHash = keccak(
             "sccp:sora-finality-anchor:v1".toByteArray(Charsets.UTF_8) + canonicalAnchor,
@@ -1009,12 +1009,12 @@ object SccpJsonParser {
             SccpSoraFinalityAnchorV1(
                 anchorVersion,
                 sourceNetwork,
+                protocolVersion,
                 anchorRoles[0],
                 checkpointHeight,
                 anchorRoles[1],
-                validatorSetEpoch,
                 anchorRoles[2],
-                hashVersion,
+                anchorRoles[3],
                 "0x${anchorHash.lowercase()}",
             ),
         )
@@ -1456,7 +1456,10 @@ object SccpJsonParser {
     }
 
     private fun requireDistinctRawHashes(values: List<String>, label: String) {
-        require(values.distinct().size == values.size) { "$label hash roles must be distinct" }
+        require(
+            values.all { value -> value.any { it != '0' } } &&
+                values.distinct().size == values.size,
+        ) { "$label hash roles must be nonzero and distinct" }
     }
 
     private fun deepCopyObject(value: Map<String, Any?>): Map<String, Any?> =
@@ -1624,12 +1627,12 @@ object SccpJsonParser {
     private val FINALITY_ANCHOR_FIELDS = setOf(
         "version",
         "source_network",
+        "protocol_version",
         "chain_id_hash",
         "checkpoint_height",
         "checkpoint_block_hash",
-        "validator_set_epoch",
-        "validator_set_hash",
-        "validator_set_hash_version",
+        "checkpoint_context_id",
+        "checkpoint_finality_artifact_hash",
     )
     private val PROOF_REQUEST_FIELDS = setOf(
         "version",

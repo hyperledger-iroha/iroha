@@ -33,20 +33,20 @@ seiyaku ThresholdEscrow {
         AlreadyOpen = 1, AlreadyReleased = 2, AlreadyRefunded = 3, NotOpen = 4, UnauthorizedPayer = 5, NonPositiveTarget = 6, NonPositiveAmount = 7, TargetExceeded = 8, NotFullyFunded = 9,
     }
 
-    const recipient_account_literal: string = "sorauﾛ1PｽNgｿﾘ9ﾏﾕ2ﾕ9ﾄZﾀﾃﾌWwNｸｾヰﾄﾂT3WｺTxｶｵﾎKﾓﾛmｷ4Y6PLN";
-    const escrow_account_literal: string = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
-    const escrow_asset_definition_literal: string = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-    state payer_account: AccountId;
-    state recipient_account: AccountId;
-    state escrow_account_id: AccountId;
-    state escrow_asset_definition: AssetDefinitionId;
-    state target_amount_value: Amount;
-    state funded_amount_value: Amount;
-    state is_open: bool;
-    state is_released: bool;
-    state is_refunded: bool;
+    const string recipient_account_literal = "sorauﾛ1PｽNgｿﾘ9ﾏﾕ2ﾕ9ﾄZﾀﾃﾌWwNｸｾヰﾄﾂT3WｺTxｶｵﾎKﾓﾛmｷ4Y6PLN";
+    const string escrow_account_literal = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
+    const string escrow_asset_definition_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    state AccountId payer_account;
+    state AccountId recipient_account;
+    state AccountId escrow_account_id;
+    state AssetDefinitionId escrow_asset_definition;
+    state quantity target_amount_value;
+    state quantity funded_amount_value;
+    state bool is_open;
+    state bool is_released;
+    state bool is_refunded;
     hajimari() {
-        let zero = Amount::from_i64(0);
+        let quantity zero = 0;
         payer_account = context::authority();
         recipient_account = AccountId::parse(recipient_account_literal);
         escrow_account_id = AccountId::parse(escrow_account_literal);
@@ -79,9 +79,9 @@ seiyaku ThresholdEscrow {
     // from the configured escrow account. The recipient, escrow account, and
     // asset definition are fixed literals so the compiler can emit a complete
     // first-release access set without manual annotations.
-    kotoage fn open_escrow(target_amount: Amount) authorize("Admin") {
+    kotoage fn open_escrow(quantity target_amount) authorize("Admin") {
         assert_unopened();
-        let zero = Amount::from_i64(0);
+        let quantity zero = 0;
         require(target_amount > zero, EscrowError::NonPositiveTarget);
         payer_account = context::authority();
         recipient_account = AccountId::parse(recipient_account_literal);
@@ -94,10 +94,10 @@ seiyaku ThresholdEscrow {
         is_refunded = false;
     }
 
-    kotoage fn deposit(amount: Amount) authorize("Admin") {
+    kotoage fn deposit(quantity amount) authorize("Admin") {
         assert_open();
         assert_payer();
-        require(amount > Amount::from_i64(0), EscrowError::NonPositiveAmount);
+        require(amount > 0, EscrowError::NonPositiveAmount);
         let next_funded = funded_amount_value + amount;
         require(next_funded <= target_amount_value, EscrowError::TargetExceeded);
         ledger::asset::transfer(
@@ -128,7 +128,7 @@ seiyaku ThresholdEscrow {
         assert_open();
         assert_payer();
         let funded = funded_amount_value;
-        if (funded > Amount::from_i64(0)) {
+        if (funded > 0) {
             ledger::asset::transfer(
                 source: AccountId::parse(escrow_account_literal),
                 destination: context::authority(),

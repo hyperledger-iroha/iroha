@@ -76,12 +76,12 @@ fn build_submit_ballot_inline_rejects_runtime_bytes() {
 }
 
 #[test]
-fn build_unshield_inline_rejects_non_literal_amount() {
+fn build_unshield_inline_rejects_non_literal_quantity() {
     let src = r#"
         seiyaku NonLiteralAmount {
-          kotoage fn main(amt: i64) authorize("Unshield") {
+          kotoage fn main(int amount) authorize("Unshield") {
             let inputs = b"0123456789abcdef0123456789abcdef";
-            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: amt, inputs: inputs, backend: "ipa", proof: b"\x0a\x0b\x0c", verification_key: b"\x0d\x0e\x0f");
+            crypto::zk::build_unshield(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), destination: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), amount: amount, inputs: inputs, backend: "ipa", proof: b"\x0a\x0b\x0c", verification_key: b"\x0d\x0e\x0f");
           }
         }
     "#;

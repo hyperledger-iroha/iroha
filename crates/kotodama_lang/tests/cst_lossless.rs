@@ -10,7 +10,7 @@ fn valid_source_round_trips_with_unicode_in_trivia_and_strings() {
     let text = r##"/* leading comment */
 seiyaku Words {
     // 言葉 and spacing must survive
-    view fn cafe(value: i64) -> string {
+    view fn cafe(int value) -> string {
         let message = r#"こんにちは // not a comment"#;
         return message;
     }
@@ -71,27 +71,21 @@ fn malformed_text_remains_lossless_as_error_tokens() {
 }
 
 #[test]
-fn decimal_fraction_is_preserved_but_rejected_by_v1_lexer() {
+fn unsuffixed_decimal_fraction_is_preserved_by_v1_lexer() {
     let text = "seiyaku Demo { fn f() { let value = 1_234.50_0; } }";
     let source = SourceFile::new(SourceId(9), "decimal-fraction.ko", text);
     let output = parse(&source, FrontendBudget::v1());
 
     assert_eq!(output.tree.text(&source), text);
-    assert!(!output.is_ok());
+    assert!(output.is_ok(), "{:#?}", output.diagnostics.diagnostics);
     assert!(output.tree.tokens().into_iter().any(|token| {
-        token.kind == SyntaxKind::ErrorToken && source.slice(token.range) == Some("1_234.50_0")
-    }));
-    assert!(output.diagnostics.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "E_AMOUNT_SUFFIX"
-            && diagnostic
-                .message
-                .contains("decimal fractions require the adjacent lowercase `amt` suffix")
+        token.kind == SyntaxKind::Decimal && source.slice(token.range) == Some("1_234.50_0")
     }));
 }
 
 #[test]
 fn parser_inserts_zero_width_missing_tokens_without_changing_text() {
-    let text = "seiyaku Demo { fn f() { let value: i64 = ; return; } }";
+    let text = "seiyaku Demo { fn f() { let int value = ; return; } }";
     let source = SourceFile::new(SourceId(2), "missing.ko", text);
     let output = parse(&source, FrontendBudget::v1());
 

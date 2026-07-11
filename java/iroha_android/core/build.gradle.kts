@@ -36,6 +36,12 @@ tasks.withType<Test>().configureEach {
             .dir("..")
             .file("fixtures/sumeragi_v2/wire_v2.tsv"),
     )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/numeric_v1_golden.json"),
+    )
     val harnessFilter = System.getenv("ANDROID_HARNESS_MAINS")
     if (!harnessFilter.isNullOrBlank()) {
         systemProperty("android.test.mains", harnessFilter)

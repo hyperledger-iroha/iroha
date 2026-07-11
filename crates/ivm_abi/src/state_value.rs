@@ -40,7 +40,7 @@ pub const DECODED_STATE_VALUE_WORD_BYTES: i16 = 8;
 /// Canonical representation of one scalar leaf in a durable aggregate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueKindV1 {
-    /// Canonical Kotodama signed 4096-bit integer pointer.
+    /// Canonical Kotodama signed 512-bit integer pointer.
     Int,
     /// Canonical exact bounded decimal pointer.
     Decimal,

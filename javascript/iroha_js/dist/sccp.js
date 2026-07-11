@@ -636,12 +636,12 @@ function parseSoraFinalityAnchor(value, label) {
     new Set([
       "version",
       "source_network",
+      "protocol_version",
       "chain_id_hash",
       "checkpoint_height",
       "checkpoint_block_hash",
-      "validator_set_epoch",
-      "validator_set_hash",
-      "validator_set_hash_version",
+      "checkpoint_context_id",
+      "checkpoint_finality_artifact_hash",
     ]),
     label,
   );
@@ -650,6 +650,12 @@ function parseSoraFinalityAnchor(value, label) {
   if (source.profile !== "sora-taira") {
     throw new TypeError(`${label}.source_network must be SORA Taira`);
   }
+  const protocolVersion = integer(
+    record.protocol_version,
+    `${label}.protocol_version`,
+    2,
+    2,
+  );
   const chainHash = bytesFromUpperHex(record.chain_id_hash, `${label}.chain_id_hash`, 32);
   if (record.chain_id_hash !== SORA_TAIRA_CHAIN_ID_HASH) {
     throw new TypeError(`${label}.chain_id_hash is not the Taira chain commitment`);
@@ -664,34 +670,28 @@ function parseSoraFinalityAnchor(value, label) {
     `${label}.checkpoint_block_hash`,
     32,
   );
-  const validatorSetEpoch = integer(
-    record.validator_set_epoch,
-    `${label}.validator_set_epoch`,
-    0,
-  );
-  const validatorHash = bytesFromUpperHex(
-    record.validator_set_hash,
-    `${label}.validator_set_hash`,
+  const contextId = bytesFromUpperHex(
+    record.checkpoint_context_id,
+    `${label}.checkpoint_context_id`,
     32,
   );
-  const validatorHashVersion = integer(
-    record.validator_set_hash_version,
-    `${label}.validator_set_hash_version`,
-    1,
-    1,
+  const finalityArtifactHash = bytesFromUpperHex(
+    record.checkpoint_finality_artifact_hash,
+    `${label}.checkpoint_finality_artifact_hash`,
+    32,
   );
-  const roles = [chainHash, checkpointHash, validatorHash];
+  const roles = [chainHash, checkpointHash, contextId, finalityArtifactHash];
   if (new Set(roles.map(lowerHexBytes)).size !== roles.length) {
     throw new TypeError(`${label} reuses a consensus hash role`);
   }
   const canonical = concatenateBytes(
     Uint8Array.of(1, NETWORKS["sora-taira"].tag),
+    unsignedLittleEndian(protocolVersion, 2, `${label}.protocol_version`),
     chainHash,
     unsignedLittleEndian(checkpointHeight, 8, `${label}.checkpoint_height`),
     checkpointHash,
-    unsignedLittleEndian(validatorSetEpoch, 8, `${label}.validator_set_epoch`),
-    validatorHash,
-    unsignedLittleEndian(validatorHashVersion, 2, `${label}.validator_set_hash_version`),
+    contextId,
+    finalityArtifactHash,
   );
   return Object.freeze({
     hash: Uint8Array.from(

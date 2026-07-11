@@ -1,4 +1,4 @@
-//! Checked and explicitly wrapping Kotodama `i64` arithmetic regressions.
+//! Checked and explicitly wrapping Kotodama `int` arithmetic regressions.
 
 use std::collections::BTreeMap;
 
@@ -92,7 +92,7 @@ fn run_unary(program: &[u8], value: i64) -> Result<i64, VMError> {
 #[test]
 fn ordinary_addition_and_subtraction_trap_at_i64_boundaries() {
     let add = compile(
-        "seiyaku CheckedAdd { view fn run(left: i64, right: i64) -> i64 { return left + right; } }",
+        "seiyaku CheckedAdd { view fn run(int left, int right) -> int { return left + right; } }",
     );
     assert_eq!(run_binary(&add, i64::MAX, 0).unwrap(), i64::MAX);
     assert_eq!(run_binary(&add, i64::MIN, 0).unwrap(), i64::MIN);
@@ -106,7 +106,7 @@ fn ordinary_addition_and_subtraction_trap_at_i64_boundaries() {
     ));
 
     let sub = compile(
-        "seiyaku CheckedSub { view fn run(left: i64, right: i64) -> i64 { return left - right; } }",
+        "seiyaku CheckedSub { view fn run(int left, int right) -> int { return left - right; } }",
     );
     assert_eq!(run_binary(&sub, i64::MIN, 0).unwrap(), i64::MIN);
     assert_eq!(run_binary(&sub, i64::MAX, 0).unwrap(), i64::MAX);
@@ -123,7 +123,7 @@ fn ordinary_addition_and_subtraction_trap_at_i64_boundaries() {
 #[test]
 fn ordinary_multiplication_and_negation_trap_at_i64_boundaries() {
     let mul = compile(
-        "seiyaku CheckedMul { view fn run(left: i64, right: i64) -> i64 { return left * right; } }",
+        "seiyaku CheckedMul { view fn run(int left, int right) -> int { return left * right; } }",
     );
     assert_eq!(run_binary(&mul, i64::MAX, 1).unwrap(), i64::MAX);
     assert_eq!(run_binary(&mul, i64::MIN, 1).unwrap(), i64::MIN);
@@ -136,7 +136,7 @@ fn ordinary_multiplication_and_negation_trap_at_i64_boundaries() {
         Err(VMError::AssertionFailed)
     ));
 
-    let neg = compile("seiyaku CheckedNeg { view fn run(value: i64) -> i64 { return -value; } }");
+    let neg = compile("seiyaku CheckedNeg { view fn run(int value) -> int { return -value; } }");
     assert_eq!(run_unary(&neg, i64::MAX).unwrap(), -i64::MAX);
     assert_eq!(run_unary(&neg, 0).unwrap(), 0);
     assert!(matches!(
@@ -148,7 +148,7 @@ fn ordinary_multiplication_and_negation_trap_at_i64_boundaries() {
 #[test]
 fn constant_folding_uses_checked_i64_rules() {
     let safe = compile(
-        "seiyaku CheckedConstant { view fn run() -> i64 { return (9223372036854775807 - 1) + 1; } }",
+        "seiyaku CheckedConstant { view fn run() -> int { return (9223372036854775807 - 1) + 1; } }",
     );
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&safe).unwrap();
@@ -157,8 +157,8 @@ fn constant_folding_uses_checked_i64_rules() {
     assert_eq!(vm.register(10) as i64, i64::MAX);
 
     for source in [
-        "seiyaku OverflowAdd { view fn run() -> i64 { return 9223372036854775807 + 1; } }",
-        "seiyaku OverflowNeg { view fn run() -> i64 { return -(-9223372036854775808); } }",
+        "seiyaku OverflowAdd { view fn run() -> int { return 9223372036854775807 + 1; } }",
+        "seiyaku OverflowNeg { view fn run() -> int { return -(-9223372036854775808); } }",
     ] {
         let error = Compiler::new()
             .compile_source(source)
@@ -175,7 +175,7 @@ fn wrapping_builtins_are_the_explicit_modular_opt_in() {
     let program = compile(
         r#"
 seiyaku WrappingArithmetic {
-  view fn run() -> (i64, i64, i64, i64) {
+  view fn run() -> (int, int, int, int) {
     return (
         math::wrapping_add(left: 9223372036854775807, right: 1),
         math::wrapping_sub(left: -9223372036854775808, right: 1),

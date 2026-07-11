@@ -708,12 +708,12 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
             {
                 "version",
                 "source_network",
+                "protocol_version",
                 "chain_id_hash",
                 "checkpoint_height",
                 "checkpoint_block_hash",
-                "validator_set_epoch",
-                "validator_set_hash",
-                "validator_set_hash_version",
+                "checkpoint_context_id",
+                "checkpoint_finality_artifact_hash",
             }
         ),
         label,
@@ -722,6 +722,9 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
     source = _network(record["source_network"], f"{label}.source_network")
     if source[0] != "sora-taira":
         raise ValueError(f"{label}.source_network must be SORA Taira")
+    protocol_version = _integer(
+        record["protocol_version"], f"{label}.protocol_version", 2, 2
+    )
     chain_hash = bytes.fromhex(_upper_hex(record["chain_id_hash"], f"{label}.chain_id_hash", 32))
     if chain_hash != _SORA_TAIRA_CHAIN_ID_HASH:
         raise ValueError(f"{label}.chain_id_hash is not the Taira chain commitment")
@@ -731,26 +734,27 @@ def _sora_finality_anchor(value: Any, label: str) -> Tuple[bytes, Tuple[bytes, .
     checkpoint_hash = bytes.fromhex(
         _upper_hex(record["checkpoint_block_hash"], f"{label}.checkpoint_block_hash", 32)
     )
-    validator_set_epoch = _integer(
-        record["validator_set_epoch"], f"{label}.validator_set_epoch", 0, _U64_MASK
+    context_id = bytes.fromhex(
+        _upper_hex(record["checkpoint_context_id"], f"{label}.checkpoint_context_id", 32)
     )
-    validator_hash = bytes.fromhex(
-        _upper_hex(record["validator_set_hash"], f"{label}.validator_set_hash", 32)
+    finality_artifact_hash = bytes.fromhex(
+        _upper_hex(
+            record["checkpoint_finality_artifact_hash"],
+            f"{label}.checkpoint_finality_artifact_hash",
+            32,
+        )
     )
-    validator_hash_version = _integer(
-        record["validator_set_hash_version"], f"{label}.validator_set_hash_version", 1, 1
-    )
-    roles = (chain_hash, checkpoint_hash, validator_hash)
+    roles = (chain_hash, checkpoint_hash, context_id, finality_artifact_hash)
     if len(set(roles)) != len(roles):
         raise ValueError(f"{label} reuses a consensus hash role")
     canonical = (
         b"\x01\x01"
+        + protocol_version.to_bytes(2, "little")
         + chain_hash
         + checkpoint_height.to_bytes(8, "little")
         + checkpoint_hash
-        + validator_set_epoch.to_bytes(8, "little")
-        + validator_hash
-        + validator_hash_version.to_bytes(2, "little")
+        + context_id
+        + finality_artifact_hash
     )
     return _keccak_256(_SORA_FINALITY_ANCHOR_PREFIX + canonical), roles
 

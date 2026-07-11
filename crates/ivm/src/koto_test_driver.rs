@@ -98,7 +98,7 @@ struct DiscoveredTestModule {
 
 struct CompiledSuite {
     code: Vec<u8>,
-    runtime_code: Vec<u8>,
+    runtime_code: Option<Vec<u8>>,
     report: CompileReport,
     pc_base: u64,
     runtime_entrypoints: HashMap<String, u64>,
@@ -138,7 +138,7 @@ struct KotoTestHost {
     actors: HashMap<String, FixtureActor>,
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, u64>,
-    program: Vec<u8>,
+    program: Option<Vec<u8>>,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
     supplemental_delta_trace: Vec<crate::zk::DeltaEntry>,
@@ -617,33 +617,42 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .build_test_sources(&target, &test_modules)
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
-    let runtime_output = outputs.runtime;
     let code = test_output.artifact;
     let test_report = test_output.report;
-    let runtime_code = runtime_output.artifact;
-    let runtime_report = runtime_output.report;
     let metadata = ProgramMetadata::parse(&code)
         .map_err(|err| format!("failed to parse compiled program metadata: {err:?}"))?;
     let test_pc_base = metadata.prefix_len() as u64;
-    let runtime_metadata = ProgramMetadata::parse(&runtime_code)
-        .map_err(|err| format!("failed to parse runtime program metadata: {err:?}"))?;
-    let runtime_pc_base = runtime_metadata.prefix_len() as u64;
-    let runtime_entrypoints = runtime_metadata
-        .contract_interface
-        .as_ref()
-        .map(|interface| {
-            interface
-                .entrypoints
-                .iter()
-                .map(|entry| {
-                    (
-                        entry.name.clone(),
-                        runtime_pc_base.saturating_add(entry.entry_pc),
-                    )
+    let (runtime_code, runtime_report, runtime_pc_base, runtime_entrypoints) =
+        if let Some(runtime_output) = outputs.runtime {
+            let runtime_code = runtime_output.artifact;
+            let runtime_metadata = ProgramMetadata::parse(&runtime_code)
+                .map_err(|err| format!("failed to parse runtime program metadata: {err:?}"))?;
+            let runtime_pc_base = runtime_metadata.prefix_len() as u64;
+            let runtime_entrypoints = runtime_metadata
+                .contract_interface
+                .as_ref()
+                .map(|interface| {
+                    interface
+                        .entrypoints
+                        .iter()
+                        .map(|entry| {
+                            (
+                                entry.name.clone(),
+                                runtime_pc_base.saturating_add(entry.entry_pc),
+                            )
+                        })
+                        .collect::<HashMap<_, _>>()
                 })
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default();
+                .unwrap_or_default();
+            (
+                Some(runtime_code),
+                runtime_output.report,
+                runtime_pc_base,
+                runtime_entrypoints,
+            )
+        } else {
+            (None, test_report.clone(), test_pc_base, HashMap::new())
+        };
 
     let mut test_pcs = HashMap::new();
     for entry in &test_report.budget_report {
@@ -1025,7 +1034,7 @@ struct KotoTestHostSnapshot {
 }
 
 impl KotoTestHost {
-    fn new(inner: WsvHost, program: Vec<u8>, entrypoints: HashMap<String, u64>) -> Self {
+    fn new(inner: WsvHost, program: Option<Vec<u8>>, entrypoints: HashMap<String, u64>) -> Self {
         Self {
             inner,
             actors: HashMap::new(),
@@ -1236,6 +1245,11 @@ impl KotoTestHost {
                 ));
             }
         };
+        let Some(program) = self.program.as_deref() else {
+            return self.fail_test(format!(
+                "runtime entrypoint `{entrypoint}` has no compiled runtime artifact"
+            ));
+        };
 
         let rollback = self
             .inner
@@ -1260,7 +1274,7 @@ impl KotoTestHost {
             .memory
             .preload_input(0, &clear)
             .map_err(|_| crate::VMError::DecodeError)?;
-        let runtime_program = with_return_halt(&self.program);
+        let runtime_program = with_return_halt(program);
         nested_vm
             .load_program(&runtime_program)
             .map_err(|_| crate::VMError::DecodeError)?;
@@ -2315,7 +2329,13 @@ mod tests {
             fixtures: HashMap::new(),
         };
         let compiled = compile_suite(&suite, true).expect("compile ZK test suite");
-        for artifact in [&compiled.code, &compiled.runtime_code] {
+        for artifact in [
+            &compiled.code,
+            compiled
+                .runtime_code
+                .as_ref()
+                .expect("lifecycle target has a runtime artifact"),
+        ] {
             let metadata = ProgramMetadata::parse(artifact).expect("parse compiled metadata");
             assert_ne!(metadata.metadata.mode & crate::metadata::mode::ZK, 0);
         }
@@ -2937,7 +2957,7 @@ mod tests {
         let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
         let mut host = KotoTestHost::new(
             WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
-            Vec::new(),
+            None,
             HashMap::new(),
         );
         let mut public_inputs = BTreeMap::new();
@@ -2958,7 +2978,7 @@ mod tests {
         let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
         let mut host = KotoTestHost::new(
             WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
-            Vec::new(),
+            None,
             HashMap::new(),
         );
         let mut public_inputs = BTreeMap::new();
@@ -3054,7 +3074,7 @@ mod tests {
         let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
         let mut host = KotoTestHost::new(
             WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
-            Vec::new(),
+            None,
             HashMap::new(),
         );
         let mut public_inputs = BTreeMap::new();

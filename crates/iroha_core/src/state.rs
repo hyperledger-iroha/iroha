@@ -11186,7 +11186,7 @@ pub trait StakeSnapshot {
 }
 
 #[allow(clippy::too_many_lines)]
-fn epoch_validator_peer_ids_from_world<I>(
+pub(crate) fn epoch_validator_peer_ids_from_world<I>(
     world: &impl WorldReadOnly,
     commit_topology: I,
     block_height: u64,
@@ -73816,11 +73816,11 @@ mod tests {
         let err = state
             .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
             .expect_err("post-replacement publication failure must restore the prior journal");
-        assert!(matches!(err, LaneLifecycleError::Storage(_)));
+        assert!(matches!(&err, LaneLifecycleError::Storage(_)));
         assert!(
-            err.to_string()
-                .contains("failed after journal replacement for test injection"),
-            "State must receive the original rollback-safe publication error: {err}"
+            !err.to_string()
+                .contains("exact prior-journal restoration was not proven"),
+            "successful exact restoration must not be reported as a fatal restore failure: {err}"
         );
         let rolled_back_nexus = state.nexus_snapshot();
         assert_eq!(rolled_back_nexus.lane_catalog, before_nexus.lane_catalog);
@@ -73857,7 +73857,9 @@ mod tests {
         state
             .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
             .expect("the one-shot failure must allow a corrected exact retry");
-        assert_eq!(state.nexus_snapshot().lane_catalog, configured);
+        let retried_nexus = state.nexus_snapshot();
+        assert_eq!(retried_nexus.lane_catalog, configured);
+        assert_eq!(retried_nexus.configured_lane_catalog, configured);
         assert!(configured_blocks_dir.exists());
         let (baseline, phases, has_temp) = kura
             .lane_geometry_journal_state_for_test()
@@ -102074,6 +102076,55 @@ seiyaku IdentitylessRawCallback {
         );
         assert!(state.kura.merge_ledger_snapshot().is_empty());
         assert!(state.settled_nexus_fee_receipts.read().is_empty());
+    }
+
+    #[test]
+    fn staged_fee_merge_kura_failure_publishes_no_burn_or_receipt_cache() {
+        let source_id = [0x47; 32];
+        let (state, sponsor_id, asset_def_id, commit_keypairs) =
+            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+        let candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("fee merge candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        let parent = state
+            .kura
+            .get_block(NonZeroUsize::new(1).expect("non-zero parent height"))
+            .expect("fee merge carrier parent");
+        let carrier = certified_merge_carrier_after(&parent, &entry);
+        let state_block = state
+            .block_with_certified_merge_entry(carrier.header().clone(), &entry)
+            .expect("stage fee merge before Kura publication");
+
+        state.kura.fail_next_merge_append_for_test();
+        state
+            .kura
+            .store_block_with_merge_entry(Arc::new(carrier), &entry)
+            .expect_err("Kura publication failure must abort before State publication");
+        drop(state_block);
+
+        let receipt_marker =
+            State::nexus_fee_receipt_marker_key(&source_id).expect("fee receipt marker key");
+        assert_eq!(state.committed_height(), 1);
+        assert_eq!(
+            account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
+            Numeric::from(10_u32)
+        );
+        assert!(state.kura.merge_ledger_snapshot().is_empty());
+        assert!(state.settled_nexus_fee_receipts.read().is_empty());
+        assert!(
+            state
+                .world
+                .view()
+                .smart_contract_state()
+                .get(&receipt_marker)
+                .is_none(),
+            "Kura failure must publish no durable receipt marker"
+        );
+        assert!(state.merge_ledger().is_empty());
     }
 
     #[test]

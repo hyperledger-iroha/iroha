@@ -8,9 +8,9 @@
 use std::{fmt, io::Write};
 
 use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId,
+    AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric, NumericOperationError,
+    Quantity,
 };
-use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use norito::{
     Decode, Encode, NoritoDeserialize, NoritoSerialize,
     core::{self as ncore, DecodeFromSlice},

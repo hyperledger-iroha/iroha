@@ -35,6 +35,11 @@ fn norito_bytes_tlv<T: norito::core::NoritoSerialize>(val: &T) -> Vec<u8> {
     tlv_from_payload(&payload, PointerType::NoritoBytes as u16)
 }
 
+fn quantity_tlv(value: Numeric) -> Vec<u8> {
+    let quantity = Quantity::try_from_numeric(value).expect("canonical quantity");
+    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+}
+
 fn tlv_from_payload(payload: &[u8], type_id: u16) -> Vec<u8> {
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     blob.extend_from_slice(&type_id.to_be_bytes());
@@ -228,7 +233,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let from_tlv = tlv_blob(&from, PointerType::AccountId as u16);
     let to_tlv = tlv_blob(&to, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
-    let amount_tlv = norito_bytes_tlv(&Numeric::from(1000_u64));
+    let amount_tlv = quantity_tlv(Numeric::from(1000_u64));
     let dataspace_tlv = tlv_blob(
         &iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         PointerType::DataSpaceId as u16,
@@ -365,8 +370,8 @@ fn host_batches_transfer_v1_calls() {
     let first_recipient_tlv = tlv_blob(&to_a, PointerType::AccountId as u16);
     let second_recipient_tlv = tlv_blob(&to_b, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def_id, PointerType::AssetDefinitionId as u16);
-    let amount_a_tlv = norito_bytes_tlv(&Numeric::from(7_u64));
-    let amount_b_tlv = norito_bytes_tlv(&Numeric::from(4_u64));
+    let amount_a_tlv = quantity_tlv(Numeric::from(7_u64));
+    let amount_b_tlv = quantity_tlv(Numeric::from(4_u64));
     let mut vm = IVM::new(50_000);
     vm.set_host(CoreHost::new(from.clone()));
     let mut cursor = 0;
@@ -584,7 +589,7 @@ fn host_bridges_mint_asset() {
     );
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
-    let amount_tlv = norito_bytes_tlv(&Numeric::from(123_u64));
+    let amount_tlv = quantity_tlv(Numeric::from(123_u64));
 
     let mut vm = IVM::new(100_000);
     vm.set_host(CoreHost::new(authority.clone()));

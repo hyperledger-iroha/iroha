@@ -860,7 +860,7 @@ mod tests {
     fn detects_constant_overflow() {
         let findings = analyze_static(
             r#"
-            fn overflow() -> i64 {
+            fn overflow() -> int {
                 return 9223372036854775807 + 1;
             }
         "#,
@@ -875,7 +875,7 @@ mod tests {
     fn detects_division_by_zero_literal() {
         let findings = analyze_static(
             r#"
-            fn div_zero() -> i64 {
+            fn div_zero() -> int {
                 let x = 10;
                 return x / 0;
             }
@@ -891,7 +891,7 @@ mod tests {
     fn raw_contract_calls_are_rejected_before_static_analysis() {
         let program = parse(
             r#"
-            state balances: StateMap<i64, i64>;
+            state StateMap<int, int> balances;
 
             fn withdraw() {
                 balances[1] = 0;
@@ -920,7 +920,7 @@ mod tests {
     fn unary_neg_on_i64_min_literal_does_not_panic() {
         let findings = analyze_static(
             r#"
-            fn neg_min() -> i64 {
+            fn neg_min() -> int {
                 return -(-9223372036854775808);
             }
         "#,
@@ -932,7 +932,7 @@ mod tests {
     fn ordinary_state_writes_do_not_create_reentrancy_findings() {
         let findings = analyze_static(
             r#"
-            state balances: StateMap<i64, i64>;
+            state StateMap<int, int> balances;
 
             fn withdraw() {
                 balances[1] = balances.get(1).unwrap_or(0) - 1;

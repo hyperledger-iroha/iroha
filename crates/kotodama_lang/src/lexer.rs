@@ -690,34 +690,26 @@ mod tests {
     }
 
     #[test]
-    fn decimal_literal_overflow_is_reported() {
-        let err = lex("340282366920938463463374607431768211456").unwrap_err();
-        assert!(err.contains("overflow"));
+    fn large_integer_spelling_is_preserved_for_the_parser_domain_check() {
+        let spelling = "340282366920938463463374607431768211456";
+        let tokens = lex(spelling).expect("lex adaptive-width int");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling));
     }
 
     #[test]
-    fn complete_u128_domain_is_tokenized() {
-        let tokens = lex("340282366920938463463374607431768211455u128").expect("lex");
+    fn former_u128_endpoint_is_an_ordinary_unsuffixed_int() {
+        let spelling = "340282366920938463463374607431768211455";
+        let tokens = lex(spelling).expect("lex");
         assert!(
-            matches!(tokens[0].kind, TokenKind::Number(n) if n == u128::MAX),
-            "expected u128 literal token, got {:?}",
+            matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling),
+            "expected unsuffixed int token, got {:?}",
             tokens[0].kind
         );
     }
 
     #[test]
-    fn decimal_fraction_literal_is_rejected() {
-        let error = lex("1_234.50_0").expect_err("fractional literal must be rejected");
-        assert!(
-            error.contains("E_AMOUNT_SUFFIX")
-                && error.contains("decimal fractions require the adjacent lowercase `amt` suffix"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn amount_literals_retain_their_exact_spelling() {
-        let tokens = lex("10amt 1.250_0amt 0.000amt").expect("lex Amount literals");
+    fn exact_decimal_literals_retain_their_source_spelling() {
+        let tokens = lex("1_234.50_0 1e6 1.5e-3").expect("lex exact decimals");
         let spellings = tokens
             .iter()
             .filter_map(|token| match &token.kind {
@@ -725,41 +717,27 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(spellings, ["10amt", "1.250_0amt", "0.000amt"]);
+        assert_eq!(spellings, ["1_234.50_0", "1e6", "1.5e-3"]);
     }
 
     #[test]
-    fn malformed_amount_suffixes_have_stable_diagnostics() {
-        for spelling in ["1.25am", "1.25Amt", "1.25amount", "10Amt", "10amt1"] {
-            let error = lex(spelling).expect_err("malformed Amount suffix must fail");
+    fn every_retired_numeric_suffix_has_a_stable_diagnostic() {
+        for spelling in [
+            "1i64", "1u128", "1amt", "1.25amt", "1.25float", "10money",
+        ] {
+            let error = lex(spelling).expect_err("retired numeric suffix must fail");
             assert!(
-                error.contains("E_AMOUNT_SUFFIX"),
-                "unexpected diagnostic for `{spelling}`: {error}"
-            );
-        }
-        for spelling in ["0x10amt", "0b10amt", "1.amt"] {
-            let error = lex(spelling).expect_err("malformed Amount spelling must fail");
-            assert!(
-                error.contains("E_AMOUNT_MALFORMED"),
+                error.contains("E_RETIRED_NUMERIC_SUFFIX"),
                 "unexpected diagnostic for `{spelling}`: {error}"
             );
         }
     }
 
     #[test]
-    fn separated_fractional_amount_suffix_has_stable_diagnostic() {
-        let error = lex("1.25 amt").expect_err("separated suffix must fail");
-        assert!(error.contains("E_AMOUNT_SUFFIX_SEPARATED"), "{error}");
-    }
-
-    #[test]
-    fn amount_token_does_not_change_integer_suffix_behavior() {
-        let tokens = lex("10 10i64 10u128").expect("lex integers");
-        assert!(matches!(tokens[0].kind, TokenKind::Number(10)));
-        assert!(matches!(tokens[1].kind, TokenKind::Number(10)));
-        assert!(matches!(&tokens[2].kind, TokenKind::Ident(suffix) if suffix == "i64"));
-        assert!(matches!(tokens[3].kind, TokenKind::Number(10)));
-        assert!(matches!(&tokens[4].kind, TokenKind::Ident(suffix) if suffix == "u128"));
+    fn separated_type_name_is_not_a_literal_suffix() {
+        let tokens = lex("10 int").expect("lex separate literal and type identifier");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == "10"));
+        assert!(matches!(&tokens[1].kind, TokenKind::Ident(name) if name == "int"));
     }
 
     #[test]
@@ -892,9 +870,9 @@ mod tests {
     #[test]
     fn semantic_tokens_reuse_lossless_token_boundaries() {
         let text = r##"seiyaku Demo { // trivia
-            kotoage fn run(value: i64) authorize("Run") {
-                let raw: string = r#"日本語"#;
-                let data: bytes = br"a\n";
+            kotoage fn run(int value) authorize("Run") {
+                let string raw = r#"日本語"#;
+                let bytes data = br"a\n";
             }
         }"##;
         let source = SourceFile::new(SourceId(41), "boundaries.ko", text);
@@ -915,7 +893,7 @@ mod tests {
 
     #[test]
     fn recovering_lowering_retains_valid_tokens_without_admitting_bad_source() {
-        let text = "seiyaku Broken { fn run() { let value: i64 = @; } }";
+        let text = "seiyaku Broken { fn run() { let int value = @; } }";
         let source = SourceFile::new(SourceId(43), "recovering.ko", text);
         let lossless = crate::syntax::lexer::lex(&source, FrontendBudget::v1());
 

@@ -86,6 +86,132 @@ def write_json(path: Path, value: object) -> None:
     path.write_bytes(common.canonical_json_file_bytes(value))
 
 
+def current_synthetic_validator_identity() -> dict[str, object]:
+    """Build an exact local-source identity without requiring a Cargo build."""
+
+    identity: dict[str, object] = {
+        "protocol_version": 1,
+        "crate_name": "iroha_sccp",
+        "crate_version": common._workspace_crate_version(),
+        "enabled_features": [],
+        "build_profile": "release",
+        "target_triple": "aarch64-apple-darwin",
+        "rustc_version": (
+            f"rustc {common._locked_rust_version()} "
+            "(0123456789abcdef0123456789abcdef01234567 2026-01-01)"
+        ),
+        "source_sha256_hex": hashlib.sha256(
+            common.RUST_VALIDATOR_SOURCE.read_bytes()
+        ).hexdigest(),
+        "crate_manifest_sha256_hex": hashlib.sha256(
+            common.SCCP_CRATE_MANIFEST.read_bytes()
+        ).hexdigest(),
+        "build_script_sha256_hex": hashlib.sha256(
+            common.SCCP_BUILD_SCRIPT.read_bytes()
+        ).hexdigest(),
+        "workspace_manifest_sha256_hex": hashlib.sha256(
+            common.WORKSPACE_MANIFEST.read_bytes()
+        ).hexdigest(),
+        "cargo_lock_sha256_hex": hashlib.sha256(
+            common.CARGO_LOCK.read_bytes()
+        ).hexdigest(),
+        "toolchain_lock_sha256_hex": hashlib.sha256(
+            common.RUST_TOOLCHAIN_LOCK.read_bytes()
+        ).hexdigest(),
+        "executable_sha256_hex": hashlib.sha256(
+            b"synthetic-sccp-release-validator"
+        ).hexdigest(),
+        "build_identity_hex": "00" * 32,
+    }
+    identity["build_identity_hex"] = common.validator_build_identity_hex(identity)
+    return common._validate_validator_identity(identity)
+
+
+def synthetic_bundle_evidence(
+    *, production_semantics: bool
+) -> tuple[dict[str, object], bytes, dict[str, object]]:
+    """Build an unsigned evidence projection sufficient for bundle-index tests."""
+
+    artifacts: list[dict[str, object]] = []
+
+    def add(kind: str, path: str, label: str) -> None:
+        artifacts.append(
+            {
+                "path": path,
+                "kind": kind,
+                "sha256_hex": hashlib.sha256(label.encode("ascii")).hexdigest(),
+                "size_bytes": len(label),
+            }
+        )
+
+    for phase in common.REQUIRED_PHASES:
+        add("phase-transcript", f"artifacts/phases/{phase}.log", f"phase:{phase}")
+    for profile in common.PROFILE_ORDER:
+        add("lane-evidence", f"artifacts/lanes/{profile}.json", f"lane:{profile}")
+
+    if production_semantics:
+        for profile in common.PROFILE_ORDER:
+            for role, kind, filename in common.SEMANTIC_ARTIFACT_ROLES:
+                label = f"semantic:{profile}:{role}"
+                digest = hashlib.sha256(label.encode("ascii")).hexdigest()
+                add(
+                    kind,
+                    common._semantic_artifact_path(role, digest, filename),
+                    label,
+                )
+            for auditor_role in common.CIRCUIT_AUDITOR_ROLES:
+                add(
+                    "circuit-audit-report",
+                    common._circuit_audit_report_path(profile, auditor_role),
+                    f"audit:{profile}:{auditor_role}",
+                )
+
+    artifacts.sort(key=lambda entry: entry["path"])
+    policy = {"policy_id": "synthetic-bundle-policy-v1"}
+    policy_bytes = common.canonical_json_file_bytes(policy)
+    evidence: dict[str, object] = {
+        "release_id": "synthetic-bundle-release-v1",
+        "trust_policy_id": policy["policy_id"],
+        "trust_policy_sha256_hex": hashlib.sha256(policy_bytes).hexdigest(),
+        "validator": current_synthetic_validator_identity(),
+        "artifacts": artifacts,
+    }
+    evidence_bytes = common.canonical_json_file_bytes(evidence)
+    index = common.make_bundle_index(
+        evidence,
+        evidence_bytes,
+        policy,
+        policy_bytes,
+        evidence["validator"]["executable_sha256_hex"],
+    )
+    return evidence, evidence_bytes, index
+
+
+def reseal_bundle_index(index: dict[str, object]) -> None:
+    """Recompute the root so mutation tests reach inventory validation."""
+
+    index["entries"].sort(key=lambda entry: entry["path"])
+    index["bundle_root_hash_hex"] = common.bundle_root_hash_hex(
+        index["entries"],
+        trust_policy_id=index["trust_policy_id"],
+        trust_policy_sha256_hex=index["trust_policy_sha256_hex"],
+        validator=index["validator"],
+        validator_executable_sha256_hex=index[
+            "validator_executable_sha256_hex"
+        ],
+    )
+
+
+def swap_first_bundle_entry_kinds(
+    index: dict[str, object], left_kind: str, right_kind: str
+) -> None:
+    """Swap two entry kinds without changing aggregate structural counts."""
+
+    left = next(entry for entry in index["entries"] if entry["kind"] == left_kind)
+    right = next(entry for entry in index["entries"] if entry["kind"] == right_kind)
+    left["kind"], right["kind"] = right_kind, left_kind
+
+
 def mutated_policy(tmp_path: Path, mutation) -> Path:
     value = json.loads(FIXTURE_POLICY.read_text(encoding="utf-8"))
     mutation(value)
@@ -220,6 +346,7 @@ def test_rust_release_trust_rejects_malformed_and_cross_role_replay(
     "case",
     (
         "circuit-id",
+        "diagnostic-classification",
         "semantics",
         "signal-binding-artifact",
         "zero-witness",
@@ -228,8 +355,13 @@ def test_rust_release_trust_rejects_malformed_and_cross_role_replay(
         "profile-hash",
         "anchor-chain",
         "anchor-height",
-        "anchor-alias",
-        "anchor-version",
+        "anchor-protocol",
+        "anchor-zero-context",
+        "anchor-zero-artifact",
+        "anchor-context-alias",
+        "anchor-artifact-alias",
+        "anchor-protocol-type",
+        "anchor-legacy-field",
         "anchor-hash",
     ),
 )
@@ -241,6 +373,8 @@ def test_rust_release_trust_rejects_semantic_policy_and_anchor_drift(
     anchor = proof["sora_finality_anchor"]
     if case == "circuit-id":
         proof["circuit_id"] = "sccp-sora-taira-generic-groth16-bn254-v1"
+    elif case == "diagnostic-classification":
+        proof["circuit_id"] = "public-signal-binding-material-only"
     elif case == "semantics":
         proof["semantics"] = list(common.REQUIRED_SEMANTICS[:-1])
     elif case == "signal-binding-artifact":
@@ -261,10 +395,22 @@ def test_rust_release_trust_rejects_semantic_policy_and_anchor_drift(
         anchor["chain_id_hash_hex"] = "53" * 32
     elif case == "anchor-height":
         anchor["checkpoint_height"] = 0
-    elif case == "anchor-alias":
-        anchor["validator_set_hash_hex"] = anchor["checkpoint_block_hash_hex"]
-    elif case == "anchor-version":
-        anchor["validator_set_hash_version"] = 2
+    elif case == "anchor-protocol":
+        anchor["protocol_version"] = 1
+    elif case == "anchor-zero-context":
+        anchor["checkpoint_context_id_hex"] = "00" * 32
+    elif case == "anchor-zero-artifact":
+        anchor["checkpoint_finality_artifact_hash_hex"] = "00" * 32
+    elif case == "anchor-context-alias":
+        anchor["checkpoint_context_id_hex"] = anchor["checkpoint_block_hash_hex"]
+    elif case == "anchor-artifact-alias":
+        anchor["checkpoint_finality_artifact_hash_hex"] = anchor[
+            "checkpoint_context_id_hex"
+        ]
+    elif case == "anchor-protocol-type":
+        anchor["protocol_version"] = True
+    elif case == "anchor-legacy-field":
+        anchor["validator_set_epoch"] = 1
     elif case == "anchor-hash":
         proof["sora_finality_anchor_hash_hex"] = "54" * 32
     else:
@@ -383,6 +529,9 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
             circuit_id="sccp-labeled-signal-binding-v1"
         ),
         lambda value: value["proof_systems"][0].update(
+            circuit_id="public-signal-binding-material-only"
+        ),
+        lambda value: value["proof_systems"][0].update(
             circuit_artifact_sha256_hex=hashlib.sha256(
                 common._SIGNAL_BINDING_CIRCUIT.read_bytes()
             ).hexdigest()
@@ -417,12 +566,29 @@ def test_production_clis_cannot_accept_fixture_policy(script: Path, tmp_path: Pa
             checkpoint_block_hash_hex="00" * 32
         ),
         lambda value: value["proof_systems"][0]["sora_finality_anchor"].update(
-            validator_set_hash_hex=value["proof_systems"][0]["sora_finality_anchor"][
+            protocol_version=1
+        ),
+        lambda value: value["proof_systems"][0]["sora_finality_anchor"].update(
+            protocol_version=True
+        ),
+        lambda value: value["proof_systems"][0]["sora_finality_anchor"].update(
+            checkpoint_context_id_hex="00" * 32
+        ),
+        lambda value: value["proof_systems"][0]["sora_finality_anchor"].update(
+            checkpoint_finality_artifact_hash_hex="00" * 32
+        ),
+        lambda value: value["proof_systems"][0]["sora_finality_anchor"].update(
+            checkpoint_context_id_hex=value["proof_systems"][0]["sora_finality_anchor"][
                 "checkpoint_block_hash_hex"
             ]
         ),
         lambda value: value["proof_systems"][0]["sora_finality_anchor"].update(
-            validator_set_hash_version=2
+            checkpoint_finality_artifact_hash_hex=value["proof_systems"][0][
+                "sora_finality_anchor"
+            ]["checkpoint_context_id_hex"]
+        ),
+        lambda value: value["proof_systems"][0]["sora_finality_anchor"].update(
+            validator_set_epoch=1
         ),
         lambda value: value["proof_systems"][0].update(
             sora_finality_anchor_hash_hex="00" * 32
@@ -690,6 +856,290 @@ def test_bundle_rejects_inventory_and_commitment_tampering(
         verifier.verify_bundle(
             bundle, FIXTURE_POLICY, policy, policy_bytes, validator_path()
         )
+
+
+@pytest.mark.parametrize("production_semantics", (False, True))
+def test_bundle_index_accepts_exact_fixture_and_production_inventory(
+    production_semantics: bool,
+) -> None:
+    evidence, evidence_bytes, index = synthetic_bundle_evidence(
+        production_semantics=production_semantics
+    )
+    assert common.validate_bundle_index(copy.deepcopy(index)) == index
+    assert (
+        common.validate_bundle_index_against_evidence(
+            index, evidence, evidence_bytes
+        )
+        == index
+    )
+    expected_artifacts = 13
+    if production_semantics:
+        expected_artifacts += (
+            len(common.PROFILE_ORDER) * len(common.SEMANTIC_ARTIFACT_ROLES)
+            + len(common.PROFILE_ORDER) * len(common.CIRCUIT_AUDITOR_ROLES)
+        )
+    assert len(index["entries"]) == expected_artifacts + 1
+
+
+def test_bundle_index_accepts_policy_shared_semantic_roles_but_distinct_proofs() -> None:
+    evidence, _, _ = synthetic_bundle_evidence(production_semantics=True)
+    shared_kinds = {
+        kind
+        for _, kind, _ in common.SEMANTIC_ARTIFACT_ROLES
+        if kind != "honest-proof"
+    }
+    retained_shared: set[str] = set()
+    retained = []
+    for artifact in evidence["artifacts"]:
+        kind = artifact["kind"]
+        if kind in shared_kinds:
+            if kind in retained_shared:
+                continue
+            retained_shared.add(kind)
+        retained.append(artifact)
+    evidence["artifacts"] = retained
+    evidence_bytes = common.canonical_json_file_bytes(evidence)
+    policy = {"policy_id": "synthetic-bundle-policy-v1"}
+    policy_bytes = common.canonical_json_file_bytes(policy)
+    index = common.make_bundle_index(
+        evidence,
+        evidence_bytes,
+        policy,
+        policy_bytes,
+        evidence["validator"]["executable_sha256_hex"],
+    )
+    assert sum(
+        entry["kind"] == "honest-proof" for entry in index["entries"]
+    ) == len(common.PROFILE_ORDER)
+    for kind in shared_kinds:
+        assert sum(entry["kind"] == kind for entry in index["entries"]) == 1
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    (
+        (
+            lambda entries: entries.append(
+                {
+                    "path": "artifacts/semantic/circuit-artifact/"
+                    + "91" * 32
+                    + "-circuit.bin",
+                    "kind": "semantic-circuit",
+                    "sha256_hex": "91" * 32,
+                    "size_bytes": 1,
+                }
+            ),
+            "semantic-circuit",
+        ),
+        (
+            lambda entries: entries.__setitem__(
+                slice(None),
+                [entry for entry in entries if entry["kind"] != "circuit-audit-report"],
+            ),
+            "audit reports",
+        ),
+        (
+            lambda entries: entries.__setitem__(
+                slice(None),
+                [
+                    entry
+                    for entry in entries
+                    if entry["kind"] != "witness-generator"
+                ],
+            ),
+            "witness-generator",
+        ),
+        (
+            lambda entries: entries.append(
+                {
+                    "path": "artifacts/semantic/honest-proof/"
+                    + "92" * 32
+                    + "-honest-proof.norito",
+                    "kind": "honest-proof",
+                    "sha256_hex": "92" * 32,
+                    "size_bytes": 1,
+                }
+            ),
+            "honest-proof",
+        ),
+    ),
+)
+def test_bundle_index_rejects_partial_or_count_drifted_semantic_inventory(
+    mutation, match: str
+) -> None:
+    _, _, index = synthetic_bundle_evidence(production_semantics=True)
+    mutation(index["entries"])
+    reseal_bundle_index(index)
+    with pytest.raises(common.SccpReleaseError, match=match):
+        common.validate_bundle_index(index)
+
+
+def test_bundle_index_rejects_fixture_with_partial_semantic_inventory() -> None:
+    _, _, index = synthetic_bundle_evidence(production_semantics=False)
+    index["entries"].append(
+        {
+            "path": "artifacts/semantic/circuit-artifact/"
+            + "93" * 32
+            + "-circuit.bin",
+            "kind": "semantic-circuit",
+            "sha256_hex": "93" * 32,
+            "size_bytes": 1,
+        }
+    )
+    reseal_bundle_index(index)
+    with pytest.raises(common.SccpReleaseError, match="audit reports"):
+        common.validate_bundle_index(index)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda index: index["entries"].pop(
+            next(
+                position
+                for position, entry in enumerate(index["entries"])
+                if entry["kind"] == "semantic-circuit"
+            )
+        ),
+        lambda index: index["entries"].__setitem__(
+            next(
+                position
+                for position, entry in enumerate(index["entries"])
+                if entry["kind"] == "semantic-circuit"
+            ),
+            {
+                **next(
+                    entry
+                    for entry in index["entries"]
+                    if entry["kind"] == "semantic-circuit"
+                ),
+                "path": "artifacts/semantic/circuit-artifact/"
+                + "94" * 32
+                + "-circuit.bin",
+                "sha256_hex": "94" * 32,
+            },
+        ),
+        lambda index: next(
+            entry for entry in index["entries"] if entry["kind"] == "semantic-circuit"
+        ).update(size_bytes=2),
+        lambda index: next(
+            entry for entry in index["entries"] if entry["kind"] == "semantic-circuit"
+        ).update(sha256_hex="95" * 32),
+        lambda index: swap_first_bundle_entry_kinds(
+            index, "semantic-circuit", "witness-generator"
+        ),
+    ),
+)
+def test_bundle_index_must_exactly_match_signed_production_artifacts(mutation) -> None:
+    evidence, evidence_bytes, index = synthetic_bundle_evidence(
+        production_semantics=True
+    )
+    mutation(index)
+    reseal_bundle_index(index)
+    common.validate_bundle_index(index)
+    with pytest.raises(common.SccpReleaseError, match="exactly equal"):
+        common.validate_bundle_index_against_evidence(
+            index, evidence, evidence_bytes
+        )
+
+
+def test_bundle_index_rejects_omission_plus_untrusted_extra_substitution() -> None:
+    evidence, evidence_bytes, index = synthetic_bundle_evidence(
+        production_semantics=True
+    )
+    position = next(
+        position
+        for position, entry in enumerate(index["entries"])
+        if entry["kind"] == "semantic-circuit"
+    )
+    index["entries"][position] = {
+        **index["entries"][position],
+        "path": "artifacts/semantic/circuit-artifact/"
+        + "96" * 32
+        + "-circuit.bin",
+        "sha256_hex": "96" * 32,
+    }
+    reseal_bundle_index(index)
+    common.validate_bundle_index(index)
+    with pytest.raises(common.SccpReleaseError, match="exactly equal"):
+        common.validate_bundle_index_against_evidence(
+            index, evidence, evidence_bytes
+        )
+
+
+def test_bundle_index_rejects_cross_entry_hash_alias() -> None:
+    _, _, index = synthetic_bundle_evidence(production_semantics=True)
+    index["entries"][1]["sha256_hex"] = index["entries"][0]["sha256_hex"]
+    reseal_bundle_index(index)
+    with pytest.raises(common.SccpReleaseError, match="distinct SHA-256"):
+        common.validate_bundle_index(index)
+
+
+@pytest.mark.parametrize(
+    "hostile_path",
+    (
+        "../escape.json",
+        "/absolute.json",
+        "artifacts//double.json",
+        "artifacts/./dot.json",
+        "artifacts/../parent.json",
+        "artifacts\\windows.json",
+        "artifacts/phases/white space.log",
+    ),
+)
+def test_bundle_index_rejects_path_aliases_and_traversal(hostile_path: str) -> None:
+    _, _, index = synthetic_bundle_evidence(production_semantics=False)
+    index["entries"][1]["path"] = hostile_path
+    reseal_bundle_index(index)
+    with pytest.raises(common.SccpReleaseError, match="path|component"):
+        common.validate_bundle_index(index)
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    (
+        (
+            lambda entries: entries.pop(
+                next(
+                    position
+                    for position, entry in enumerate(entries)
+                    if entry["kind"] == "phase-transcript"
+                )
+            ),
+            "bounded signed artifact inventory|phase-transcript count",
+        ),
+        (
+            lambda entries: next(
+                entry for entry in entries if entry["kind"] == "lane-evidence"
+            ).update(kind="phase-transcript"),
+            "phase-transcript count",
+        ),
+        (
+            lambda entries: next(
+                entry for entry in entries if entry["kind"] == "phase-transcript"
+            ).update(kind="lane-evidence"),
+            "phase-transcript count",
+        ),
+        (
+            lambda entries: next(
+                entry for entry in entries if entry["kind"] == "lane-evidence"
+            ).update(kind="not-a-release-kind"),
+            "not part",
+        ),
+        (
+            lambda entries: next(
+                entry for entry in entries if entry["kind"] == "release-evidence"
+            ).update(path="artifacts/evidence.json"),
+            "at evidence.json",
+        ),
+    ),
+)
+def test_bundle_index_rejects_core_kind_and_count_confusion(mutation, match: str) -> None:
+    _, _, index = synthetic_bundle_evidence(production_semantics=False)
+    mutation(index["entries"])
+    reseal_bundle_index(index)
+    with pytest.raises(common.SccpReleaseError, match=match):
+        common.validate_bundle_index(index)
 
 
 def test_bundle_rejects_symlink_and_hardlink_entries(tmp_path: Path) -> None:
@@ -982,16 +1432,93 @@ def test_policy_hash_derivation_matches_rust_and_solidity_golden_vectors() -> No
         {
             "version": 1,
             "source_profile": "sora-taira",
+            "protocol_version": 2,
             "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
             "checkpoint_height": 5,
             "checkpoint_block_hash_hex": "73" * 32,
-            "validator_set_epoch": 1,
-            "validator_set_hash_hex": "74" * 32,
-            "validator_set_hash_version": 1,
+            "checkpoint_context_id_hex": "74" * 32,
+            "checkpoint_finality_artifact_hash_hex": "75" * 32,
         }
     )
     assert anchor_hash.hex() == (
-        "7dda271d98d9e4333093da84236157e39ce67f6f68680fedbdc17fbe8b7b6a4a"
+        "690888c1b9a1409ea47fc682be915184e86a817a2f0b3439eef82e64e08e990b"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda anchor: anchor.update(protocol_version=1),
+        lambda anchor: anchor.update(protocol_version=3),
+        lambda anchor: anchor.update(protocol_version=True),
+        lambda anchor: anchor.update(protocol_version="2"),
+        lambda anchor: anchor.update(checkpoint_height=True),
+        lambda anchor: anchor.update(checkpoint_context_id_hex="00" * 32),
+        lambda anchor: anchor.update(
+            checkpoint_finality_artifact_hash_hex="00" * 32
+        ),
+        lambda anchor: anchor.update(checkpoint_context_id_hex=True),
+        lambda anchor: anchor.update(
+            checkpoint_finality_artifact_hash_hex=bytes([0x75]) * 32
+        ),
+        lambda anchor: anchor.update(
+            checkpoint_context_id_hex=anchor["chain_id_hash_hex"]
+        ),
+        lambda anchor: anchor.update(
+            checkpoint_context_id_hex=anchor["checkpoint_block_hash_hex"]
+        ),
+        lambda anchor: anchor.update(
+            checkpoint_context_id_hex=anchor[
+                "checkpoint_finality_artifact_hash_hex"
+            ]
+        ),
+        lambda anchor: anchor.update(
+            checkpoint_finality_artifact_hash_hex=anchor[
+                "checkpoint_context_id_hex"
+            ]
+        ),
+        lambda anchor: anchor.update(
+            checkpoint_finality_artifact_hash_hex=anchor[
+                "checkpoint_block_hash_hex"
+            ]
+        ),
+        lambda anchor: anchor.update(
+            checkpoint_finality_artifact_hash_hex=anchor["chain_id_hash_hex"]
+        ),
+        lambda anchor: anchor.update(validator_set_epoch=1),
+        lambda anchor: anchor.update(validator_set_hash_hex="76" * 32),
+        lambda anchor: anchor.update(validator_set_hash_version=1),
+        lambda anchor: anchor.pop("checkpoint_context_id_hex"),
+        lambda anchor: anchor.pop("checkpoint_finality_artifact_hash_hex"),
+    ),
+)
+def test_sumeragi_v2_anchor_hash_rejects_protocol_role_and_schema_drift(
+    mutation,
+) -> None:
+    anchor = {
+        "version": 1,
+        "source_profile": "sora-taira",
+        "protocol_version": 2,
+        "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
+        "checkpoint_height": 5,
+        "checkpoint_block_hash_hex": "73" * 32,
+        "checkpoint_context_id_hex": "74" * 32,
+        "checkpoint_finality_artifact_hash_hex": "75" * 32,
+    }
+    mutation(anchor)
+    with pytest.raises(common.SccpReleaseError):
+        common.sora_finality_anchor_hash(anchor)
+
+
+def test_required_semantics_bind_v2_finality_artifact_and_dual_quorum() -> None:
+    assert common.REQUIRED_SEMANTICS == (
+        "sccp-canonical-transfer-v1",
+        "sccp-message-leaf-v1",
+        "sccp-merkle-inclusion-v1",
+        "sora-taira-block-commitment-v1",
+        "sora-taira-v2-finality-artifact-v1",
+        "sora-taira-v2-dual-quorum-v1",
+        "sora-taira-anchor-continuity-v1",
     )
 
 
@@ -1179,16 +1706,18 @@ def synthetic_production_semantic_inventory() -> tuple[
         anchor = {
             "version": 1,
             "source_profile": "sora-taira",
+            "protocol_version": 2,
             "chain_id_hash_hex": common.SORA_TAIRA_CHAIN_ID_HASH_HEX,
             "checkpoint_height": 100 + profile_index,
             "checkpoint_block_hash_hex": _semantic_hash(
                 f"{profile}:anchor-block"
             ),
-            "validator_set_epoch": 10 + profile_index,
-            "validator_set_hash_hex": _semantic_hash(
-                f"{profile}:validator-set"
+            "checkpoint_context_id_hex": _semantic_hash(
+                f"{profile}:height-context"
             ),
-            "validator_set_hash_version": 1,
+            "checkpoint_finality_artifact_hash_hex": _semantic_hash(
+                f"{profile}:finality-artifact"
+            ),
         }
         anchor_hash = common.sora_finality_anchor_hash(anchor).hex()
         proof_system: dict[str, object] = {

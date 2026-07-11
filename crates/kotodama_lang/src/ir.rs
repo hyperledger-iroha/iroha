@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
     ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
@@ -188,6 +187,26 @@ pub enum WideNumericKind {
     Quantity,
 }
 
+/// Rounded exact-decimal operation selected by the typed source method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericRoundOp {
+    /// `decimal / decimal -> decimal`.
+    DecimalDiv,
+    /// `quantity / decimal -> quantity`.
+    QuantityDiv,
+    /// `quantity / quantity -> decimal`.
+    QuantityRatio,
+}
+
+/// Exact-decimal to integer conversion policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecimalToIntOp {
+    /// Discard the fractional component toward zero.
+    Truncate,
+    /// Apply the explicit rounding mode operand.
+    Round,
+}
+
 /// Non-control-flow instructions.
 #[derive(Debug, PartialEq)]
 pub enum Instr {
@@ -211,7 +230,7 @@ pub enum Instr {
         left: Temp,
         right: Temp,
     },
-    /// Explicit modular `i64` addition, subtraction, or multiplication.
+    /// Explicit modulo-2^512 `int` addition, subtraction, or multiplication.
     WrappingBinary {
         dest: Temp,
         op: BinaryOp,
@@ -223,18 +242,28 @@ pub enum Instr {
         op: UnaryOp,
         operand: Temp,
     },
-    /// Explicit modular `i64` negation.
+    /// Explicit modulo-2^512 `int` negation.
     WrappingNeg {
         dest: Temp,
         operand: Temp,
     },
     /// Convert an internal signed IVM scalar into a source `int` pointer.
-    IntFromScalar {
+    IntFromI64 {
         dest: Temp,
         value: Temp,
     },
-    /// Convert a source `int` pointer to an internal signed IVM scalar.
-    IntToScalar {
+    /// Convert an internal unsigned IVM scalar into a source `int` pointer.
+    IntFromU64 {
+        dest: Temp,
+        value: Temp,
+    },
+    /// Fallibly convert a source `int` pointer to an internal signed IVM scalar.
+    IntTryToI64 {
+        dest: Temp,
+        value: Temp,
+    },
+    /// Fallibly convert a source `int` pointer to an internal unsigned IVM scalar.
+    IntTryToU64 {
         dest: Temp,
         value: Temp,
     },
@@ -271,6 +300,23 @@ pub enum Instr {
         left_kind: WideNumericKind,
         right_kind: WideNumericKind,
         result_kind: WideNumericKind,
+    },
+    /// Rounded numeric division with an explicit scale and rounding tag.
+    NumericRound {
+        dest: Temp,
+        dividend: Temp,
+        divisor: Temp,
+        scale: Temp,
+        mode: Temp,
+        op: NumericRoundOp,
+        result_kind: WideNumericKind,
+    },
+    /// Convert a decimal pointer to an integer pointer with an explicit policy.
+    DecimalToInt {
+        dest: Temp,
+        value: Temp,
+        mode: Option<Temp>,
+        op: DecimalToIntOp,
     },
     /// Numeric comparison using NoritoBytes payloads (result is 0/1).
     NumericCompare {
@@ -950,7 +996,7 @@ pub enum Instr {
         offset: Temp,
         limit: Temp,
     },
-    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns &Amount.
+    /// Host balance query: r10 = &AccountId, r11 = &AssetDefinitionId; returns &QuantityV1.
     GetAccountBalance {
         dest: Temp,
         account: Temp,
@@ -1111,17 +1157,12 @@ pub enum Instr {
         key: Temp,
         value: Temp,
     },
-    /// JSON getter returning one active-only `Option<i64>` handle.
-    JsonGetInt {
-        dest: Temp,
-        json: Temp,
-        key: Temp,
-    },
-    /// JSON getter returning one active-only `Option<Amount>` handle.
+    /// JSON getter returning one active-only typed numeric `Option<T>` handle.
     JsonGetNumeric {
         dest: Temp,
         json: Temp,
         key: Temp,
+        kind: WideNumericKind,
     },
     /// JSON getter returning one active-only `Option<Json>` handle.
     JsonGetJson {
@@ -1294,7 +1335,6 @@ pub enum DataRefKind {
 enum KeyCodec {
     Int,
     Pointer,
-    NoritoBytes,
 }
 
 fn pointer_kind_for_type(ty: &Type) -> Option<DataRefKind> {
@@ -1369,8 +1409,8 @@ fn lower_map_key_eq(ctx: &mut LowerCtx, key_ty: &Type, left: Temp, right: Temp) 
 
 fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
     match semantic::resolve_struct_type(ty) {
-        Type::Int | Type::Bool => Some(KeyCodec::Int),
-        ty if semantic::is_wide_numeric_type(&ty) => Some(KeyCodec::NoritoBytes),
+        Type::Bool => Some(KeyCodec::Int),
+        ty if semantic::is_wide_numeric_type(&ty) => Some(KeyCodec::Pointer),
         Type::String | Type::Bytes => Some(KeyCodec::Pointer),
         other if semantic::is_pointer_type(&other) => Some(KeyCodec::Pointer),
         _ => None,
@@ -1737,7 +1777,7 @@ fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<T
     let tag_temp = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: tag_temp,
-        value: i64::try_from(tag).expect("canonical sum tag fits i64"),
+        value: i64::try_from(tag).expect("canonical sum tag fits int"),
     });
     ctx.current_instr(Instr::Store64Imm {
         base: value,
@@ -1817,6 +1857,24 @@ fn emit_i64_const(ctx: &mut LowerCtx, value: i64) -> Temp {
     let temp = ctx.new_temp();
     ctx.current_instr(Instr::Const { dest: temp, value });
     temp
+}
+
+/// Cross the internal scalar/source-value boundary explicitly.
+///
+/// Some internal arithmetic protocols return signed 64-bit words. A Kotodama
+/// `int` is instead a nominal canonical 512-bit TLV value, so a raw word must
+/// never escape from an intrinsic whose semantic result is `int`.
+fn emit_int_from_i64(ctx: &mut LowerCtx, value: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::IntFromI64 { dest, value });
+    dest
+}
+
+/// Materialize a non-negative machine word as a canonical source `int`.
+fn emit_int_from_u64(ctx: &mut LowerCtx, value: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::IntFromU64 { dest, value });
+    dest
 }
 
 fn emit_list_allocation(ctx: &mut LowerCtx, list_ty: &Type, initial_len: u64) -> Temp {
@@ -2395,7 +2453,7 @@ fn lower_list_get(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let list = lower_expr(ctx, &args[0], vars);
-    let index = lower_expr_as_int(ctx, &args[1], vars);
+    let index = lower_expr_as_i64(ctx, &args[1], vars);
     let len = ctx.new_temp();
     ctx.current_instr(Instr::Load64Imm {
         dest: len,
@@ -2443,7 +2501,7 @@ fn lower_list_try_set(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let list = lower_expr(ctx, &args[0], vars);
-    let index = lower_expr_as_int(ctx, &args[1], vars);
+    let index = lower_expr_as_i64(ctx, &args[1], vars);
     let value = lower_expr(ctx, &args[2], vars);
     let Type::List(element_ty, _) = semantic::resolve_struct_type(&args[0].ty) else {
         ctx.record_error("internal error: List.try_set receiver lost List type".into());
@@ -2698,7 +2756,7 @@ fn lower_list_take(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let source = lower_expr(ctx, &args[0], vars);
-    let limit = lower_expr_as_int(ctx, &args[1], vars);
+    let limit = lower_expr_as_i64(ctx, &args[1], vars);
     let Type::List(source_element, _) = semantic::resolve_struct_type(&args[0].ty) else {
         ctx.record_error("internal error: List.take receiver lost List type".into());
         return emit_i64_const(ctx, 0);
@@ -2818,10 +2876,11 @@ fn lower_list_enumerate(
 
     ctx.start_block(body);
     let value = load_list_element(ctx, source, index, &source_element);
+    let source_index = emit_int_from_u64(ctx, index);
     let pair = ctx.new_temp();
     ctx.current_instr(Instr::TuplePack {
         dest: pair,
-        items: vec![index, value],
+        items: vec![source_index, value],
     });
     store_list_element(ctx, result, index, pair, &result_element);
     let new_len = ctx.new_temp();
@@ -2861,7 +2920,7 @@ fn lower_list_intrinsic(
                 base: list,
                 imm: 0,
             });
-            len
+            emit_int_from_u64(ctx, len)
         }
         semantic::LIST_GET_INTRINSIC => lower_list_get(ctx, args, result_ty, vars),
         semantic::LIST_TRY_SET_INTRINSIC => lower_list_try_set(ctx, args, vars),
@@ -2874,30 +2933,71 @@ fn lower_list_intrinsic(
     })
 }
 
-fn lower_amount_intrinsic(
+fn lower_numeric_round_intrinsic(
     ctx: &mut LowerCtx,
     name: &str,
     args: &[TypedExpr],
     vars: &mut HashMap<String, Temp>,
 ) -> Option<Temp> {
-    if name != semantic::AMOUNT_DIV_ROUND_INTRINSIC {
-        return None;
-    }
+    let (op, result_kind) = match name {
+        semantic::DECIMAL_DIV_ROUND_INTRINSIC => {
+            (NumericRoundOp::DecimalDiv, WideNumericKind::Decimal)
+        }
+        semantic::QUANTITY_DIV_ROUND_INTRINSIC => {
+            (NumericRoundOp::QuantityDiv, WideNumericKind::Quantity)
+        }
+        semantic::QUANTITY_RATIO_ROUND_INTRINSIC => {
+            (NumericRoundOp::QuantityRatio, WideNumericKind::Decimal)
+        }
+        _ => return None,
+    };
     if args.len() != 4 {
         ctx.record_error(
-            "internal error: Amount.div_round requires dividend, divisor, scale, and mode".into(),
+            "internal error: rounded numeric division requires dividend, divisor, scale, and mode"
+                .into(),
         );
         return Some(emit_i64_const(ctx, 0));
     }
-    let syscall_args = args
-        .iter()
-        .map(|argument| lower_expr(ctx, argument, vars))
-        .collect::<Vec<_>>();
+    let dividend = lower_expr(ctx, &args[0], vars);
+    let divisor = lower_expr(ctx, &args[1], vars);
+    let scale = lower_expr(ctx, &args[2], vars);
+    let mode = lower_expr_as_i64(ctx, &args[3], vars);
     let dest = ctx.new_temp();
-    ctx.current_instr(Instr::DirectHelperSyscall {
+    ctx.current_instr(Instr::NumericRound {
         dest,
-        syscall: ivm_abi::syscalls::SYSCALL_AMOUNT_DIV_ROUND,
-        args: syscall_args,
+        dividend,
+        divisor,
+        scale,
+        mode,
+        op,
+        result_kind,
+    });
+    Some(dest)
+}
+
+fn lower_decimal_to_int_intrinsic(
+    ctx: &mut LowerCtx,
+    name: &str,
+    args: &[TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Option<Temp> {
+    let (op, expected_args) = match name {
+        semantic::DECIMAL_TO_INT_TRUNC_INTRINSIC => (DecimalToIntOp::Truncate, 1),
+        semantic::DECIMAL_TO_INT_ROUND_INTRINSIC => (DecimalToIntOp::Round, 2),
+        _ => return None,
+    };
+    if args.len() != expected_args {
+        ctx.record_error("internal error: malformed decimal-to-int intrinsic".into());
+        return Some(emit_i64_const(ctx, 0));
+    }
+    let value = lower_expr(ctx, &args[0], vars);
+    let mode = args.get(1).map(|mode| lower_expr_as_i64(ctx, mode, vars));
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::DecimalToInt {
+        dest,
+        value,
+        mode,
+        op,
     });
     Some(dest)
 }
@@ -4787,7 +4887,7 @@ fn lower_state_foreach_map(
 
 fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Option<Temp> {
     match semantic::resolve_struct_type(key_ty) {
-        Type::Int | Type::Bool => {
+        Type::Bool => {
             let key = ctx.new_temp();
             ctx.current_instr(Instr::DecodeInt {
                 dest: key,
@@ -4795,7 +4895,16 @@ fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Op
             });
             Some(key)
         }
-        ty if semantic::is_wide_numeric_type(&ty) => Some(key_blob),
+        ty if semantic::is_wide_numeric_type(&ty) => {
+            let kind = pointer_kind_for_type(&ty)?;
+            let key = ctx.new_temp();
+            ctx.current_instr(Instr::PointerFromNorito {
+                dest: key,
+                blob: key_blob,
+                kind,
+            });
+            Some(key)
+        }
         Type::String | Type::Bytes => {
             let key = ctx.new_temp();
             ctx.current_instr(Instr::PointerFromNorito {
@@ -4946,7 +5055,7 @@ fn lower_state_foreach_page(
     apply_loop_phi(vars, &loop_phi);
 }
 
-fn lower_expr_as_int(
+fn lower_expr_as_i64(
     ctx: &mut LowerCtx,
     expr: &TypedExpr,
     vars: &mut HashMap<String, Temp>,
@@ -4954,7 +5063,7 @@ fn lower_expr_as_int(
     let value = lower_expr(ctx, expr, vars);
     if matches!(semantic::resolve_struct_type(&expr.ty), Type::Int) {
         let out = ctx.new_temp();
-        ctx.current_instr(Instr::IntToScalar { dest: out, value });
+        ctx.current_instr(Instr::IntTryToI64 { dest: out, value });
         out
     } else {
         value
@@ -5141,7 +5250,7 @@ fn lower_direct_helper_call(
     let mut lowered_args = Vec::with_capacity(args.len());
     for (idx, arg) in args.iter().enumerate() {
         let temp = if builtin == Builtin::JsonSetIntDirect && idx == 2 {
-            lower_expr_as_int(ctx, arg, vars)
+            lower_expr_as_i64(ctx, arg, vars)
         } else {
             lower_expr(ctx, arg, vars)
         };
@@ -5321,7 +5430,8 @@ fn lower_surface_builtin_call(
         Builtin::JsonSetIntDirect
         | Builtin::JsonSetAccountIdDirect
         | Builtin::JsonGetIntDirect
-        | Builtin::JsonGetNumericDirect
+        | Builtin::JsonGetDecimalDirect
+        | Builtin::JsonGetQuantityDirect
         | Builtin::JsonGetJsonDirect
         | Builtin::JsonGetNameDirect
         | Builtin::JsonGetAccountIdDirect
@@ -5393,7 +5503,7 @@ fn lower_surface_builtin_call(
         Builtin::JsonSetInt => {
             let j = lower_expr(ctx, &args[0], vars);
             let k = lower_expr(ctx, &args[1], vars);
-            let v = lower_expr_as_int(ctx, &args[2], vars);
+            let v = lower_expr_as_i64(ctx, &args[2], vars);
             let d = ctx.new_temp();
             ctx.current_instr(Instr::JsonSetInt {
                 dest: d,
@@ -5417,16 +5527,16 @@ fn lower_surface_builtin_call(
             d
         }
         Builtin::EncodeInt => {
-            let value = lower_expr_as_int(ctx, &args[0], vars);
+            let value = lower_expr_as_i64(ctx, &args[0], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::EncodeInt { dest, value });
             dest
         }
         Builtin::DecodeInt => {
             let blob = lower_expr(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::DecodeInt { dest, blob });
-            dest
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::DecodeInt { dest: scalar, blob });
+            emit_int_from_i64(ctx, scalar)
         }
         Builtin::EncodeJson => {
             let json = lower_expr(ctx, &args[0], vars);
@@ -5440,18 +5550,7 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::JsonDecode { dest, blob });
             dest
         }
-        Builtin::GetInt => {
-            let j = lower_expr(ctx, &args[0], vars);
-            let k = lower_expr(ctx, &args[1], vars);
-            let d = ctx.new_temp();
-            ctx.current_instr(Instr::JsonGetInt {
-                dest: d,
-                json: j,
-                key: k,
-            });
-            d
-        }
-        Builtin::GetNumeric => {
+        builtin @ (Builtin::GetInt | Builtin::GetDecimal | Builtin::GetQuantity) => {
             let j = lower_expr(ctx, &args[0], vars);
             let k = lower_expr(ctx, &args[1], vars);
             let d = ctx.new_temp();
@@ -5459,6 +5558,12 @@ fn lower_surface_builtin_call(
                 dest: d,
                 json: j,
                 key: k,
+                kind: match builtin {
+                    Builtin::GetInt => WideNumericKind::Int,
+                    Builtin::GetDecimal => WideNumericKind::Decimal,
+                    Builtin::GetQuantity => WideNumericKind::Quantity,
+                    _ => unreachable!("matched typed numeric JSON getter"),
+                },
             });
             d
         }
@@ -5544,19 +5649,19 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::CurrentTimeMs => {
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::CurrentTimeMs { dest });
-            dest
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::CurrentTimeMs { dest: scalar });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::BlockHeight => {
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::BlockHeight { dest });
-            dest
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::BlockHeight { dest: scalar });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::BlockTimeMs => {
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::BlockTimeMs { dest });
-            dest
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::BlockTimeMs { dest: scalar });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::ChainId => {
             let dest = ctx.new_temp();
@@ -5577,7 +5682,7 @@ fn lower_surface_builtin_call(
             let base = lower_expr(ctx, &args[0], vars);
             let d = ctx.new_temp();
             if semantic::is_numeric_type(&args[1].ty) {
-                let key = lower_expr_as_int(ctx, &args[1], vars);
+                let key = lower_expr_as_i64(ctx, &args[1], vars);
                 ctx.current_instr(Instr::PathMapKey { dest: d, base, key });
             } else if semantic::is_blob_like(&args[1].ty) {
                 let blob = lower_expr(ctx, &args[1], vars);
@@ -5587,7 +5692,7 @@ fn lower_surface_builtin_call(
                     key_blob: blob,
                 });
             } else {
-                panic!("path expects an i64-like or bytes-like key")
+                panic!("path expects an int-like or bytes-like key")
             }
             d
         }
@@ -5606,9 +5711,12 @@ fn lower_surface_builtin_call(
         }
         Builtin::TlvLen => {
             let value = lower_expr(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TlvLen { dest, value });
-            dest
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::TlvLen {
+                dest: scalar,
+                value,
+            });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::PointerToNorito => {
             let value = lower_expr(ctx, &args[0], vars);
@@ -5694,86 +5802,94 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::Isqrt => {
-            let src = lower_expr_as_int(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Isqrt { dest, src });
-            dest
+            let src = lower_expr_as_i64(ctx, &args[0], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Isqrt { dest: scalar, src });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::Abs => {
-            let src = lower_expr_as_int(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Abs { dest, src });
-            dest
+            let src = lower_expr_as_i64(ctx, &args[0], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Abs { dest: scalar, src });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::Min => {
-            let a = lower_expr_as_int(ctx, &args[0], vars);
-            let b = lower_expr_as_int(ctx, &args[1], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Min { dest, a, b });
-            dest
+            let a = lower_expr_as_i64(ctx, &args[0], vars);
+            let b = lower_expr_as_i64(ctx, &args[1], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Min { dest: scalar, a, b });
+            emit_int_from_i64(ctx, scalar)
         }
         Builtin::Max => {
-            let a = lower_expr_as_int(ctx, &args[0], vars);
-            let b = lower_expr_as_int(ctx, &args[1], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Max { dest, a, b });
-            dest
+            let a = lower_expr_as_i64(ctx, &args[0], vars);
+            let b = lower_expr_as_i64(ctx, &args[1], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Max { dest: scalar, a, b });
+            emit_int_from_i64(ctx, scalar)
         }
         Builtin::DivCeil => {
-            let num = lower_expr_as_int(ctx, &args[0], vars);
-            let denom = lower_expr_as_int(ctx, &args[1], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::DivCeil { dest, num, denom });
-            dest
+            let num = lower_expr_as_i64(ctx, &args[0], vars);
+            let denom = lower_expr_as_i64(ctx, &args[1], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::DivCeil {
+                dest: scalar,
+                num,
+                denom,
+            });
+            emit_int_from_i64(ctx, scalar)
         }
         Builtin::Gcd => {
-            let a = lower_expr_as_int(ctx, &args[0], vars);
-            let b = lower_expr_as_int(ctx, &args[1], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Gcd { dest, a, b });
-            dest
+            let a = lower_expr_as_i64(ctx, &args[0], vars);
+            let b = lower_expr_as_i64(ctx, &args[1], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Gcd { dest: scalar, a, b });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::Mean => {
-            let a = lower_expr_as_int(ctx, &args[0], vars);
-            let b = lower_expr_as_int(ctx, &args[1], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Mean { dest, a, b });
-            dest
+            let a = lower_expr_as_i64(ctx, &args[0], vars);
+            let b = lower_expr_as_i64(ctx, &args[1], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Mean { dest: scalar, a, b });
+            emit_int_from_i64(ctx, scalar)
         }
         Builtin::Poseidon2 => {
-            let a = lower_expr_as_int(ctx, &args[0], vars);
-            let b = lower_expr_as_int(ctx, &args[1], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Poseidon2 { dest, a, b });
-            dest
+            let a = lower_expr_as_i64(ctx, &args[0], vars);
+            let b = lower_expr_as_i64(ctx, &args[1], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Poseidon2 { dest: scalar, a, b });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::Poseidon6 => {
             let mut lowered_args = [Temp(0); 6];
             for (index, arg) in args.iter().enumerate() {
-                lowered_args[index] = lower_expr_as_int(ctx, arg, vars);
+                lowered_args[index] = lower_expr_as_i64(ctx, arg, vars);
             }
-            let dest = ctx.new_temp();
+            let scalar = ctx.new_temp();
             ctx.current_instr(Instr::Poseidon6 {
-                dest,
+                dest: scalar,
                 args: lowered_args,
             });
-            dest
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::Pubkgen => {
-            let src = lower_expr_as_int(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Pubkgen { dest, src });
-            dest
+            let src = lower_expr_as_i64(ctx, &args[0], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Pubkgen { dest: scalar, src });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::Valcom => {
-            let value = lower_expr_as_int(ctx, &args[0], vars);
-            let blind = lower_expr_as_int(ctx, &args[1], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Valcom { dest, value, blind });
-            dest
+            let value = lower_expr_as_i64(ctx, &args[0], vars);
+            let blind = lower_expr_as_i64(ctx, &args[1], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Valcom {
+                dest: scalar,
+                value,
+                blind,
+            });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::SetVl => {
-            let value = lower_expr_as_int(ctx, &args[0], vars);
+            let value = lower_expr_as_i64(ctx, &args[0], vars);
             ctx.current_instr(Instr::SetVl { value });
             let temp = ctx.new_temp();
             ctx.current_instr(Instr::Const {
@@ -5805,8 +5921,8 @@ fn lower_surface_builtin_call(
         }
         Builtin::StateKeys => {
             let prefix = lower_expr(ctx, &args[0], vars);
-            let offset = lower_expr_as_int(ctx, &args[1], vars);
-            let limit = lower_expr_as_int(ctx, &args[2], vars);
+            let offset = lower_expr_as_i64(ctx, &args[1], vars);
+            let limit = lower_expr_as_i64(ctx, &args[2], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::StateKeys {
                 dest,
@@ -5824,15 +5940,18 @@ fn lower_surface_builtin_call(
         }
         Builtin::StateLen => {
             let path = lower_expr(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::StateLen { dest, path });
-            dest
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::StateLen { dest: scalar, path });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::StateCount => {
             let prefix = lower_expr(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::StateCount { dest, prefix });
-            dest
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::StateCount {
+                dest: scalar,
+                prefix,
+            });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::QueryExecuteNorito => {
             let payload = lower_expr(ctx, &args[0], vars);
@@ -5865,8 +5984,8 @@ fn lower_surface_builtin_call(
         | Builtin::QueryPageAssetDefinitions
         | Builtin::QueryPageDomains
         | Builtin::QueryPageNfts => {
-            let offset = lower_expr_as_int(ctx, &args[0], vars);
-            let limit = lower_expr_as_int(ctx, &args[1], vars);
+            let offset = lower_expr_as_i64(ctx, &args[0], vars);
+            let limit = lower_expr_as_i64(ctx, &args[1], vars);
             let entity = match builtin {
                 Builtin::QueryPageAccounts => ivm_abi::core_query::CoreQueryEntityTagV1::Account,
                 Builtin::QueryPageAssets => ivm_abi::core_query::CoreQueryEntityTagV1::Asset,
@@ -5927,7 +6046,7 @@ fn lower_surface_builtin_call(
         Builtin::BuildUnshieldInline => {
             let asset = lower_expr(ctx, &args[0], vars);
             let to = lower_expr(ctx, &args[1], vars);
-            let amount = lower_expr_as_int(ctx, &args[2], vars);
+            let amount = lower_expr_as_i64(ctx, &args[2], vars);
             let inputs = lower_expr(ctx, &args[3], vars);
             let (outputs, backend_idx) = if args.len() == 8 {
                 (Some(lower_expr(ctx, &args[4], vars)), 5)
@@ -6017,7 +6136,7 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::DebugPrint => {
-            let value = lower_expr_as_int(ctx, &args[0], vars);
+            let value = lower_expr_as_i64(ctx, &args[0], vars);
             ctx.current_instr(Instr::DebugPrint { value });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -6042,7 +6161,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::Require => {
             let cond = lower_expr(ctx, &args[0], vars);
-            let code = lower_expr_as_int(ctx, &args[1], vars);
+            let code = lower_expr_as_i64(ctx, &args[1], vars);
             let reject = ctx.new_temp();
             ctx.current_instr(Instr::Unary {
                 dest: reject,
@@ -6056,7 +6175,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::Info => {
             let msg = if semantic::is_numeric_type(&args[0].ty) {
-                let value = lower_expr_as_int(ctx, &args[0], vars);
+                let value = lower_expr_as_i64(ctx, &args[0], vars);
                 let encoded = ctx.new_temp();
                 ctx.current_instr(Instr::EncodeInt {
                     dest: encoded,
@@ -6097,7 +6216,8 @@ fn lower_surface_builtin_call(
             let asset = lower_expr(ctx, &args[1], vars);
             let amt = match args[2].kind() {
                 semantic::ExprKind::IntLiteral(value)
-                    if value.is_zero() && !semantic::is_wide_numeric_type(&args[2].ty) => {
+                    if value.is_zero() && !semantic::is_wide_numeric_type(&args[2].ty) =>
+                {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
@@ -6457,19 +6577,22 @@ fn lower_surface_builtin_call(
             t
         }
         Builtin::Alloc => {
-            let bytes = lower_expr_as_int(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::Alloc { dest, bytes });
-            dest
+            let bytes = lower_expr_as_i64(ctx, &args[0], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::Alloc {
+                dest: scalar,
+                bytes,
+            });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetPrivateInput => {
-            let index = lower_expr_as_int(ctx, &args[0], vars);
+            let index = lower_expr_as_i64(ctx, &args[0], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::GetPrivateInput { dest, index });
             dest
         }
         Builtin::UseNullifier => {
-            let nullifier = lower_expr_as_int(ctx, &args[0], vars);
+            let nullifier = lower_expr_as_i64(ctx, &args[0], vars);
             ctx.current_instr(Instr::UseNullifier { nullifier });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -6488,7 +6611,7 @@ fn lower_surface_builtin_call(
             t
         }
         Builtin::SetExecutionDepth => {
-            let value = lower_expr_as_int(ctx, &args[0], vars);
+            let value = lower_expr_as_i64(ctx, &args[0], vars);
             ctx.current_instr(Instr::SetExecutionDepth { value });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -6644,53 +6767,56 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::GrowHeap => {
-            let bytes = lower_expr_as_int(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::GrowHeap { dest, bytes });
-            dest
+            let bytes = lower_expr_as_i64(ctx, &args[0], vars);
+            let scalar = ctx.new_temp();
+            ctx.current_instr(Instr::GrowHeap {
+                dest: scalar,
+                bytes,
+            });
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetMerklePath => {
-            let address = lower_expr_as_int(ctx, &args[0], vars);
-            let output = lower_expr_as_int(ctx, &args[1], vars);
-            let root_output = args.get(2).map(|arg| lower_expr_as_int(ctx, arg, vars));
-            let dest = ctx.new_temp();
+            let address = lower_expr_as_i64(ctx, &args[0], vars);
+            let output = lower_expr_as_i64(ctx, &args[1], vars);
+            let root_output = args.get(2).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let scalar = ctx.new_temp();
             ctx.current_instr(Instr::GetMerklePath {
-                dest,
+                dest: scalar,
                 address,
                 output,
                 root_output,
             });
-            dest
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetMerkleCompact => {
-            let address = lower_expr_as_int(ctx, &args[0], vars);
-            let output = lower_expr_as_int(ctx, &args[1], vars);
-            let max_depth = args.get(2).map(|arg| lower_expr_as_int(ctx, arg, vars));
-            let root_output = args.get(3).map(|arg| lower_expr_as_int(ctx, arg, vars));
-            let dest = ctx.new_temp();
+            let address = lower_expr_as_i64(ctx, &args[0], vars);
+            let output = lower_expr_as_i64(ctx, &args[1], vars);
+            let max_depth = args.get(2).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let root_output = args.get(3).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let scalar = ctx.new_temp();
             ctx.current_instr(Instr::GetMerkleCompact {
-                dest,
+                dest: scalar,
                 address,
                 output,
                 max_depth,
                 root_output,
             });
-            dest
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetRegisterMerkleCompact => {
-            let register_index = lower_expr_as_int(ctx, &args[0], vars);
-            let output = lower_expr_as_int(ctx, &args[1], vars);
-            let max_depth = args.get(2).map(|arg| lower_expr_as_int(ctx, arg, vars));
-            let root_output = args.get(3).map(|arg| lower_expr_as_int(ctx, arg, vars));
-            let dest = ctx.new_temp();
+            let register_index = lower_expr_as_i64(ctx, &args[0], vars);
+            let output = lower_expr_as_i64(ctx, &args[1], vars);
+            let max_depth = args.get(2).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let root_output = args.get(3).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let scalar = ctx.new_temp();
             ctx.current_instr(Instr::GetRegisterMerkleCompact {
-                dest,
+                dest: scalar,
                 register_index,
                 output,
                 max_depth,
                 root_output,
             });
-            dest
+            emit_int_from_u64(ctx, scalar)
         }
         Builtin::VerifyProof => {
             let payload = lower_expr(ctx, &args[0], vars);
@@ -6731,7 +6857,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::SetAccountQuorum => {
             let account = lower_expr(ctx, &args[0], vars);
-            let quorum = lower_expr_as_int(ctx, &args[1], vars);
+            let quorum = lower_expr_as_i64(ctx, &args[1], vars);
             ctx.current_instr(Instr::SetAccountQuorum { account, quorum });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -7079,8 +7205,8 @@ fn lower_surface_builtin_call(
         Builtin::StateMapRemove => lower_state_map_remove_option(ctx, args, vars),
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
             let base = lower_expr(ctx, &args[0], vars);
-            let start_t = lower_expr_as_int(ctx, &args[1], vars);
-            let which_t = lower_expr_as_int(ctx, &args[2], vars);
+            let start_t = lower_expr_as_i64(ctx, &args[1], vars);
+            let which_t = lower_expr_as_i64(ctx, &args[2], vars);
             let one = ctx.new_temp();
             ctx.current_instr(Instr::Const {
                 dest: one,
@@ -7135,8 +7261,8 @@ fn lower_surface_builtin_call(
         }
         Builtin::KeysValuesTake2 => {
             let base = lower_expr(ctx, &args[0], vars);
-            let start_t = lower_expr_as_int(ctx, &args[1], vars);
-            let which_t = lower_expr_as_int(ctx, &args[2], vars);
+            let start_t = lower_expr_as_i64(ctx, &args[1], vars);
+            let which_t = lower_expr_as_i64(ctx, &args[2], vars);
             let one = ctx.new_temp();
             ctx.current_instr(Instr::Const {
                 dest: one,
@@ -7487,7 +7613,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             let source = wide_numeric_kind_for_type(&inner.ty)
                 .expect("recoverable numeric cast source has an ABI kind");
             let Type::Result(ok_type, error_type) = semantic::resolve_struct_type(&expr.ty) else {
-                ctx.record_error("internal error: recoverable numeric cast has non-Result type".into());
+                ctx.record_error(
+                    "internal error: recoverable numeric cast has non-Result type".into(),
+                );
                 return emit_i64_const(ctx, 0);
             };
             if semantic::resolve_struct_type(&error_type) != Type::Int {
@@ -7513,9 +7641,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 left: status,
                 right: zero,
             });
-            let success = ctx.new_block();
-            let failure = ctx.new_block();
-            let end = ctx.new_block();
+            let success = ctx.new_label();
+            let failure = ctx.new_label();
+            let end = ctx.new_label();
             let result = ctx.new_temp();
             ctx.finish_current(Terminator::Branch {
                 cond: succeeded,
@@ -7533,7 +7661,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
 
             ctx.start_block(failure);
             let fault = ctx.new_temp();
-            ctx.current_instr(Instr::IntFromScalar {
+            ctx.current_instr(Instr::IntFromU64 {
                 dest: fault,
                 value: status,
             });
@@ -7801,7 +7929,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             evaluation_order,
         } => lower_named_call(ctx, &expr.ty, name, args, evaluation_order, vars),
         semantic::ExprKind::Call { name, args } => {
-            if let Some(value) = lower_amount_intrinsic(ctx, name, args, vars) {
+            if let Some(value) = lower_numeric_round_intrinsic(ctx, name, args, vars) {
+                return value;
+            }
+            if let Some(value) = lower_decimal_to_int_intrinsic(ctx, name, args, vars) {
                 return value;
             }
             if let Some(value) = lower_list_intrinsic(ctx, name, args, &expr.ty, vars) {
@@ -8568,15 +8699,6 @@ fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCo
             });
             t_path
         }
-        KeyCodec::NoritoBytes => {
-            let t_path = ctx.new_temp();
-            ctx.current_instr(Instr::PathMapKeyNorito {
-                dest: t_path,
-                base: t_base,
-                key_blob: key,
-            });
-            t_path
-        }
     }
 }
 
@@ -8701,6 +8823,64 @@ mod tests {
     use crate::{parser::parse_test_fragment as parse, semantic::analyze};
 
     #[test]
+    fn source_int_and_internal_scalar_have_an_explicit_ir_boundary() {
+        let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
+        let entry = context.new_label();
+        context.start_block(entry);
+        let scalar = emit_i64_const(&mut context, 17);
+        let source_int = emit_int_from_i64(&mut context, scalar);
+        context.finish_current(Terminator::Return(Some(source_int)));
+
+        assert!(matches!(
+            context.blocks[0].instrs.as_slice(),
+            [
+                Instr::Const {
+                    dest: actual_scalar,
+                    value: 17,
+                },
+                Instr::IntFromI64 {
+                    dest: actual_source,
+                    value,
+                },
+            ] if *actual_scalar == scalar && *actual_source == source_int && *value == scalar
+        ));
+    }
+
+    #[test]
+    fn wide_numeric_state_keys_use_canonical_pointer_norito() {
+        assert_eq!(key_codec_for_type(&Type::Bool), Some(KeyCodec::Int));
+        for ty in [Type::Int, Type::Decimal, Type::Quantity] {
+            assert_eq!(key_codec_for_type(&ty), Some(KeyCodec::Pointer));
+
+            let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
+            let entry = context.new_label();
+            context.start_block(entry);
+            let blob = emit_i64_const(&mut context, 8);
+            let decoded = decode_state_map_key(&mut context, blob, &ty)
+                .expect("wide numeric state key must decode");
+            context.finish_current(Terminator::Return(Some(decoded)));
+            let expected_kind = pointer_kind_for_type(&ty).expect("numeric pointer kind");
+
+            assert!(context.blocks[0].instrs.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::PointerFromNorito {
+                        dest,
+                        blob: actual_blob,
+                        kind,
+                    } if *dest == decoded && *actual_blob == blob && *kind == expected_kind
+                )
+            }));
+            assert!(
+                context.blocks[0]
+                    .instrs
+                    .iter()
+                    .all(|instruction| !matches!(instruction, Instr::DecodeInt { .. }))
+            );
+        }
+    }
+
+    #[test]
     fn direct_syscall_lowering_is_exhaustively_registry_driven_and_fail_closed() {
         for &builtin in Builtin::ALL {
             let spec = builtin.spec();
@@ -8725,7 +8905,7 @@ mod tests {
 
     #[test]
     fn lower_simple_function() {
-        let src = "fn add(a: i64, b: i64) { let c = a + b; }";
+        let src = "fn add(int a, int b) { let c = a + b; }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -8737,10 +8917,10 @@ mod tests {
     #[test]
     fn named_calls_evaluate_in_source_order_and_permute_only_temp_references() {
         let src = r#"
-            fn first() -> i64 { 1 }
-            fn second() -> i64 { 2 }
-            fn combine(left: i64, right: i64) -> i64 { left * 10 + right }
-            fn run() -> i64 { combine(right: second(), left: first()) }
+            fn first() -> int { 1 }
+            fn second() -> int { 2 }
+            fn combine(int left, int right) -> int { left * 10 + right }
+            fn run() -> int { combine(right: second(), left: first()) }
         "#;
         let typed = analyze(&parse(src).expect("parse named call")).expect("analyze named call");
         let ir = lower(&typed).expect("lower named call");
@@ -8776,10 +8956,10 @@ mod tests {
     #[test]
     fn named_list_intrinsic_evaluates_source_order_before_abi_slots() {
         let source = r#"
-            fn index() -> i64 { 0 }
-            fn replacement() -> i64 { 9 }
+            fn index() -> int { 0 }
+            fn replacement() -> int { 9 }
             fn mutate() -> bool {
-                var values: List<i64, 2> = [1];
+                var List<int, 2> values = [1];
                 values.try_set(value: replacement(), index: index())
             }
         "#;
@@ -8806,11 +8986,11 @@ mod tests {
     }
 
     #[test]
-    fn named_amount_intrinsic_evaluates_dynamic_arguments_in_source_order() {
+    fn named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order() {
         let source = r#"
-            fn divisor() -> Amount { 2amt }
-            fn scale() -> i64 { 2 }
-            fn rounded(value: Amount) -> Amount {
+            fn divisor() -> quantity { 2 }
+            fn scale() -> int { 2 }
+            fn rounded(quantity value) -> quantity {
                 value.div_round(
                     scale: scale(),
                     mode: Rounding::floor,
@@ -8819,10 +8999,10 @@ mod tests {
             }
         "#;
         let lowered = lower(
-            &analyze(&parse(source).expect("parse named Amount intrinsic"))
-                .expect("analyze named Amount intrinsic"),
+            &analyze(&parse(source).expect("parse named quantity intrinsic"))
+                .expect("analyze named quantity intrinsic"),
         )
-        .expect("lower named Amount intrinsic");
+        .expect("lower named quantity intrinsic");
         let rounded = lowered
             .functions
             .iter()
@@ -8844,7 +9024,7 @@ mod tests {
     fn require_lowers_declared_error_code_into_abort_ir() {
         let src = r#"
             error enum PaymentError { Unauthorized = 1001 }
-            fn authorize_payment(allowed: bool) {
+            fn authorize_payment(bool allowed) {
                 require(allowed, PaymentError::Unauthorized);
             }
         "#;
@@ -8873,7 +9053,7 @@ mod tests {
     fn test_mode_entrypoint_wrapper_checks_override_state_first() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Entry") { return count; }
+                kotoage fn run(int count) -> int authorize("Entry") { return count; }
             }
         "#;
         let prog = parse(src).expect("parse wrapper test");
@@ -8918,7 +9098,7 @@ mod tests {
     fn single_json_entrypoint_uses_the_same_one_shot_argument_record() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(ev: Json) authorize("Entry") { let _payload = ev; }
+                kotoage fn run(Json ev) authorize("Entry") { let _payload = ev; }
             }
         "#;
         let prog = parse(src).expect("parse single json entrypoint");
@@ -8962,15 +9142,15 @@ mod tests {
         let src = r#"
             seiyaku Demo {
                 kotoage fn run(
-                    count: i64,
-                    total: u128,
-                    ready: bool,
-                    text: string,
-                    label: Name,
-                    asset: AssetId,
-                    domain: DomainId,
-                    dataspace: DataSpaceId,
-                    bytes: bytes
+                    int count,
+                    int total,
+                    bool ready,
+                    string text,
+                    Name label,
+                    AssetId asset,
+                    DomainId domain,
+                    DataSpaceId dataspace,
+                    bytes bytes
                 ) authorize("Entry") {
                     let _count = count;
                     let _total = total;
@@ -9006,8 +9186,7 @@ mod tests {
                         record_decodes += 1;
                     }
                     Instr::Load64Imm { .. } => table_loads += 1,
-                    Instr::JsonGetInt { .. }
-                    | Instr::JsonGetNumeric { .. }
+                    Instr::JsonGetNumeric { .. }
                     | Instr::JsonGetJson { .. }
                     | Instr::JsonGetName { .. }
                     | Instr::JsonGetAccountId { .. }
@@ -9055,7 +9234,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("count", ivm_abi::entrypoint::EntrypointValueKindV1::Int),
-                ("total", ivm_abi::entrypoint::EntrypointValueKindV1::U128),
+                ("total", ivm_abi::entrypoint::EntrypointValueKindV1::Int),
                 ("ready", ivm_abi::entrypoint::EntrypointValueKindV1::Bool),
                 ("text", ivm_abi::entrypoint::EntrypointValueKindV1::String),
                 ("label", ivm_abi::entrypoint::EntrypointValueKindV1::Name),
@@ -9077,14 +9256,14 @@ mod tests {
     fn public_aggregate_arguments_cross_internal_calls_as_flat_words() {
         let src = r#"
             seiyaku Demo {
-                struct Request { count: i64, ready: bool }
+                struct Request { int count, bool ready }
 
                 view fn run(
-                    request: Request,
-                    pair: (i64, bool),
-                    maybe: Option<i64>,
-                    outcome: Result<i64, bool>
-                ) -> i64 {
+                    Request request,
+                    (int, bool) pair,
+                    Option<int>,
+                    outcome: Result<int, bool> maybe
+                ) -> int {
                     return request.count + pair.0
                         + maybe.unwrap_or(0) + outcome.unwrap_or(0);
                 }
@@ -9144,13 +9323,13 @@ mod tests {
     fn nested_aggregate_returns_use_every_flattened_abi_word() {
         let src = r#"
             seiyaku AggregateReturn {
-                struct Pair { count: i64, ready: bool }
+                struct Pair { int count, bool ready }
 
                 fn make() -> Result<Option<Pair>, (string, bool)> {
                     return Result::ok(Option::some(Pair { count: 7, ready: true }));
                 }
 
-                view fn inspect(seed: i64) -> Result<Option<Pair>, (string, bool)> {
+                view fn inspect(int seed) -> Result<Option<Pair>, (string, bool)> {
                     let _ = seed;
                     return make();
                 }
@@ -9204,16 +9383,16 @@ mod tests {
     fn inactive_sum_has_no_payload_construction_or_store() {
         let source = r#"
             seiyaku InactivePlaceholder {
-                state counter: i64;
+                state int counter;
 
                 hajimari() { counter = 0; }
 
-                fn poison() -> i64 {
+                fn poison() -> int {
                     counter = counter + 1;
                     return 99;
                 }
 
-                view fn inspect() -> Option<i64> {
+                view fn inspect() -> Option<int> {
                     return Option::none;
                 }
             }
@@ -9252,13 +9431,13 @@ mod tests {
     #[test]
     fn tail_expression_lowers_identically_to_explicit_return() {
         let tail = lower(
-            &analyze(&parse("fn identity(value: i64) -> i64 { value }").expect("parse tail"))
+            &analyze(&parse("fn identity(int value) -> int { value }").expect("parse tail"))
                 .expect("analyze tail"),
         )
         .expect("lower tail");
         let explicit = lower(
             &analyze(
-                &parse("fn identity(value: i64) -> i64 { return value; }").expect("parse return"),
+                &parse("fn identity(int value) -> int { return value; }").expect("parse return"),
             )
             .expect("analyze return"),
         )
@@ -9303,7 +9482,7 @@ mod tests {
     #[test]
     fn exhaustive_match_reads_only_the_selected_sum_payload() {
         let source = r#"
-            fn project(value: Option<i64>) -> i64 {
+            fn project(Option<int> value) -> int {
                 match value {
                     Option::some(item) => item,
                     Option::none => 0,
@@ -9338,7 +9517,7 @@ mod tests {
     #[test]
     fn propagation_returns_original_error_handle_without_conversion() {
         let source = r#"
-            fn propagate(value: Result<i64, bool>) -> Result<i64, bool> {
+            fn propagate(Result<int, bool> value) -> Result<int, bool> {
                 let payload = value?;
                 Result::ok(payload)
             }
@@ -9385,13 +9564,13 @@ mod tests {
         }
 
         let propagated = r#"
-            fn widen(value: Result<i64, bool>) -> Result<(i64, i64), bool> {
+            fn widen(Result<int, bool> value) -> Result<(int, int), bool> {
                 let payload = value?;
                 Result::ok((payload, payload))
             }
         "#;
         let explicit = r#"
-            fn widen(value: Result<i64, bool>) -> Result<(i64, i64), bool> {
+            fn widen(Result<int, bool> value) -> Result<(int, int), bool> {
                 let payload = match value {
                     Result::ok(payload) => payload,
                     Result::err(failure) => { return Result::err(failure); },
@@ -9426,13 +9605,13 @@ mod tests {
         );
 
         let option = r#"
-            fn widen(value: Option<i64>) -> Option<(i64, i64)> {
+            fn widen(Option<int> value) -> Option<(int, int)> {
                 let payload = value?;
                 Option::some((payload, payload))
             }
         "#;
         let explicit_option = r#"
-            fn widen(value: Option<i64>) -> Option<(i64, i64)> {
+            fn widen(Option<int> value) -> Option<(int, int)> {
                 let payload = match value {
                     Option::some(payload) => payload,
                     Option::none => { return Option::none; },
@@ -9464,11 +9643,11 @@ mod tests {
     #[test]
     fn typed_query_page_lowers_to_one_host_call_and_two_typed_handles() {
         let source = r#"
-            fn page(offset: i64, limit: i64) -> QueryPage<AccountView> {
+            fn page(int offset, int limit) -> QueryPage<AccountView> {
                 ledger::query::accounts(offset: offset, limit: limit)
             }
 
-            fn account(id: AccountId) -> Option<AccountView> {
+            fn account(AccountId id) -> Option<AccountView> {
                 ledger::query::account(id)
             }
         "#;
@@ -9552,14 +9731,14 @@ mod tests {
     fn native_json_lowers_to_one_schema_bound_build_and_one_word_table() {
         let source = r#"
             fn build(
-                owner: AccountId,
-                label: string,
-                maybe: Option<Amount>,
+                AccountId owner,
+                string label,
+                Option<quantity> maybe,
             ) -> Json {
-                let labels: List<string, 4> = ["secondary", label];
+                let List<string, 4> labels = ["secondary", label];
                 json {
                     owner: owner,
-                    amount: 1.25amt,
+                    amount: 1.25,
                     primary: json ["primary", label],
                     labels: labels,
                     maybe: maybe,
@@ -9665,10 +9844,89 @@ mod tests {
     }
 
     #[test]
+    fn list_len_and_enumerate_materialize_source_int_values() {
+        let source = "fn indices() -> List<(int, int), 4> {\
+                 let List<int, 4> values = [1, 2];\
+                 let length = values.len();\
+                 values.enumerate()\
+             }";
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse List scalar boundaries"))
+                .expect("analyze List scalar boundaries"),
+        )
+        .expect("lower List scalar boundaries");
+        let instructions = lowered.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let materialized = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::IntFromI64 { dest, value } => Some((*dest, *value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            materialized.len() >= 2,
+            "List.len and List.enumerate indices must each cross the scalar/int boundary"
+        );
+        assert!(instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instr::TuplePack { items, .. }
+                    if materialized.iter().any(|(source_int, _)| items.first() == Some(source_int))
+            )
+        }));
+    }
+
+    #[test]
+    fn state_map_int_keys_are_encoded_from_the_canonical_int_pointer() {
+        let source = "state StateMap<int, int> balances; fn set(int key, int value) { balances[key] = value; }";
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse numeric StateMap key"))
+                .expect("analyze numeric StateMap key"),
+        )
+        .expect("lower numeric StateMap key");
+        let instructions = lowered.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .collect::<Vec<_>>();
+        let encoded_keys = instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instr::PointerToNorito { dest, value } => Some((*dest, *value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            encoded_keys.len(),
+            1,
+            "one canonical key encoding per access"
+        );
+        assert!(instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instr::PathMapKeyNorito { key_blob, .. }
+                    if *key_blob == encoded_keys[0].0
+            )
+        }));
+        assert!(
+            instructions
+                .iter()
+                .all(|instruction| !matches!(instruction, Instr::EncodeInt { .. })),
+            "source int keys must not use the retired scalar/ASCII key codec"
+        );
+    }
+
+    #[test]
     fn list_literal_and_comprehension_use_only_contiguous_ir_operations() {
         let source = r#"
-            fn doubled() -> List<i64, 4> {
-                let values: List<i64, 4> = [1, 2, 3];
+            fn doubled() -> List<int, 4> {
+                let List<int, 4> values = [1, 2, 3];
                 [value * 2 for value in values if value > 1]
             }
         "#;
@@ -9721,10 +9979,10 @@ mod tests {
         }
 
         let comprehension = instruction_count(
-            "fn copy() -> List<i64, 4> { let source: List<i64, 4> = [1, 2]; [value for value in source] }",
+            "fn copy() -> List<int, 4> { let List<int, 4> source = [1, 2]; [value for value in source] }",
         );
         let bounded_baseline = instruction_count(
-            "fn copy() -> List<i64, 4> { let source: List<i64, 4> = [1, 2]; source.take(4) }",
+            "fn copy() -> List<int, 4> { let List<int, 4> source = [1, 2]; source.take(4) }",
         );
         assert!(
             comprehension <= bounded_baseline,
@@ -9736,7 +9994,7 @@ mod tests {
     fn every_list_method_lowers_without_runtime_helper_calls() {
         let source = r#"
             fn methods() {
-                var values: List<i64, 4> = [1, 2];
+                var List<int, 4> values = [1, 2];
                 values.len();
                 values.get(0);
                 values.try_set(index: 0, value: 3);
@@ -9779,7 +10037,7 @@ mod tests {
     #[test]
     fn list_take_zero_lowers_to_a_bounded_empty_copy() {
         let source =
-            "fn empty() -> List<i64, 1> { let values: List<i64, 4> = [1, 2]; values.take(0) }";
+            "fn empty() -> List<int, 1> { let List<int, 4> values = [1, 2]; values.take(0) }";
         let lowered = lower(
             &analyze(&parse(source).expect("parse List.take(0)")).expect("analyze List.take(0)"),
         )
@@ -9804,12 +10062,12 @@ mod tests {
     fn recursive_list_contains_dereferences_aggregate_handles() {
         let source = r#"
             struct Envelope {
-                labels: Option<List<i64, 2>>,
-                outcome: Result<(i64, bool), i64>,
+                Option<List<int, 2>>,
+                outcome: Result<(int, bool), int> labels,
             }
 
-            fn contains_nested(needle: Envelope) -> bool {
-                let values: List<Envelope, 2> = [
+            fn contains_nested(Envelope needle) -> bool {
+                let List<Envelope, 2> values = [
                     Envelope {
                         labels: Option::some([1, 2]),
                         outcome: Result::ok((7, true)),
@@ -9864,13 +10122,13 @@ mod tests {
     #[test]
     fn failed_list_mutation_branches_have_no_stores() {
         let source = r#"
-            fn set(index: i64) -> bool {
-                var values: List<i64, 1> = [1];
+            fn set(int index) -> bool {
+                var List<int, 1> values = [1];
                 values.try_set(index: index, value: 2)
             }
 
             fn push() -> bool {
-                var values: List<i64, 1> = [1];
+                var List<int, 1> values = [1];
                 values.try_push(2)
             }
         "#;
@@ -9909,7 +10167,7 @@ mod tests {
             .expect("build List return schema")
             .expect("non-unit return schema");
         let [Node::List(list), Node::Option, Node::Leaf(_)] = schema.nodes.as_slice() else {
-            panic!("expected one flat List<Option<Amount>> preorder tape");
+            panic!("expected one flat List<Option<quantity>> preorder tape");
         };
         assert_eq!(list.capacity, 64);
         assert_eq!(schema.word_count(), Some(1));
@@ -9921,19 +10179,19 @@ mod tests {
 
         let source = r#"
             seiyaku TypedPages {
-                view fn accounts(offset: i64, limit: i64) -> QueryPage<AccountView> {
+                view fn accounts(int offset, int limit) -> QueryPage<AccountView> {
                     ledger::query::accounts(offset: offset, limit: limit)
                 }
-                view fn assets(offset: i64, limit: i64) -> QueryPage<AssetView> {
+                view fn assets(int offset, int limit) -> QueryPage<AssetView> {
                     ledger::query::assets(offset: offset, limit: limit)
                 }
-                view fn asset_definitions(offset: i64, limit: i64) -> QueryPage<AssetDefinitionView> {
+                view fn asset_definitions(int offset, int limit) -> QueryPage<AssetDefinitionView> {
                     ledger::query::asset_definitions(offset: offset, limit: limit)
                 }
-                view fn domains(offset: i64, limit: i64) -> QueryPage<DomainView> {
+                view fn domains(int offset, int limit) -> QueryPage<DomainView> {
                     ledger::query::domains(offset: offset, limit: limit)
                 }
-                view fn nfts(offset: i64, limit: i64) -> QueryPage<NftView> {
+                view fn nfts(int offset, int limit) -> QueryPage<NftView> {
                     ledger::query::nfts(offset: offset, limit: limit)
                 }
             }
@@ -10003,11 +10261,11 @@ mod tests {
         let src = r#"
             seiyaku WideCall {
                 struct Wide {
-                    f00: i64, f01: i64, f02: i64, f03: i64, f04: i64,
-                    f05: i64, f06: i64, f07: i64, f08: i64, f09: i64,
-                    f10: i64, f11: i64, f12: i64, f13: i64
+                    int f00, int f01, int f02, int f03, int f04,
+                    int f05, int f06, int f07, int f08, int f09,
+                    int f10, int f11, int f12, int f13
                 }
-                view fn inspect(value: Wide) -> i64 { return value.f00; }
+                view fn inspect(Wide value) -> int { return value.f00; }
             }
         "#;
         let prog = parse(src).expect("parse oversized aggregate call");
@@ -10025,7 +10283,7 @@ mod tests {
     fn invoke_entrypoint_lowers_to_wrapper_call_with_override_restore() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Entry") { return count + 1; }
+                kotoage fn run(int count) -> int authorize("Entry") { return count + 1; }
 
                 #[test]
                 fn drive_run() {
@@ -10091,7 +10349,7 @@ mod tests {
     fn invoke_entrypoint_tuple_return_uses_wrapper_callmulti() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> (i64, i64) authorize("Entry") { return (count, count + 1); }
+                kotoage fn run(int count) -> (int, int) authorize("Entry") { return (count, count + 1); }
 
                 #[test]
                 fn drive_run() {
@@ -10141,7 +10399,7 @@ mod tests {
     fn invoke_entrypoint_as_lowers_to_test_host_intrinsics() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Entry") { return count + 1; }
+                kotoage fn run(int count) -> int authorize("Entry") { return count + 1; }
 
                 #[test]
                 fn drive_run() {
@@ -10200,7 +10458,7 @@ mod tests {
     fn invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic() {
         let src = r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> (i64, i64) authorize("Entry") { return (count, count + 1); }
+                kotoage fn run(int count) -> (int, int) authorize("Entry") { return (count, count + 1); }
 
                 #[test]
                 fn drive_run() {
@@ -10299,7 +10557,7 @@ mod tests {
 
     #[test]
     fn lower_if() {
-        let src = "fn f(a: i64, b: i64) { if a == b { let c = a; } else { let c = b; } }";
+        let src = "fn f(int a, int b) { if a == b { let c = a; } else { let c = b; } }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         assert_eq!(ir.functions[0].blocks.len(), 4); // entry, then, else, end
     }
@@ -10308,8 +10566,8 @@ mod tests {
     fn logical_operators_lower_to_short_circuit_cfg() {
         let src = r#"
 fn rhs() -> bool { return true; }
-fn both(value: bool) -> bool { return value && rhs(); }
-fn either(value: bool) -> bool { return value || rhs(); }
+fn both(bool value) -> bool { return value && rhs(); }
+fn either(bool value) -> bool { return value || rhs(); }
 "#;
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower logical operators");
 
@@ -10404,7 +10662,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
     #[test]
     fn bounded_loop_only_materializes_live_mutated_phi_slots() {
         let src = r#"
-            fn f() -> i64 {
+            fn f() -> int {
                 let invariant = 7;
                 var carried = 0;
                 var overwritten = 0;
@@ -10455,7 +10713,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
     #[test]
     fn break_and_continue_update_only_selected_loop_phi_slots() {
         let src = r#"
-            fn f() -> i64 {
+            fn f() -> int {
                 let invariant = 10;
                 var carried = 0;
                 for index in range(4) {
@@ -10500,9 +10758,9 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn state_map_foreach_carries_mutated_locals_through_break_and_continue() {
         let src = r#"
             seiyaku ForeachPhi {
-                state Values: StateMap<i64, i64>;
+                state StateMap<int, int> Values;
 
-                kotoage fn f() -> i64 authorize("WriteState") {
+                kotoage fn f() -> int authorize("WriteState") {
                     var seen = 0;
                     for (key, value) in Values.take(2) {
                         seen = seen + 1;
@@ -10556,7 +10814,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
     #[test]
     fn nested_loops_do_not_carry_outer_invariants() {
         let src = r#"
-            fn f() -> i64 {
+            fn f() -> int {
                 let invariant = 9;
                 var total = 0;
                 for outer in range(2) {
@@ -10589,7 +10847,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn leaf_identity_ir_has_no_copy_or_stack_pseudo_traffic() {
-        let src = "fn identity(value: i64) -> i64 { return value; }";
+        let src = "fn identity(int value) -> int { return value; }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let function = &ir.functions[0];
 
@@ -10615,7 +10873,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn lower_return() {
-        let src = "fn f() -> i64 { return 1; let x = 2; }";
+        let src = "fn f() -> int { return 1; let x = 2; }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         // Expect at least a Return terminator in one block, and a following unreachable block
         let f = &ir.functions[0];
@@ -10663,7 +10921,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn lower_bytes_literal_to_dataref() {
-        let src = r#"fn main() { let _b: bytes = b"ab"; }"#;
+        let src = r#"fn main() { let bytes _b = b"ab"; }"#;
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -11094,8 +11352,8 @@ fn either(value: bool) -> bool { return value || rhs(); }
     }
 
     #[test]
-    fn lower_get_amount_builtin() {
-        let src = "fn main() { let ev = context::trigger_event(); let _amount: Option<Amount> = ev.get_amount(Name::parse(\"amount\")); }";
+    fn lower_get_quantity_builtin() {
+        let src = "fn main() { let ev = context::trigger_event(); let Option<quantity> value = ev.get_quantity(Name::parse(\"value\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -11103,14 +11361,18 @@ fn either(value: bool) -> bool { return value || rhs(); }
         let mut saw_get_numeric = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
-                if let Instr::JsonGetNumeric { .. } = instr {
+                if let Instr::JsonGetNumeric {
+                    kind: WideNumericKind::Quantity,
+                    ..
+                } = instr
+                {
                     saw_get_numeric = true;
                 }
             }
         }
         assert!(
             saw_get_numeric,
-            "expected JsonGetNumeric instruction in lowered IR"
+            "expected quantity JsonGetNumeric instruction in lowered IR"
         );
     }
 
@@ -11139,35 +11401,35 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn lower_state_map_sets_keep_declared_base_names() {
         let src = r#"
             seiyaku StagedMintRequest {
-              state MintRequestNextSequence: i64;
-              state MintRequestSequenceById: StateMap<Name, i64>;
-              state MintRequestSequences: StateMap<i64, i64>;
-              state MintRequestRequestIds: StateMap<i64, Name>;
-              state MintRequestFiIds: StateMap<i64, Name>;
-              state MintRequestFiAuthorities: StateMap<i64, AccountId>;
-              state MintRequestToAccounts: StateMap<i64, AccountId>;
-              state MintRequestAmounts: StateMap<i64, i64>;
-              state MintRequestRequestedBy: StateMap<i64, Json>;
-              state MintRequestStates: StateMap<i64, i64>;
-              state MintRequestCreatedAt: StateMap<i64, i64>;
-              state MintRequestExpiresAt: StateMap<i64, i64>;
-              state MintRequestFinalizedAt: StateMap<i64, i64>;
-              state MintRequestCanceledAt: StateMap<i64, i64>;
+              state int MintRequestNextSequence;
+              state StateMap<Name, int> MintRequestSequenceById;
+              state StateMap<int, int> MintRequestSequences;
+              state StateMap<int, Name> MintRequestRequestIds;
+              state StateMap<int, Name> MintRequestFiIds;
+              state StateMap<int, AccountId> MintRequestFiAuthorities;
+              state StateMap<int, AccountId> MintRequestToAccounts;
+              state StateMap<int, int> MintRequestAmounts;
+              state StateMap<int, Json> MintRequestRequestedBy;
+              state StateMap<int, int> MintRequestStates;
+              state StateMap<int, int> MintRequestCreatedAt;
+              state StateMap<int, int> MintRequestExpiresAt;
+              state StateMap<int, int> MintRequestFinalizedAt;
+              state StateMap<int, int> MintRequestCanceledAt;
 
               hajimari() { MintRequestNextSequence = 0; }
 
-              fn update_record(sequence: i64,
-                               request_id: Name,
-                               fi_id: Name,
-                               fi_multisig_account_id: AccountId,
-                               to_account_id: AccountId,
-                               amount_i64: i64,
-                               requested_by_actor_id: Json,
-                               state_code: i64,
-                               created_at_ms: i64,
-                               expires_at_ms: i64,
-                               finalized_at_ms: i64,
-                               canceled_at_ms: i64) {
+              fn update_record(int sequence,
+                               Name request_id,
+                               Name fi_id,
+                               AccountId fi_multisig_account_id,
+                               AccountId to_account_id,
+                               int amount_i64,
+                               Json requested_by_actor_id,
+                               int state_code,
+                               int created_at_ms,
+                               int expires_at_ms,
+                               int finalized_at_ms,
+                               int canceled_at_ms) {
                 MintRequestSequences[sequence] = sequence;
                 MintRequestRequestIds[sequence] = request_id;
                 MintRequestFiIds[sequence] = fi_id;
@@ -11283,7 +11545,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn lower_struct_fields_for_transfer_domain() {
         let src = r#"
             seiyaku C {
-                struct TransferArgs { domain: DomainId; to: AccountId; }
+                struct TransferArgs { DomainId domain; AccountId to; }
                 fn main() {
                     let args = TransferArgs {
                         domain: DomainId::parse("wonderland.universal"),
@@ -11376,7 +11638,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn lower_get_or_on_state_map_reads_without_writing() {
-        let src = "state balances: StateMap<i64, i64>; fn f() -> i64 { return balances.get_or(key: 1, default: 7); }";
+        let src = "state StateMap<int, int> balances; fn f() -> int { return balances.get_or(key: 1, default: 7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -11401,7 +11663,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn scalar_state_map_get_reuses_presence_blob() {
-        let src = "state balances: StateMap<i64, i64>; fn f() { let _value = balances.get(1); }";
+        let src = "state StateMap<int, int> balances; fn f() { let _value = balances.get(1); }";
         let typed = analyze(&parse(src).expect("parse StateMap.get")).expect("analyze");
         let ir = lower(&typed).expect("lower");
         let state_gets = ir.functions[0]
@@ -11415,7 +11677,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn scalar_state_map_remove_reads_and_deletes_once() {
-        let src = "state balances: StateMap<i64, i64>; fn f() { let _value = balances.remove(1); }";
+        let src = "state StateMap<int, int> balances; fn f() { let _value = balances.remove(1); }";
         let typed = analyze(&parse(src).expect("parse StateMap.remove")).expect("analyze");
         let ir = lower(&typed).expect("lower");
         let instructions = ir.functions[0]
@@ -11443,8 +11705,8 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn lower_state_struct_ident_decodes_one_schema_bound_record() {
         let src = r#"
             seiyaku C {
-                struct Ledger { counter: i64; flag: bool; }
-                state ledger: Ledger;
+                struct Ledger { int counter; bool flag; }
+                state Ledger ledger;
 
                 hajimari() { ledger = Ledger { counter: 0, flag: false }; }
 
@@ -11498,7 +11760,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
         let program = parse(
             r#"
             module NamedStruct {
-                struct Pair { first: i64; second: i64; }
+                struct Pair { int first; int second; }
                 fn main() -> Pair { return Pair { second: 2, first: 1 }; }
             }
             "#,
@@ -11538,9 +11800,9 @@ fn either(value: bool) -> bool { return value || rhs(); }
         let program = parse(
             r#"
             module NamedStructEffects {
-                struct Pair { first: i64; second: i64; }
-                fn first() -> i64 { 1 }
-                fn second() -> i64 { 2 }
+                struct Pair { int first; int second; }
+                fn first() -> int { 1 }
+                fn second() -> int { 2 }
                 fn main() -> Pair { Pair { second: second(), first: first() } }
             }
             "#,
@@ -11582,8 +11844,8 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn lower_state_struct_assignment_encodes_and_writes_once() {
         let src = r#"
             seiyaku C {
-                struct Ledger { counter: i64; flag: bool; }
-                state ledger: Ledger;
+                struct Ledger { int counter; bool flag; }
+                state Ledger ledger;
 
                 hajimari() { ledger = Ledger { counter: 0, flag: false }; }
 
@@ -11634,8 +11896,8 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn aggregate_state_map_entry_uses_one_read_and_one_write() {
         let src = r#"
             seiyaku C {
-                struct Ledger { counter: i64; flag: bool; }
-                state ledgers: StateMap<i64, Ledger>;
+                struct Ledger { int counter; bool flag; }
+                state StateMap<int, Ledger> ledgers;
 
                 hajimari() {}
 
@@ -11693,9 +11955,9 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn scalar_state_read_after_write_reuses_the_live_value() {
         let src = r#"
             seiyaku C {
-                state counter: i64;
+                state int counter;
                 hajimari() { counter = 0; }
-                fn main() -> i64 {
+                fn main() -> int {
                     counter = 7;
                     return counter;
                 }
@@ -11735,8 +11997,8 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn missing_aggregate_map_entry_branches_before_typed_decode() {
         let src = r#"
             seiyaku C {
-                struct Pair { count: i64; ready: bool }
-                state values: StateMap<i64, Pair>;
+                struct Pair { int count; bool ready }
+                state StateMap<int, Pair> values;
                 hajimari() {}
                 fn main() { let _missing = values.get(7); }
             }
@@ -11789,7 +12051,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn bytes_state_map_uses_the_schema_bound_record_codec() {
         let source = r#"
             seiyaku C {
-                state values: StateMap<i64, bytes>;
+                state StateMap<int, bytes> values;
                 hajimari() {}
                 fn main() {
                     values[7] = b"payload";
@@ -11830,7 +12092,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
 
     #[test]
     fn checked_integer_constants_fold_without_wrapping() {
-        let safe = parse("fn main() -> i64 { return (9223372036854775807 - 1) + 1; }")
+        let safe = parse("fn main() -> int { return (9223372036854775807 - 1) + 1; }")
             .expect("parse safe constant expression");
         let safe = lower(&analyze(&safe).expect("analyze safe constant expression"))
             .expect("lower safe constant expression");
@@ -11841,7 +12103,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
                 .any(|instr| matches!(instr, Instr::Const { value, .. } if *value == i64::MAX))
         }));
 
-        let overflow = parse("fn main() -> i64 { return 9223372036854775807 + 1; }")
+        let overflow = parse("fn main() -> int { return 9223372036854775807 + 1; }")
             .expect("parse overflowing constant expression");
         let error =
             lower(&analyze(&overflow).expect("ordinary type analysis accepts runtime arithmetic"))
@@ -11853,17 +12115,17 @@ fn either(value: bool) -> bool { return value || rhs(); }
     }
 
     #[test]
-    fn exact_amount_constants_fold_and_invalid_arithmetic_is_diagnosed() {
-        let safe = parse("fn main() -> Amount { return 1amt / 8amt; }")
-            .expect("parse exact Amount constant");
-        let safe = lower(&analyze(&safe).expect("analyze exact Amount constant"))
-            .expect("lower exact Amount constant");
+    fn exact_decimal_constants_fold_and_invalid_arithmetic_is_diagnosed() {
+        let safe = parse("fn main() -> decimal { return 1.0 / 8.0; }")
+            .expect("parse exact decimal constant");
+        let safe = lower(&analyze(&safe).expect("analyze exact decimal constant"))
+            .expect("lower exact decimal constant");
         assert!(safe.functions[0].blocks.iter().any(|block| {
             block.instrs.iter().any(|instruction| {
                 matches!(
                     instruction,
                     Instr::DataRef {
-                        kind: DataRefKind::Quantity,
+                        kind: DataRefKind::Decimal,
                         value,
                         ..
                     } if value == "0.125"
@@ -11871,21 +12133,27 @@ fn either(value: bool) -> bool { return value || rhs(); }
             })
         }));
 
-        for source in [
-            "fn main() -> Amount { return 1amt - 2amt; }",
-            "fn main() -> Amount { return 1amt / 3amt; }",
+        for (source, code) in [
+            (
+                "fn main() -> quantity { return 1 - 2; }",
+                "E_QUANTITY_UNDERFLOW",
+            ),
+            (
+                "fn main() -> decimal { return 1.0 / 3.0; }",
+                "E_REPEATING_DECIMAL",
+            ),
         ] {
-            let program = parse(source).expect("parse invalid constant Amount arithmetic");
+            let program = parse(source).expect("parse invalid constant numeric arithmetic");
             let error = analyze(&program)
-                .expect_err("invalid constant Amount arithmetic must fail semantic checking");
-            assert_eq!(error.code, "E_AMOUNT_CONSTANT_ARITHMETIC");
+                .expect_err("invalid constant numeric arithmetic must fail semantic checking");
+            assert_eq!(error.code, code);
         }
     }
 
     #[test]
-    fn rounded_amount_division_is_constant_folded_or_one_direct_syscall() {
+    fn rounded_numeric_division_is_constant_folded_or_one_numeric_round_instruction() {
         let dynamic = parse(
-            "fn rounded(value: Amount, divisor: Amount, scale: i64) -> Amount { \
+            "fn rounded(quantity value, decimal divisor, int scale) -> quantity { \
                 return value.div_round( \
                     divisor: divisor, \
                     scale: scale, \
@@ -11893,55 +12161,43 @@ fn either(value: bool) -> bool { return value || rhs(); }
                 ); \
             }",
         )
-        .expect("parse dynamic rounded Amount division");
-        let dynamic = lower(&analyze(&dynamic).expect("analyze rounded Amount division"))
-            .expect("lower rounded Amount division");
+        .expect("parse dynamic rounded quantity division");
+        let dynamic = lower(&analyze(&dynamic).expect("analyze rounded quantity division"))
+            .expect("lower rounded quantity division");
         let calls = dynamic.functions[0]
             .blocks
             .iter()
             .flat_map(|block| &block.instrs)
-            .filter_map(|instruction| match instruction {
-                Instr::DirectHelperSyscall { syscall, args, .. }
-                    if *syscall == ivm_abi::syscalls::SYSCALL_AMOUNT_DIV_ROUND =>
-                {
-                    Some(args)
-                }
-                _ => None,
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::NumericRound {
+                        op: NumericRoundOp::QuantityDiv,
+                        ..
+                    }
+                )
             })
             .collect::<Vec<_>>();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].len(), 4);
-        let mode = calls[0][3];
-        assert!(dynamic.functions[0].blocks.iter().any(|block| {
-            block.instrs.iter().any(|instruction| {
-                matches!(
-                    instruction,
-                    Instr::Const { dest, value }
-                        if *dest == mode
-                            && *value
-                                == ivm_abi::syscalls::AMOUNT_ROUND_NEAREST_EVEN as i64
-                )
-            })
-        }));
 
         let folded = parse(
-            "fn rounded() -> Amount { \
-                return 1amt.div_round( \
-                    divisor: 8amt, \
+            "fn rounded() -> decimal { \
+                return 1.0.div_round( \
+                    divisor: 8.0, \
                     scale: 2, \
                     mode: Rounding::nearest_even, \
                 ); \
             }",
         )
-        .expect("parse constant rounded Amount division");
-        let folded = lower(&analyze(&folded).expect("analyze constant rounded Amount division"))
-            .expect("lower constant rounded Amount division");
+        .expect("parse constant rounded decimal division");
+        let folded = lower(&analyze(&folded).expect("analyze constant rounded decimal division"))
+            .expect("lower constant rounded decimal division");
         assert!(folded.functions[0].blocks.iter().any(|block| {
             block.instrs.iter().any(|instruction| {
                 matches!(
                     instruction,
                     Instr::DataRef {
-                        kind: DataRefKind::Quantity,
+                        kind: DataRefKind::Decimal,
                         value,
                         ..
                     } if value == "0.12"
@@ -11949,15 +12205,10 @@ fn either(value: bool) -> bool { return value || rhs(); }
             })
         }));
         assert!(folded.functions[0].blocks.iter().all(|block| {
-            block.instrs.iter().all(|instruction| {
-                !matches!(
-                    instruction,
-                    Instr::DirectHelperSyscall {
-                        syscall: ivm_abi::syscalls::SYSCALL_AMOUNT_DIV_ROUND,
-                        ..
-                    }
-                )
-            })
+            block
+                .instrs
+                .iter()
+                .all(|instruction| !matches!(instruction, Instr::NumericRound { .. }))
         }));
     }
 
@@ -11965,7 +12216,7 @@ fn either(value: bool) -> bool { return value || rhs(); }
     fn wrapping_builtins_have_distinct_ir() {
         let program = parse(
             r#"
-fn main(left: i64, right: i64) -> (i64, i64, i64, i64) {
+fn main(int left, int right) -> (int, int, int, int) {
     return (
         math::wrapping_add(left: left, right: right),
         math::wrapping_sub(left: left, right: right),

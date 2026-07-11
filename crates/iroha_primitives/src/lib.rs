@@ -38,7 +38,7 @@ pub mod json_macros {}
 pub use crate::{
     bigint::{BigInt, BigIntError, MAX_BITS as BIGINT_MAX_BITS},
     numeric::{
-        AmountError, AmountRoundingMode, ExactDivisionClass, Numeric, NumericError,
+        ExactDivisionClass, MAX_MANTISSA_BITS, MAX_MANTISSA_BYTES, Numeric, NumericError,
         NumericOperationError, NumericSpec, NumericSpecError, NumericSpecParseError,
         NumericWorkStep, ObservedNumericError, Quantity, RoundingMode, TryFromNumericError,
         numeric,

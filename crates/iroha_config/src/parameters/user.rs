@@ -6252,6 +6252,11 @@ pub struct SumeragiPersistence {
         default = "defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS"
     )]
     pub commit_inflight_timeout_ms: u64,
+    /// Maximum time (ms) finalized rollover waits for its height-local I/O
+    /// worker to report body cleanup before continuing under supervision. This
+    /// node-local setting is not part of the shared consensus fingerprint.
+    #[config(default = "defaults::sumeragi::POST_FINALITY_CLEANUP_TIMEOUT_MS")]
+    pub post_finality_cleanup_timeout_ms: u64,
     /// Commit worker work-queue capacity.
     #[config(
         env = "SUMERAGI_COMMIT_WORK_QUEUE_CAP",
@@ -7627,6 +7632,14 @@ impl Sumeragi {
         } else {
             true
         };
+        let post_finality_cleanup_ok = if persistence.post_finality_cleanup_timeout_ms == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.persistence.post_finality_cleanup_timeout_ms must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
         let commit_work_queue_ok = if persistence.commit_work_queue_cap == 0 {
             emitter
                 .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
@@ -7965,6 +7978,7 @@ impl Sumeragi {
             && da_openings_ok
             && kura_retry_ok
             && commit_inflight_ok
+            && post_finality_cleanup_ok
             && commit_work_queue_ok
             && commit_result_queue_ok
             && height_attempt_cap_ok
@@ -8174,6 +8188,9 @@ impl Sumeragi {
                 kura_retry_max_attempts: persistence.kura_retry_max_attempts,
                 commit_inflight_timeout: std::time::Duration::from_millis(
                     persistence.commit_inflight_timeout_ms,
+                ),
+                post_finality_cleanup_timeout: std::time::Duration::from_millis(
+                    persistence.post_finality_cleanup_timeout_ms,
                 ),
                 commit_work_queue_cap: persistence.commit_work_queue_cap,
                 commit_result_queue_cap: persistence.commit_result_queue_cap,
@@ -16034,6 +16051,9 @@ pub struct Torii {
     /// Maximum proof request payload size (bytes).
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
     pub proof_max_body_bytes: Bytes<u64>,
+    /// Maximum proof request bodies buffered concurrently before handler admission.
+    #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
+    pub proof_body_max_inflight: NonZeroUsize,
     /// Optional proof egress steady-state budget (bytes/sec). None disables.
     pub proof_egress_bytes_per_sec: Option<u64>,
     /// Optional proof egress burst budget (bytes). None disables.
@@ -16219,6 +16239,12 @@ pub struct Torii {
         default = "defaults::torii::ZK_IVM_PROVE_MAX_QUEUE"
     )]
     pub zk_ivm_prove_max_queue: usize,
+    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
+    #[config(
+        env = "TORII_ZK_IVM_TOOLING_TIMEOUT_MS",
+        default = "defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS"
+    )]
+    pub zk_ivm_tooling_timeout_ms: u64,
     /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
     #[config(
         env = "TORII_ZK_IVM_PROVE_JOB_TTL_SECS",
@@ -16233,6 +16259,12 @@ pub struct Torii {
         default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES"
     )]
     pub zk_ivm_prove_job_max_entries: usize,
+    /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES",
+        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES"
+    )]
+    pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
     /// Push notification configuration (feature-gated in runtime).
     #[config(nested)]
     pub push: ToriiPush,
@@ -16784,6 +16816,7 @@ impl Torii {
                     .or(super::defaults::torii::PROOF_BURST)
                     .and_then(std::num::NonZeroU32::new),
                 max_body_bytes: self.proof_max_body_bytes,
+                body_max_inflight: self.proof_body_max_inflight,
                 egress_bytes_per_sec: self
                     .proof_egress_bytes_per_sec
                     .or(super::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC)
@@ -16866,8 +16899,10 @@ impl Torii {
             zk_prover_allowed_circuits: self.zk_prover_allowed_circuits,
             zk_ivm_prove_max_inflight: self.zk_ivm_prove_max_inflight,
             zk_ivm_prove_max_queue: self.zk_ivm_prove_max_queue,
+            zk_ivm_tooling_timeout_ms: self.zk_ivm_tooling_timeout_ms,
             zk_ivm_prove_job_ttl_secs: self.zk_ivm_prove_job_ttl_secs,
             zk_ivm_prove_job_max_entries: self.zk_ivm_prove_job_max_entries,
+            zk_ivm_prove_job_max_retained_bytes: self.zk_ivm_prove_job_max_retained_bytes,
             connect: self.connect.parse(),
             iso_bridge: self.iso_bridge.parse(),
             rbc_sampling,
@@ -23489,6 +23524,45 @@ initial_delay_seconds = 17
             "membership_mismatch_alert_threshold".into(),
             Value::Integer(0),
         );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn sumeragi_post_finality_cleanup_deadline_is_file_configured_and_nonzero() {
+        let mut table = base_table();
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let persistence = sumeragi
+            .entry("persistence")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.persistence table");
+        persistence.insert(
+            "post_finality_cleanup_timeout_ms".into(),
+            Value::Integer(37),
+        );
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.sumeragi.persistence.post_finality_cleanup_timeout,
+            StdDuration::from_millis(37)
+        );
+
+        let mut table = base_table();
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let persistence = sumeragi
+            .entry("persistence")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.persistence table");
+        persistence.insert("post_finality_cleanup_timeout_ms".into(), Value::Integer(0));
         assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
     }
 

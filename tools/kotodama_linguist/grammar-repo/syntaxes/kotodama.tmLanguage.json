@@ -71,7 +71,7 @@
     "roundingVariants": {
       "patterns": [
         {
-          "match": "\\b(?:Rounding::floor|Rounding::ceil|Rounding::nearest_even)\\b",
+          "match": "\\b(?:Rounding::toward_zero|Rounding::away_from_zero|Rounding::floor|Rounding::ceil|Rounding::nearest_even|Rounding::nearest_away|Rounding::nearest_toward_zero)\\b",
           "name": "support.constant.variant.rounding.kotodama"
         }
       ]
@@ -87,7 +87,7 @@
     "memberCalls": {
       "patterns": [
         {
-          "match": "(?<=\\.)(?:len|get|try_set|try_push|pop|contains|take|enumerate|div_round|get_or_default|get_or|ensure|remove|get_int|get_amount|get_json|get_name|get_account_id|get_asset_definition_id|get_nft_id|get_blob_hex)(?=\\s*\\()",
+          "match": "(?<=\\.)(?:len|get|try_set|try_push|pop|contains|take|enumerate|div_round|ratio_round|get_or_default|get_or|ensure|remove|get_int|get_decimal|get_quantity|get_json|get_name|get_account_id|get_asset_definition_id|get_nft_id|get_blob_hex)(?=\\s*\\()",
           "name": "support.function.method.kotodama"
         }
       ]
@@ -294,8 +294,8 @@
           "name": "constant.numeric.integer.binary.kotodama"
         },
         {
-          "match": "\\b\\d(?:[\\d_]*\\d)?(?:\\.\\d(?:[\\d_]*\\d)?)?amt\\b",
-          "name": "constant.numeric.amount.decimal.kotodama"
+          "match": "\\b(?:\\d(?:[\\d_]*\\d)?\\.\\d(?:[\\d_]*\\d)?(?:[eE][+-]?\\d(?:[\\d_]*\\d)?)?|\\d(?:[\\d_]*\\d)?[eE][+-]?\\d(?:[\\d_]*\\d)?)\\b",
+          "name": "constant.numeric.decimal.kotodama"
         },
         {
           "match": "\\b\\d(?:[\\d_]*\\d)?\\b",
@@ -306,7 +306,7 @@
     "types": {
       "patterns": [
         {
-          "match": "\\b(?:i64|u128|bool|string|bytes|Amount|Json|AccountId|AssetDefinitionId|AssetId|DomainId|Name|NftId|DataSpaceId|Option|Result|List|StateMap|Secret|AccountView|AssetView|AssetDefinitionView|DomainView|NftView|QueryPage|Rounding)\\b",
+          "match": "\\b(?:int|decimal|quantity|bool|string|bytes|Json|AccountId|AssetDefinitionId|AssetId|DomainId|Name|NftId|DataSpaceId|Option|Result|List|StateMap|Secret|AccountView|AssetView|AssetDefinitionView|DomainView|NftView|QueryPage|Rounding)\\b",
           "name": "storage.type.kotodama"
         }
       ]

@@ -141,11 +141,11 @@ pub enum TypeExpr {
         source: Option<SourceRange>,
         ty: Box<TypeExpr>,
     },
-    /// A path or simple identifier, e.g. `i64`, `AccountId`.
+    /// A path or simple identifier, e.g. `int`, `AccountId`.
     Path(String),
     /// A generic type, such as `StateMap<K, V>`.
     Generic { base: String, args: Vec<TypeExpr> },
-    /// A tuple type, e.g. `(i64, bool)`.
+    /// A tuple type, e.g. `(int, bool)`.
     Tuple(Vec<TypeExpr>),
     /// A non-negative compile-time integer argument, used by `List<T, N>`.
     Const(u64),
@@ -205,7 +205,7 @@ pub struct ConstDecl {
     pub value: Expr,
 }
 
-/// A seiyaku-level `state` declaration: `state name: Type;`.
+/// A seiyaku-level `state` declaration: `state Type name;`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StateDecl {
     pub name: String,
@@ -1439,7 +1439,7 @@ mod provenance_tests {
 
     fn deeply_sourced_program(depth: u32) -> Program {
         let old_source = SourceId(11);
-        let mut expression = Expr::IntLiteral(1);
+        let mut expression = Expr::IntLiteral(BigInt::one());
         for index in (0..depth).rev() {
             expression = Expr::Source {
                 node: NodeId(index),
@@ -1488,7 +1488,7 @@ mod provenance_tests {
                     };
                     current = expr;
                 }
-                Expr::IntLiteral(1) => break,
+                Expr::IntLiteral(value) if value == &BigInt::one() => break,
                 other => panic!("unexpected nested expression: {other:?}"),
             }
         }
@@ -1505,7 +1505,7 @@ mod provenance_tests {
             };
             current = expr;
         }
-        assert!(matches!(current, Expr::IntLiteral(1)));
+        assert!(matches!(current, Expr::IntLiteral(value) if value == &BigInt::one()));
         drop_program_iterative(program);
     }
 }

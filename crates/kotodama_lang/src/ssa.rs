@@ -2276,14 +2276,34 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(right);
         }
         Unary { operand, .. } | WrappingNeg { operand, .. } => f(operand),
-        IntFromScalar { value, .. }
-        | IntToScalar { value, .. }
+        IntFromI64 { value, .. }
+        | IntFromU64 { value, .. }
+        | IntTryToI64 { value, .. }
+        | IntTryToU64 { value, .. }
         | NumericConvert { value, .. }
         | NumericTryConvert { value, .. }
         | NumericNeg { value, .. } => f(value),
+        DecimalToInt { value, mode, .. } => {
+            f(value);
+            if let Some(mode) = mode {
+                f(mode);
+            }
+        }
         NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
             f(left);
             f(right);
+        }
+        NumericRound {
+            dividend,
+            divisor,
+            scale,
+            mode,
+            ..
+        } => {
+            f(dividend);
+            f(divisor);
+            f(scale);
+            f(mode);
         }
         DirectHelperSyscall { args, .. } => {
             for arg in args {
@@ -2762,8 +2782,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(key);
             f(value);
         }
-        JsonGetInt { json, key, .. }
-        | JsonGetNumeric { json, key, .. }
+        JsonGetNumeric { json, key, .. }
         | JsonGetJson { json, key, .. }
         | JsonGetName { json, key, .. }
         | JsonGetAccountId { json, key, .. }
@@ -2935,13 +2954,17 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         | ir::Instr::StateHas { dest, .. }
         | ir::Instr::StateLen { dest, .. }
         | ir::Instr::StateCount { dest, .. }
-        | ir::Instr::IntFromScalar { dest, .. }
-        | ir::Instr::IntToScalar { dest, .. }
+        | ir::Instr::IntFromI64 { dest, .. }
+        | ir::Instr::IntFromU64 { dest, .. }
+        | ir::Instr::IntTryToI64 { dest, .. }
+        | ir::Instr::IntTryToU64 { dest, .. }
         | ir::Instr::NumericConvert { dest, .. }
         | ir::Instr::NumericTryConvert { dest, .. }
         | ir::Instr::NumericStatus { dest }
         | ir::Instr::NumericNeg { dest, .. }
         | ir::Instr::NumericBinary { dest, .. }
+        | ir::Instr::NumericRound { dest, .. }
+        | ir::Instr::DecimalToInt { dest, .. }
         | ir::Instr::NumericCompare { dest, .. }
         | ir::Instr::DirectHelperSyscall { dest, .. } => Some(dest),
         ir::Instr::SchemaInfo { dest, .. } | ir::Instr::CoreQueryGet { dest, .. } => Some(dest),
@@ -2976,8 +2999,7 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::PathMapKeyNorito { dest, .. } => Some(dest),
         ir::Instr::JsonEncode { dest, .. } => Some(dest),
         ir::Instr::JsonDecode { dest, .. } => Some(dest),
-        ir::Instr::JsonGetInt { dest, .. }
-        | ir::Instr::JsonGetNumeric { dest, .. }
+        ir::Instr::JsonGetNumeric { dest, .. }
         | ir::Instr::JsonGetJson { dest, .. }
         | ir::Instr::JsonGetName { dest, .. }
         | ir::Instr::JsonGetAccountId { dest, .. }

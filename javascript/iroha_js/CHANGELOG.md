@@ -9,13 +9,56 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   diagnostic fields and UTF-8 byte spans, validate artifact/manifest/sidecar
   integrity on success, and bound compiler-service success and error bodies
   while reading them.
+- Fixed the built-in browser Connect approval handoff: browser Connect verifies
+  the `{accountId, walletPublicKey, signature}` proof, while the Nexus facade
+  projects the account and derives its Ed25519 controller instead of treating
+  the X25519 `walletPublicKey` as a transaction key. Submissions using
+  `{wait: true, signal}` now check cancellation before finalization and again
+  immediately before Torii submission.
 - Made `build:dist` concurrency-safe and content-idempotent: explicit builds
   stage and validate the complete ESM tree under an inter-process lock, then
-  replace `dist` only when its content changed. Consuming `file:` installs no
-  longer run a mutating `prepare` hook; release and packaged-layout workflows
-  continue to build the distribution explicitly.
+  replace `dist` only when its content changed, with stale-lock recovery,
+  rollback to the last good tree after interrupted publication, and a shared
+  reader lock for packaging. Consuming `file:` installs no longer run a mutating
+  `prepare` hook; release gates now build first and verify the exact fresh tree
+  through source/dist parity, safe tarball inspection, clean installation, and
+  public/subpath imports.
+- Added fail-closed proof-carrying deployed-contract submission. Callers now
+  provide independently trusted ledger code and full-artifact identities;
+  Torii simulation, fetched bytes, derived/proved bytecode, gas, entrypoint,
+  payload, and proof/verifying-key backends are bound before signing. The new
+  browser-safe `computeIvmArtifactHashes` helper and `./ivm-artifact` subpath
+  compute both identities and ship standalone strict-DOM declarations without
+  ambient Node types. Artifacts are capped at 4 MiB before allocation and
+  SharedArrayBuffer-backed inputs are rejected, while genuine cross-realm
+  ArrayBuffers remain supported. Code-byte, simulation, derivation, and proof
+  responses now enforce declared and streamed endpoint-specific byte caps
+  before fatal UTF-8 decoding and strict JSON parsing. Validation-fee policy
+  verification now uses strict
+  uncofactored Ed25519 verification, rejects duplicate governance keyset ids,
+  bounds adversarial inputs before allocation, and fails closed on unaudited
+  overlay instruction families. IVM proof polling validates options before job
+  creation and best-effort cancels failed or aborted jobs.
 
 ## [0.0.3] - 2026-07-11
+
+- Hardened Nexus wallet-signing boundaries: signables are now copied and
+  independently validated as canonical `Transfer::Asset` payloads before any
+  signer callback, Connect and transfer alias conflicts fail closed, polling
+  options are validated before Torii submission, and non-canonical scaled
+  numeric archives with trailing zeros are rejected. The exported
+  `validateBrowserTransferSignable` helper and executable Nexus recipe smoke
+  test expose and lock the same validation contract for integrators.
+- Made the complete public `./browser` aggregate bundle-safe without global
+  shims: browser Buffer edges resolve through the declared `buffer` dependency,
+  while browser-safe modules import a package-local crypto adapter that maps to
+  streaming `@noble/hashes` SHA-256 and securely chunked Web Crypto entropy;
+  Node consumers retain native crypto semantics. The `./canonical-request`
+  subpath now supports secure default nonce generation in browser builds and
+  ships standalone strict-DOM declarations without ambient Node types.
+  Release checks bundle both that subpath and the full browser namespace,
+  reject Node-only graph inputs, and enforce measured 75 KiB and 300 KiB
+  production bundle ceilings respectively.
 
 - Hardened Nexus custom-codec boundaries with descriptor snapshots, exact and
   recomputed payload hashes, independently finalized canonical signed bytes,

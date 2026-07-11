@@ -38,7 +38,7 @@ pub enum AstNodeKind {
     IndexExpression,
     /// Capacity-proven bounded-list comprehension.
     ListComprehension,
-    /// Exact decimal Amount literal token.
+    /// Unsuffixed exact decimal literal token.
     DecimalLiteral,
     /// Declaration or reference name.
     Name,

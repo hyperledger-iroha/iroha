@@ -825,12 +825,12 @@ export interface SccpSemanticProofProfileV1 {
 export interface SccpSoraFinalityAnchorV1 {
   readonly version: 1;
   readonly source_network: SccpNetworkV1;
+  readonly protocol_version: 2;
   readonly chain_id_hash: string;
   readonly checkpoint_height: number;
   readonly checkpoint_block_hash: string;
-  readonly validator_set_epoch: number;
-  readonly validator_set_hash: string;
-  readonly validator_set_hash_version: 1;
+  readonly checkpoint_context_id: string;
+  readonly checkpoint_finality_artifact_hash: string;
 }
 export interface SccpOutboundProofPolicyV1 {
   readonly version: 1;
@@ -2914,6 +2914,17 @@ export function blake2b256(
     includeZeroKeyBlock?: boolean;
   },
 ): Uint8Array;
+
+export const IVM_PROGRAM_HEADER_LENGTH: 17;
+export const IVM_ARTIFACT_MAX_BYTES: 4194304;
+
+/** Compute ledger/Core body identity and full-artifact SHA-256 identity. */
+export function computeIvmArtifactHashes(
+  artifact: Uint8Array | ArrayBuffer | ArrayBufferView,
+): {
+  codeHashHex: string;
+  artifactSha256Hex: string;
+};
 
 export interface ConfidentialGasSchedule {
   proofBase: number;
@@ -7517,55 +7528,96 @@ export interface RequiredIvmOverlayTransfer {
   destination_account_id?: string;
 }
 
-export interface IvmProvedContractCallInput {
-  chainId: string;
-  chain_id?: string;
+export interface IvmProvedContractCallInputBase {
   authority: string;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  private_key?: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-  private_key_algorithm?: string | null;
-  vkRef: IvmVerifyingKeyRef;
-  vk_ref?: IvmVerifyingKeyRef;
-  contractAddress?: string;
-  contract_address?: string;
-  contractAlias?: string;
-  contract_alias?: string;
   entrypoint?: string | null;
   payload?: JsonValue;
-  gasLimit: NumericLike;
-  gas_limit?: NumericLike;
-  gasAssetId?: string | null;
-  gas_asset_id?: string | null;
-  feeSponsor?: string | null;
-  fee_sponsor?: string | null;
   metadata?: MetadataLike;
-  validationFeePolicy?: IvmValidationFeePolicyIntent | null;
-  validation_fee_policy?: IvmValidationFeePolicyIntent | null;
-  requiredOverlayTransfer?: RequiredIvmOverlayTransfer | null;
-  required_overlay_transfer?: RequiredIvmOverlayTransfer | null;
-  creationTimeMs?: number | null;
-  creation_time_ms?: number | null;
-  ttlMs?: number | null;
-  ttl_ms?: number | null;
   nonce?: number | null;
 }
 
+type IvmRequiredAliasPair<
+  Camel extends string,
+  Snake extends string,
+  Value,
+> =
+  | ({ [Key in Camel]: Value } & { [Key in Snake]?: never })
+  | ({ [Key in Camel]?: never } & { [Key in Snake]: Value });
+
+type IvmOptionalAliasPair<
+  Camel extends string,
+  Snake extends string,
+  Value,
+> =
+  | ({ [Key in Camel]?: Value } & { [Key in Snake]?: never })
+  | ({ [Key in Camel]?: never } & { [Key in Snake]: Value });
+
+type IvmContractTarget =
+  | (IvmRequiredAliasPair<"contractAddress", "contract_address", string> & {
+      contractAlias?: never;
+      contract_alias?: never;
+    })
+  | (IvmRequiredAliasPair<"contractAlias", "contract_alias", string> & {
+      contractAddress?: never;
+      contract_address?: never;
+    });
+
+type IvmProvedContractCallCore = IvmProvedContractCallInputBase &
+  IvmRequiredAliasPair<"chainId", "chain_id", string> &
+  IvmRequiredAliasPair<
+    "privateKey",
+    "private_key",
+    Buffer | ArrayBuffer | ArrayBufferView
+  > &
+  IvmOptionalAliasPair<
+    "privateKeyAlgorithm",
+    "private_key_algorithm",
+    string | null
+  > &
+  IvmRequiredAliasPair<"vkRef", "vk_ref", IvmVerifyingKeyRef> &
+  IvmContractTarget &
+  IvmRequiredAliasPair<"gasLimit", "gas_limit", NumericLike> &
+  IvmOptionalAliasPair<"gasAssetId", "gas_asset_id", string | null> &
+  IvmOptionalAliasPair<"feeSponsor", "fee_sponsor", string | null> &
+  IvmOptionalAliasPair<
+    "requiredOverlayTransfer",
+    "required_overlay_transfer",
+    RequiredIvmOverlayTransfer | null
+  > &
+  IvmOptionalAliasPair<"creationTimeMs", "creation_time_ms", number | null> &
+  IvmOptionalAliasPair<"ttlMs", "ttl_ms", number | null> &
+  IvmRequiredAliasPair<
+    "expectedCodeHashHex",
+    "expected_code_hash_hex",
+    string
+  > &
+  IvmRequiredAliasPair<
+    "expectedArtifactSha256Hex",
+    "expected_artifact_sha256_hex",
+    string
+  >;
+
+/**
+ * A proved deployed-contract call must carry an independently trusted code
+ * hash and a SHA-256 digest of the complete artifact. The helper verifies
+ * Torii's simulation, the ledger/Core body hash, and every header/body byte
+ * against those values before deriving, proving, signing, or submitting.
+ */
+export type IvmProvedContractCallInput = IvmProvedContractCallCore &
+  IvmOptionalAliasPair<
+    "validationFeePolicy",
+    "validation_fee_policy",
+    IvmValidationFeePolicyIntent | null
+  >;
+
 /** Input for the strict validation-fee submission helper. */
-export type ValidationFeeIvmProvedContractCallInput = Omit<
-  IvmProvedContractCallInput,
-  "validationFeePolicy" | "validation_fee_policy"
-> &
-  (
-    | {
-        validationFeePolicy: IvmValidationFeePolicyIntent;
-        validation_fee_policy?: never;
-      }
-    | {
-        validationFeePolicy?: never;
-        validation_fee_policy: IvmValidationFeePolicyIntent;
-      }
-  );
+export type ValidationFeeIvmProvedContractCallInput =
+  IvmProvedContractCallCore &
+    IvmRequiredAliasPair<
+      "validationFeePolicy",
+      "validation_fee_policy",
+      IvmValidationFeePolicyIntent
+    >;
 
 export interface IvmProvedContractCallOptions {
   signal?: AbortSignal;
@@ -8824,6 +8876,18 @@ export interface IvmProvedPayload {
   gas_policy_commitment: string;
 }
 
+export interface IvmCompactProofAttachment {
+  backend: string;
+  proof: {
+    backend: string;
+    bytes_b64: string;
+  };
+  vk_ref: IvmVerifyingKeyRef;
+  vk_commitment?: JsonValue;
+  envelope_hash?: JsonValue;
+  lane_privacy?: JsonValue;
+}
+
 export interface ZkIvmExecutionRequest {
   vkRef?: IvmVerifyingKeyRef;
   vk_ref?: IvmVerifyingKeyRef;
@@ -8846,7 +8910,7 @@ export interface ZkIvmProveJobResponse {
   status: "pending" | "running" | "done" | "error";
   error: string | null;
   proved: IvmProvedPayload | null;
-  attachment: { [key: string]: JsonValue } | null;
+  attachment: IvmCompactProofAttachment | null;
 }
 
 export interface ZkIvmProveWaitOptions {
@@ -11259,6 +11323,7 @@ export declare class ToriiClient {
   ): Promise<unknown | null>;
   submitTransaction(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: { signal?: AbortSignal },
   ): Promise<unknown>;
   submitTransactionBatch(
     payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
@@ -11891,6 +11956,10 @@ export declare class ToriiClient {
     jobId: string,
     options?: { signal?: AbortSignal },
   ): Promise<ZkIvmProveJobResponse>;
+  cancelIvmProveJob(
+    jobId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ZkIvmProveJobCreatedResponse>;
   waitForIvmProveJob(
     jobId: string,
     options?: ZkIvmProveWaitOptions,
@@ -11931,6 +12000,7 @@ export declare class ToriiClient {
   ): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(
     codeHashHex: string,
+    options?: { signal?: AbortSignal },
   ): Promise<ContractCodeBytesRecord | null>;
   getGovernanceContract(
     contractAddress: string,
@@ -12176,82 +12246,7 @@ export function ed25519SeedToRecoveryPhrase(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): RecoveryPhrase;
 
-export function canonicalQueryString(
-  query?: string | URLSearchParams | null,
-): string;
-
-export function canonicalRequestMessage(params: {
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body?: Buffer | ArrayBuffer | ArrayBufferView | string;
-}): Buffer;
-
-export function canonicalRequestSignatureMessage(params: {
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body?: Buffer | ArrayBuffer | ArrayBufferView | string;
-  timestampMs: number;
-  nonce: string;
-}): Buffer;
-
-export function buildCanonicalRequestHeaders(params: {
-  accountId: string;
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body?: Buffer | ArrayBuffer | ArrayBufferView | string;
-  privateKey: ArrayBufferView | ArrayBuffer | Buffer;
-  timestampMs?: number;
-  nonce?: string;
-}): {
-  "X-Iroha-Account": string;
-  "X-Iroha-Signature": string;
-  "X-Iroha-Timestamp-Ms": string;
-  "X-Iroha-Nonce": string;
-};
-
-export interface CanonicalJsonRequestSignerInput {
-  message: Buffer;
-  messageBase64: string;
-  method: string;
-  path: string;
-  query?: string | URLSearchParams;
-  body: string;
-  timestampMs: number;
-  nonce: string;
-}
-
-export type CanonicalJsonRequestSignature =
-  | Buffer
-  | Uint8Array
-  | ArrayBuffer
-  | ArrayBufferView
-  | string;
-
-export function buildCanonicalJsonRequest(params: {
-  accountId: string;
-  method?: string;
-  path: string;
-  baseUrl?: string;
-  query?: string | URLSearchParams;
-  body?: unknown;
-  headers?:
-    | Headers
-    | ReadonlyArray<readonly [string, string]>
-    | Record<string, string>;
-  privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
-  sign?: (
-    input: CanonicalJsonRequestSignerInput,
-  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
-  timestampMs?: number;
-  nonce?: string;
-}): Promise<{
-  method: string;
-  headers: Record<string, string>;
-  body: string;
-}>;
+export * from "./canonical-request.js";
 
 export function deriveConfidentialKeyset(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -14732,6 +14727,77 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(
 export function privateUploadedModelReceiptInstruction(
   response: Record<string, unknown>,
 ): SoracloudTxInstruction;
+
+export class NumericV1Error extends Error {
+  readonly code: string;
+}
+
+export class KotodamaInt {
+  constructor(value: bigint | string);
+  readonly value: bigint;
+  toString(): string;
+}
+
+export class KotodamaDecimal {
+  constructor(value: string);
+  constructor(mantissa: bigint | string, scale: number);
+  readonly mantissa: bigint;
+  readonly scale: number;
+  toString(): string;
+}
+
+export class KotodamaQuantity {
+  constructor(value: string);
+  constructor(mantissa: bigint | string, scale: number);
+  readonly mantissa: bigint;
+  readonly scale: number;
+  toString(): string;
+}
+
+export const NumericV1: {
+  readonly INT_MIN: bigint;
+  readonly INT_MAX: bigint;
+  readonly MAX_MANTISSA_BYTES: 64;
+  readonly MAX_SCALE: 28;
+  readonly schemas: {
+    readonly int: {
+      readonly name: "iroha.numeric.IntValueV1";
+      readonly hash: string;
+      readonly pointerType: 0x0011;
+      readonly scaled: false;
+    };
+    readonly decimal: {
+      readonly name: "iroha.numeric.DecimalValueV1";
+      readonly hash: string;
+      readonly pointerType: 0x0012;
+      readonly scaled: true;
+    };
+    readonly quantity: {
+      readonly name: "iroha.numeric.QuantityValueV1";
+      readonly hash: string;
+      readonly pointerType: 0x0013;
+      readonly scaled: true;
+    };
+  };
+  encodeIntFrame(value: KotodamaInt | bigint | string): Uint8Array;
+  encodeDecimalFrame(value: KotodamaDecimal | string): Uint8Array;
+  encodeQuantityFrame(value: KotodamaQuantity | string): Uint8Array;
+  decodeIntFrame(value: ArrayBuffer | ArrayBufferView): KotodamaInt;
+  decodeDecimalFrame(value: ArrayBuffer | ArrayBufferView): KotodamaDecimal;
+  decodeQuantityFrame(value: ArrayBuffer | ArrayBufferView): KotodamaQuantity;
+  encodeIntEnvelope(value: KotodamaInt | bigint | string): Uint8Array;
+  encodeDecimalEnvelope(value: KotodamaDecimal | string): Uint8Array;
+  encodeQuantityEnvelope(value: KotodamaQuantity | string): Uint8Array;
+  decodeIntEnvelope(value: ArrayBuffer | ArrayBufferView): KotodamaInt;
+  decodeDecimalEnvelope(value: ArrayBuffer | ArrayBufferView): KotodamaDecimal;
+  decodeQuantityEnvelope(value: ArrayBuffer | ArrayBufferView): KotodamaQuantity;
+  encodeIntJson(value: KotodamaInt | bigint | string): string;
+  encodeDecimalJson(value: KotodamaDecimal | string): string;
+  encodeQuantityJson(value: KotodamaQuantity | string): string;
+  decodeIntJson(value: string): KotodamaInt;
+  decodeDecimalJson(value: string): KotodamaDecimal;
+  decodeQuantityJson(value: string): KotodamaQuantity;
+};
 
 export * from "./nexus-app";
 export * from "./transaction-codec.js";

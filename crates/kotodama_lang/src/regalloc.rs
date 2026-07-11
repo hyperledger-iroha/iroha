@@ -1185,12 +1185,32 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
             visit(*left);
             visit(*right);
         }
+        Instr::NumericRound {
+            dividend,
+            divisor,
+            scale,
+            mode,
+            ..
+        } => {
+            visit(*dividend);
+            visit(*divisor);
+            visit(*scale);
+            visit(*mode);
+        }
         Instr::Unary { operand, .. } | Instr::WrappingNeg { operand, .. } => visit(*operand),
-        Instr::IntFromScalar { value, .. }
-        | Instr::IntToScalar { value, .. }
+        Instr::IntFromI64 { value, .. }
+        | Instr::IntFromU64 { value, .. }
+        | Instr::IntTryToI64 { value, .. }
+        | Instr::IntTryToU64 { value, .. }
         | Instr::NumericConvert { value, .. }
         | Instr::NumericTryConvert { value, .. }
         | Instr::NumericNeg { value, .. } => visit(*value),
+        Instr::DecimalToInt { value, mode, .. } => {
+            visit(*value);
+            if let Some(mode) = mode {
+                visit(*mode);
+            }
+        }
         Instr::Min { a, b, .. }
         | Instr::Max { a, b, .. }
         | Instr::Gcd { a, b, .. }
@@ -1719,14 +1739,34 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*right);
         }
         Unary { operand, .. } | WrappingNeg { operand, .. } => f(*operand),
-        IntFromScalar { value, .. }
-        | IntToScalar { value, .. }
+        IntFromI64 { value, .. }
+        | IntFromU64 { value, .. }
+        | IntTryToI64 { value, .. }
+        | IntTryToU64 { value, .. }
         | NumericConvert { value, .. }
         | NumericTryConvert { value, .. }
         | NumericNeg { value, .. } => f(*value),
+        DecimalToInt { value, mode, .. } => {
+            f(*value);
+            if let Some(mode) = mode {
+                f(*mode);
+            }
+        }
         NumericBinary { left, right, .. } | NumericCompare { left, right, .. } => {
             f(*left);
             f(*right);
+        }
+        NumericRound {
+            dividend,
+            divisor,
+            scale,
+            mode,
+            ..
+        } => {
+            f(*dividend);
+            f(*divisor);
+            f(*scale);
+            f(*mode);
         }
         DirectHelperSyscall { args, .. } => {
             for arg in args {
@@ -2205,8 +2245,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*key);
             f(*value);
         }
-        JsonGetInt { json, key, .. }
-        | JsonGetNumeric { json, key, .. }
+        JsonGetNumeric { json, key, .. }
         | JsonGetJson { json, key, .. }
         | JsonGetName { json, key, .. }
         | JsonGetAccountId { json, key, .. }
@@ -2395,13 +2434,17 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::StateHas { dest, .. }
         | Instr::StateLen { dest, .. }
         | Instr::StateCount { dest, .. }
-        | Instr::IntFromScalar { dest, .. }
-        | Instr::IntToScalar { dest, .. }
+        | Instr::IntFromI64 { dest, .. }
+        | Instr::IntFromU64 { dest, .. }
+        | Instr::IntTryToI64 { dest, .. }
+        | Instr::IntTryToU64 { dest, .. }
         | Instr::NumericConvert { dest, .. }
         | Instr::NumericTryConvert { dest, .. }
         | Instr::NumericStatus { dest }
         | Instr::NumericNeg { dest, .. }
         | Instr::NumericBinary { dest, .. }
+        | Instr::NumericRound { dest, .. }
+        | Instr::DecimalToInt { dest, .. }
         | Instr::NumericCompare { dest, .. }
         | Instr::DirectHelperSyscall { dest, .. } => Some(*dest),
         Instr::SchemaInfo { dest, .. } | Instr::CoreQueryGet { dest, .. } => Some(*dest),
@@ -2436,8 +2479,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
         Instr::JsonEncode { dest, .. } => Some(*dest),
         Instr::JsonDecode { dest, .. } => Some(*dest),
-        Instr::JsonGetInt { dest, .. }
-        | Instr::JsonGetNumeric { dest, .. }
+        Instr::JsonGetNumeric { dest, .. }
         | Instr::JsonGetJson { dest, .. }
         | Instr::JsonGetName { dest, .. }
         | Instr::JsonGetAccountId { dest, .. }

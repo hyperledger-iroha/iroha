@@ -687,30 +687,29 @@ mod tests {
     }
 
     #[test]
-    fn amount_is_one_lossless_token_with_exact_range() {
-        let source = SourceFile::new(SourceId(0), "amount.ko", "  1.250_0amt // exact\n");
+    fn decimal_is_one_lossless_token_with_exact_range() {
+        let source = SourceFile::new(SourceId(0), "decimal.ko", "  1.250_0 // exact\n");
         let lexed = lex(&source, FrontendBudget::v1());
         assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
-        let amount = lexed
+        let decimal = lexed
             .tokens
             .iter()
             .find(|token| token.kind == SyntaxKind::Decimal)
-            .expect("Amount token");
-        assert_eq!(source.slice(amount.range), Some("1.250_0amt"));
-        assert_eq!(amount.range.start, 2);
-        assert_eq!(amount.range.end, 12);
+            .expect("decimal token");
+        assert_eq!(source.slice(decimal.range), Some("1.250_0"));
+        assert_eq!(decimal.range.start, 2);
+        assert_eq!(decimal.range.end, 9);
     }
 
     #[test]
-    fn amount_lexical_failures_have_dedicated_codes() {
+    fn decimal_and_retired_suffix_failures_have_dedicated_codes() {
         for (spelling, code) in [
-            ("1.25", "E_AMOUNT_SUFFIX"),
-            ("1.25 amt", "E_AMOUNT_SUFFIX_SEPARATED"),
-            ("1.25am", "E_AMOUNT_SUFFIX"),
-            ("0x10amt", "E_AMOUNT_MALFORMED"),
-            ("1.amt", "E_AMOUNT_MALFORMED"),
+            ("1.amt", "E_DECIMAL_MALFORMED"),
+            ("1e", "E_DECIMAL_EXPONENT"),
+            ("1.25amt", "E_RETIRED_NUMERIC_SUFFIX"),
+            ("0x10amt", "E_RETIRED_NUMERIC_SUFFIX"),
         ] {
-            let source = SourceFile::new(SourceId(0), "invalid-amount.ko", spelling);
+            let source = SourceFile::new(SourceId(0), "invalid-decimal.ko", spelling);
             let lexed = lex(&source, FrontendBudget::v1());
             assert_eq!(lexed.diagnostics[0].code, code, "`{spelling}`");
             assert_eq!(lexed.tokens[0].kind, SyntaxKind::ErrorToken, "`{spelling}`");
@@ -718,29 +717,12 @@ mod tests {
     }
 
     #[test]
-    fn amount_lexical_fixes_are_value_preserving_and_exactly_spanned() {
-        for (spelling, original, replacement) in [
-            ("1.25", "1.25", "1.25amt"),
-            ("1.25 amt", "1.25 amt", "1.25amt"),
-            ("1.25Amt", "1.25Amt", "1.25amt"),
-            ("1.amt", "1.amt", "1.0amt"),
-        ] {
-            let source = SourceFile::new(SourceId(0), "invalid-amount.ko", spelling);
+    fn retired_numeric_suffixes_do_not_offer_compatibility_fixes() {
+        for spelling in ["1i64", "1u128", "1amt", "1.25amt"] {
+            let source = SourceFile::new(SourceId(0), "retired-suffix.ko", spelling);
             let lexed = lex(&source, FrontendBudget::v1());
-            let fix = lexed.diagnostics[0]
-                .fix
-                .as_ref()
-                .expect("safe Amount spelling fix");
-            let range = fix.span.byte_range.expect("exact byte range");
-            assert_eq!(source.slice(range), Some(original), "`{spelling}`");
-            assert_eq!(fix.replacement, replacement, "`{spelling}`");
+            assert_eq!(lexed.diagnostics[0].code, "E_RETIRED_NUMERIC_SUFFIX");
+            assert!(lexed.diagnostics[0].fix.is_none());
         }
-
-        let source = SourceFile::new(SourceId(0), "ambiguous-amount.ko", "0x10amt");
-        let lexed = lex(&source, FrontendBudget::v1());
-        assert!(
-            lexed.diagnostics[0].fix.is_none(),
-            "the compiler must not guess whether hexadecimal text should become a decimal Amount"
-        );
     }
 }

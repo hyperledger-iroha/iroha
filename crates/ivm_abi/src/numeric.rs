@@ -7,7 +7,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u64)]
 pub enum NumericFaultV1 {
-    /// The canonical result exceeds the signed 4096-bit integer domain.
+    /// The canonical result exceeds the signed 512-bit integer domain.
     MantissaOverflow = 1,
     /// The canonical exact decimal result requires a scale greater than 28.
     ScaleOverflow = 2,
@@ -25,6 +25,12 @@ pub enum NumericFaultV1 {
     NegativeQuantity = 8,
     /// Quantity subtraction would produce a negative value.
     QuantityUnderflow = 9,
+    /// A rounded operation received an unknown rounding-mode tag.
+    InvalidRoundingMode = 10,
+    /// A fallible operation received an unknown failure-mode tag.
+    InvalidFailureMode = 11,
+    /// A register required to be zero by the syscall contract was nonzero.
+    ReservedRegisterNonZero = 12,
 }
 
 impl NumericFaultV1 {
@@ -41,6 +47,9 @@ impl NumericFaultV1 {
             7 => Self::InexactConversion,
             8 => Self::NegativeQuantity,
             9 => Self::QuantityUnderflow,
+            10 => Self::InvalidRoundingMode,
+            11 => Self::InvalidFailureMode,
+            12 => Self::ReservedRegisterNonZero,
             _ => return None,
         })
     }
@@ -171,11 +180,11 @@ mod tests {
 
     #[test]
     fn numeric_fault_tags_are_complete_and_stable() {
-        for tag in 1..=9 {
+        for tag in 1..=12 {
             assert_eq!(NumericFaultV1::from_tag(tag).map(NumericFaultV1::tag), Some(tag));
         }
         assert_eq!(NumericFaultV1::from_tag(0), None);
-        assert_eq!(NumericFaultV1::from_tag(10), None);
+        assert_eq!(NumericFaultV1::from_tag(13), None);
     }
 
     #[test]

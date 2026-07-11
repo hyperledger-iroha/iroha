@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use iroha_data_model::smart_contract::manifest::ContractManifest;
 
 use crate::{
-    ast::{Item, Program, SourceUnitKind},
+    ast::{FunctionKind, Item, Program, SourceUnitKind},
     compiler::{CompileReport, Compiler, CompilerMode, CompilerOptions},
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourcePosition, SourceSpan,
@@ -45,7 +45,10 @@ pub struct TestCompileOutput {
     /// Test-mode artifact containing the local test functions.
     pub suite: CompileOutput,
     /// Production-mode artifact derived after removing local-only test declarations.
-    pub runtime: CompileOutput,
+    ///
+    /// Pure unit-test targets with no public runtime entrypoint do not need a
+    /// deployable projection and therefore return `None`.
+    pub runtime: Option<CompileOutput>,
 }
 
 /// One source-identified input to the typed-HIR local test linker.
@@ -492,10 +495,20 @@ impl CompilerSession {
             .map_err(|error| semantic_error_diagnostic(error, Some(&target.source_name)))?;
 
         let suite = self.build_typed_program(suite_typed, Some(&target.source_name))?;
-        let mut runtime_options = self.options.clone();
-        runtime_options.mode = CompilerMode::Production;
-        let runtime = CompilerSession::new(runtime_options)
-            .build_typed_program(runtime_typed, Some(&target.source_name))?;
+        let has_runtime_entrypoint = runtime_typed.items.iter().any(|item| {
+            let crate::semantic::TypedItem::Function(function) = item;
+            function.modifiers.kind != FunctionKind::Private
+        });
+        let runtime = if has_runtime_entrypoint {
+            let mut runtime_options = self.options.clone();
+            runtime_options.mode = CompilerMode::Production;
+            Some(
+                CompilerSession::new(runtime_options)
+                    .build_typed_program(runtime_typed, Some(&target.source_name))?,
+            )
+        } else {
+            None
+        };
         Ok(TestCompileOutput { suite, runtime })
     }
 
@@ -991,7 +1004,7 @@ mod tests {
         let session = CompilerSession::default();
         let output = session
             .build(CompileRequest {
-                source: "seiyaku Demo { view fn ping() -> i64 { return 1; } }",
+                source: "seiyaku Demo { view fn ping() -> int { return 1; } }",
                 source_name: Some("demo.ko"),
             })
             .expect("compile canonical source");
@@ -1016,7 +1029,7 @@ mod tests {
 
     #[test]
     fn check_drops_a_boundary_depth_program_iteratively() {
-        let mut ty = String::from("i64");
+        let mut ty = String::from("int");
         for _ in 0..crate::source::MAX_NESTING_DEPTH - 2 {
             ty = format!("Option<{ty}>");
         }
@@ -1036,7 +1049,7 @@ mod tests {
             })
             .expect("lint cleanup at the nesting boundary must be stack-safe");
 
-        let invalid = source.replace("i64", "UnknownType");
+        let invalid = source.replace("int", "UnknownType");
         session
             .check(CompileRequest {
                 source: &invalid,
@@ -1071,10 +1084,10 @@ mod tests {
     fn session_rejects_aggregate_arguments_over_the_register_word_limit() {
         let source = r#"seiyaku WideCall {
   struct Wide {
-    f00: i64, f01: i64, f02: i64, f03: i64, f04: i64, f05: i64, f06: i64,
-    f07: i64, f08: i64, f09: i64, f10: i64, f11: i64, f12: i64, f13: i64
+    int f00, int f01, int f02, int f03, int f04, int f05, int f06,
+    int f07, int f08, int f09, int f10, int f11, int f12, int f13
   }
-  view fn inspect(value: Wide) -> i64 { return value.f00; }
+  view fn inspect(Wide value) -> int { return value.f00; }
 }"#;
         let session = CompilerSession::default();
         let request = CompileRequest {
@@ -1106,9 +1119,9 @@ mod tests {
         );
 
         let nested = r#"seiyaku NestedWideCall {
-  struct Inner { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64 }
-  struct Outer { left: Inner, right: Inner }
-  view fn inspect_nested(payload: Outer) -> i64 { return payload.left.a; }
+  struct Inner { int a, int b, int c, int d, int e, int f, int g }
+  struct Outer { Inner left, Inner right }
+  view fn inspect_nested(Outer payload) -> int { return payload.left.a; }
 }"#;
         let nested_error = session
             .check(CompileRequest {
@@ -1131,7 +1144,7 @@ mod tests {
             "payload"
         );
 
-        let at_limit = source.replace("f13: i64", "");
+        let at_limit = source.replace("f13: int", "");
         session
             .build(CompileRequest {
                 source: &at_limit,
@@ -1144,7 +1157,7 @@ mod tests {
     fn modules_can_be_checked_but_never_emitted_directly() {
         let session = CompilerSession::default();
         let request = CompileRequest {
-            source: "module Math { fn add(left: i64, right: i64) -> i64 { return left + right; } }",
+            source: "module Math { fn add(int left, int right) -> int { return left + right; } }",
             source_name: Some("math.ko"),
         };
         session.check(request).expect("standalone module check");
@@ -1161,12 +1174,12 @@ mod tests {
         let session = CompilerSession::default();
         for source in [
             r#"seiyaku Broken {
-                fn first(value: Missing) -> i64 { return unknown; }
-                fn second(flag: bool) { flag = false; missing_call(); }
+                fn first(Missing value) -> int { return unknown; }
+                fn second(bool flag) { flag = false; missing_call(); }
             }"#,
             r#"module Broken {
-                fn first(value: Missing) -> i64 { return unknown; }
-                fn second(flag: bool) { flag = false; missing_call(); }
+                fn first(Missing value) -> int { return unknown; }
+                fn second(bool flag) { flag = false; missing_call(); }
             }"#,
         ] {
             let request = CompileRequest {
@@ -1219,7 +1232,7 @@ mod tests {
 
     #[test]
     fn resolution_failures_are_collected_with_stable_source_spans() {
-        let source = "seiyaku Broken {\nfn first() -> i64 { return missing_first; }\nfn second() -> i64 { return missing_second; }\n}";
+        let source = "seiyaku Broken {\nfn first() -> int { return missing_first; }\nfn second() -> int { return missing_second; }\n}";
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
                 source,
@@ -1292,15 +1305,15 @@ mod tests {
         });
         for (source, code) in [
             (
-                "seiyaku Privacy { state hidden: Secret<i64>; }",
+                "seiyaku Privacy { state Secret<int> hidden; }",
                 "E_SECRET_STATE_TYPE",
             ),
             (
-                "seiyaku Privacy { kotoage fn leak(value: Secret<i64>) authorize(\"Leak\") {} }",
+                "seiyaku Privacy { kotoage fn leak(Secret<int> value) authorize(\"Leak\") {} }",
                 "E_SECRET_PUBLIC_PARAMETER",
             ),
             (
-                "seiyaku Privacy { kotoage fn leak() -> Secret<i64> authorize(\"Leak\") { return crypto::private_input(0); } }",
+                "seiyaku Privacy { kotoage fn leak() -> Secret<int> authorize(\"Leak\") { return crypto::private_input(0); } }",
                 "E_SECRET_PUBLIC_RETURN",
             ),
         ] {
@@ -1324,7 +1337,7 @@ mod tests {
                 .expect("security diagnostics retain an exact type span");
             assert_eq!(
                 &source[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()],
-                "Secret<i64>"
+                "Secret<int>"
             );
         }
     }
@@ -1370,7 +1383,7 @@ mod tests {
         }
 
         let positional =
-            "seiyaku C { struct Pair { left: i64, right: i64 } fn f() { let pair = Pair(1, 2); } }";
+            "seiyaku C { struct Pair { int left, int right } fn f() { let pair = Pair(1, 2); } }";
         let positional_error = reject(positional);
         let positional_diagnostic = diagnostic(&positional_error, "E_POSITIONAL_STRUCT");
         assert_eq!(
@@ -1383,7 +1396,7 @@ mod tests {
         );
 
         let mixed =
-            "seiyaku C { fn target(first: i64, second: i64) {} fn f() { target(1, second: 2); } }";
+            "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
         let mixed_error = reject(mixed);
         let mixed_diagnostic = diagnostic(&mixed_error, "E_MIXED_CALL_ARGUMENTS");
         assert_eq!(primary_text(mixed, mixed_diagnostic), "1");
@@ -1399,7 +1412,7 @@ mod tests {
         assert!(unresolved_diagnostic.fix.is_none());
 
         let unsafe_read =
-            "seiyaku C { fn read(values: List<i64, 2>) -> Option<i64> { return values[0]; } }";
+            "seiyaku C { fn read(List<int, 2> values) -> Option<int> { return values[0]; } }";
         let read_error = reject(unsafe_read);
         let read_diagnostic = diagnostic(&read_error, "E_LIST_UNSAFE_INDEX");
         assert_eq!(primary_text(unsafe_read, read_diagnostic), "values[0]");
@@ -1408,17 +1421,17 @@ mod tests {
             ("values[0]", "values.get(0)")
         );
 
-        let mistyped_read = "seiyaku C { fn read(values: List<i64, 2>) -> Option<i64> { return values[\"zero\"]; } }";
+        let mistyped_read = "seiyaku C { fn read(List<int, 2> values) -> Option<int> { return values[\"zero\"]; } }";
         let mistyped_read_error = reject(mistyped_read);
         assert!(
             diagnostic(&mistyped_read_error, "E_LIST_UNSAFE_INDEX")
                 .fix
                 .is_none(),
-            "a List.get recipe with a non-i64 index would not type-check"
+            "a List.get recipe with a non-int index would not type-check"
         );
 
         let unsafe_write =
-            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] = 2; } }";
+            "seiyaku C { fn write() { var List<int, 2> values = [1]; values[0] = 2; } }";
         let write_error = reject(unsafe_write);
         let write_diagnostic = diagnostic(&write_error, "E_LIST_UNSAFE_INDEX");
         assert_eq!(
@@ -1431,11 +1444,11 @@ mod tests {
         );
 
         for unsafe_without_recipe in [
-            "seiyaku C { fn write() { let values: List<i64, 2> = [1]; values[0] = 2; } }",
-            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[\"zero\"] = 2; } }",
-            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] = \"two\"; } }",
-            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] += 2; } }",
-            "seiyaku C { fn write() { var values: List<i64, 2> = [1]; values[0] /* keep */ = 2; } }",
+            "seiyaku C { fn write() { let List<int, 2> values = [1]; values[0] = 2; } }",
+            "seiyaku C { fn write() { var List<int, 2> values = [1]; values[\"zero\"] = 2; } }",
+            "seiyaku C { fn write() { var List<int, 2> values = [1]; values[0] = \"two\"; } }",
+            "seiyaku C { fn write() { var List<int, 2> values = [1]; values[0] += 2; } }",
+            "seiyaku C { fn write() { var List<int, 2> values = [1]; values[0] /* keep */ = 2; } }",
         ] {
             let error = reject(unsafe_without_recipe);
             let diagnostic = diagnostic(&error, "E_LIST_UNSAFE_INDEX");
@@ -1445,7 +1458,7 @@ mod tests {
             );
         }
 
-        let legacy_sum = "seiyaku C { fn f() -> Option<i64> { option::none(0) } }";
+        let legacy_sum = "seiyaku C { fn f() -> Option<int> { option::none(0) } }";
         let legacy_error = reject(legacy_sum);
         let legacy_diagnostic = diagnostic(&legacy_error, "E_LEGACY_SUM_CONSTRUCTOR");
         assert_eq!(
@@ -1457,7 +1470,7 @@ mod tests {
             ("option::none(0)", "Option::none")
         );
 
-        let query_key = "seiyaku C { view fn account(raw: bytes) { let account_view = ledger::query::account(raw); } }";
+        let query_key = "seiyaku C { view fn account(bytes raw) { let account_view = ledger::query::account(raw); } }";
         let query_key_error = reject(query_key);
         let query_key_diagnostic = diagnostic(&query_key_error, "E_QUERY_KEY_TYPE");
         assert_eq!(
@@ -1466,7 +1479,7 @@ mod tests {
         );
         assert!(query_key_diagnostic.fix.is_none());
 
-        let query_result = "seiyaku C { view fn account(id: AccountId) { let raw: bytes = ledger::query::account(id); } }";
+        let query_result = "seiyaku C { view fn account(AccountId id) { let bytes raw = ledger::query::account(id); } }";
         let query_result_error = reject(query_result);
         let query_result_diagnostic = diagnostic(&query_result_error, "E_QUERY_RESULT_TYPE");
         assert_eq!(primary_text(query_result, query_result_diagnostic), "bytes");
@@ -1475,40 +1488,43 @@ mod tests {
             ("bytes", "Option<AccountView>")
         );
 
-        let comprehension = "seiyaku C { fn copy() { let source: List<i64, 8> = [1]; let result: List<i64, 4> = [item for item in source]; } }";
+        let comprehension = "seiyaku C { fn copy() { let List<int, 8> source = [1]; let List<int, 4> result = [item for item in source]; } }";
         let comprehension_error = reject(comprehension);
         let comprehension_diagnostic =
             diagnostic(&comprehension_error, "E_LIST_COMPREHENSION_CAPACITY");
         assert_eq!(
             primary_text(comprehension, comprehension_diagnostic),
-            "List<i64, 4>"
+            "List<int, 4>"
         );
         assert_eq!(
             fix_text(comprehension, comprehension_diagnostic),
-            ("List<i64, 4>", "List<i64, 8>")
+            ("List<int, 4>", "List<int, 8>")
         );
 
-        let separated_amount = "seiyaku C { fn amount() -> Amount { 1.25 amt } }";
-        let separated_error = reject(separated_amount);
-        let separated_diagnostic = diagnostic(&separated_error, "E_AMOUNT_SUFFIX_SEPARATED");
-        assert_eq!(primary_text(separated_amount, separated_diagnostic), "1.25");
+        let retired_suffix = "seiyaku C { fn quantity_value() -> quantity { 1.25amt } }";
+        let retired_error = reject(retired_suffix);
+        let retired_diagnostic = diagnostic(&retired_error, "E_RETIRED_NUMERIC_SUFFIX");
+        assert_eq!(primary_text(retired_suffix, retired_diagnostic), "1.25amt");
+        assert!(
+            retired_diagnostic.fix.is_none(),
+            "first-release V1 diagnostics must reject retired suffixes without compatibility rewrites"
+        );
+
+        let scale_29 = format!("0.{}1", "0".repeat(28));
+        let invalid_quantity =
+            format!("seiyaku C {{ fn quantity_value() -> quantity {{ return {scale_29}; }} }}");
+        let quantity_error = reject(&invalid_quantity);
+        let quantity_diagnostic = diagnostic(&quantity_error, "E_DECIMAL_SCALE_OVERFLOW");
         assert_eq!(
-            fix_text(separated_amount, separated_diagnostic),
-            ("1.25 amt", "1.25amt")
+            primary_text(&invalid_quantity, quantity_diagnostic),
+            scale_29
         );
-
-        let scale_29 = format!("0.{}1amt", "0".repeat(28));
-        let invalid_amount =
-            format!("seiyaku C {{ fn amount() -> Amount {{ return {scale_29}; }} }}");
-        let amount_error = reject(&invalid_amount);
-        let amount_diagnostic = diagnostic(&amount_error, "E_AMOUNT_SCALE_OVERFLOW");
-        assert_eq!(primary_text(&invalid_amount, amount_diagnostic), scale_29);
-        assert!(amount_diagnostic.fix.is_none());
+        assert!(quantity_diagnostic.fix.is_none());
     }
 
     #[test]
     fn parser_recovers_independent_items_into_one_spanned_bundle() {
-        let source = "seiyaku Broken {\nfn first() { let value: i64 = ; }\nfn second() { let value: bool = ; }\n}";
+        let source = "seiyaku Broken {\nfn first() { let int value = ; }\nfn second() { let bool value = ; }\n}";
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
                 source,
@@ -1543,7 +1559,7 @@ mod tests {
 
     #[test]
     fn parser_spans_cover_the_complete_unexpected_token() {
-        let source = "seiyaku Broken {\nfn first() { let value: i64 = ; }\nfn second() { let value: bool = ; }\n}";
+        let source = "seiyaku Broken {\nfn first() { let int value = ; }\nfn second() { let bool value = ; }\n}";
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
                 source,
@@ -1631,7 +1647,7 @@ mod tests {
 
     #[test]
     fn invalid_escape_reports_the_full_literal_span() {
-        let source = r#"module Escape { fn invalid() { let value: string = "\q"; } }"#;
+        let source = r#"module Escape { fn invalid() { let string value = "\q"; } }"#;
         let diagnostics = CompilerSession::default()
             .build(CompileRequest {
                 source,
@@ -1653,12 +1669,12 @@ mod tests {
         let session = CompilerSession::default();
         for (source, code, expected_primary) in [
             (
-                "seiyaku Missing { state value: i64; view fn read() -> i64 { return value; } }",
+                "seiyaku Missing { state int value; view fn read() -> int { return value; } }",
                 "E_STATE_HAJIMARI_REQUIRED",
                 "state",
             ),
             (
-                "seiyaku Partial { state left: i64; state right: i64; hajimari() { left = 0; } }",
+                "seiyaku Partial { state int left; state int right; hajimari() { left = 0; } }",
                 "E_STATE_HAJIMARI_INCOMPLETE",
                 "hajimari",
             ),
@@ -1699,7 +1715,7 @@ mod tests {
             use std::fmt::Write as _;
             writeln!(
                 source,
-                "fn failure_{index}() -> i64 {{ return missing_{index}; }}"
+                "fn failure_{index}() -> int {{ return missing_{index}; }}"
             )
             .expect("write source fixture");
         }
@@ -1829,8 +1845,8 @@ mod tests {
     #[test]
     fn typed_test_graph_is_restricted_to_test_mode_and_derives_a_clean_runtime() {
         let source = r#"seiyaku Demo {
-            fn current() -> i64 { return 1; }
-            view fn value() -> i64 { return current(); }
+            fn current() -> int { return 1; }
+            view fn value() -> int { return current(); }
             #[test]
             fn smoke() { test::assert(current() == 1); }
         }"#;
@@ -1861,6 +1877,8 @@ mod tests {
         assert!(
             outputs
                 .runtime
+                .as_ref()
+                .expect("public view requires a runtime projection")
                 .report
                 .source_map
                 .iter()
@@ -1869,14 +1887,44 @@ mod tests {
     }
 
     #[test]
+    fn typed_test_graph_without_runtime_entrypoint_skips_runtime_artifact() {
+        let target = TestSourceUnit {
+            source_name: "pure-suite.ko".to_owned(),
+            source: r#"seiyaku PureSuite {
+                fn helper() -> int { return 1; }
+                #[test]
+                fn smoke() { test::assert(helper() == 1); }
+            }"#
+            .to_owned(),
+        };
+
+        let outputs = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[])
+        .expect("compile pure unit-test suite");
+
+        assert!(outputs.runtime.is_none());
+        assert!(
+            outputs
+                .suite
+                .report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "smoke")
+        );
+    }
+
+    #[test]
     fn standalone_test_graph_keeps_stable_distinct_sources_and_typed_target_state() {
         let target = TestSourceUnit {
             source_name: "contracts/counter.ko".to_owned(),
             source: r#"seiyaku Counter {
-                state counter: i64;
+                state int counter;
                 hajimari() { counter = 0; }
-                fn current() -> i64 { return counter; }
-                view fn value() -> i64 { return current(); }
+                fn current() -> int { return counter; }
+                view fn value() -> int { return current(); }
             }"#
             .to_owned(),
         };
@@ -1909,7 +1957,18 @@ mod tests {
             .build_test_sources(&target, &[second, first])
             .expect("test source order cannot affect linking");
         assert_eq!(forward.suite.artifact, reverse.suite.artifact);
-        assert_eq!(forward.runtime.artifact, reverse.runtime.artifact);
+        assert_eq!(
+            forward
+                .runtime
+                .as_ref()
+                .expect("target lifecycle requires runtime")
+                .artifact,
+            reverse
+                .runtime
+                .as_ref()
+                .expect("target lifecycle requires runtime")
+                .artifact
+        );
 
         let paths = forward
             .suite
@@ -2013,11 +2072,11 @@ mod tests {
         let session = CompilerSession::default();
         for (source, expected_code) in [
             (
-                "seiyaku InvalidIndex { state values: StateMap<i64, i64>; view fn read() -> i64 { return values[1]; } }",
+                "seiyaku InvalidIndex { state StateMap<int, int> values; view fn read() -> int { return values[1]; } }",
                 "E_STATE_MAP_OPTIONAL_READ",
             ),
             (
-                "seiyaku InvalidFlatGet { state values: StateMap<i64, i64>; view fn read() -> Option<i64> { return get(values, 1); } }",
+                "seiyaku InvalidFlatGet { state StateMap<int, int> values; view fn read() -> Option<int> { return get(values, 1); } }",
                 "K2002",
             ),
         ] {
@@ -2038,19 +2097,19 @@ mod tests {
 
         let source = r#"
             seiyaku PresenceAware {
-                state values: StateMap<i64, i64>;
+                state StateMap<int, int> values;
 
-                fn get(value: i64) -> i64 { return value; }
+                fn get(int value) -> int { return value; }
 
-                kotoage fn set(key: i64, value: i64) authorize("Write") {
+                kotoage fn set(int key, int value) authorize("Write") {
                     values[key] = value;
                 }
 
-                view fn read(key: i64) -> Option<i64> {
+                view fn read(int key) -> Option<int> {
                     return values.get(key);
                 }
 
-                view fn echo(value: i64) -> i64 {
+                view fn echo(int value) -> int {
                     return get(value);
                 }
             }
@@ -2069,7 +2128,7 @@ mod tests {
             .iter()
             .find(|entrypoint| entrypoint.name == "read")
             .expect("read entrypoint manifest");
-        assert_eq!(interface.return_type.as_deref(), Some("Option<i64>"));
+        assert_eq!(interface.return_type.as_deref(), Some("Option<int>"));
     }
 
     #[test]
@@ -2077,9 +2136,9 @@ mod tests {
         let session = CompilerSession::default();
         for (source, expected_span) in [
             ("seiyaku Invalid { fn run() { let value = (); } }", "()"),
-            ("seiyaku Invalid { fn run(value: (i64)) {} }", "(i64)"),
+            ("seiyaku Invalid { fn run((int) value) {} }", "(int)"),
             ("seiyaku Invalid { fn run() -> () { return; } }", "()"),
-            ("seiyaku Invalid { fn run() { var value: i64; } }", ";"),
+            ("seiyaku Invalid { fn run() { var int value; } }", ";"),
         ] {
             let diagnostics = session
                 .check(CompileRequest {
@@ -2103,7 +2162,7 @@ mod tests {
     fn session_builds_grouping_real_tuples_and_else_if_chains() {
         let source = r#"
             seiyaku Branches {
-                view fn classify(value: i64) -> i64 {
+                view fn classify(int value) -> int {
                     if value < 0 {
                         return -1;
                     } else if value == 0 {
@@ -2113,11 +2172,11 @@ mod tests {
                     }
                 }
 
-                view fn grouped(value: i64) -> i64 {
+                view fn grouped(int value) -> int {
                     return (value);
                 }
 
-                view fn pair() -> (i64, bool) {
+                view fn pair() -> (int, bool) {
                     return (1, true);
                 }
             }
@@ -2138,9 +2197,9 @@ mod tests {
             (
                 r#"
                 seiyaku IntegerContract {
-                    struct Shared { value: i64; }
+                    struct Shared { int value; }
                     fn make() -> Shared { return Shared { value: 7 }; }
-                    view fn read() -> i64 {
+                    view fn read() -> int {
                         let record = make();
                         return record.value;
                     }
@@ -2151,7 +2210,7 @@ mod tests {
             (
                 r#"
                 seiyaku BooleanContract {
-                    struct Shared { value: bool; }
+                    struct Shared { bool value; }
                     fn make() -> Shared { return Shared { value: true }; }
                     view fn read() -> bool {
                         let record = make();

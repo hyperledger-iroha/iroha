@@ -7,7 +7,7 @@ use iroha_data_model::{
     prelude::{AccountId, AssetDefinitionId, Name},
     smart_contract::ContractAddress,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{CoreHost, IVM, PointerType, encoding, instruction::wide, syscalls};
 mod common;
 
@@ -343,7 +343,7 @@ fn schema_decode_unknown_schema_exposes_metadata() {
 }
 
 #[test]
-fn json_get_amount_reads_decimal_strings() {
+fn json_get_quantity_reads_canonical_decimal_strings() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let json = br#"{"amount":"0.00001"}"#;
@@ -352,17 +352,7 @@ fn json_get_amount_reads_decimal_strings() {
         .alloc_input_tlv(&tlv(PointerType::Name, b"amount"))
         .unwrap();
 
-    let prog = common::assemble(
-        &[
-            encoding::wide::encode_sys(
-                wide::system::SCALL,
-                syscalls::SYSCALL_JSON_GET_AMOUNT as u8,
-            )
-            .to_le_bytes(),
-            encoding::wide::encode_halt().to_le_bytes(),
-        ]
-        .concat(),
-    );
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY]);
     vm.set_register(10, p_json);
     vm.set_register(11, p_key);
     vm.load_program(&prog).unwrap();
@@ -370,15 +360,17 @@ fn json_get_amount_reads_decimal_strings() {
 
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode Amount");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 }
 
 #[test]
-fn json_get_amount_direct_accepts_input_heap_and_literal_pointers() {
+fn json_get_quantity_direct_accepts_input_heap_and_literal_pointers() {
     let json_tlv = tlv(PointerType::Json, br#"{"amount":"0.00001"}"#);
     let key_tlv = tlv(PointerType::Name, b"amount");
-    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_AMOUNT_DIRECT as u8]);
+    let direct_prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT]);
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -390,8 +382,10 @@ fn json_get_amount_direct_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode input Amount");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode input quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
@@ -403,11 +397,13 @@ fn json_get_amount_direct_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode heap Amount");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode heap quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 
     let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_JSON_GET_AMOUNT_DIRECT as u8],
+        &[syscalls::SYSCALL_JSON_GET_QUANTITY_DIRECT],
         &[json_tlv.as_slice(), key_tlv.as_slice()],
     );
     let json_addr = literal_ptrs[0];
@@ -421,8 +417,10 @@ fn json_get_amount_direct_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     let tlv = vm.memory.validate_tlv(unwrap_some_word(&vm)).unwrap();
     assert_eq!(tlv.type_id, PointerType::Quantity);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode literal Amount");
-    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse Amount"));
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode literal quantity")
+        .into_quantity();
+    assert_eq!(value, "0.00001".parse::<Quantity>().expect("quantity"));
 }
 
 #[test]
@@ -703,15 +701,6 @@ fn json_object_builders_roundtrip_i64_and_account_id() {
     .unwrap();
     vm.run().unwrap();
     let p_payload = vm.register(10);
-
-    vm.set_register(10, p_payload);
-    vm.set_register(11, p_bucket_key);
-    vm.load_program(&common::assemble_syscalls(&[
-        syscalls::SYSCALL_JSON_GET_I64 as u8,
-    ]))
-    .unwrap();
-    vm.run().unwrap();
-    assert_eq!(unwrap_some_word(&vm) as i64, 2);
 
     vm.set_register(10, p_payload);
     vm.set_register(11, p_owner_key);

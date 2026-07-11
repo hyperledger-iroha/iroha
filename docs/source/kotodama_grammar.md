@@ -479,12 +479,12 @@ arithmetic implementation as runtime execution.
 
 Intentional modular arithmetic is written with explicit operations such as `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and `math::wrapping_neg`. Ordinary operators never silently wrap.
 
-`int` is the signed range `-2^4095..=2^4095-1`; its compact encoding does not
+`int` is the signed range `-2^511..=2^511-1`; its compact encoding does not
 change its semantic bounds. Division truncates toward zero, and remainder has
 the dividend's sign. `min_int / -1` and the paired remainder operation fail
-with overflow. Explicit wrapping helpers operate modulo `2^4096`.
+with overflow. Explicit wrapping helpers operate modulo `2^512`.
 
-`decimal` and `quantity` use a signed 4,096-bit mantissa and canonical decimal
+`decimal` and `quantity` use a signed 512-bit mantissa and canonical decimal
 scale `0..=28`; `quantity` additionally rejects negative values. Trailing
 fractional zeros are removed and zero always has scale zero. Ordinary
 arithmetic computes the exact mathematical result with conceptual unbounded
@@ -666,8 +666,11 @@ analysis or artifact hashing. Typed HIR records whether test capabilities were
 enabled, and production code generation rejects test-capable HIR as well.
 
 The `koto test` driver is the explicit test-mode boundary. It compiles the full
-suite in test mode, then derives a test-free runtime seiyaku for invocation;
-that runner-only derivation is not available to ordinary production builds.
+suite in test mode, then derives a test-free runtime seiyaku when the target has
+an invocable public or lifecycle entrypoint. A pure unit-test target containing
+only private helpers and `#[test]` functions needs no runtime artifact; its
+tests, coverage, and profile data run from the test projection. This runner-only
+derivation is not available to ordinary production builds.
 Typed fixture values use the same constructors as seiyaku code, including
 `AccountId::parse`, `AssetDefinitionId::parse`, `DomainId::parse`,
 `Name::parse`, and `Json::parse`; flat fixture-only constructor aliases are

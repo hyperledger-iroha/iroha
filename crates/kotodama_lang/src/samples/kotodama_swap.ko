@@ -13,10 +13,10 @@ seiyaku KotodamaSwap {
         quantity reserve_in,
         quantity reserve_out,
     ) -> quantity authorize("Admin") {
-        let fee_numerator = 997;
-        let fee_denominator = 1000;
+        let decimal fee_numerator = 997;
+        let decimal fee_denominator = 1000;
         let effective = (amount_in * fee_numerator) / fee_denominator;
-        let out = (reserve_out * effective) / (reserve_in + effective);
+        let out = reserve_out * (effective / (reserve_in + effective));
         ledger::asset::transfer(
             source: trader,
             destination: pool,

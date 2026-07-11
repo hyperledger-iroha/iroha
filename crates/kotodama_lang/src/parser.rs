@@ -22,7 +22,7 @@ use super::{
         cst::{MissingSyntax, SyntaxOutline, SyntaxOutlineBuilder, SyntaxOutlineCheckpoint},
     },
 };
-use iroha_primitives::bigint::BigInt;
+use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParseError {
@@ -75,6 +75,7 @@ fn parse_integer_value(spelling: &str, negative: bool) -> Result<BigInt, ()> {
             value.checked_add(&BigInt::from(digit)).map_err(|_| ())?
         };
     }
+    IntValueV1::try_new(value.clone()).map_err(|_| ())?;
     Ok(value)
 }
 
@@ -2072,7 +2073,7 @@ impl<'a> CstAstLowerer<'a> {
                 if !map_iteration_has_explicit_bound(&map) {
                     return Err(self.error(
                         self.tokens[self.pos.saturating_sub(1)].clone(),
-                        "StateMap iteration requires `.take(N)` or `.range(start, end)` with i64 literals",
+                        "StateMap iteration requires `.take(N)` or `.range(start, end)` with int literals",
                     ));
                 }
                 let body = self.parse_block()?;
@@ -2767,6 +2768,32 @@ impl<'a> CstAstLowerer<'a> {
                     }
                     return Ok(expr);
                 }
+                if let Some(token) = self.tokens.get(self.pos).cloned()
+                    && let TokenKind::DecimalLiteral(spelling) = token.kind.clone()
+                {
+                    self.bump();
+                    let range = TextRange::new(minus.range.start, token.range.end);
+                    let node = self.facts.source_map.allocate_owned(
+                        AstNodeKind::DecimalLiteral,
+                        range,
+                        self.current_function,
+                    );
+                    let mut expr = Expr::Source {
+                        node,
+                        source: SourceRange::new(self.facts.source_map.source(), range),
+                        expression: Box::new(Expr::DecimalLiteral(format!("-{spelling}"))),
+                    };
+                    for (op, token) in prefixes.into_iter().rev() {
+                        expr = self.source_expression_from(
+                            token.range.start,
+                            Expr::Unary {
+                                op,
+                                expr: Box::new(expr),
+                            },
+                        );
+                    }
+                    return Ok(expr);
+                }
                 prefixes.push((UnaryOp::Neg, minus));
             } else if self.peek(TokenKind::Bang) {
                 prefixes.push((UnaryOp::Not, self.bump()));
@@ -2849,9 +2876,6 @@ impl<'a> CstAstLowerer<'a> {
                         );
                         let call_name = match field.as_str() {
                             "get" => STATE_MAP_GET_INTRINSIC.to_owned(),
-                            // The runtime helper retains its internal Numeric-era
-                            // spelling; V1 source exposes the nominal Amount name.
-                            "get_amount" => "get_numeric".to_owned(),
                             _ => field,
                         };
                         expr = Expr::Source {
@@ -2868,9 +2892,6 @@ impl<'a> CstAstLowerer<'a> {
                     }
                     let call_name = match field.as_str() {
                         "get" => STATE_MAP_GET_INTRINSIC.to_owned(),
-                        // The runtime helper retains its internal Numeric-era
-                        // spelling; V1 source exposes the nominal Amount name.
-                        "get_amount" => "get_numeric".to_owned(),
                         _ => field,
                     };
                     expr = self.source_expression_from(
@@ -3353,6 +3374,7 @@ impl<'a> CstAstLowerer<'a> {
             | "decimal::from_int"
             | "decimal::to_int_exact"
             | "decimal::to_int_trunc"
+            | "quantity::try_from_int"
             | "quantity::try_from_decimal"
             | "decimal::from_quantity"
             | "try_push"
@@ -3363,8 +3385,10 @@ impl<'a> CstAstLowerer<'a> {
             "try_set" => &["index", "value"],
             "take" => &["limit"],
             "div_round" => &["divisor", "scale", "mode"],
-            "get_bool" | "get_i64" | "get_u128" | "get_amount" | "get_string" | "get_bytes"
-            | "get_json" => &["key"],
+            "ratio_round" => &["divisor", "scale", "mode"],
+            "decimal::to_int_round" => &["value", "mode"],
+            "get_bool" | "get_int" | "get_decimal" | "get_quantity" | "get_string"
+            | "get_bytes" | "get_json" => &["key"],
             _ => return None,
         };
         Some(parameters.iter().map(|name| (*name).to_owned()).collect())
@@ -4320,8 +4344,8 @@ fn removed_method_helper_message(name: &str) -> Option<&'static str> {
             Some("`base.path_map_key(segment)` was removed; use `base.path(segment)`")
         }
         "json_get_int" => Some("`json.json_get_int(key)` was removed; use `json.get_int(key)`"),
-        "get_numeric" | "json_get_numeric" => {
-            Some("`.get_numeric(key)` was retired; use `.get_amount(key)`")
+        "get_amount" | "json_get_amount" | "get_numeric" | "json_get_numeric" => {
+            Some("legacy numeric JSON getters were retired; use `.get_quantity(key)`")
         }
         "json_get_json" => Some("`json.json_get_json(key)` was removed; use `json.get_json(key)`"),
         "json_get_name" => Some("`json.json_get_name(key)` was removed; use `json.get_name(key)`"),
@@ -4342,7 +4366,10 @@ fn removed_method_helper_message(name: &str) -> Option<&'static str> {
 }
 
 fn removed_method_helper_code(name: &str) -> &'static str {
-    if matches!(name, "get_numeric" | "json_get_numeric") {
+    if matches!(
+        name,
+        "get_amount" | "json_get_amount" | "get_numeric" | "json_get_numeric"
+    ) {
         "E_LEGACY_JSON_GETTER"
     } else {
         "K1001"
@@ -4351,6 +4378,24 @@ fn removed_method_helper_code(name: &str) -> &'static str {
 
 fn removed_free_helper_message(name: &str) -> Option<&'static str> {
     match name {
+        "json::set_i64" | "json::set_int" => Some(
+            "scalar JSON setters are not part of Kotodama V1; use native `json { key: value }` construction so adaptive-width int values remain exact",
+        ),
+        "numeric::to_i64"
+        | "numeric::neg"
+        | "numeric::add"
+        | "numeric::sub"
+        | "numeric::mul"
+        | "numeric::div"
+        | "numeric::rem"
+        | "numeric::eq"
+        | "numeric::ne"
+        | "numeric::lt"
+        | "numeric::le"
+        | "numeric::gt"
+        | "numeric::ge" => Some(
+            "generic numeric helpers are not part of Kotodama V1; use operators and the named int, decimal, or quantity conversions",
+        ),
         "contains" | "std::map::contains" | "has" | "std::map::has" => {
             Some("`contains(...)` was removed; use `map.contains(key)`")
         }
@@ -4377,8 +4422,13 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         "get_int" | "json_get_int" | "json::get_int" => {
             Some("`get_int(...)` was removed as a free helper; use `json.get_int(key)`")
         }
-        "get_numeric" | "json_get_numeric" | "json::get_numeric" => Some(
-            "`get_numeric(...)` was retired; use `value.get_amount(key)` or `json::get_amount(value, key)`",
+        "get_amount"
+        | "json_get_amount"
+        | "json::get_amount"
+        | "get_numeric"
+        | "json_get_numeric"
+        | "json::get_numeric" => Some(
+            "legacy numeric JSON getters were retired; use `value.get_quantity(key)`",
         ),
         "get_json" | "json_get_json" | "json::get_json" => {
             Some("`get_json(...)` was removed as a free helper; use `json.get_json(key)`")
@@ -4414,7 +4464,31 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
 fn removed_free_helper_code(name: &str) -> &'static str {
     if matches!(
         name,
-        "get_numeric" | "json_get_numeric" | "json::get_numeric"
+        "json::set_i64"
+            | "json::set_int"
+            | "numeric::to_i64"
+            | "numeric::neg"
+            | "numeric::add"
+            | "numeric::sub"
+            | "numeric::mul"
+            | "numeric::div"
+            | "numeric::rem"
+            | "numeric::eq"
+            | "numeric::ne"
+            | "numeric::lt"
+            | "numeric::le"
+            | "numeric::gt"
+            | "numeric::ge"
+    ) {
+        "E_RETIRED_NUMERIC_HELPER"
+    } else if matches!(
+        name,
+        "get_amount"
+            | "json_get_amount"
+            | "json::get_amount"
+            | "get_numeric"
+            | "json_get_numeric"
+            | "json::get_numeric"
     ) {
         "E_LEGACY_JSON_GETTER"
     } else {
@@ -4490,7 +4564,7 @@ mod tests {
 
     #[test]
     fn iterative_type_parser_preserves_nested_generic_and_tuple_shapes() {
-        let program = parse_module("struct Wrapper { value: Result<Option<i64>, (bool, string)> }")
+        let program = parse_module("struct Wrapper { Result<Option<int>, (bool, string)> value }")
             .expect("parse nested type");
         let Item::Struct(definition) = &program.items[0] else {
             panic!("expected struct item");
@@ -4507,7 +4581,7 @@ mod tests {
             panic!("expected Option generic");
         };
         assert_eq!(option_base, "Option");
-        assert!(matches!(option_args[0].kind(), TypeExpr::Path(path) if path == "i64"));
+        assert!(matches!(option_args[0].kind(), TypeExpr::Path(path) if path == "int"));
         let TypeExpr::Tuple(elements) = args[1].kind() else {
             panic!("expected tuple type");
         };
@@ -4544,7 +4618,7 @@ mod tests {
     #[test]
     fn canonical_public_parse_output_contains_no_provenance_wrappers() {
         let program = parse_module(
-            "fn clean(values: List<i64, 4>) -> bool { let copy = [item for item in values if true]; copy.contains(1) }",
+            "fn clean(List<int, 4> values) -> bool { let copy = [item for item in values if true]; copy.contains(1) }",
         )
         .expect("parse representative source-backed tree");
         let Item::Function(function) = &program.items[0] else {
@@ -4588,7 +4662,7 @@ mod tests {
     #[test]
     fn list_type_capacity_is_preserved_as_a_constant_argument() {
         let program =
-            parse_module("fn values(input: List<Option<i64>, 64>) {}").expect("List type");
+            parse_module("fn values(List<Option<int>, 64> input) {}").expect("List type");
         let Item::Function(function) = &program.items[0] else {
             panic!("expected function item");
         };
@@ -4618,11 +4692,11 @@ mod tests {
                 "source-level unit value `()` is not part of Kotodama V1",
             ),
             (
-                "fn invalid(value: ()) {}",
+                "fn invalid(() value) {}",
                 "tuple types require at least two elements",
             ),
             (
-                "fn invalid(value: (i64)) {}",
+                "fn invalid((int) value) {}",
                 "tuple types require at least two elements",
             ),
             (
@@ -4635,7 +4709,7 @@ mod tests {
         }
 
         let grouped = parse_module(
-            "fn grouped() -> i64 { return (1); } fn pair(value: (i64, bool)) -> (i64, bool) { return (1, true); } fn omitted() { return; }",
+            "fn grouped() -> int { return (1); } fn pair((int, bool) value) -> (int, bool) { return (1, true); } fn omitted() { return; }",
         )
         .expect("grouping, real tuples, and omitted Unit returns remain valid");
         let Item::Function(grouped_function) = &grouped.items[0] else {
@@ -4643,14 +4717,14 @@ mod tests {
         };
         assert!(matches!(
             grouped_function.body.statements[0].kind(),
-            Statement::Return(Some(value)) if matches!(value.kind(), Expr::IntLiteral(1))
+            Statement::Return(Some(value)) if matches!(value.kind(), Expr::IntLiteral(value) if value == &BigInt::one())
         ));
     }
 
     #[test]
     fn else_if_is_represented_as_a_nested_if_in_the_else_block() {
         let program = parse_module(
-            "fn classify(value: i64) -> i64 { if value < 0 { return -1; } else if value == 0 { return 0; } else { return 1; } }",
+            "fn classify(int value) -> int { if value < 0 { return -1; } else if value == 0 { return 0; } else { return 1; } }",
         )
         .expect("parse documented else-if chain");
         let Item::Function(function) = &program.items[0] else {
@@ -4678,15 +4752,15 @@ mod tests {
     fn parses_value_tails_and_expression_oriented_control_flow() {
         let program = parse_module(
             r#"
-            fn identity(value: i64) -> i64 { value }
-            fn choose(flag: bool) -> i64 { if flag { 1 } else { 2 } }
-            fn unwrap(value: Option<i64>) -> i64 {
+            fn identity(int value) -> int { value }
+            fn choose(bool flag) -> int { if flag { 1 } else { 2 } }
+            fn unwrap(Option<int> value) -> int {
                 match value {
                     Option::some(item) => item,
                     Option::none => 0,
                 }
             }
-            fn observe(value: Option<i64>) {
+            fn observe(Option<int> value) {
                 if let Option::some(item) = value { let _seen = item; }
             }
             "#,
@@ -4729,7 +4803,7 @@ mod tests {
     #[test]
     fn postfix_propagation_binds_tighter_than_ternary() {
         let program = parse_module(
-            "fn choose(condition: bool, maybe: Option<i64>, fallback: i64) -> i64 { condition ? maybe? : fallback }",
+            "fn choose(bool condition, Option<int> maybe, int fallback) -> int { condition ? maybe? : fallback }",
         )
         .expect("parse ternary containing postfix propagation");
         let Item::Function(function) = &program.items[0] else {
@@ -4747,10 +4821,10 @@ mod tests {
     fn active_only_sum_constructors_have_no_placeholder_payloads() {
         let program = parse_module(
             r#"
-            fn some(value: i64) -> Option<i64> { Option::some(value) }
-            fn none() -> Option<i64> { Option::none }
-            fn ok(value: i64) -> Result<i64, string> { Result::ok(value) }
-            fn err(message: string) -> Result<i64, string> { Result::err(message) }
+            fn some(int value) -> Option<int> { Option::some(value) }
+            fn none() -> Option<int> { Option::none }
+            fn ok(int value) -> Result<int, string> { Result::ok(value) }
+            fn err(string message) -> Result<int, string> { Result::err(message) }
             "#,
         )
         .expect("parse canonical active-only constructors");
@@ -4769,9 +4843,9 @@ mod tests {
         ));
 
         for (source, replacement) in [
-            ("fn f() -> Option<i64> { option::none(0) }", "Option::none"),
+            ("fn f() -> Option<int> { option::none(0) }", "Option::none"),
             (
-                "fn f() -> Result<i64, string> { result::ok(1, \"unused\") }",
+                "fn f() -> Result<int, string> { result::ok(1, \"unused\") }",
                 "Result::ok(1)",
             ),
         ] {
@@ -4783,7 +4857,7 @@ mod tests {
 
     #[test]
     fn mutable_bindings_still_require_initializers() {
-        let error = parse_module("fn invalid() { var value: i64; }")
+        let error = parse_module("fn invalid() { var int value; }")
             .expect_err("uninitialized locals are not part of V1");
         assert!(error.contains("Equal"), "unexpected error: {error}");
     }
@@ -4829,7 +4903,7 @@ mod tests {
 
     #[test]
     fn parse_preserves_local_binding_mutability() {
-        let program = parse_module("fn f() { let fixed = 1; var changing: i64 = 2; }")
+        let program = parse_module("fn f() { let fixed = 1; var int changing = 2; }")
             .expect("parse let and var bindings");
         let Item::Function(function) = &program.items[0] else {
             panic!("expected function")
@@ -4848,13 +4922,13 @@ mod tests {
     fn parse_canonical_seiyaku_surface_and_preserve_identity() {
         let src = r#"
         seiyaku Payments {
-            state counter: i64;
-            struct Pair { left: i64; right: i64; }
+            state int counter;
+            struct Pair { int left; int right; }
             hajimari() { counter = 0; }
             kaizen() {}
-            kotoage fn submit(who: AccountId, amount: Amount) authorize("Submit") {}
-            view fn read(key: Name) -> i64 { return counter; }
-            fn helper(left: i64, right: i64) -> i64 { return left + right; }
+            kotoage fn submit(AccountId who, quantity amount) authorize("Submit") {}
+            view fn read(Name key) -> int { return counter; }
+            fn helper(int left, int right) -> int { return left + right; }
         }
         "#;
         let prog = parse(src).unwrap();
@@ -4898,7 +4972,7 @@ mod tests {
     #[test]
     fn parse_canonical_module_surface_and_preserve_identity() {
         let prog =
-            parse("module Math { fn add(left: i64, right: i64) -> i64 { return left + right; } }")
+            parse("module Math { fn add(int left, int right) -> int { return left + right; } }")
                 .expect("parse module");
         assert_eq!(prog.unit.kind, SourceUnitKind::Module);
         assert_eq!(prog.unit.name, "Math");
@@ -4910,10 +4984,10 @@ mod tests {
             r#"
             seiyaku Payments {
                 kotoage fn transfer(
-                    recipient: AccountId,
-                    asset: AssetDefinitionId,
-                    amount: Amount,
-                    dataspace: DataSpaceId
+                    AccountId recipient,
+                    AssetDefinitionId asset,
+                    quantity amount,
+                    DataSpaceId dataspace
                 ) authorize("TransferAsset") {
                     let sender = context::authority();
                     ledger::asset::transfer(
@@ -4951,7 +5025,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Controls {
-                kotoage fn update(path: Name, trigger_id: Name) authorize("Control") {
+                kotoage fn update(Name path, Name trigger_id) authorize("Control") {
                     state::set(path, 1);
                     ledger::trigger::set_enabled(trigger_id, 1);
                 }
@@ -5025,11 +5099,11 @@ mod tests {
     #[test]
     fn canonical_declaration_shapes_are_required() {
         for source in [
-            "module M { fn f(i64 value) {} }",
+            "module M { fn f(value: int) {} }",
             "module M { fn f(value) {} }",
             "module M { const VALUE = 1; }",
-            "seiyaku C { state i64 value; }",
-            "module M { struct Pair { i64 value; } }",
+            "seiyaku C { state value: int; }",
+            "module M { struct Pair { value: int; } }",
             "seiyaku C { kotoage fn f() authorize(Admin) {} }",
         ] {
             parse(source).expect_err("legacy declaration shape must fail");
@@ -5037,22 +5111,46 @@ mod tests {
     }
 
     #[test]
-    fn retired_type_spellings_are_unreserved_type_paths() {
-        for legacy in [
-            "int",
-            "number",
-            "fixed_u128",
-            "String",
-            "Blob",
-            "Bytes",
-            "Balance",
-            "Map<i64, i64>",
-            "unit",
+    fn retired_colon_declarations_report_the_type_first_replacement() {
+        for (source, replacement) in [
+            ("module M { fn f(value: int) {} }", "`int value`"),
+            ("module M { const limit: int = 1; }", "`const int limit = 1;`"),
+            ("seiyaku C { state value: int; }", "`state int value;`"),
+            ("module M { struct Pair { value: int; } }", "`int field;`"),
+            ("module M { fn f() { let value: int = 1; } }", "`let int value = ...;`"),
         ] {
-            let source = format!("module Types {{ fn use_type(value: {legacy}) {{}} }}");
-            parse(&source).expect(
-                "the parser must not recognize or rewrite retired type names; resolution rejects unknown types",
+            let error = parse(source).expect_err("retired declaration order must fail closed");
+            assert!(error.contains("E_RETIRED_DECLARATION_ORDER"), "{error}");
+            assert!(error.contains(replacement), "{error}");
+        }
+    }
+
+    #[test]
+    fn retired_numeric_type_spellings_are_rejected_with_replacements() {
+        for legacy in [
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64",
+            "u128", "usize", "num", "float", "f32", "f64", "Amount", "amount", "money",
+            "number",
+        ] {
+            let source = format!("module Types {{ fn use_type({legacy} value) {{}} }}");
+            let error = parse(&source).expect_err("retired numeric type must fail closed");
+            assert!(
+                error.contains("E_RETIRED_NUMERIC_TYPE"),
+                "unexpected diagnostic for `{legacy}`: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn retired_numeric_helpers_are_rejected_before_resolution() {
+        for source in [
+            "module M { fn f() { let value = numeric::add(left: 1, right: 2); } }",
+            "module M { fn f() { let value = numeric::to_i64(1); } }",
+            "module M { fn f() { let value = json::set_i64(json::object(), Name::parse(\"n\"), 1); } }",
+            "module M { fn f() { let value = json::set_int(json::object(), Name::parse(\"n\"), 1); } }",
+        ] {
+            let error = parse(source).expect_err("retired numeric helper must fail closed");
+            assert!(error.contains("E_RETIRED_NUMERIC_HELPER"), "{error}");
         }
     }
 
@@ -5060,10 +5158,10 @@ mod tests {
     fn modules_reject_deployable_contract_items() {
         for body in [
             "kotoage fn run() {}",
-            "view fn read() -> i64 { return 1; }",
+            "view fn read() -> int { return 1; }",
             "hajimari() {}",
             "kaizen() {}",
-            "state value: i64;",
+            "state int value;",
             "meta { abi_version: 1; }",
         ] {
             let source = format!("module Library {{ {body} }}");
@@ -5076,8 +5174,8 @@ mod tests {
         for body in [
             "fn f() { while true {} }",
             "fn f() { for let i = 0; i < 3; i = i + 1 {} }",
-            "fn f(n: i64) { for i in range(n) {} }",
-            "fn f(values: StateMap<i64, i64>) { for (key, value) in values {} }",
+            "fn f(int n) { for i in range(n) {} }",
+            "fn f(StateMap<int, int> values) { for (key, value) in values {} }",
         ] {
             parse_module(body).expect_err("unbounded loop form must fail");
         }
@@ -5159,15 +5257,21 @@ mod tests {
     }
 
     #[test]
-    fn integer_literal_i64_suffix_is_allowed() {
-        let src = "fn main() { let x = 1i64; }";
-        parse_module(src).expect("parse i64 suffixed literal");
+    fn retired_numeric_literal_suffixes_are_rejected() {
+        for suffix in ["i64", "u128", "amt", "float", "money"] {
+            let source = format!("fn main() {{ let value = 1{suffix}; }}");
+            let error = parse_module(&source).expect_err("numeric suffix must fail closed");
+            assert!(
+                error.contains("E_RETIRED_NUMERIC_SUFFIX"),
+                "unexpected diagnostic for `{suffix}`: {error}"
+            );
+        }
     }
 
     #[test]
-    fn integer_literal_complete_u128_domain_is_allowed_with_suffix() {
-        let src = "fn main() { let x: u128 = 340282366920938463463374607431768211455u128; }";
-        let program = parse_module(src).expect("parse u128::MAX literal");
+    fn adaptive_width_int_literal_is_allowed_without_a_suffix() {
+        let src = "fn main() { let int x = 340282366920938463463374607431768211455; }";
+        let program = parse_module(src).expect("parse adaptive-width int literal");
         let function = program
             .items
             .into_iter()
@@ -5181,14 +5285,14 @@ mod tests {
         };
         assert!(matches!(
             value.kind(),
-            Expr::IntLiteral(value) if value == "340282366920938463463374607431768211455"
+            Expr::IntLiteral(value) if value.to_string() == "340282366920938463463374607431768211455"
         ));
     }
 
     #[test]
-    fn amount_literal_ast_retains_exact_source_spelling() {
-        let program = parse_module("fn main() { let value: Amount = 1.250_0amt; }")
-            .expect("parse Amount literal");
+    fn decimal_literal_ast_retains_exact_source_spelling() {
+        let program = parse_module("fn main() { let decimal value = 1.250_0; }")
+            .expect("parse decimal literal");
         let function = program
             .items
             .into_iter()
@@ -5200,13 +5304,15 @@ mod tests {
         let Statement::Let { value, .. } = function.body.statements[0].kind() else {
             panic!("expected let statement");
         };
-        assert!(matches!(value.kind(), Expr::DecimalLiteral(value) if value == "1.250_0amt"));
+        assert!(matches!(value.kind(), Expr::DecimalLiteral(value) if value == "1.250_0"));
     }
 
     #[test]
-    fn amount_literals_follow_existing_expression_precedence() {
-        let program = parse_module("fn main() { let value = true ? 1amt : 2amt + 3amt * 4amt; }")
-            .expect("parse Amount expression");
+    fn decimal_literals_follow_existing_expression_precedence() {
+        let program = parse_module(
+            "fn main() { let value = true ? 1.0 : 2.0 + 3.0 * 4.0; }",
+        )
+        .expect("parse decimal expression");
         let function = program
             .items
             .into_iter()
@@ -5241,7 +5347,7 @@ mod tests {
     #[test]
     fn native_json_preserves_decoded_keys_and_exact_source_spelling() {
         let program = parse_module(
-            r#"fn build(label: string) -> Json {
+            r#"fn build(string label) -> Json {
                 json { owner: label, "owner-alias": json [label] }
             }"#,
         )
@@ -5268,7 +5374,7 @@ mod tests {
     #[test]
     fn named_calls_preserve_source_names_and_trailing_comma() {
         let program = parse_module(
-            "fn target(first: i64, second: string) {} fn main() { target(second: \"two\", first: 1,); }",
+            "fn target(int first, string second) {} fn main() { target(second: \"two\", first: 1,); }",
         )
         .expect("parse named call");
         let main = program
@@ -5302,7 +5408,7 @@ mod tests {
     #[test]
     fn method_named_arguments_exclude_the_implicit_receiver() {
         let program = parse_module(
-            "fn main(value: Json, key: Name) { let found = value.get_int(key: key); }",
+            "fn main(Json value, Name key) { let found = value.get_int(key: key); }",
         )
         .expect("parse named method call");
         let function = program
@@ -5334,10 +5440,10 @@ mod tests {
     }
 
     #[test]
-    fn amount_json_getter_uses_canonical_source_name_and_rejects_numeric_legacy() {
+    fn quantity_json_getter_uses_canonical_source_name_and_rejects_legacy_names() {
         let program =
-            parse_module("fn main(value: Json, key: Name) { let found = value.get_amount(key); }")
-                .expect("parse canonical Amount JSON getter");
+            parse_module("fn main(Json value, Name key) { let found = value.get_quantity(key); }")
+                .expect("parse canonical quantity JSON getter");
         let function = program
             .items
             .iter()
@@ -5347,7 +5453,7 @@ mod tests {
             })
             .expect("function");
         let Statement::Let { value, .. } = function.body.statements[0].kind() else {
-            panic!("expected Amount getter binding");
+            panic!("expected quantity getter binding");
         };
         let Expr::Call {
             name,
@@ -5355,15 +5461,18 @@ mod tests {
             ..
         } = value.kind()
         else {
-            panic!("expected Amount getter call");
+            panic!("expected quantity getter call");
         };
-        assert_eq!(name, "get_numeric");
+        assert_eq!(name, "get_quantity");
         assert!(implicit_receiver);
 
-        let error =
-            parse_module("fn main(value: Json, key: Name) { let found = value.get_numeric(key); }")
-                .expect_err("retired Numeric getter must fail");
-        assert!(error.contains("E_LEGACY_JSON_GETTER"), "{error}");
+        for legacy in ["get_amount", "get_numeric"] {
+            let source = format!(
+                "fn main(Json value, Name key) {{ let found = value.{legacy}(key); }}"
+            );
+            let error = parse_module(&source).expect_err("retired JSON getter must fail");
+            assert!(error.contains("E_LEGACY_JSON_GETTER"), "{error}");
+        }
     }
 
     #[test]
@@ -5394,7 +5503,7 @@ mod tests {
             (8, "target(first: 1, 2)", "", "second: "),
         ] {
             let text = format!(
-                "seiyaku C {{ fn target(first: i64, second: i64) {{}} fn main() {{ {call}; }} }}"
+                "seiyaku C {{ fn target(int first, int second) {{}} fn main() {{ {call}; }} }}"
             );
             let source = SourceFile::new(SourceId(id), "mixed.ko", text.clone());
             let diagnostics = parse_source(&source, FrontendBudget::v1())
@@ -5446,7 +5555,7 @@ mod tests {
     #[test]
     fn named_struct_literals_support_shorthand_and_trailing_comma() {
         let program = parse_module(
-            "struct Transfer { source: i64, destination: i64, amount: Amount } fn main(source: i64, destination: i64) { let value = Transfer { amount: 10amt, source, destination, }; }",
+            "struct Transfer { int source, int destination, quantity amount } fn main(int source, int destination) { let value = Transfer { amount: 10, source, destination, }; }",
         )
         .expect("parse named struct literal");
         let function = program
@@ -5478,7 +5587,7 @@ mod tests {
     #[test]
     fn duplicate_struct_literal_fields_are_rejected() {
         let error = parse_module(
-            "struct Pair { first: i64, second: i64 } fn main() { let pair = Pair { first: 1, first: 2, second: 3 }; }",
+            "struct Pair { int first, int second } fn main() { let pair = Pair { first: 1, first: 2, second: 3 }; }",
         )
         .expect_err("duplicate field must fail");
         assert!(error.contains("E_DUPLICATE_STRUCT_FIELD"), "{error}");
@@ -5486,79 +5595,37 @@ mod tests {
 
     #[test]
     fn control_flow_block_is_not_parsed_as_a_struct_literal() {
-        parse_module("fn main(ready: bool) { if ready {} }")
+        parse_module("fn main(bool ready) { if ready {} }")
             .expect("if block must remain unambiguous");
     }
 
     #[test]
-    fn negative_and_separated_amount_spellings_have_stable_diagnostics() {
-        let negative = parse_module("fn main() { let value: Amount = -10amt; }")
-            .expect_err("Amount is non-negative");
-        assert!(negative.contains("E_AMOUNT_NEGATIVE"), "{negative}");
-
-        let separated = parse_module("fn main() { let value: Amount = 10 amt; }")
-            .expect_err("Amount suffix must be adjacent");
-        assert!(
-            separated.contains("E_AMOUNT_SUFFIX_SEPARATED"),
-            "{separated}"
-        );
-
-        let text = "seiyaku Demo { fn main() { let value: Amount = -10amt; } }";
-        let source = SourceFile::new(SourceId(11), "negative-amount.ko", text);
-        let diagnostics = parse_source(&source, FrontendBudget::v1())
-            .expect_err("negative Amount literal must fail");
-        let diagnostic = diagnostics
-            .diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "E_AMOUNT_NEGATIVE")
-            .expect("negative Amount diagnostic");
-        let fix = diagnostic.fix.as_ref().expect("minus-removal fix");
-        assert_eq!(
-            source.slice(fix.span.byte_range.expect("minus byte range")),
-            Some("-")
-        );
-        assert_eq!(fix.replacement, "");
+    fn negative_unsuffixed_literal_remains_available_for_semantic_quantity_validation() {
+        parse_module("fn main() { let quantity value = -10; }")
+            .expect("the parser leaves nominal quantity validation to semantics");
     }
 
     #[test]
-    fn integer_literal_u128_max_plus_one_is_rejected() {
-        let src = "fn main() { let x: u128 = 340282366920938463463374607431768211456u128; }";
-        let error = parse_module(src).expect_err("u128 overflow must fail");
-        assert!(error.contains("numeric literal overflow"), "{error}");
+    fn signed_512_bit_integer_endpoints_are_accepted() {
+        for spelling in [
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+            "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+        ] {
+            parse_module(&format!("fn main() {{ let int value = {spelling}; }}"))
+                .expect("signed 512-bit endpoint must parse");
+        }
     }
 
     #[test]
-    fn u128_suffix_must_be_adjacent() {
-        let error = parse_module("fn main() { let x: u128 = 1 u128; }")
-            .expect_err("separated suffix must not be accepted");
-        assert!(!error.is_empty());
-    }
-
-    #[test]
-    fn negative_u128_literal_is_rejected() {
-        let error =
-            parse_module("fn main() { let x: u128 = -1u128; }").expect_err("u128 is unsigned");
-        assert!(error.contains("u128"), "{error}");
-    }
-
-    #[test]
-    fn unknown_integer_literal_suffix_errors() {
-        let src = "fn main() { let x = 1i128; }";
-        let err = parse_module(src).unwrap_err();
-        assert!(err.contains("unknown integer literal suffix `i128`"));
-    }
-
-    #[test]
-    fn parse_negative_i64_min_literal() {
-        let src = "fn main() { let x = -9223372036854775808; }";
-        parse_module(src).expect("parse i64::MIN literal");
-    }
-
-    #[test]
-    fn parse_positive_i64_overflow_literal_errors() {
-        let src = "fn main() { let x = 9223372036854775808; }";
-        let err = parse_module(src).unwrap_err();
-        assert!(err.contains("integer literal out of range"));
+    fn signed_512_bit_integer_neighbors_are_rejected() {
+        for spelling in [
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+            "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
+        ] {
+            let error = parse_module(&format!("fn main() {{ let int value = {spelling}; }}"))
+                .expect_err("out-of-domain int literal must fail");
+            assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{error}");
+        }
     }
 
     #[test]
@@ -5584,7 +5651,7 @@ mod tests {
 
     #[test]
     fn bounded_collection_attribute_is_rejected() {
-        let src = "fn f(m: StateMap<i64, i64>) { for (k, v) in m #[bounded(1)] { let z = k; } }";
+        let src = "fn f(StateMap<int, int> m) { for (k, v) in m #[bounded(1)] { let z = k; } }";
         let error = parse_module(src).expect_err("#[bounded] is not Kotodama V1 syntax");
         assert!(error.contains("`.take(N)` or `.range(start, end)`"));
     }
@@ -5605,7 +5672,7 @@ mod tests {
         match stmt.kind() {
             Statement::AssignExpr { op, value, .. } => {
                 assert_eq!(*op, AssignOp::Add);
-                assert!(matches!(value.kind(), Expr::IntLiteral(1)));
+                assert!(matches!(value.kind(), Expr::IntLiteral(value) if value == &BigInt::one()));
             }
             other => panic!("expected compound assignment, got {other:?}"),
         }
@@ -5646,7 +5713,7 @@ mod tests {
     #[test]
     fn parse_rejects_state_parameter_annotations() {
         let src = r#"
-        fn helper(balances: state StateMap<Name, i64>, key: Name) {}
+        fn helper(balances: state StateMap<Name, int>, Name key) {}
         "#;
         let err = parse_module(src).expect_err("state parameters must be rejected");
         assert!(err.contains("state handles are not first-class parameters"));
@@ -5654,7 +5721,7 @@ mod tests {
 
     #[test]
     fn parse_rejects_removed_free_map_helpers() {
-        let err = parse_module("fn f(m: StateMap<i64, i64>) { let _x = get_or(m, 1, 7); }")
+        let err = parse_module("fn f(StateMap<int, int> m) { let _x = get_or(m, 1, 7); }")
             .expect_err("free get_or should be rejected");
         assert!(
             err.contains("map.get_or(key, default)"),
@@ -5665,8 +5732,8 @@ mod tests {
     #[test]
     fn state_map_get_method_preserves_call_form_for_resolution() {
         let program = parse_module(
-            "fn get(value: i64) -> i64 { return value; } \
-             fn use_get(map: StateMap<i64, i64>) { \
+            "fn get(int value) -> int { return value; } \
+             fn use_get(StateMap<int, int> map) { \
                  let optional = map.get(1); \
                  let ordinary = get(1); \
              }",
@@ -5699,7 +5766,7 @@ mod tests {
 
     #[test]
     fn parse_rejects_removed_free_json_helpers() {
-        let err = parse_module("fn f(ev: Json) { let _x = get_int(ev, Name::parse(\"n\")); }")
+        let err = parse_module("fn f(Json ev) { let _x = get_int(ev, Name::parse(\"n\")); }")
             .expect_err("free get_int should be rejected");
         assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
     }
@@ -5714,7 +5781,7 @@ mod tests {
             "state_map_get(map, 1)",
         ] {
             let error = parse_module(&format!(
-                "fn f(value: Option<i64>, map: StateMap<i64, i64>) {{ let _x = {expression}; }}"
+                "fn f(Option<int>, map: StateMap<int, int> value) {{ let _x = {expression}; }}"
             ))
             .expect_err("flat sum/state helper must be rejected by the V1 parser");
             assert!(
@@ -5728,12 +5795,12 @@ mod tests {
 
     #[test]
     fn parse_rejects_removed_method_map_aliases() {
-        let err = parse_module("fn f(m: StateMap<i64, i64>) { let _x = m.has(1); }")
+        let err = parse_module("fn f(StateMap<int, int> m) { let _x = m.has(1); }")
             .expect_err("method has should be rejected");
         assert!(err.contains("map.contains(key)"), "unexpected error: {err}");
 
         let err =
-            parse_module("fn f(m: StateMap<i64, i64>) { let _x = m.get_or_insert_default(1, 7); }")
+            parse_module("fn f(StateMap<int, int> m) { let _x = m.get_or_insert_default(1, 7); }")
                 .expect_err("method get_or_insert_default should be rejected");
         assert!(
             err.contains("map.ensure(key, default)"),
@@ -5743,14 +5810,14 @@ mod tests {
 
     #[test]
     fn parse_rejects_removed_method_path_and_json_aliases() {
-        let err = parse_module("fn f(base: Name) { let _x = base.path_map_key(7); }")
+        let err = parse_module("fn f(Name base) { let _x = base.path_map_key(7); }")
             .expect_err("method path_map_key should be rejected");
         assert!(
             err.contains("base.path(segment)"),
             "unexpected error: {err}"
         );
 
-        let err = parse_module("fn f(ev: Json) { let _x = ev.json_get_int(Name::parse(\"n\")); }")
+        let err = parse_module("fn f(Json ev) { let _x = ev.json_get_int(Name::parse(\"n\")); }")
             .expect_err("method json_get_int should be rejected");
         assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
     }
@@ -5758,10 +5825,10 @@ mod tests {
     #[test]
     fn parse_rejects_constructor_method_aliases() {
         for source in [
-            r#"module M { fn f(value: string) { let _id = value.account_id(); } }"#,
-            r#"module M { fn f(value: string) { let _name = value.name(); } }"#,
-            r#"module M { fn f(value: string) { let _json = value.json(); } }"#,
-            r#"module M { fn f(value: bytes) { let _raw = value.norito_bytes(); } }"#,
+            r#"module M { fn f(string value) { let _id = value.account_id(); } }"#,
+            r#"module M { fn f(string value) { let _name = value.name(); } }"#,
+            r#"module M { fn f(string value) { let _json = value.json(); } }"#,
+            r#"module M { fn f(bytes value) { let _raw = value.norito_bytes(); } }"#,
         ] {
             let error = parse(source).expect_err("constructor method alias must be rejected");
             assert!(

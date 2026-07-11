@@ -1,5 +1,5 @@
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { Buffer } from "buffer";
+import { createHash } from "./cryptoHash.js";
 import {
   noritoEncodeInstruction,
   noritoDecodePrivacyProofEnvelope,
@@ -10233,10 +10233,10 @@ function normalizeEntrypointValueKind(value, name) {
   const kind = normalizeRequiredManifestString(source.kind, `${name}.kind`);
   const allowed = new Set([
     "Int",
-    "U128",
+    "Decimal",
+    "Quantity",
     "Bool",
     "String",
-    "Amount",
     "Json",
     "Name",
     "AccountId",

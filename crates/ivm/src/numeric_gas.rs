@@ -21,18 +21,17 @@ pub const NUMERIC_VALIDATION_WORD_BYTES: u64 = 8;
 pub const MAX_DECIMAL_SCALE: u8 = 28;
 /// Maximum scale of an exact multiplication intermediate.
 pub const MAX_PRODUCT_SCALE: u8 = MAX_DECIMAL_SCALE * 2;
-/// Maximum signed integer limb width (`4096 / 64`).
-pub const MAX_VALUE_LIMBS: u64 = 64;
+/// Maximum signed integer limb width (`512 / 64`).
+pub const MAX_VALUE_LIMBS: u64 = (iroha_primitives::numeric::MAX_MANTISSA_BITS / 64) as u64;
 /// Maximum schoolbook multiplication intermediate width.
 pub const MAX_PRODUCT_LIMBS: u64 = MAX_VALUE_LIMBS * 2;
 
 // Exact bit length of 10^n for n=0..=56. Keeping the table in the consensus
 // module avoids floating-point logarithms and their cross-platform edge cases.
 const POW10_BIT_LENGTH: [u16; 57] = [
-    1, 4, 7, 10, 14, 17, 20, 24, 27, 30, 34, 37, 40, 44, 47, 50, 54, 57, 60,
-    64, 67, 70, 74, 77, 80, 84, 87, 90, 94, 97, 100, 103, 107, 110, 113, 117,
-    120, 123, 127, 130, 133, 137, 140, 143, 147, 150, 153, 157, 160, 163, 167,
-    170, 173, 177, 180, 183, 187,
+    1, 4, 7, 10, 14, 17, 20, 24, 27, 30, 34, 37, 40, 44, 47, 50, 54, 57, 60, 64, 67, 70, 74, 77,
+    80, 84, 87, 90, 94, 97, 100, 103, 107, 110, 113, 117, 120, 123, 127, 130, 133, 137, 140, 143,
+    147, 150, 153, 157, 160, 163, 167, 170, 173, 177, 180, 183, 187,
 ];
 
 /// Checked addition in the consensus gas domain.
@@ -84,14 +83,6 @@ pub const fn limbs_for_bits(bits: u64) -> u64 {
     if bits == 0 { 1 } else { bits.div_ceil(64) }
 }
 
-/// Logical limb count for a minimal signed little-endian representation.
-///
-/// An empty representation is canonical zero and therefore costs one limb.
-pub fn limbs_for_signed_bytes(bytes: &[u8]) -> Result<u64, VMError> {
-    let bits = checked_mul(checked_bytes(bytes.len())?, 8)?;
-    Ok(limbs_for_bits(bits))
-}
-
 /// Exact bit width of `10^exponent` for every supported intermediate scale.
 pub fn pow10_bit_length(exponent: u8) -> Result<u64, VMError> {
     POW10_BIT_LENGTH
@@ -108,14 +99,20 @@ pub fn pow10_limbs(exponent: u8) -> Result<u64, VMError> {
 
 /// Conservative exact width bound for a nonzero `value * 10^exponent`.
 ///
-/// `value_bits` is the exact magnitude bit width. The product uses at most
-/// `value_bits + bit_length(10^exponent) - 1` bits. Passing zero returns one
-/// logical limb regardless of exponent.
+/// `value_bits` is the exact magnitude bit width. For a nonzero exponent the
+/// product uses at most `value_bits + bit_length(10^exponent)` bits. The
+/// seemingly tighter `- 1` bound is not valid for every operand: for example,
+/// a 61-bit value multiplied by ten can require 65 bits. Exponent zero is
+/// handled separately so multiplying by one retains the original width.
+/// Passing zero returns one logical limb regardless of exponent.
 pub fn scaled_limbs(value_bits: u64, exponent: u8) -> Result<u64, VMError> {
     if value_bits == 0 {
         return Ok(1);
     }
-    let bits = checked_add(value_bits, pow10_bit_length(exponent)? - 1)?;
+    if exponent == 0 {
+        return Ok(limbs_for_bits(value_bits));
+    }
+    let bits = checked_add(value_bits, pow10_bit_length(exponent)?)?;
     Ok(limbs_for_bits(bits))
 }
 
@@ -169,6 +166,39 @@ pub fn division_work(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VME
     )
 }
 
+/// Conservative logical width of a truncating quotient.
+///
+/// The zero quotient still occupies one logical limb. For all other inputs,
+/// base-`2^64` long division cannot produce more than
+/// `dividend_limbs - divisor_limbs + 1` quotient limbs.
+pub fn quotient_limb_bound(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VMError> {
+    let dividend = dividend_limbs.max(1);
+    let divisor = divisor_limbs.max(1);
+    if dividend < divisor {
+        Ok(1)
+    } else {
+        checked_add(dividend - divisor, 1)
+    }
+}
+
+/// Work for one quotient/remainder operation implemented with one division.
+///
+/// The bigint layer computes `q = dividend / divisor` once and derives the
+/// remainder as `dividend - q * divisor`. Account for all three operations so
+/// the consensus charge remains an upper bound for the actual backend work.
+pub fn quotient_remainder_work(dividend_limbs: u64, divisor_limbs: u64) -> Result<u64, VMError> {
+    let dividend = dividend_limbs.max(1);
+    let divisor = divisor_limbs.max(1);
+    let quotient = quotient_limb_bound(dividend, divisor)?;
+    checked_add(
+        checked_add(
+            division_work(dividend, divisor)?,
+            multiplication_work(quotient, divisor)?,
+        )?,
+        dividend,
+    )
+}
+
 /// Work for one exact or rounded division scale attempt.
 pub fn division_attempt_work(
     numerator_limbs: u64,
@@ -183,7 +213,7 @@ pub fn division_attempt_work(
             scale_work(numerator_limbs, numerator_scale_delta)?,
             scale_work(denominator_limbs, denominator_scale_delta)?,
         )?,
-        division_work(scaled_numerator_limbs, scaled_denominator_limbs)?,
+        quotient_remainder_work(scaled_numerator_limbs, scaled_denominator_limbs)?,
     )
 }
 
@@ -198,7 +228,7 @@ pub fn normalization_work(intermediate_limbs: u64, intermediate_scale: u8) -> Re
         return Err(VMError::GasCostOverflow);
     }
     checked_mul(
-        division_work(intermediate_limbs.max(1), 1)?,
+        quotient_remainder_work(intermediate_limbs.max(1), 1)?,
         u64::from(intermediate_scale),
     )
 }
@@ -216,8 +246,8 @@ pub fn work_gas(limb_work: u64) -> Result<u64, VMError> {
 pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
     let work = match step {
         NumericWorkStep::CanonicalityProbe { mantissa_limbs, .. } => {
-            // Division by the one-limb constant ten.
-            division_work(u64::from(mantissa_limbs), 1)?
+            // Quotient/remainder by the one-limb constant ten.
+            quotient_remainder_work(u64::from(mantissa_limbs), 1)?
         }
         NumericWorkStep::ScaleByPowerOfTen {
             value_limbs,
@@ -238,7 +268,7 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
             rhs_limbs,
         } => multiplication_work(u64::from(lhs_limbs), u64::from(rhs_limbs))?,
         NumericWorkStep::Normalize { mantissa_limbs, .. } => {
-            division_work(u64::from(mantissa_limbs), 1)?
+            quotient_remainder_work(u64::from(mantissa_limbs), 1)?
         }
         NumericWorkStep::ExactDivisionAttempt {
             numerator_limbs,
@@ -249,11 +279,11 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
             numerator_limbs,
             denominator_limbs,
             ..
-        } => division_work(u64::from(numerator_limbs), u64::from(denominator_limbs))?,
+        } => quotient_remainder_work(u64::from(numerator_limbs), u64::from(denominator_limbs))?,
         NumericWorkStep::DivisionClassification {
             dividend_limbs,
             divisor_limbs,
-        } => division_work(u64::from(dividend_limbs), u64::from(divisor_limbs))?,
+        } => quotient_remainder_work(u64::from(dividend_limbs), u64::from(divisor_limbs))?,
     };
     work_gas(work)
 }
@@ -300,15 +330,38 @@ mod tests {
         assert_eq!(limbs_for_bits(1), 1);
         assert_eq!(limbs_for_bits(64), 1);
         assert_eq!(limbs_for_bits(65), 2);
-        assert_eq!(limbs_for_bits(4096), 64);
-        assert_eq!(scaled_limbs(4095, 28), Ok(66));
+        assert_eq!(limbs_for_bits(512), 8);
+        assert_eq!(MAX_VALUE_LIMBS, 8);
+        assert_eq!(scaled_limbs(511, 28), Ok(10));
+    }
+
+    #[test]
+    fn frame_validation_is_one_charge_split_without_byte_double_counting() {
+        assert_eq!(numeric_frame_validation_work(0), Ok(1));
+        assert_eq!(numeric_frame_validation_phase_work(1), Ok((1, 0)));
+        assert_eq!(numeric_frame_validation_phase_work(8), Ok((1, 0)));
+        assert_eq!(numeric_frame_validation_phase_work(9), Ok((1, 1)));
+        assert_eq!(numeric_frame_validation_phase_work(44), Ok((1, 5)));
+        assert_eq!(envelope_tail_bytes(44), Ok(76));
+    }
+
+    #[test]
+    fn scaled_limb_bound_covers_decimal_power_boundary_products() {
+        assert_eq!(scaled_limbs(0, 28), Ok(1));
+        assert_eq!(scaled_limbs(64, 0), Ok(1));
+        assert_eq!(scaled_limbs(65, 0), Ok(2));
+
+        // (2^61 - 1) * 10 has 65 bits. Using
+        // `value_bits + bit_length(10) - 1` would incorrectly charge one limb.
+        assert_eq!(scaled_limbs(61, 1), Ok(2));
+        assert_eq!(scaled_limbs(60, 1), Ok(1));
     }
 
     #[test]
     fn multiplication_and_scale_intermediates_exceed_value_width() {
-        assert_eq!(multiplication_work(64, 64), Ok(4096));
-        assert_eq!(MAX_PRODUCT_LIMBS, 128);
-        assert_eq!(normalization_work(128, 56), Ok(14_392));
+        assert_eq!(multiplication_work(8, 8), Ok(64));
+        assert_eq!(MAX_PRODUCT_LIMBS, 16);
+        assert_eq!(normalization_work(16, 56), Ok(3_640));
     }
 
     #[test]
@@ -316,7 +369,17 @@ mod tests {
         assert_eq!(division_work(1, 2), Ok(5));
         assert_eq!(division_work(1, 1), Ok(3));
         assert_eq!(division_work(8, 3), Ok(29));
-        assert_eq!(division_work(66, 64), Ok(322));
+        assert_eq!(division_work(10, 8), Ok(42));
+    }
+
+    #[test]
+    fn quotient_remainder_formula_covers_derived_remainder_work() {
+        assert_eq!(quotient_limb_bound(1, 2), Ok(1));
+        assert_eq!(quotient_limb_bound(8, 3), Ok(6));
+        assert_eq!(quotient_remainder_work(1, 2), Ok(8));
+        assert_eq!(quotient_remainder_work(1, 1), Ok(5));
+        assert_eq!(quotient_remainder_work(8, 3), Ok(55));
+        assert_eq!(quotient_remainder_work(10, 8), Ok(76));
     }
 
     #[test]
@@ -330,18 +393,18 @@ mod tests {
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::ScaleByPowerOfTen {
-                value_limbs: 64,
+                value_limbs: 8,
                 exponent: 56,
-                result_limbs: 67,
+                result_limbs: 11,
             }),
-            Ok(768)
+            Ok(96)
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::Multiply {
-                lhs_limbs: 64,
-                rhs_limbs: 64,
+                lhs_limbs: 8,
+                rhs_limbs: 8,
             }),
-            Ok(16_384)
+            Ok(256)
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::Normalize {

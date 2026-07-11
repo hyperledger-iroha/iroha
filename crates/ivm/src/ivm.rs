@@ -8005,6 +8005,43 @@ mod tests {
     }
 
     #[test]
+    fn private_memory_ranges_match_byte_reference_across_overwrites() {
+        let operations = [
+            (true, 10..20),
+            (true, 30..40),
+            (true, 18..32),
+            (false, 12..14),
+            (false, 19..35),
+            (true, 0..64),
+            (false, 1..63),
+            (false, 0..64),
+        ];
+        let mut ranges = PrivateMemoryRanges::default();
+        let mut bytes = [false; 64];
+        for (private, range) in operations {
+            if private {
+                ranges.insert(range.clone());
+            } else {
+                ranges.remove(range.clone());
+            }
+            for byte in range {
+                bytes[usize::try_from(byte).expect("test byte fits usize")] = private;
+            }
+            for start in 0..=64_usize {
+                for end in start..=64_usize {
+                    let expected =
+                        u64::try_from(bytes[start..end].iter().filter(|private| **private).count())
+                            .expect("64-byte reference count fits u64");
+                    let start = u64::try_from(start).expect("test start fits u64");
+                    let end = u64::try_from(end).expect("test end fits u64");
+                    assert_eq!(ranges.intersection_len(start..end), expected);
+                    assert_eq!(ranges.intersects(start..end), expected != 0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn missing_allowed_syscall_metering_entry_fails_closed() {
         let number = crate::syscalls::SYSCALL_EXIT;
         assert!(crate::syscalls::is_syscall_allowed(

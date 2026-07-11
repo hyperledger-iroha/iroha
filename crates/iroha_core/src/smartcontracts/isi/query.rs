@@ -280,6 +280,15 @@ impl QueryExecutionStats {
         self.processed_bytes = self.processed_bytes.saturating_add(encoded);
         budget.ensure(self.processed_items, self.processed_bytes)
     }
+
+    fn record_preflighted_item(
+        &mut self,
+        encoded: u64,
+        budget: Option<QueryExecutionBudget>,
+    ) -> Result<(), Error> {
+        self.processed_items = self.processed_items.saturating_add(1);
+        self.record_precomputed_bytes(encoded, budget)
+    }
 }
 
 struct BoundedLengthWriter {
@@ -788,9 +797,9 @@ fn preflight_singular_source_materialization(
     query: &SingularQueryBox,
     state: &impl StateReadOnly,
     budget: Option<QueryExecutionBudget>,
-) -> Result<(), Error> {
+) -> Result<u64, Error> {
     let Some(budget) = budget else {
-        return Ok(());
+        return Ok(0);
     };
     let limit = budget.remaining_bytes(1, 0)?;
     let world = state.world();
@@ -1013,7 +1022,7 @@ fn preflight_singular_source_materialization(
             return Err(reject_unbounded("__TestFallback"));
         }
     }
-    Ok(())
+    Ok(limit.saturating_sub(remaining))
 }
 
 impl ExecuteSingularQuery for SingularQueryBox {
@@ -4377,10 +4386,18 @@ impl ValidQueryRequest {
         let budget_items = budget;
         match request {
             QueryRequest::Singular(singular_query) => {
-                preflight_singular_source_materialization(&singular_query, state, budget)?;
-                let output = singular_query.execute(state)?;
+                let source_bytes =
+                    preflight_singular_source_materialization(&singular_query, state, budget)?;
                 let mut stats = QueryExecutionStats::default();
-                stats.record_item(&output, budget)?;
+                // The borrowed preflight is real deterministic work and must
+                // be admitted together with the one result item before the
+                // query clones or synthesizes its owned output.
+                stats.record_preflighted_item(source_bytes, budget)?;
+                let output = singular_query.execute(state)?;
+                // Materializing the generic output and framing the response
+                // are separate serialization passes, charged below and by
+                // `execute_ephemeral_with_stats`, respectively.
+                stats.record_value_bytes(&output, budget)?;
                 Ok((QueryResponse::Singular(output), stats))
             }
             QueryRequest::Start(iter_query) => {
@@ -5757,6 +5774,86 @@ mod tests {
         )
         .expect_err("large manifest must fail before materialization");
         assert!(matches!(error, Error::GasBudgetExceeded));
+    }
+
+    #[test]
+    fn singular_preflight_work_is_charged_and_exact_budget_passes() {
+        let code_hash = Hash::new(b"metered-manifest");
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            seiyaku_name: Some("metered".repeat(32)),
+            code_hash: Some(code_hash),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            error_codes: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let mut world = World::default();
+        world.contract_manifests.insert(code_hash, manifest.clone());
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = SingularQueryBox::FindContractManifestByCodeHash(
+            iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash {
+                code_hash,
+            },
+        );
+        let output = SingularQueryOutputBox::ContractManifest(manifest.clone());
+        let response = QueryResponse::Singular(output.clone());
+        let source_bytes =
+            bounded_bare_encoded_len(&manifest, u64::MAX).expect("measure borrowed manifest");
+        let output_bytes =
+            bounded_bare_encoded_len(&output, u64::MAX).expect("measure generic output");
+        let response_bytes =
+            bounded_framed_encoded_len(&response, u64::MAX).expect("measure framed response");
+        let exact_units = 1_u64
+            .saturating_add(source_bytes)
+            .saturating_add(output_bytes)
+            .saturating_add(response_bytes);
+
+        let tight_budget = QueryExecutionBudget::from_weighted_limit(
+            exact_units.saturating_sub(source_bytes).saturating_sub(1),
+            1,
+            1,
+        );
+        let measured =
+            preflight_singular_source_materialization(&query, &state.view(), Some(tight_budget))
+                .expect("borrowed source fits the initial preflight window");
+        assert_eq!(measured, source_bytes);
+        let mut tight_stats = QueryExecutionStats::default();
+        tight_stats
+            .record_preflighted_item(measured, Some(tight_budget))
+            .expect("item and preflight source fit before owned materialization");
+        tight_stats
+            .record_value_bytes(&output, Some(tight_budget))
+            .expect("generic output still fits");
+        assert!(matches!(
+            tight_stats.record_response(&response, Some(tight_budget)),
+            Err(Error::GasBudgetExceeded)
+        ));
+
+        let exact_budget = QueryExecutionBudget::from_weighted_limit(exact_units, 1, 1);
+        let measured =
+            preflight_singular_source_materialization(&query, &state.view(), Some(exact_budget))
+                .expect("exact budget admits borrowed source");
+        let mut exact_stats = QueryExecutionStats::default();
+        exact_stats
+            .record_preflighted_item(measured, Some(exact_budget))
+            .expect("charge borrowed source");
+        exact_stats
+            .record_value_bytes(&output, Some(exact_budget))
+            .expect("charge generic output");
+        exact_stats
+            .record_response(&response, Some(exact_budget))
+            .expect("charge framed response");
+        assert_eq!(exact_stats.processed_items(), 1);
+        assert_eq!(exact_stats.processed_bytes(), exact_units - 1);
     }
 
     #[test]

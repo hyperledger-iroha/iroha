@@ -17,9 +17,7 @@ use super::{
     BridgeNativeProofBackendV1, SccpEvmSourceEmitterV1, SccpLaneIdV1, SccpNativeTrustAnchorV1,
     SccpNetworkV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
-use crate::{
-    account::AccountId, asset::AssetDefinitionId, consensus::VALIDATOR_SET_HASH_VERSION_V1,
-};
+use crate::{account::AccountId, asset::AssetDefinitionId, block::consensus_v2::PROTOCOL_VERSION};
 
 /// Maximum decimal scale accepted by first-release SCCP amount payloads.
 pub const SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE: u32 = 28;
@@ -520,18 +518,18 @@ pub struct SccpSoraFinalityAnchorV1 {
     pub version: u8,
     /// Exact source chain. SCCP V1 outbound proofs require SORA Taira.
     pub source_network: SccpNetworkV1,
+    /// Exact authoritative Sumeragi wire protocol. SCCP V1 requires v2.
+    pub protocol_version: u16,
     /// Keccak-256 of the canonical 16-byte Taira chain identifier.
     pub chain_id_hash: [u8; 32],
     /// Nonzero finalized checkpoint height.
     pub checkpoint_height: u64,
     /// Hash of the canonical finalized checkpoint block header.
     pub checkpoint_block_hash: [u8; 32],
-    /// Consensus epoch of the checkpoint validator roster.
-    pub validator_set_epoch: u64,
-    /// Canonical validator-roster hash at the checkpoint.
-    pub validator_set_hash: [u8; 32],
-    /// Version of the validator-roster hash construction.
-    pub validator_set_hash_version: u16,
+    /// Immutable Sumeragi-v2 height-context identifier at the checkpoint.
+    pub checkpoint_context_id: [u8; 32],
+    /// Domain-separated hash of the canonical durable v2 finality artifact.
+    pub checkpoint_finality_artifact_hash: [u8; 32],
 }
 
 impl SccpSoraFinalityAnchorV1 {
@@ -539,13 +537,14 @@ impl SccpSoraFinalityAnchorV1 {
     pub fn validate(self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1
             || self.source_network != SccpNetworkV1::SoraTaira
+            || self.protocol_version != PROTOCOL_VERSION
             || self.chain_id_hash != sccp_sora_taira_chain_id_hash_v1()
             || self.checkpoint_height == 0
-            || self.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
             || validate_hash_roles(&[
                 self.chain_id_hash,
                 self.checkpoint_block_hash,
-                self.validator_set_hash,
+                self.checkpoint_context_id,
+                self.checkpoint_finality_artifact_hash,
             ])
             .is_err()
         {
@@ -585,7 +584,8 @@ impl SccpOutboundProofPolicyV1 {
         roles.extend([
             self.sora_finality_anchor.chain_id_hash,
             self.sora_finality_anchor.checkpoint_block_hash,
-            self.sora_finality_anchor.validator_set_hash,
+            self.sora_finality_anchor.checkpoint_context_id,
+            self.sora_finality_anchor.checkpoint_finality_artifact_hash,
             self.semantic_profile_hash()?,
             self.sora_finality_anchor_hash()?,
         ]);
@@ -1529,15 +1529,15 @@ pub fn canonical_sccp_sora_finality_anchor_bytes_v1(
     anchor: SccpSoraFinalityAnchorV1,
 ) -> Result<Vec<u8>, SccpRouteValidationError> {
     anchor.validate()?;
-    let mut out = Vec::with_capacity(124);
+    let mut out = Vec::with_capacity(140);
     out.push(anchor.version);
     out.push(sccp_network_tag_v1(anchor.source_network));
+    push_u16(&mut out, anchor.protocol_version);
     out.extend_from_slice(&anchor.chain_id_hash);
     push_u64(&mut out, anchor.checkpoint_height);
     out.extend_from_slice(&anchor.checkpoint_block_hash);
-    push_u64(&mut out, anchor.validator_set_epoch);
-    out.extend_from_slice(&anchor.validator_set_hash);
-    push_u16(&mut out, anchor.validator_set_hash_version);
+    out.extend_from_slice(&anchor.checkpoint_context_id);
+    out.extend_from_slice(&anchor.checkpoint_finality_artifact_hash);
     Ok(out)
 }
 
@@ -2203,12 +2203,12 @@ mod tests {
             sora_finality_anchor: SccpSoraFinalityAnchorV1 {
                 version: 1,
                 source_network: SccpNetworkV1::SoraTaira,
+                protocol_version: PROTOCOL_VERSION,
                 chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
                 checkpoint_height: 5,
                 checkpoint_block_hash: [0x73; 32],
-                validator_set_epoch: 1,
-                validator_set_hash: [0x74; 32],
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                checkpoint_context_id: [0x74; 32],
+                checkpoint_finality_artifact_hash: [0x75; 32],
             },
         }
     }
@@ -2983,7 +2983,7 @@ mod tests {
         );
         assert_eq!(
             anchor_hash,
-            hex32("7dda271d98d9e4333093da84236157e39ce67f6f68680fedbdc17fbe8b7b6a4a")
+            hex32("690888c1b9a1409ea47fc682be915184e86a817a2f0b3439eef82e64e08e990b")
         );
         assert_ne!(profile_hash, [0; 32]);
         assert_ne!(anchor_hash, [0; 32]);
@@ -3029,17 +3029,26 @@ mod tests {
             Err(SccpRouteValidationError::InvalidSemanticProofProfile)
         );
 
-        let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 7] = [
+        let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 10] = [
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.version = 0,
             |anchor: &mut SccpSoraFinalityAnchorV1| {
                 anchor.source_network = SccpNetworkV1::EthereumMainnet;
             },
+            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.protocol_version = 1,
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.chain_id_hash[0] ^= 1,
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_height = 0,
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_block_hash = [0; 32],
-            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.validator_set_hash = [0; 32],
             |anchor: &mut SccpSoraFinalityAnchorV1| {
-                anchor.validator_set_hash_version = VALIDATOR_SET_HASH_VERSION_V1 + 1;
+                anchor.checkpoint_context_id = [0; 32];
+            },
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.checkpoint_finality_artifact_hash = [0; 32];
+            },
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.checkpoint_context_id = anchor.checkpoint_block_hash;
+            },
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.checkpoint_finality_artifact_hash = anchor.checkpoint_context_id;
             },
         ];
         for mutate in anchor_mutations {

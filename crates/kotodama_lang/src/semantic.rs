@@ -37,7 +37,7 @@ use iroha_data_model::{
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,
-    numeric::{Numeric, NumericError, RoundingMode},
+    numeric::{MAX_MANTISSA_BYTES, Numeric, NumericError, RoundingMode},
 };
 use norito::json::{self, native::Number as JsonNumber};
 
@@ -116,6 +116,8 @@ pub(crate) const LIST_ENUMERATE_INTRINSIC: &str = "__kotodama_list_enumerate";
 pub(crate) const DECIMAL_DIV_ROUND_INTRINSIC: &str = "__kotodama_decimal_div_round";
 pub(crate) const QUANTITY_DIV_ROUND_INTRINSIC: &str = "__kotodama_quantity_div_round";
 pub(crate) const QUANTITY_RATIO_ROUND_INTRINSIC: &str = "__kotodama_quantity_ratio_round";
+pub(crate) const DECIMAL_TO_INT_TRUNC_INTRINSIC: &str = "__kotodama_decimal_to_int_trunc";
+pub(crate) const DECIMAL_TO_INT_ROUND_INTRINSIC: &str = "__kotodama_decimal_to_int_round";
 
 fn is_list_intrinsic(name: &str) -> bool {
     matches!(
@@ -153,6 +155,8 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
             DECIMAL_DIV_ROUND_INTRINSIC
                 | QUANTITY_DIV_ROUND_INTRINSIC
                 | QUANTITY_RATIO_ROUND_INTRINSIC
+                | DECIMAL_TO_INT_TRUNC_INTRINSIC
+                | DECIMAL_TO_INT_ROUND_INTRINSIC
         )
         || is_canonical_type_spelling(name)
         || (is_function
@@ -423,7 +427,7 @@ pub struct FunctionSignature {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    /// Signed adaptive-width integer in `-2^4095..=2^4095-1`.
+    /// Signed adaptive-width integer in `-2^511..=2^511-1`.
     Int,
     /// Exact bounded base-10 decimal.
     Decimal,
@@ -587,7 +591,7 @@ pub enum ExprKind {
         target: Box<TypedExpr>,
         index: Box<TypedExpr>,
     },
-    /// A source `int` literal in the complete signed 4,096-bit domain.
+    /// A source `int` literal in the complete signed 512-bit domain.
     IntLiteral(BigInt),
     /// Canonical exact decimal payload paired with its source spelling.
     DecimalLiteral {
@@ -2369,6 +2373,7 @@ fn validate_production_projection_expr(
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::Member { object: expr, .. }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
@@ -3822,7 +3827,7 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
         Expr::DecimalLiteral(_) => {
             return Err(SemanticError {
                 code: "E_TRIGGER_METADATA_VALUE",
-                message: "Amount trigger metadata requires explicit native JSON construction"
+                message: "quantity trigger metadata requires explicit native JSON construction"
                     .into(),
             });
         }
@@ -3884,6 +3889,19 @@ fn numeric_kind_to_type(kind: NumericKind) -> Type {
     }
 }
 
+fn typed_int_literal(value: &BigInt) -> Result<TypedExpr, SemanticError> {
+    if value.to_twos_bytes().len() > MAX_MANTISSA_BYTES {
+        return Err(SemanticError {
+            code: "E_INT_LITERAL_OVERFLOW",
+            message: "integer literal is outside the signed 512-bit Kotodama int domain".into(),
+        });
+    }
+    Ok(TypedExpr {
+        expr: ExprKind::IntLiteral(value.clone()),
+        ty: Type::Int,
+    })
+}
+
 fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
     let (coefficient, exponent) = spelling
         .split_once(['e', 'E'])
@@ -3899,6 +3917,9 @@ fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
         },
         message: "decimal exponent is outside the representable V1 domain".into(),
     })?;
+    let (negative, coefficient) = coefficient
+        .strip_prefix('-')
+        .map_or((false, coefficient), |coefficient| (true, coefficient));
     let (whole, fractional) = coefficient
         .split_once('.')
         .map_or((coefficient, ""), |(whole, fractional)| {
@@ -3906,10 +3927,12 @@ fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
         });
     let whole = whole.replace('_', "");
     let fractional = fractional.replace('_', "");
-    let mut mantissa_spelling = format!("{whole}{fractional}");
-    if mantissa_spelling.bytes().all(|byte| byte == b'0') {
+    let combined = format!("{whole}{fractional}");
+    let significant = combined.trim_start_matches('0');
+    if significant.is_empty() {
         return Ok(Numeric::zero());
     }
+    let mut mantissa_spelling = significant.to_owned();
     let mut scale = i64::try_from(fractional.len())
         .map_err(|_| SemanticError {
             code: "E_DECIMAL_SCALE_OVERFLOW",
@@ -3927,12 +3950,12 @@ fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
     if scale < 0 {
         let zeros = usize::try_from(scale.unsigned_abs()).map_err(|_| SemanticError {
             code: "E_DECIMAL_MANTISSA_OVERFLOW",
-            message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
+            message: "decimal literal exceeds the signed 512-bit mantissa domain".into(),
         })?;
-        if mantissa_spelling.len().saturating_add(zeros) > 1_234 {
+        if mantissa_spelling.len().saturating_add(zeros) > 154 {
             return Err(SemanticError {
                 code: "E_DECIMAL_MANTISSA_OVERFLOW",
-                message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
+                message: "decimal literal exceeds the signed 512-bit mantissa domain".into(),
             });
         }
         mantissa_spelling.extend(core::iter::repeat_n('0', zeros));
@@ -3952,17 +3975,20 @@ fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
             message: format!("decimal literal has canonical scale {scale}; the V1 maximum is 28"),
         });
     }
+    if negative {
+        mantissa_spelling.insert(0, '-');
+    }
     let mantissa = mantissa_spelling
         .parse::<BigInt>()
         .map_err(|_| SemanticError {
             code: "E_DECIMAL_MANTISSA_OVERFLOW",
-            message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
+            message: "decimal literal exceeds the signed 512-bit mantissa domain".into(),
         })?;
     Numeric::try_new(mantissa, scale)
         .map_err(|error| match error {
             NumericError::MantissaTooLarge => SemanticError {
                 code: "E_DECIMAL_MANTISSA_OVERFLOW",
-                message: "decimal literal exceeds the signed 4,096-bit mantissa domain".into(),
+                message: "decimal literal exceeds the signed 512-bit mantissa domain".into(),
             },
             NumericError::ScaleTooLarge => SemanticError {
                 code: "E_DECIMAL_SCALE_OVERFLOW",
@@ -4255,6 +4281,41 @@ fn explicit_numeric_conversion(
     name: &str,
     args: Vec<TypedExpr>,
 ) -> Option<Result<TypedExpr, SemanticError>> {
+    if name == "decimal::to_int_trunc" {
+        return Some((|| {
+            if args.len() != 1 || resolve_struct_type(&args[0].ty) != Type::Decimal {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "decimal::to_int_trunc expects exactly one decimal argument".into(),
+                });
+            }
+            if let Some(crate::checked_arithmetic::ConstantNumeric::Decimal(value)) =
+                crate::checked_arithmetic::evaluate(&args[0]).map_err(|error| SemanticError {
+                    code: error.code(),
+                    message: error.to_string(),
+                })?
+            {
+                let value = value.decimal_to_int_trunc().map_err(|error| {
+                    let error = crate::checked_arithmetic::ConstantNumericError::Numeric(error);
+                    SemanticError {
+                        code: error.code(),
+                        message: error.to_string(),
+                    }
+                })?;
+                return Ok(TypedExpr {
+                    expr: ExprKind::IntLiteral(value),
+                    ty: Type::Int,
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: DECIMAL_TO_INT_TRUNC_INTRINSIC.to_owned(),
+                    args,
+                },
+                ty: Type::Int,
+            })
+        })());
+    }
     let (source, destination, recoverable) = match name {
         "decimal::from_int" => (Type::Int, Type::Decimal, false),
         "decimal::to_int_exact" => (Type::Decimal, Type::Int, false),
@@ -6256,7 +6317,7 @@ fn analyze_statement_inner(
                     return Err(SemanticError {
                         code: "E_UNBOUNDED_ITERATION",
                         message:
-                            "`.take(n)` requires a non-negative i64 literal no greater than 64"
+                            "`.take(n)` requires a non-negative int literal no greater than 64"
                                 .into(),
                     });
                 }
@@ -6337,7 +6398,7 @@ fn analyze_statement_inner(
                     }
                     return Err(SemanticError {
                         code: "E_UNBOUNDED_ITERATION",
-                        message: "`.range(start, end)` requires non-negative i64 literals with a span no greater than 64".into(),
+                        message: "`.range(start, end)` requires non-negative int literals with a span no greater than 64".into(),
                     });
                 }
             }
@@ -6478,7 +6539,8 @@ fn core_query_page_type(builtin: Builtin) -> Type {
 fn direct_json_getter_type(builtin: Builtin) -> Option<Type> {
     let payload = match builtin {
         Builtin::JsonGetIntDirect => Type::Int,
-        Builtin::JsonGetNumericDirect => Type::Quantity,
+        Builtin::JsonGetDecimalDirect => Type::Decimal,
+        Builtin::JsonGetQuantityDirect => Type::Quantity,
         Builtin::JsonGetJsonDirect => Type::Json,
         Builtin::JsonGetNameDirect => Type::Name,
         Builtin::JsonGetAccountIdDirect => Type::AccountId,
@@ -6714,7 +6776,7 @@ fn analyze_surface_builtin_call(
                         return Err(SemanticError {
                             code: "K2003",
                             message: format!(
-                                "get_or auto-default is only available for StateMap<*,i64>; provide an explicit default for value type {}",
+                                "get_or auto-default is only available for StateMap<*,int>; provide an explicit default for value type {}",
                                 type_name(&other)
                             ),
                         });
@@ -6790,7 +6852,7 @@ fn analyze_surface_builtin_call(
                         return Err(SemanticError {
                             code: "K2003",
                             message: format!(
-                                "ensure auto-default is only available for StateMap<*,i64>; provide an explicit default for value type {}",
+                                "ensure auto-default is only available for StateMap<*,int>; provide an explicit default for value type {}",
                                 type_name(&other)
                             ),
                         });
@@ -6842,7 +6904,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 3 {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: format!("{name} expects (StateMap<i64,i64>, i64 start, i64 which)"),
+                    message: format!("{name} expects (StateMap<int,int>, int start, int which)"),
                 });
             }
             match &arg_typed[0].ty {
@@ -6853,7 +6915,7 @@ fn analyze_surface_builtin_call(
                     return Err(SemanticError {
                         code: "K2003",
                         message: format!(
-                            "{name} expects StateMap<i64,i64> as first arg, got {}",
+                            "{name} expects StateMap<int,int> as first arg, got {}",
                             type_name(other)
                         ),
                     });
@@ -6864,7 +6926,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: format!("{name} expects (StateMap<i64,i64>, i64, i64)"),
+                    message: format!("{name} expects (StateMap<int,int>, int, int)"),
                 });
             }
             Ok(TypedExpr {
@@ -6879,7 +6941,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 3 {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "keys_values_take2 expects (StateMap<i64,i64>, i64, i64)".into(),
+                    message: "keys_values_take2 expects (StateMap<int,int>, int, int)".into(),
                 });
             }
             match &arg_typed[0].ty {
@@ -6890,7 +6952,7 @@ fn analyze_surface_builtin_call(
                     return Err(SemanticError {
                         code: "K2003",
                         message: format!(
-                            "keys_values_take2 expects StateMap<i64,i64> as first arg, got {}",
+                            "keys_values_take2 expects StateMap<int,int> as first arg, got {}",
                             type_name(other)
                         ),
                     });
@@ -6901,7 +6963,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "keys_values_take2 expects (StateMap<i64,i64>, i64, i64)".into(),
+                    message: "keys_values_take2 expects (StateMap<int,int>, int, int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -6967,7 +7029,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "state_keys expects (Name, i64 offset, i64 limit)".into(),
+                    message: "state_keys expects (Name, int offset, int limit)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7066,7 +7128,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "E_QUERY_PAGE_ARGUMENTS",
                     message: format!(
-                        "`{}` expects named `offset: i64` and `limit: i64` arguments",
+                        "`{}` expects named `offset: int` and `limit: int` arguments",
                         builtin.source_name()
                     ),
                 });
@@ -7177,7 +7239,7 @@ fn analyze_surface_builtin_call(
             if !(valid_without_outputs || valid_with_outputs) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, i64 amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
+                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, bytes inputs32, [bytes outputs32,] string backend, bytes proof, bytes vk)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7285,14 +7347,14 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 4 {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "vrf_verify expects (bytes, bytes, bytes, i64 variant)".into(),
+                    message: "vrf_verify expects (bytes, bytes, bytes, int variant)".into(),
                 });
             }
             if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) || !is_int_like(&arg_typed[3].ty)
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "vrf_verify expects (bytes, bytes, bytes, i64 variant)".into(),
+                    message: "vrf_verify expects (bytes, bytes, bytes, int variant)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7374,7 +7436,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 4 {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "verify_signature expects (bytes, bytes, bytes, i64) arguments".into(),
+                    message: "verify_signature expects (bytes, bytes, bytes, int) arguments".into(),
                 });
             }
             if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) {
@@ -7387,7 +7449,7 @@ fn analyze_surface_builtin_call(
             if !is_int_like(&arg_typed[3].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "verify_signature expects scheme code as i64".into(),
+                    message: "verify_signature expects scheme code as int".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7418,7 +7480,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message: format!(
-                        "{} expects (bytes, bytes, bytes, bytes[, i64])",
+                        "{} expects (bytes, bytes, bytes, bytes[, int])",
                         builtin.name()
                     ),
                 });
@@ -7440,7 +7502,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() == 5 && !is_int_like(&arg_typed[4].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: format!("{} optional tag length must be i64", builtin.name()),
+                    message: format!("{} optional tag length must be int", builtin.name()),
                 });
             }
             Ok(TypedExpr {
@@ -7488,7 +7550,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "debug_print expects (i64 value)".into(),
+                    message: "debug_print expects (int value)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7528,7 +7590,7 @@ fn analyze_surface_builtin_call(
             if !ok {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "assert expects (bool) or (bool, string|i64)".into(),
+                    message: "assert expects (bool) or (bool, string|int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7561,7 +7623,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "info expects (string|i64)".into(),
+                    message: "info expects (string|int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7576,7 +7638,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 2 || !arg_typed.iter().all(|t| is_int_like(&t.ty)) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "assert_eq expects two i64 args".into(),
+                    message: "assert_eq expects two int args".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7615,7 +7677,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message: format!(
-                        "{} expects (AccountId, AssetDefinitionId, Amount)",
+                        "{} expects (AccountId, AssetDefinitionId, quantity)",
                         builtin.name()
                     ),
                 });
@@ -7639,7 +7701,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message:
-                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, Amount, DataSpaceId)"
+                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, quantity, DataSpaceId)"
                             .into(),
                 });
             }
@@ -7779,7 +7841,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "register_asset expects (AssetDefinitionId, string, i64, i64)".into(),
+                    message: "register_asset expects (AssetDefinitionId, string, int, int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7801,7 +7863,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message:
-                        "create_new_asset expects (AssetDefinitionId, string, i64, AccountId, i64)"
+                        "create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)"
                             .into(),
                 });
             }
@@ -7883,7 +7945,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "set_trigger_enabled expects (Name, i64)".into(),
+                    message: "set_trigger_enabled expects (Name, int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -7973,7 +8035,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message:
-                        "escrow_open_offer expects (Name, AssetDefinitionId, Amount[, bytes evidence_hashes])"
+                        "escrow_open_offer expects (Name, AssetDefinitionId, quantity[, bytes evidence_hashes])"
                             .into(),
                 });
             }
@@ -8031,7 +8093,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "escrow_resolve_dispute expects (Name, Amount, Amount[, bytes evidence_hashes])"
+                    message: "escrow_resolve_dispute expects (Name, quantity, quantity[, bytes evidence_hashes])"
                         .into(),
                 });
             }
@@ -8102,7 +8164,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "alloc expects (i64 bytes)".into(),
+                    message: "alloc expects (int bytes)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8132,7 +8194,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "grow_heap expects (i64 bytes)".into(),
+                    message: "grow_heap expects (int bytes)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8166,7 +8228,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message:
-                        "get_merkle_path expects (i64 address, i64 output_ptr[, i64 root_output_ptr])"
+                        "get_merkle_path expects (int address, int output_ptr[, int root_output_ptr])"
                             .into(),
                 });
             }
@@ -8184,7 +8246,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message: format!(
-                        "{} expects (i64 address_or_register, i64 output_ptr[, i64 max_depth[, i64 root_output_ptr]])",
+                        "{} expects (int address_or_register, int output_ptr[, int max_depth[, int root_output_ptr]])",
                         builtin.name()
                     ),
                 });
@@ -8201,7 +8263,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "get_private_input expects (i64 index)".into(),
+                    message: "get_private_input expects (int index)".into(),
                 });
             }
             if !context.zk_enabled {
@@ -8223,7 +8285,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "use_nullifier expects (i64 nullifier)".into(),
+                    message: "use_nullifier expects (int nullifier)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8268,7 +8330,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "set_execution_depth expects one i64 arg".into(),
+                    message: "set_execution_depth expects one int arg".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8489,7 +8551,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "set_account_quorum expects (AccountId, Amount)".into(),
+                    message: "set_account_quorum expects (AccountId, quantity)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8504,13 +8566,13 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "path expects (Name, i64|bytes)".into(),
+                    message: "path expects (Name, int|bytes)".into(),
                 });
             }
             if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "path expects (Name, i64|bytes)".into(),
+                    message: "path expects (Name, int|bytes)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8628,7 +8690,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "json_set_int expects (Json, Name, i64)".into(),
+                    message: "json_set_int expects (Json, Name, int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8662,7 +8724,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "encode_int expects (i64)".into(),
+                    message: "encode_int expects (int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8726,7 +8788,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "json_set_int_direct expects (Json, Name, i64)".into(),
+                    message: "json_set_int_direct expects (Json, Name, int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8757,7 +8819,8 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::JsonGetIntDirect
-        | Builtin::JsonGetNumericDirect
+        | Builtin::JsonGetDecimalDirect
+        | Builtin::JsonGetQuantityDirect
         | Builtin::JsonGetJsonDirect
         | Builtin::JsonGetNameDirect
         | Builtin::JsonGetAccountIdDirect
@@ -8906,7 +8969,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "numeric_to_int expects (Amount|u128)".into(),
+                    message: "numeric_to_int expects (quantity|int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8921,12 +8984,12 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "numeric_neg expects (Amount|u128)".into(),
+                    message: "numeric_neg expects (quantity|int)".into(),
                 });
             }
             Err(SemanticError {
-                code: "E_UNSIGNED_NEGATION",
-                message: "numeric::neg is not defined for u128 or Amount values".into(),
+                code: "E_QUANTITY_NEGATION",
+                message: "numeric::neg is not defined for int or quantity values".into(),
             })
         }
         Builtin::NumericToIntDirect => {
@@ -8936,7 +8999,7 @@ fn analyze_surface_builtin_call(
                 return Err(SemanticError {
                     code: "K2003",
                     message:
-                        "numeric_to_int_direct expects (u128); Amount uses its nominal V1 syscall"
+                        "numeric_to_int_direct expects (int); quantity uses its nominal V1 syscall"
                             .into(),
                 });
             }
@@ -8952,12 +9015,12 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_wide_numeric_type(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "numeric_neg_direct expects (Amount|u128)".into(),
+                    message: "numeric_neg_direct expects (quantity|int)".into(),
                 });
             }
             Err(SemanticError {
-                code: "E_UNSIGNED_NEGATION",
-                message: "numeric negation is not defined for u128 or Amount values".into(),
+                code: "E_QUANTITY_NEGATION",
+                message: "numeric negation is not defined for int or quantity values".into(),
             })
         }
         Builtin::NumericAdd
@@ -8976,7 +9039,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: format!("{} expects (Amount|u128, Amount|u128)", builtin.name()),
+                    message: format!("{} expects (quantity|int, quantity|int)", builtin.name()),
                 });
             }
             let Some(result_ty) = numeric_result_type(&arg_typed[0].ty, &arg_typed[1].ty) else {
@@ -8998,8 +9061,8 @@ fn analyze_surface_builtin_call(
                 && matches!(builtin, Builtin::NumericRem | Builtin::NumericRemDirect)
             {
                 return Err(SemanticError {
-                    code: "E_AMOUNT_REMAINDER",
-                    message: "Amount does not support `%`; use exact `/` or amount.div_round"
+                    code: "E_QUANTITY_REMAINDER",
+                    message: "quantity does not support `%`; use exact `/` or quantity.div_round"
                         .into(),
                 });
             }
@@ -9015,7 +9078,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "direct Numeric helpers only accept u128; Amount uses its nominal V1 syscalls"
+                    message: "direct Numeric helpers only accept int; quantity uses its nominal V1 syscalls"
                         .into(),
                 });
             }
@@ -9065,7 +9128,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "direct Numeric comparisons only accept u128; Amount uses its nominal V1 syscalls"
+                    message: "direct Numeric comparisons only accept int; quantity uses its nominal V1 syscalls"
                         .into(),
                 });
             }
@@ -9081,7 +9144,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !matches!(resolve_struct_type(&arg_typed[0].ty), Type::Int) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "wrapping_neg expects (i64)".into(),
+                    message: "wrapping_neg expects (int)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -9100,7 +9163,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: format!("{} expects (i64, i64)", builtin.name()),
+                    message: format!("{} expects (int, int)", builtin.name()),
                 });
             }
             Ok(TypedExpr {
@@ -9116,7 +9179,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: format!("{name} expects (i64)"),
+                    message: format!("{name} expects (int)"),
                 });
             }
             Ok(TypedExpr {
@@ -9135,7 +9198,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: format!("{name} expects (i64, i64)"),
+                    message: format!("{name} expects (int, int)"),
                 });
             }
             Ok(TypedExpr {
@@ -9149,9 +9212,9 @@ fn analyze_surface_builtin_call(
         Builtin::Poseidon2 | Builtin::Valcom => {
             let name = builtin.name();
             let message = if builtin == Builtin::Poseidon2 {
-                "poseidon2 expects two i64 args"
+                "poseidon2 expects two int args"
             } else {
-                "valcom expects two i64 args"
+                "valcom expects two int args"
             };
             if arg_typed.len() != 2
                 || !arg_typed
@@ -9179,7 +9242,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "poseidon6 expects six i64 args".into(),
+                    message: "poseidon6 expects six int args".into(),
                 });
             }
             Ok(TypedExpr {
@@ -9197,7 +9260,7 @@ fn analyze_surface_builtin_call(
             {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "pubkgen expects one i64 arg".into(),
+                    message: "pubkgen expects one int arg".into(),
                 });
             }
             Ok(TypedExpr {
@@ -9212,7 +9275,7 @@ fn analyze_surface_builtin_call(
             if arg_typed.len() != 1 || !is_int_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "setvl expects one i64 arg".into(),
+                    message: "setvl expects one int arg".into(),
                 });
             }
             Ok(TypedExpr {
@@ -9224,7 +9287,8 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::GetInt
-        | Builtin::GetNumeric
+        | Builtin::GetDecimal
+        | Builtin::GetQuantity
         | Builtin::GetJson
         | Builtin::GetName
         | Builtin::GetAccountId
@@ -9242,7 +9306,8 @@ fn analyze_surface_builtin_call(
             }
             let payload = match builtin {
                 Builtin::GetInt => Type::Int,
-                Builtin::GetNumeric => Type::Quantity,
+                Builtin::GetDecimal => Type::Decimal,
+                Builtin::GetQuantity => Type::Quantity,
                 Builtin::GetJson => Type::Json,
                 Builtin::GetName => Type::Name,
                 Builtin::GetAccountId => Type::AccountId,
@@ -9982,7 +10047,7 @@ fn analyze_list_method_call(
     let named_only_reason = (method.0 == LIST_TRY_SET_INTRINSIC
         && resolve_struct_type(&element) == Type::Int)
         .then_some(
-            "the i64 index and i64 element value can be transposed, so their names are required",
+            "the int index and int element value can be transposed, so their names are required",
         );
     let plan = match reorder_call_arguments(
         source_name,
@@ -10028,7 +10093,7 @@ fn analyze_list_method_call(
                 if resolve_struct_type(&argument.ty) != Type::Int {
                     return Some(Err(SemanticError {
                         code: "E_LIST_INDEX_TYPE",
-                        message: format!("List.{} expects an i64 index or limit", source_name),
+                        message: format!("List.{} expects an int index or limit", source_name),
                     }));
                 }
                 argument
@@ -10041,7 +10106,7 @@ fn analyze_list_method_call(
                 if resolve_struct_type(&argument.ty) != Type::Int {
                     return Some(Err(SemanticError {
                         code: "E_LIST_INDEX_TYPE",
-                        message: "List.try_set expects an i64 index".into(),
+                        message: "List.try_set expects an int index".into(),
                     }));
                 }
                 argument
@@ -10140,29 +10205,41 @@ fn analyze_list_method_call(
     )))
 }
 
-fn amount_rounding_mode(expression: &Expr) -> Option<(AmountRoundingMode, i64)> {
+fn numeric_rounding_mode(expression: &Expr) -> Option<(RoundingMode, i64)> {
+    use ivm_abi::numeric::RoundingModeV1 as AbiMode;
+
     let (mode, tag) = match expression {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
-            return amount_rounding_mode(expression);
+            return numeric_rounding_mode(expression);
         }
-        Expr::Ident(name) if name == "Rounding::floor" => (
-            AmountRoundingMode::Floor,
-            ivm_abi::syscalls::AMOUNT_ROUND_FLOOR,
-        ),
-        Expr::Ident(name) if name == "Rounding::ceil" => (
-            AmountRoundingMode::Ceil,
-            ivm_abi::syscalls::AMOUNT_ROUND_CEIL,
-        ),
-        Expr::Ident(name) if name == "Rounding::nearest_even" => (
-            AmountRoundingMode::NearestEven,
-            ivm_abi::syscalls::AMOUNT_ROUND_NEAREST_EVEN,
+        Expr::Ident(name) if name == "Rounding::toward_zero" => {
+            (RoundingMode::TowardZero, AbiMode::TowardZero.tag())
+        }
+        Expr::Ident(name) if name == "Rounding::away_from_zero" => {
+            (RoundingMode::AwayFromZero, AbiMode::AwayFromZero.tag())
+        }
+        Expr::Ident(name) if name == "Rounding::floor" => {
+            (RoundingMode::Floor, AbiMode::Floor.tag())
+        }
+        Expr::Ident(name) if name == "Rounding::ceil" => {
+            (RoundingMode::Ceil, AbiMode::Ceil.tag())
+        }
+        Expr::Ident(name) if name == "Rounding::nearest_even" => {
+            (RoundingMode::NearestEven, AbiMode::NearestEven.tag())
+        }
+        Expr::Ident(name) if name == "Rounding::nearest_away" => {
+            (RoundingMode::NearestAway, AbiMode::NearestAway.tag())
+        }
+        Expr::Ident(name) if name == "Rounding::nearest_toward_zero" => (
+            RoundingMode::NearestTowardZero,
+            AbiMode::NearestTowardZero.tag(),
         ),
         _ => return None,
     };
     i64::try_from(tag).ok().map(|tag| (mode, tag))
 }
 
-fn analyze_amount_method_call(
+fn analyze_decimal_to_int_round_call(
     context: &SemanticContext,
     source_name: &str,
     args: &[Expr],
@@ -10170,44 +10247,153 @@ fn analyze_amount_method_call(
     implicit_receiver: bool,
     vars: &mut HashMap<String, Type>,
 ) -> Option<Result<TypedExpr, SemanticError>> {
-    if source_name != "div_round" || !implicit_receiver || args.is_empty() {
+    if source_name != "decimal::to_int_round" || implicit_receiver {
+        return None;
+    }
+    let names = ["value".to_owned(), "mode".to_owned()];
+    let plan = match reorder_call_arguments(
+        source_name,
+        args,
+        argument_names,
+        false,
+        &names,
+        &[true, true],
+        None,
+    ) {
+        Ok(plan) => plan,
+        Err(error) => return Some(Err(error)),
+    };
+    if plan.ordered.len() != 2 {
+        return Some(Err(SemanticError {
+            code: "E_NUMERIC_ROUND_ARITY",
+            message: "decimal::to_int_round expects value and mode".into(),
+        }));
+    }
+    let mut value = match analyze_expr_expected(
+        context,
+        &plan.ordered[0],
+        vars,
+        Some(&Type::Decimal),
+    ) {
+        Ok(value) => value,
+        Err(error) => return Some(Err(error)),
+    };
+    if let Err(error) = ensure_assignable_and_coerce(&Type::Decimal, &mut value) {
+        return Some(Err(error));
+    }
+    let Some((rounding, tag)) = numeric_rounding_mode(&plan.ordered[1]) else {
+        return Some(Err(SemanticError {
+            code: "E_NUMERIC_ROUNDING_MODE",
+            message: format!(
+                "decimal::to_int_round mode must be one of {}",
+                V1_ROUNDING_PATHS.join(", ")
+            ),
+        }));
+    };
+    if let Ok(Some(crate::checked_arithmetic::ConstantNumeric::Decimal(constant))) =
+        crate::checked_arithmetic::evaluate(&value)
+    {
+        let integer = match constant.decimal_to_int_round(rounding) {
+            Ok(integer) => integer,
+            Err(error) => {
+                let error = crate::checked_arithmetic::ConstantNumericError::Numeric(error);
+                return Some(Err(SemanticError {
+                    code: error.code(),
+                    message: error.to_string(),
+                }));
+            }
+        };
+        return Some(Ok(TypedExpr {
+            expr: ExprKind::IntLiteral(integer),
+            ty: Type::Int,
+        }));
+    }
+    let mode = TypedExpr {
+        expr: ExprKind::IntLiteral(BigInt::from(tag)),
+        ty: Type::Int,
+    };
+    Some(Ok(retain_named_call_evaluation_order(
+        TypedExpr {
+            expr: ExprKind::Call {
+                name: DECIMAL_TO_INT_ROUND_INTRINSIC.to_owned(),
+                args: vec![value, mode],
+            },
+            ty: Type::Int,
+        },
+        &plan,
+    )))
+}
+
+fn analyze_numeric_round_method_call(
+    context: &SemanticContext,
+    source_name: &str,
+    args: &[Expr],
+    argument_names: Option<&[String]>,
+    implicit_receiver: bool,
+    vars: &mut HashMap<String, Type>,
+) -> Option<Result<TypedExpr, SemanticError>> {
+    if !implicit_receiver
+        || args.is_empty()
+        || !matches!(source_name, "div_round" | "ratio_round")
+    {
         return None;
     }
     let receiver = match analyze_expr(context, &args[0], vars) {
         Ok(receiver) => receiver,
         Err(error) => return Some(Err(error)),
     };
-    if resolve_struct_type(&receiver.ty) != Type::Quantity {
-        return Some(Err(SemanticError {
-            code: "E_AMOUNT_DIV_ROUND_RECEIVER",
-            message: format!(
-                "Amount.div_round requires an Amount receiver, found `{}`",
-                type_name(&receiver.ty)
-            ),
-        }));
-    }
+    let receiver_type = resolve_struct_type(&receiver.ty);
+    let (divisor_type, result_type, intrinsic, display_name) = match (source_name, &receiver_type) {
+        ("div_round", Type::Decimal) => (
+            Type::Decimal,
+            Type::Decimal,
+            DECIMAL_DIV_ROUND_INTRINSIC,
+            "decimal.div_round",
+        ),
+        ("div_round", Type::Quantity) => (
+            Type::Decimal,
+            Type::Quantity,
+            QUANTITY_DIV_ROUND_INTRINSIC,
+            "quantity.div_round",
+        ),
+        ("ratio_round", Type::Quantity) => (
+            Type::Quantity,
+            Type::Decimal,
+            QUANTITY_RATIO_ROUND_INTRINSIC,
+            "quantity.ratio_round",
+        ),
+        _ => {
+            return Some(Err(SemanticError {
+                code: "E_NUMERIC_ROUND_RECEIVER",
+                message: format!(
+                    "{source_name} is not defined for receiver type `{}`",
+                    type_name(&receiver_type)
+                ),
+            }));
+        }
+    };
 
     let parameter_names = ["divisor", "scale", "mode"]
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let plan = match reorder_call_arguments(
-        "Amount.div_round",
+        display_name,
         args,
         argument_names,
         true,
         &parameter_names,
         &[true, true, true],
-        Some("rounded Amount division requires explicit `divisor`, `scale`, and `mode` names"),
+        Some("rounded numeric division requires explicit `divisor`, `scale`, and `mode` names"),
     ) {
         Ok(plan) => plan,
         Err(error) => return Some(Err(error)),
     };
     if plan.ordered.len() != 4 {
         return Some(Err(SemanticError {
-            code: "E_AMOUNT_DIV_ROUND_ARITY",
+            code: "E_NUMERIC_ROUND_ARITY",
             message: format!(
-                "Amount.div_round expects divisor, scale, and mode, got {} argument(s)",
+                "{display_name} expects divisor, scale, and mode, got {} argument(s)",
                 plan.ordered.len().saturating_sub(1)
             ),
         }));
@@ -10228,12 +10414,12 @@ fn analyze_amount_method_call(
                     context,
                     &plan.ordered[index],
                     vars,
-                    Some(&Type::Quantity),
+                    Some(&divisor_type),
                 ) {
                     Ok(divisor) => divisor,
                     Err(error) => return Some(Err(error)),
                 };
-                if let Err(error) = ensure_assignable_and_coerce(&Type::Quantity, &mut divisor) {
+                if let Err(error) = ensure_assignable_and_coerce(&divisor_type, &mut divisor) {
                     return Some(Err(error));
                 }
                 divisor
@@ -10244,10 +10430,13 @@ fn analyze_amount_method_call(
                 Err(error) => return Some(Err(error)),
             },
             3 => {
-                let Some((mode, mode_tag)) = amount_rounding_mode(&plan.ordered[index]) else {
+                let Some((mode, mode_tag)) = numeric_rounding_mode(&plan.ordered[index]) else {
                     return Some(Err(SemanticError {
-                        code: "E_AMOUNT_ROUNDING_MODE",
-                        message: "Amount.div_round mode must be exactly `Rounding::floor`, `Rounding::ceil`, or `Rounding::nearest_even`".into(),
+                        code: "E_NUMERIC_ROUNDING_MODE",
+                        message: format!(
+                            "{display_name} mode must be one of {}",
+                            V1_ROUNDING_PATHS.join(", ")
+                        ),
                     }));
                 };
                 rounding_mode = Some(mode);
@@ -10256,7 +10445,7 @@ fn analyze_amount_method_call(
                     ty: Type::Int,
                 }
             }
-            _ => unreachable!("Amount.div_round has exactly four ABI slots"),
+            _ => unreachable!("rounded division has exactly four ABI slots"),
         };
         typed_slots[index] = Some(typed);
     }
@@ -10266,7 +10455,7 @@ fn analyze_amount_method_call(
         .map(|(index, argument)| {
             argument.ok_or_else(|| SemanticError {
                 code: "E_MALFORMED_CALL",
-                message: format!("Amount.div_round did not analyze argument slot {index}"),
+                message: format!("{display_name} did not analyze argument slot {index}"),
             })
         })
         .collect::<Result<Vec<_>, _>>()
@@ -10278,67 +10467,93 @@ fn analyze_amount_method_call(
     let divisor = typed.remove(0);
     let scale = typed.remove(0);
     let mode = typed.remove(0);
-    if resolve_struct_type(&scale.ty) != Type::Int {
-        return Some(Err(SemanticError {
-            code: "E_AMOUNT_DIV_ROUND_SCALE_TYPE",
-            message: "Amount.div_round scale must be i64".into(),
-        }));
-    }
-    if let ExprKind::IntLiteral(scale) = scale.kind()
-        && !scale.try_to_u64().is_some_and(|scale| scale <= 28)
+    if let ExprKind::IntLiteral(scale_value) = scale.kind()
+        && !scale_value
+            .try_to_u64()
+            .is_some_and(|scale_value| scale_value <= 28)
     {
         return Some(Err(SemanticError {
-            code: "E_AMOUNT_DIV_ROUND_SCALE",
-            message: format!("Amount.div_round scale {scale} is outside 0..=28"),
+            code: "E_INVALID_SCALE",
+            message: format!("rounded numeric scale {scale_value} is outside 0..=28"),
         }));
     }
     let rounding_mode = rounding_mode.expect("validated rounding mode slot");
-    if matches!(divisor.kind(), ExprKind::DecimalLiteral { value, .. } if value.is_zero()) {
+    if numeric_literal_is_zero(&divisor) {
         return Some(Err(SemanticError {
-            code: "E_AMOUNT_CONSTANT_ARITHMETIC",
-            message: "Amount division by literal zero is invalid".into(),
+            code: "E_DIVISION_BY_ZERO",
+            message: format!("{display_name} divisor must not be zero"),
         }));
     }
 
-    if let (
-        ExprKind::DecimalLiteral {
-            value: dividend, ..
-        },
-        ExprKind::DecimalLiteral { value: divisor, .. },
-        ExprKind::IntLiteral(scale),
-    ) = (receiver.kind(), divisor.kind(), scale.kind())
-    {
-        let scale = u32::try_from(
-            scale
-                .try_to_u64()
-                .expect("literal scale was checked in 0..=28"),
-        )
-        .expect("literal scale was checked in 0..=28");
-        let value = match dividend.checked_amount_div_round(divisor, scale, rounding_mode) {
+    let constant_scale = match scale.kind() {
+        ExprKind::IntLiteral(scale) => scale.try_to_u64().and_then(|scale| u32::try_from(scale).ok()),
+        _ => None,
+    };
+    if let Some(output_scale) = constant_scale {
+        use crate::checked_arithmetic::{ConstantNumeric, ConstantNumericError};
+        let lhs = match crate::checked_arithmetic::evaluate(&receiver) {
             Ok(value) => value,
-            Err(error) => {
-                return Some(Err(SemanticError {
-                    code: "E_AMOUNT_CONSTANT_ARITHMETIC",
-                    message: format!("invalid rounded Amount division: {error}"),
-                }));
+            Err(error) => return Some(Err(SemanticError { code: error.code(), message: error.to_string() })),
+        };
+        let rhs = match crate::checked_arithmetic::evaluate(&divisor) {
+            Ok(value) => value,
+            Err(error) => return Some(Err(SemanticError { code: error.code(), message: error.to_string() })),
+        };
+        let folded = match (intrinsic, lhs, rhs) {
+            (DECIMAL_DIV_ROUND_INTRINSIC, Some(ConstantNumeric::Decimal(lhs)), Some(ConstantNumeric::Decimal(rhs))) => {
+                lhs.try_decimal_div_round(&rhs, output_scale, rounding_mode).map(ConstantNumeric::Decimal)
             }
+            (QUANTITY_DIV_ROUND_INTRINSIC, Some(ConstantNumeric::Quantity(lhs)), Some(ConstantNumeric::Decimal(rhs))) => {
+                lhs.try_div_decimal_round(&rhs, output_scale, rounding_mode).map(ConstantNumeric::Quantity)
+            }
+            (QUANTITY_RATIO_ROUND_INTRINSIC, Some(ConstantNumeric::Quantity(lhs)), Some(ConstantNumeric::Quantity(rhs))) => {
+                lhs.try_ratio_round(&rhs, output_scale, rounding_mode).map(ConstantNumeric::Decimal)
+            }
+            (_, None, _) | (_, _, None) => {
+                return Some(Ok(retain_named_call_evaluation_order(
+                    TypedExpr {
+                        expr: ExprKind::Call {
+                            name: intrinsic.to_owned(),
+                            args: vec![receiver, divisor, scale, mode],
+                        },
+                        ty: result_type,
+                    },
+                    &plan,
+                )));
+            }
+            _ => return Some(Err(SemanticError {
+                code: "E_INTERNAL_NUMERIC_MATRIX",
+                message: "rounded numeric operands violate their typed operator matrix".into(),
+            })),
+        };
+        let folded = match folded {
+            Ok(folded) => folded,
+            Err(error) => {
+                let error = ConstantNumericError::Numeric(error);
+                return Some(Err(SemanticError { code: error.code(), message: error.to_string() }));
+            }
+        };
+        let value = match folded {
+            ConstantNumeric::Decimal(value) => value,
+            ConstantNumeric::Quantity(value) => value.into_numeric(),
+            ConstantNumeric::Int(_) => unreachable!("rounded division never returns int"),
         };
         return Some(Ok(TypedExpr {
             expr: ExprKind::DecimalLiteral {
-                spelling: format!("{value}amt"),
+                spelling: value.to_string(),
                 value,
             },
-            ty: Type::Quantity,
+            ty: result_type,
         }));
     }
 
     Some(Ok(retain_named_call_evaluation_order(
         TypedExpr {
             expr: ExprKind::Call {
-                name: AMOUNT_DIV_ROUND_INTRINSIC.to_owned(),
+                name: intrinsic.to_owned(),
                 args: vec![receiver, divisor, scale, mode],
             },
-            ty: Type::Quantity,
+            ty: result_type,
         },
         &plan,
     )))
@@ -10747,10 +10962,7 @@ fn analyze_expr_expected_inner(
                 ty: Type::Json,
             })
         }
-        Expr::IntLiteral(n) => Ok(TypedExpr {
-            expr: ExprKind::IntLiteral(n.clone()),
-            ty: Type::Int,
-        }),
+        Expr::IntLiteral(n) => typed_int_literal(n),
         Expr::DecimalLiteral(spelling) => {
             let value = parse_decimal_literal(spelling)?;
             Ok(TypedExpr {
@@ -11271,7 +11483,17 @@ fn analyze_expr_expected_inner(
             ) {
                 return result;
             }
-            if let Some(result) = analyze_amount_method_call(
+            if let Some(result) = analyze_decimal_to_int_round_call(
+                context,
+                &name,
+                args,
+                argument_names.as_deref(),
+                *implicit_receiver,
+                vars,
+            ) {
+                return result;
+            }
+            if let Some(result) = analyze_numeric_round_method_call(
                 context,
                 &name,
                 args,
@@ -11379,7 +11601,7 @@ fn analyze_expr_expected_inner(
                     | "result::ok"
                     | "decimal::from_int"
                     | "decimal::to_int_exact"
-                    | "decimal::to_int_trunc"
+                    | "quantity::try_from_int"
                     | "quantity::try_from_decimal"
                     | "decimal::from_quantity" => &["value"],
                     "result::err" => &["error"],
@@ -11761,10 +11983,7 @@ fn analyze_const_expr_inner(
         Expr::Source { .. } | Expr::Resolved { .. } => {
             unreachable!("kind() strips AST and resolved-HIR provenance wrappers")
         }
-        Expr::IntLiteral(n) => Ok(TypedExpr {
-            expr: ExprKind::IntLiteral(n.clone()),
-            ty: Type::Int,
-        }),
+        Expr::IntLiteral(n) => typed_int_literal(n),
         Expr::DecimalLiteral(spelling) => {
             let value = parse_decimal_literal(spelling)?;
             Ok(TypedExpr {
@@ -12557,10 +12776,6 @@ impl TypedExpr {
     pub const fn kind_mut(&mut self) -> &mut ExprKind {
         &mut self.expr
     }
-
-    fn into_kind(self) -> ExprKind {
-        self.expr
-    }
 }
 
 impl TypedStatement {
@@ -12603,6 +12818,7 @@ fn expr_mutates_map(expr: &TypedExpr, map_name: &str) -> bool {
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -12888,6 +13104,7 @@ fn collect_state_accesses_expr(
         }
         ExprKind::Unary { expr: inner, .. }
         | ExprKind::NumericCast { expr: inner }
+        | ExprKind::NumericTryCast { expr: inner }
         | ExprKind::OptionSome { value: inner }
         | ExprKind::ResultOk { value: inner }
         | ExprKind::ResultErr { error: inner }
@@ -13110,6 +13327,7 @@ fn collect_calls_in_expr(
         }
         ExprKind::Unary { expr: inner, .. }
         | ExprKind::NumericCast { expr: inner }
+        | ExprKind::NumericTryCast { expr: inner }
         | ExprKind::OptionSome { value: inner }
         | ExprKind::ResultOk { value: inner }
         | ExprKind::ResultErr { error: inner }
@@ -13608,6 +13826,7 @@ fn evaluate_definite_init_expr(
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -14145,6 +14364,7 @@ fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -14233,6 +14453,7 @@ fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -14325,6 +14546,7 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::NumericCast { expr }
+        | ExprKind::NumericTryCast { expr }
         | ExprKind::OptionSome { value: expr }
         | ExprKind::ResultOk { value: expr }
         | ExprKind::ResultErr { error: expr }
@@ -14489,11 +14711,11 @@ mod tests {
 
     #[test]
     fn list_literals_infer_exact_or_contextual_capacity() {
-        let exact = function_tail("fn exact() -> List<i64, 2> { [1, 2] }");
+        let exact = function_tail("fn exact() -> List<int, 2> { [1, 2] }");
         assert_eq!(exact.ty, Type::List(Box::new(Type::Int), 2));
         assert!(matches!(exact.expr, ExprKind::List(ref items) if items.len() == 2));
 
-        let contextual = function_tail("fn wider() -> List<i64, 8> { [1, 2] }");
+        let contextual = function_tail("fn wider() -> List<int, 8> { [1, 2] }");
         assert_eq!(contextual.ty, Type::List(Box::new(Type::Int), 8));
 
         let inferred_program =
@@ -14508,7 +14730,7 @@ mod tests {
 
     #[test]
     fn empty_and_oversized_list_literals_fail_closed() {
-        let empty = function_tail("fn empty() -> List<i64, 4> { [] }");
+        let empty = function_tail("fn empty() -> List<int, 4> { [] }");
         assert_eq!(empty.ty, Type::List(Box::new(Type::Int), 4));
 
         let error = analyze_error("fn missing_context() { let values = []; }");
@@ -14524,10 +14746,10 @@ mod tests {
         for source in [
             "struct Empty {} fn typed() -> List<Empty, 1> { [Empty {}] }",
             "struct Empty {} fn inferred() { let values = [Empty {}]; }",
-            "struct Empty {} fn contextual() { let values: List<Empty, 2> = []; }",
-            "struct Empty {} struct Pair { left: Empty, right: Empty } fn parameter(values: List<Pair, 1>) { let _values = values; }",
-            "struct Empty {} fn nested(value: Option<List<Empty, 1>>) { let _value = value; }",
-            "struct Empty {} struct Holder { invalid: List<Empty, 1> } fn unused() { return; }",
+            "struct Empty {} fn contextual() { let List<Empty, 2> values = []; }",
+            "struct Empty {} struct Pair { Empty left, Empty right } fn parameter(List<Pair, 1> values) { let _values = values; }",
+            "struct Empty {} fn nested(Option<List<Empty, 1>> value) { let _value = value; }",
+            "struct Empty {} struct Holder { List<Empty, 1> invalid } fn unused() { return; }",
             "struct Empty {} fn comprehension() { let source = [1]; let values = [Empty {} for item in source]; }",
         ] {
             let error = analyze_error(source);
@@ -14538,7 +14760,7 @@ mod tests {
 
     #[test]
     fn contextual_empty_lists_and_one_word_sum_handles_remain_valid() {
-        let ordinary = function_tail("fn empty() -> List<i64, 4> { [] }");
+        let ordinary = function_tail("fn empty() -> List<int, 4> { [] }");
         assert_eq!(ordinary.ty, Type::List(Box::new(Type::Int), 4));
 
         let sum_handle = function_tail(
@@ -14556,7 +14778,7 @@ mod tests {
         );
 
         let forward = function_tail(
-            "struct Holder { values: List<Value, 1> } struct Value { item: i64 } fn values() -> List<Value, 1> { [Value { item: 1 }] }",
+            "struct Holder { List<Value, 1> values } struct Value { int item } fn values() -> List<Value, 1> { [Value { item: 1 }] }",
         );
         assert!(matches!(forward.ty, Type::List(_, 1)));
     }
@@ -14564,7 +14786,7 @@ mod tests {
     #[test]
     fn native_json_rejects_decoded_duplicate_keys_and_oversized_nodes() {
         let error = analyze_error(
-            r#"fn duplicate(owner: AccountId) -> Json {
+            r#"fn duplicate(AccountId owner) -> Json {
                 json { owner: owner, "owner": owner }
             }"#,
         );
@@ -14592,13 +14814,13 @@ mod tests {
     #[test]
     fn native_json_requires_explicit_result_and_struct_conversion() {
         let result = analyze_error(
-            "fn invalid(value: Result<i64, i64>) -> Json { json { value: value } }",
+            "fn invalid(Result<int, int> value) -> Json { json { value: value } }",
         );
         assert_eq!(result.code, "E_JSON_VALUE_TYPE");
         assert!(result.message.contains("Result"), "{}", result.message);
 
         let structure = analyze_error(
-            "struct Payload { value: i64 } fn invalid(value: Payload) -> Json { json { value: value } }",
+            "struct Payload { int value } fn invalid(Payload value) -> Json { json { value: value } }",
         );
         assert_eq!(structure.code, "E_JSON_VALUE_TYPE");
         assert!(
@@ -14634,7 +14856,7 @@ mod tests {
     #[test]
     fn list_comprehensions_preserve_the_proven_source_maximum() {
         let expression = function_tail(
-            "fn doubled() -> List<i64, 8> { let source: List<i64, 8> = [1, 2]; [value * 2 for value in source if value > 0] }",
+            "fn doubled() -> List<int, 8> { let List<int, 8> source = [1, 2]; [value * 2 for value in source if value > 0] }",
         );
         assert_eq!(expression.ty, Type::List(Box::new(Type::Int), 8));
         assert!(matches!(
@@ -14643,7 +14865,7 @@ mod tests {
         ));
 
         let error = analyze_error(
-            "fn too_small() -> List<i64, 4> { let source: List<i64, 8> = [1, 2]; [value for value in source if false] }",
+            "fn too_small() -> List<int, 4> { let List<int, 8> source = [1, 2]; [value for value in source if false] }",
         );
         assert_eq!(error.code, "E_LIST_COMPREHENSION_CAPACITY");
         assert!(error.message.contains("filters do not reduce"));
@@ -14652,16 +14874,16 @@ mod tests {
     #[test]
     fn lists_allow_nested_structures_but_reject_resource_handles() {
         let nested = function_tail(
-            "struct Pair { left: i64, right: bool } fn nested() -> List<List<Pair, 2>, 2> { [[Pair { left: 1, right: true }]] }",
+            "struct Pair { int left, bool right } fn nested() -> List<List<Pair, 2>, 2> { [[Pair { left: 1, right: true }]] }",
         );
         assert!(matches!(nested.ty, Type::List(_, 2)));
 
         let error =
-            analyze_error("fn resources(value: List<Option<StateMap<i64, i64>>, 2>) { return; }");
+            analyze_error("fn resources(List<Option<StateMap<int, int>>, 2> value) { return; }");
         assert_eq!(error.code, "E_LIST_RESOURCE_ELEMENT");
 
         let secret_source =
-            "fn resources(value: List<Option<Secret<i64>>, 2>) { let ignored = value; }";
+            "fn resources(List<Option<Secret<int>>, 2> value) { let ignored = value; }";
         let secret_program = parse(secret_source).expect("secret List source should parse");
         let error = SemanticContext::with_zk_enabled(true)
             .analyze(&secret_program)
@@ -14672,15 +14894,15 @@ mod tests {
     #[test]
     fn every_list_method_has_a_typed_safe_surface() {
         let program = parse(
-            "fn methods() -> List<(i64, i64), 4> {\
-                 var values: List<i64, 4> = [1, 2];\
+            "fn methods() -> List<(int, int), 4> {\
+                 var List<int, 4> values = [1, 2];\
                  let length = values.len();\
-                 let first: Option<i64> = values.get(0);\
+                 let Option<int> first = values.get(0);\
                  let changed = values.try_set(index: 0, value: 3);\
                  let pushed = values.try_push(4);\
                  let has_three = values.contains(3);\
-                 let removed: Option<i64> = values.pop();\
-                 let head: List<i64, 2> = values.take(2);\
+                 let Option<int> removed = values.pop();\
+                 let List<int, 2> head = values.take(2);\
                  values.enumerate()\
              }",
         )
@@ -14693,19 +14915,19 @@ mod tests {
         );
 
         let error =
-            analyze_error("fn immutable() { let values: List<i64, 2> = [1]; values.try_push(2); }");
+            analyze_error("fn immutable() { let List<int, 2> values = [1]; values.try_push(2); }");
         assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
 
         let error = analyze_error("fn temporary() { let pushed = [1].try_push(2); }");
         assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
 
         let error = analyze_error(
-            "fn ambiguous() { var values: List<i64, 2> = [1]; values.try_set(0, 1); }",
+            "fn ambiguous() { var List<int, 2> values = [1]; values.try_set(0, 1); }",
         );
         assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
 
         analyze(&parse(
-            "fn distinct() { var values: List<string, 2> = [\"a\"]; values.try_set(0, \"b\"); }",
+            "fn distinct() { var List<string, 2> values = [\"a\"]; values.try_set(0, \"b\"); }",
         ).expect("parse distinct List.try_set types"))
         .expect("distinct index/value types may remain positional");
     }
@@ -14715,7 +14937,7 @@ mod tests {
         let source = crate::source::SourceFile::new(
             crate::source::SourceId(41),
             "mutable-list.ko",
-            "seiyaku Lists { view fn main() { var values: List<i64, 2> = [1]; values.try_push(2); } }",
+            "seiyaku Lists { view fn main() { var List<int, 2> values = [1]; values.try_push(2); } }",
         );
         let (spanned, _) =
             crate::parser::parse_source_spanned(&source, crate::source::FrontendBudget::v1())
@@ -14726,13 +14948,13 @@ mod tests {
     #[test]
     fn list_take_accepts_zero_and_rejects_limits_above_source_capacity() {
         let zero = function_tail(
-            "fn zero() -> List<i64, 1> { let values: List<i64, 4> = [1, 2]; values.take(0) }",
+            "fn zero() -> List<int, 1> { let List<int, 4> values = [1, 2]; values.take(0) }",
         );
         assert_eq!(zero.ty, Type::List(Box::new(Type::Int), 1));
 
         for (source, code) in [
             (
-                "fn above_source() { let values: List<i64, 1> = [1]; let head = values.take(2); }",
+                "fn above_source() { let List<int, 1> values = [1]; let head = values.take(2); }",
                 "E_LIST_TAKE_LIMIT",
             ),
             (
@@ -14754,12 +14976,12 @@ mod tests {
         let expression = function_tail(
             r#"
                 struct Envelope {
-                    labels: List<Option<i64>, 2>,
-                    outcome: Result<(i64, bool), i64>,
+                    List<Option<int>, 2>,
+                    outcome: Result<(int, bool), int> labels,
                 }
 
                 fn contains_nested() -> bool {
-                    let values: List<Envelope, 2> = [
+                    let List<Envelope, 2> values = [
                         Envelope {
                             labels: [Option::none, Option::some(7)],
                             outcome: Result::ok((9, true)),
@@ -14793,224 +15015,245 @@ mod tests {
     }
 
     #[test]
-    fn amount_literals_are_typed_and_canonicalized_without_losing_spelling() {
-        for (spelling, mantissa, scale) in [
-            ("10amt", "10", 0),
-            ("1.250_0amt", "125", 2),
-            ("0.000amt", "0", 0),
-            ("1_000.000_001amt", "1000000001", 6),
+    fn decimal_literals_are_exact_canonical_and_preserve_source_spelling() {
+        for (spelling, canonical) in [
+            ("0.0", "0"),
+            ("1.250_0", "1.25"),
+            ("1e3", "1000"),
+            ("1.5e-3", "0.0015"),
+            ("12.00e+2", "1200"),
         ] {
-            let expr = returned_expr(&format!("fn amount() -> Amount {{ return {spelling}; }}"));
-            assert_eq!(expr.ty, Type::Quantity, "`{spelling}`");
+            let expression = returned_expr(&format!(
+                "fn value() -> decimal {{ return {spelling}; }}"
+            ));
             let ExprKind::DecimalLiteral {
                 value,
                 spelling: retained,
-            } = expr.expr
+            } = expression.expr
             else {
-                panic!("expected typed Amount literal for `{spelling}`");
+                panic!("expected exact decimal literal for {spelling}");
             };
             assert_eq!(retained, spelling);
-            assert_eq!(value.mantissa().to_string(), mantissa, "`{spelling}`");
-            assert_eq!(value.scale(), scale, "`{spelling}`");
-            value.validate_amount().expect("canonical Amount payload");
+            assert_eq!(value.to_string(), canonical);
         }
     }
 
     #[test]
-    fn amount_literal_accepts_scale_twenty_eight_and_rejects_twenty_nine() {
-        let scale_28 = format!("0.{}1amt", "0".repeat(27));
-        let expr = returned_expr(&format!("fn amount() -> Amount {{ return {scale_28}; }}"));
-        let ExprKind::DecimalLiteral { value, .. } = expr.expr else {
-            panic!("expected Amount literal");
+    fn decimal_literal_normalizes_before_enforcing_scale_twenty_eight() {
+        let removable = format!("0.{}10", "0".repeat(27));
+        let expression = returned_expr(&format!(
+            "fn value() -> decimal {{ return {removable}; }}"
+        ));
+        let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
+            panic!("expected normalized decimal literal");
         };
+        assert_eq!(value.mantissa().to_string(), "1");
         assert_eq!(value.scale(), 28);
 
-        let scale_29 = format!("0.{}1amt", "0".repeat(28));
-        let error = analyze_error(&format!("fn amount() -> Amount {{ return {scale_29}; }}"));
-        assert_eq!(error.code, "E_AMOUNT_SCALE_OVERFLOW");
-
-        let trailing_zeros = format!("1.{}amt", "0".repeat(40));
-        let expr = returned_expr(&format!(
-            "fn amount() -> Amount {{ return {trailing_zeros}; }}"
-        ));
-        let ExprKind::DecimalLiteral { value, spelling } = expr.expr else {
-            panic!("expected canonicalized Amount literal");
+        let zero = format!("0.{}", "0".repeat(80));
+        let expression = returned_expr(&format!("fn value() -> decimal {{ return {zero}; }}"));
+        let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
+            panic!("expected canonical zero");
         };
-        assert_eq!(spelling, trailing_zeros, "source spelling remains stable");
-        assert_eq!(value.mantissa().to_string(), "1");
+        assert!(value.is_zero());
         assert_eq!(value.scale(), 0);
 
-        let significant_29 = format!("0.{}amt", "1".repeat(29));
+        let nonremovable = format!("0.{}1", "0".repeat(28));
         let error = analyze_error(&format!(
-            "fn amount() -> Amount {{ return {significant_29}; }}"
+            "fn value() -> decimal {{ return {nonremovable}; }}"
         ));
-        assert_eq!(error.code, "E_AMOUNT_SCALE_OVERFLOW");
-        assert!(error.message.contains("canonical scale 29"));
+        assert_eq!(error.code, "E_DECIMAL_SCALE_OVERFLOW");
     }
 
     #[test]
-    fn amount_literal_enforces_the_bounded_mantissa() {
-        let within_bound = format!("{}amt", "6".repeat(154));
-        returned_expr(&format!(
-            "fn amount() -> Amount {{ return {within_bound}; }}"
-        ));
-
-        let overflow = format!("{}amt", "9".repeat(155));
-        let error = analyze_error(&format!("fn amount() -> Amount {{ return {overflow}; }}"));
-        assert_eq!(error.code, "E_AMOUNT_MANTISSA_OVERFLOW");
-    }
-
-    #[test]
-    fn amount_literal_rejects_adversarial_underscore_placement() {
-        for spelling in ["1__0amt", "1_.0amt", "1._0amt", "1.0_amt"] {
-            let error = analyze_error(&format!("fn amount() -> Amount {{ return {spelling}; }}"));
-            assert_eq!(error.code, "E_AMOUNT_MALFORMED", "{spelling}");
-        }
-    }
-
-    #[test]
-    fn amount_literal_is_nominally_distinct_from_u128() {
-        let error = analyze_error(
-            "fn amount() -> Amount { return 10u128; } fn integer() -> u128 { return 10amt; }",
-        );
-        assert!(error.message.contains("type"), "{}", error.message);
-
-        let expr = returned_expr("fn integer() -> u128 { return 10u128; }");
-        assert_eq!(expr.ty, Type::Int);
-        assert!(matches!(expr.expr, ExprKind::IntLiteral(ref raw) if raw == "10"));
-    }
-
-    #[test]
-    fn exact_constant_amount_arithmetic_folds_and_rejects_every_failure_class() {
-        for (source, expected) in [
-            ("1.20amt + 2.3amt", "3.5"),
-            ("5amt - 1.25amt", "3.75"),
-            ("1.5amt * 2amt", "3"),
-            ("1amt / 8amt", "0.125"),
-        ] {
-            let expression =
-                returned_expr(&format!("fn amount() -> Amount {{ return {source}; }}"));
-            let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
-                panic!("constant Amount expression `{source}` must fold");
-            };
-            assert_eq!(value.to_string(), expected, "{source}");
+    fn int_literal_accepts_both_signed_512_bit_endpoints_and_rejects_neighbors() {
+        fn decimal_plus_one(value: &str) -> String {
+            let mut digits = value.as_bytes().to_vec();
+            let mut carry = true;
+            for digit in digits.iter_mut().rev() {
+                if !carry {
+                    break;
+                }
+                if *digit == b'9' {
+                    *digit = b'0';
+                } else {
+                    *digit += 1;
+                    carry = false;
+                }
+            }
+            if carry {
+                digits.insert(0, b'1');
+            }
+            String::from_utf8(digits).expect("decimal digits")
         }
 
-        let mantissa_overflow = format!("{}amt * 2amt", "9".repeat(154));
+        let mut maximum_bytes = vec![0xff; 64];
+        maximum_bytes[63] = 0x7f;
+        let maximum = BigInt::from_twos_bytes(&maximum_bytes).expect("signed 512-bit maximum");
+        let mut minimum_bytes = vec![0; 64];
+        minimum_bytes[63] = 0x80;
+        let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("signed 512-bit minimum");
+
+        let maximum_expression = returned_expr(&format!(
+            "fn value() -> int {{ return {maximum}; }}"
+        ));
+        assert!(matches!(maximum_expression.expr, ExprKind::IntLiteral(value) if value == maximum));
+        let minimum_expression = returned_expr(&format!(
+            "fn value() -> int {{ return {minimum}; }}"
+        ));
+        assert!(matches!(minimum_expression.expr, ExprKind::IntLiteral(value) if value == minimum));
+
+        let above = decimal_plus_one(&maximum.to_string());
+        let below_magnitude = decimal_plus_one(minimum.to_string().trim_start_matches('-'));
         for source in [
-            "1amt - 2amt".to_owned(),
-            "1amt / 0amt".to_owned(),
-            "1amt / 3amt".to_owned(),
-            "0.000000000000001amt * 0.000000000000001amt".to_owned(),
-            mantissa_overflow,
+            format!("fn value() -> int {{ return {above}; }}"),
+            format!("fn value() -> int {{ return -{below_magnitude}; }}"),
         ] {
-            let error = analyze_error(&format!("fn amount() -> Amount {{ return {source}; }}"));
-            assert_eq!(
-                error.code, "E_AMOUNT_CONSTANT_ARITHMETIC",
-                "{source}: {}",
-                error.message
-            );
+            let error = parse(&source).expect_err("neighbor outside signed 512-bit range");
+            assert!(error.contains("512") || error.contains("range"), "{error}");
         }
     }
 
     #[test]
-    fn amount_div_round_requires_named_exactly_typed_arguments() {
-        let expr = returned_expr(
-            "fn rounded(value: Amount, divisor: Amount, scale: i64) -> Amount { \
+    fn decimal_literal_accepts_signed_minimum_after_combining_unary_minus() {
+        let mut minimum_bytes = vec![0; MAX_MANTISSA_BYTES];
+        minimum_bytes[MAX_MANTISSA_BYTES - 1] = 0x80;
+        let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("signed 512-bit minimum");
+        let magnitude = minimum.to_string().trim_start_matches('-').to_owned();
+
+        let expression = returned_expr(&format!(
+            "fn value() -> decimal {{ return -{magnitude}.0; }}"
+        ));
+        assert!(matches!(
+            expression.expr,
+            ExprKind::DecimalLiteral { ref value, .. }
+                if value.mantissa() == &minimum && value.scale() == 0
+        ));
+
+        let error = analyze_error(&format!(
+            "fn value() -> decimal {{ return {magnitude}.0; }}"
+        ));
+        assert_eq!(error.code, "E_DECIMAL_MANTISSA_OVERFLOW");
+    }
+
+    #[test]
+    fn decimal_literal_ignores_leading_zeroes_before_width_checks() {
+        let expression = returned_expr(&format!(
+            "fn value() -> decimal {{ return {}1e1; }}",
+            "0".repeat(1_000)
+        ));
+        assert!(matches!(
+            expression.expr,
+            ExprKind::DecimalLiteral { ref value, .. } if value.to_string() == "10"
+        ));
+    }
+
+    #[test]
+    fn exact_constant_numeric_arithmetic_uses_runtime_primitives() {
+        for (source, expected) in [
+            ("1.20 + 2.3", "3.5"),
+            ("5.0 - 1.25", "3.75"),
+            ("1.5 * 2.0", "3"),
+            ("1.0 / 8.0", "0.125"),
+        ] {
+            let expression = returned_expr(&format!(
+                "fn value() -> decimal {{ return {source}; }}"
+            ));
+            let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
+                panic!("constant decimal expression {source} must fold");
+            };
+            assert_eq!(value.to_string(), expected);
+        }
+
+        for (source, expected_code) in [
+            ("fn value() -> quantity { return 1 - 2; }", "E_QUANTITY_UNDERFLOW"),
+            ("fn value() -> decimal { return 1.0 / 0.0; }", "E_DIVISION_BY_ZERO"),
+            ("fn value() -> decimal { return 1.0 / 3.0; }", "E_REPEATING_DECIMAL"),
+            (
+                "fn value() -> decimal { return 0.000000000000001 * 0.000000000000001; }",
+                "E_DECIMAL_SCALE_OVERFLOW",
+            ),
+        ] {
+            let error = analyze_error(source);
+            assert_eq!(error.code, expected_code, "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn rounded_decimal_division_supports_every_v1_rounding_mode() {
+        for (dividend, mode, expected) in [
+            ("1.0", "toward_zero", "0.12"),
+            ("1.0", "away_from_zero", "0.13"),
+            ("-1.0", "floor", "-0.13"),
+            ("-1.0", "ceil", "-0.12"),
+            ("1.0", "nearest_even", "0.12"),
+            ("1.0", "nearest_away", "0.13"),
+            ("1.0", "nearest_toward_zero", "0.12"),
+        ] {
+            let expression = returned_expr(&format!(
+                "fn value() -> decimal {{ return {dividend}.div_round(\
+                    divisor: 8.0, scale: 2, mode: Rounding::{mode}); }}"
+            ));
+            let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
+                panic!("constant rounded division must fold");
+            };
+            assert_eq!(value.to_string(), expected, "mode={mode}");
+        }
+
+        let expression = returned_expr(
+            "fn rounded(quantity value, decimal divisor, int scale) -> quantity { \
                 return value.div_round( \
-                    mode: Rounding::nearest_even, \
-                    divisor: divisor, \
-                    scale: scale, \
-                ); \
-            }",
+                    mode: Rounding::nearest_even, divisor: divisor, scale: scale); }",
         );
         let ExprKind::NamedCall {
             name,
             args,
             evaluation_order,
-        } = expr.expr
+        } = expression.expr
         else {
             panic!("dynamic rounded division must remain a typed intrinsic");
         };
-        assert_eq!(name, AMOUNT_DIV_ROUND_INTRINSIC);
+        assert_eq!(name, QUANTITY_DIV_ROUND_INTRINSIC);
         assert_eq!(args.len(), 4);
         assert_eq!(args[0].ty, Type::Quantity);
-        assert_eq!(args[1].ty, Type::Quantity);
+        assert_eq!(args[1].ty, Type::Decimal);
         assert_eq!(args[2].ty, Type::Int);
         assert!(matches!(
             args[3].expr,
-            ExprKind::IntLiteral(value)
-                if value == ivm_abi::syscalls::AMOUNT_ROUND_NEAREST_EVEN as i64
+            ExprKind::IntLiteral(ref value)
+                if value.try_to_u64()
+                    == Some(ivm_abi::numeric::RoundingModeV1::NearestEven.tag())
         ));
         assert_eq!(evaluation_order, [0, 3, 1, 2]);
-
-        for (source, code) in [
-            (
-                "fn bad(a: Amount, b: Amount) -> Amount { return a.div_round(b, 2, Rounding::floor); }",
-                "E_NAMED_ARGUMENTS_REQUIRED",
-            ),
-            (
-                "fn bad(a: Amount, b: Amount) -> Amount { return a.div_round(divisor: b, scale: 29, mode: Rounding::floor); }",
-                "E_AMOUNT_DIV_ROUND_SCALE",
-            ),
-            (
-                "fn bad(a: Amount, b: Amount) -> Amount { return a.div_round(divisor: b, scale: 2, mode: Rounding::nearest); }",
-                "E_AMOUNT_ROUNDING_MODE",
-            ),
-            (
-                "fn bad(a: Amount) -> Amount { return a.div_round(divisor: 1u128, scale: 2, mode: Rounding::floor); }",
-                "type",
-            ),
-            (
-                "fn bad(a: u128, b: Amount) -> Amount { return a.div_round(divisor: b, scale: 2, mode: Rounding::floor); }",
-                "E_AMOUNT_DIV_ROUND_RECEIVER",
-            ),
-            (
-                "fn bad(a: Amount) -> Amount { return a.div_round(divisor: 0amt, scale: 2, mode: Rounding::floor); }",
-                "E_AMOUNT_CONSTANT_ARITHMETIC",
-            ),
-        ] {
-            let error = analyze_error(source);
-            if code == "type" {
-                assert!(error.message.contains(code), "{}", error.message);
-            } else {
-                assert_eq!(error.code, code, "{source}: {}", error.message);
-            }
-        }
     }
 
     #[test]
-    fn constant_amount_div_round_folds_with_declared_rounding_policy() {
-        for (source, expected) in [
-            (
-                "fn rounded() -> Amount { return 1amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::floor); }",
-                "0.12",
-            ),
-            (
-                "fn rounded() -> Amount { return 1amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::ceil); }",
-                "0.13",
-            ),
-            (
-                "fn rounded() -> Amount { return 1amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::nearest_even); }",
-                "0.12",
-            ),
-            (
-                "fn rounded() -> Amount { return 3amt.div_round(divisor: 8amt, scale: 2, mode: Rounding::nearest_even); }",
-                "0.38",
-            ),
-        ] {
-            let expression = returned_expr(source);
-            let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
-                panic!("constant rounded division must fold");
-            };
-            assert_eq!(value.to_string(), expected);
-        }
+    fn named_numeric_conversions_preserve_failure_and_rounding_policy() {
+        let recoverable = returned_expr(
+            "fn convert(decimal value) -> Result<quantity, int> { \
+                return quantity::try_from_decimal(value: value); }",
+        );
+        assert_eq!(
+            recoverable.ty,
+            Type::Result(Box::new(Type::Quantity), Box::new(Type::Int))
+        );
+        assert!(matches!(recoverable.expr, ExprKind::NumericTryCast { .. }));
+
+        let truncated = returned_expr(
+            "fn value() -> int { return decimal::to_int_trunc(value: -1.9); }",
+        );
+        assert!(matches!(truncated.expr, ExprKind::IntLiteral(ref value) if value.try_to_i64() == Some(-1)));
+        let rounded = returned_expr(
+            "fn value() -> int { return decimal::to_int_round(\
+                value: 2.5, mode: Rounding::nearest_even); }",
+        );
+        assert!(matches!(rounded.expr, ExprKind::IntLiteral(ref value) if value.try_to_i64() == Some(2)));
     }
 
     #[test]
     fn named_struct_fields_retain_source_evaluation_order() {
         let expr = returned_expr(
-            "struct Transfer { source: i64, destination: string, amount: Amount } fn build() -> Transfer { return Transfer { amount: 10amt, destination: \"sink\", source: 7 }; }",
+            "struct Transfer { int source, string destination, quantity amount } fn build() -> Transfer { return Transfer { amount: 10, destination: \"sink\", source: 7 }; }",
         );
         assert!(matches!(expr.ty, Type::Struct { ref name, .. } if name == "Transfer"));
         let ExprKind::StructLiteral { name, fields } = expr.expr else {
@@ -15026,22 +15269,22 @@ mod tests {
         );
         assert!(matches!(fields[0].1.expr, ExprKind::DecimalLiteral { .. }));
         assert!(matches!(fields[1].1.expr, ExprKind::String(ref value) if value == "sink"));
-        assert!(matches!(fields[2].1.expr, ExprKind::IntLiteral(7)));
+        assert!(matches!(fields[2].1.expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(7_i64)));
     }
 
     #[test]
     fn struct_literals_reject_unknown_missing_and_positional_fields() {
         for (source, code) in [
             (
-                "struct Pair { first: i64, second: string } fn build() -> Pair { return Pair { first: 1, second: \"two\", third: 3 }; }",
+                "struct Pair { int first, string second } fn build() -> Pair { return Pair { first: 1, second: \"two\", third: 3 }; }",
                 "E_UNKNOWN_STRUCT_FIELD",
             ),
             (
-                "struct Pair { first: i64, second: string } fn build() -> Pair { return Pair { first: 1 }; }",
+                "struct Pair { int first, string second } fn build() -> Pair { return Pair { first: 1 }; }",
                 "E_MISSING_STRUCT_FIELD",
             ),
             (
-                "struct Pair { first: i64, second: string } fn build() -> Pair { return Pair(1, \"two\"); }",
+                "struct Pair { int first, string second } fn build() -> Pair { return Pair(1, \"two\"); }",
                 "E_POSITIONAL_STRUCT",
             ),
         ] {
@@ -15053,7 +15296,7 @@ mod tests {
     #[test]
     fn named_user_call_arguments_are_reordered_to_parameter_order() {
         let program = parse(
-            "fn target(first: i64, second: string) -> i64 { return first; } fn main() -> i64 { return target(second: \"two\", first: 1); }",
+            "fn target(int first, string second) -> int { return first; } fn main() -> int { return target(second: \"two\", first: 1); }",
         )
         .expect("parse named user call");
         let typed = analyze(&program).expect("analyze named user call");
@@ -15076,7 +15319,7 @@ mod tests {
         else {
             panic!("expected typed call");
         };
-        assert!(matches!(args[0].expr, ExprKind::IntLiteral(1)));
+        assert!(matches!(args[0].expr, ExprKind::IntLiteral(ref value) if value == &BigInt::one()));
         assert!(matches!(args[1].expr, ExprKind::String(ref value) if value == "two"));
         assert_eq!(evaluation_order, &[1, 0]);
     }
@@ -15085,15 +15328,15 @@ mod tests {
     fn named_user_calls_reject_unknown_missing_and_ambiguous_positional_arguments() {
         for (source, code) in [
             (
-                "fn target(first: i64, second: string) {} fn main() { target(first: 1, third: \"three\"); }",
+                "fn target(int first, string second) {} fn main() { target(first: 1, third: \"three\"); }",
                 "E_UNKNOWN_NAMED_ARGUMENT",
             ),
             (
-                "fn target(first: i64, second: string) {} fn main() { target(first: 1); }",
+                "fn target(int first, string second) {} fn main() { target(first: 1); }",
                 "E_MISSING_NAMED_ARGUMENT",
             ),
             (
-                "fn target(left: i64, right: i64) {} fn main() { target(1, 2); }",
+                "fn target(int left, int right) {} fn main() { target(1, 2); }",
                 "E_NAMED_ARGUMENTS_REQUIRED",
             ),
         ] {
@@ -15102,7 +15345,7 @@ mod tests {
         }
 
         let named =
-            parse("fn target(left: i64, right: i64) {} fn main() { target(right: 2, left: 1); }")
+            parse("fn target(int left, int right) {} fn main() { target(right: 2, left: 1); }")
                 .expect("parse repeated-type named call");
         analyze(&named).expect("named repeated-type call should type-check");
     }
@@ -15110,17 +15353,17 @@ mod tests {
     #[test]
     fn privileged_and_effectful_calls_with_three_parameters_require_names() {
         let privileged = analyze_error(
-            "kotoage fn publish(first: i64, second: string, third: bool) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }",
+            "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }",
         );
         assert_eq!(privileged.code, "E_NAMED_ARGUMENTS_REQUIRED");
 
         let effectful = analyze_error(
-            "fn main(account: AccountId, key: Name, value: Json) { ledger::account::set_detail(account, key, value); }",
+            "fn main(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }",
         );
         assert_eq!(effectful.code, "E_NAMED_ARGUMENTS_REQUIRED");
 
         let transitive = analyze_error(
-            "fn sink(account: AccountId, key: Name, value: Json) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(account: AccountId, key: Name, value: Json) { sink(account: account, key: key, value: value); } fn main(account: AccountId, key: Name, value: Json) { wrapper(account, key, value); }",
+            "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key, value); }",
         );
         assert_eq!(transitive.code, "E_NAMED_ARGUMENTS_REQUIRED");
     }
@@ -15128,7 +15371,7 @@ mod tests {
     #[test]
     fn named_method_arguments_do_not_mix_with_the_receiver() {
         let program = parse(
-            "fn lookup(object: Json, key: Name) -> Option<i64> { return object.get_int(key: key); }",
+            "fn lookup(Json object, Name key) -> Option<int> { return object.get_int(key: key); }",
         )
         .expect("parse named method call");
         analyze(&program).expect("implicit receiver must not count as a positional argument");
@@ -15137,11 +15380,11 @@ mod tests {
     #[test]
     fn pagination_calls_require_offset_and_limit_names() {
         let positional =
-            analyze_error("fn page(path: Name) -> bytes { return state::keys(path, 0, 10); }");
+            analyze_error("fn page(Name path) -> bytes { return state::keys(path, 0, 10); }");
         assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
 
         let named = parse(
-            "fn page(path: Name) -> bytes { return state::keys(limit: 10, path: path, offset: 0); }",
+            "fn page(Name path) -> bytes { return state::keys(limit: 10, path: path, offset: 0); }",
         )
         .expect("parse named pagination call");
         analyze(&named).expect("named pagination call should type-check");
@@ -15155,15 +15398,15 @@ mod tests {
                 "duplicate function `repeated`",
             ),
             (
-                "struct Repeated { value: i64; } struct Repeated { value: i64; }",
+                "struct Repeated { int value; } struct Repeated { int value; }",
                 "duplicate type `Repeated`",
             ),
             (
-                "state repeated: i64; state repeated: i64;",
+                "state int repeated; state int repeated;",
                 "duplicate state `repeated`",
             ),
             (
-                "const repeated: i64 = 1; const repeated: i64 = 2;",
+                "const int repeated = 1; const int repeated = 2;",
                 "duplicate const `repeated`",
             ),
         ];
@@ -15176,7 +15419,7 @@ mod tests {
 
     #[test]
     fn cross_kind_declaration_collisions_are_rejected() {
-        let err = analyze_error("struct Shared { value: i64; } fn Shared() {}");
+        let err = analyze_error("struct Shared { int value; } fn Shared() {}");
         assert_eq!(err.code, "E_DUPLICATE_DECLARATION");
         assert_eq!(
             err.message,
@@ -15188,7 +15431,7 @@ mod tests {
     fn compiler_owned_declaration_names_are_rejected() {
         for (source, expected) in [
             (
-                "fn account_id(value: string) -> i64 { return 1; }",
+                "fn account_id(string value) -> int { return 1; }",
                 "function `account_id` uses a compiler-reserved name",
             ),
             (
@@ -15196,7 +15439,7 @@ mod tests {
                 "function `__kotodama_link_private` uses a compiler-reserved name",
             ),
             (
-                "struct Option { value: i64; }",
+                "struct Option { int value; }",
                 "type `Option` uses a compiler-reserved name",
             ),
         ] {
@@ -15208,7 +15451,7 @@ mod tests {
 
     #[test]
     fn duplicate_function_parameters_are_rejected() {
-        let err = analyze_error("fn repeated(value: i64, value: bool) {}");
+        let err = analyze_error("fn repeated(int value, bool value) {}");
         assert_eq!(
             err.message,
             "duplicate parameter `value` in function `repeated`"
@@ -15217,7 +15460,7 @@ mod tests {
 
     #[test]
     fn duplicate_struct_fields_are_rejected() {
-        let err = analyze_error("struct Repeated { value: i64; value: bool; }");
+        let err = analyze_error("struct Repeated { int value; bool value; }");
         assert_eq!(err.message, "duplicate field `value` in type `Repeated`");
     }
 
@@ -15234,7 +15477,7 @@ mod tests {
 
         let accepted = parse(
             "error enum Payment { Unauthorized = 1001 } \
-             fn pay(allowed: bool) { require(allowed, Payment::Unauthorized); }",
+             fn pay(bool allowed) { require(allowed, Payment::Unauthorized); }",
         )
         .expect("parse typed require");
         let typed = analyze(&accepted).expect("declared error variant is accepted");
@@ -15263,7 +15506,7 @@ mod tests {
 
     #[test]
     fn semantic_analysis_rejects_ast_parameters_without_types() {
-        let mut program = parse("fn f(value: i64) {}").expect("parse typed parameter");
+        let mut program = parse("fn f(int value) {}").expect("parse typed parameter");
         let Item::Function(function) = &mut program.items[0] else {
             panic!("expected function")
         };
@@ -15274,7 +15517,7 @@ mod tests {
 
     #[test]
     fn semantic_analysis_rejects_ast_consts_without_types() {
-        let mut program = parse("const VALUE: i64 = 1;").expect("parse typed const");
+        let mut program = parse("const int VALUE = 1;").expect("parse typed const");
         let Item::Const(declaration) = &mut program.items[0] else {
             panic!("expected const")
         };
@@ -15285,10 +15528,10 @@ mod tests {
 
     #[test]
     fn unknown_path_and_generic_types_are_rejected() {
-        let path_err = analyze_error("fn use_missing(value: Missing) {}");
+        let path_err = analyze_error("fn use_missing(Missing value) {}");
         assert_eq!(path_err.message, "unknown type `Missing`");
 
-        let generic_err = analyze_error("fn generic(value: Missing<i64>) {}");
+        let generic_err = analyze_error("fn generic(Missing<int> value) {}");
         assert_eq!(generic_err.message, "unknown generic type `Missing`");
     }
 
@@ -15311,7 +15554,7 @@ mod tests {
         let context = SemanticContext::new();
         let option = TypeExpr::Generic {
             base: "Option".into(),
-            args: vec![TypeExpr::Path("i64".into())],
+            args: vec![TypeExpr::Path("int".into())],
         };
         assert_eq!(
             convert_type_expr(&context, &option).expect("Option type"),
@@ -15320,7 +15563,7 @@ mod tests {
 
         let result = TypeExpr::Generic {
             base: "Result".into(),
-            args: vec![TypeExpr::Path("i64".into()), TypeExpr::Path("bool".into())],
+            args: vec![TypeExpr::Path("int".into()), TypeExpr::Path("bool".into())],
         };
         assert_eq!(
             convert_type_expr(&context, &result).expect("Result type"),
@@ -15328,25 +15571,25 @@ mod tests {
         );
 
         let helpers = parse(
-            "fn option_helper(value: Option<i64>) {} \
-             fn result_helper(value: Result<i64, bool>) {}",
+            "fn option_helper(Option<int> value) {} \
+             fn result_helper(Result<int, bool> value) {}",
         )
         .expect("private helper types parse");
         analyze(&helpers).expect("private helpers accept Option/Result parameters");
 
         let public = parse(
-            "seiyaku Demo { kotoage fn call(value: Option<i64>, outcome: Result<i64, bool>) authorize(\"Call\") {} }",
+            "seiyaku Demo { kotoage fn call(Option<int>, outcome: Result<int, bool> value) authorize(\"Call\") {} }",
         )
         .expect("public sum parameters parse");
         analyze(&public).expect("one-shot V1 argument records support Option and Result");
 
         let unsupported = analyze_error(
-            "seiyaku Demo { kotoage fn call(value: StateMap<i64, i64>) authorize(\"Call\") {} }",
+            "seiyaku Demo { kotoage fn call(StateMap<int, int> value) authorize(\"Call\") {} }",
         );
         assert!(
             unsupported
                 .message
-                .contains("unsupported V1 boundary type `StateMap<i64, i64>`"),
+                .contains("unsupported V1 boundary type `StateMap<int, int>`"),
             "unexpected error: {}",
             unsupported.message
         );
@@ -15355,9 +15598,9 @@ mod tests {
     #[test]
     fn forward_declared_struct_types_are_accepted() {
         let program = parse(
-            "struct First { second: Second; } \
-             struct Second { value: i64; } \
-             fn read(first: First) -> i64 { return first.second.value; }",
+            "struct First { Second second; } \
+             struct Second { int value; } \
+             fn read(First first) -> int { return first.second.value; }",
         )
         .expect("source should parse");
         analyze(&program).expect("forward-declared struct references should resolve");
@@ -15367,13 +15610,13 @@ mod tests {
     fn reusable_context_clears_all_declaration_registries() {
         let context = SemanticContext::new();
         let declared = parse(
-            "struct SessionOnly { value: i64; } \
-             fn read(value: SessionOnly) -> i64 { return value.value; }",
+            "struct SessionOnly { int value; } \
+             fn read(SessionOnly value) -> int { return value.value; }",
         )
         .expect("declared source");
         context.analyze(&declared).expect("first analysis");
 
-        let undeclared = parse("fn read(value: SessionOnly) -> i64 { return value.value; }")
+        let undeclared = parse("fn read(SessionOnly value) -> int { return value.value; }")
             .expect("undeclared source parses");
         let error = context
             .analyze(&undeclared)
@@ -15400,16 +15643,16 @@ mod tests {
 
     #[test]
     fn cyclic_value_structs_are_rejected_before_resolution() {
-        let direct = analyze_error("struct Node { next: Node; } state root: Node;");
+        let direct = analyze_error("struct Node { Node next; } state Node root;");
         assert_eq!(
             direct.message,
             "cyclic value struct definition: Node -> Node"
         );
 
         let indirect = analyze_error(
-            "struct Left { right: Right; } \
-             struct Right { left: Left; } \
-             state root: Left;",
+            "struct Left { Right right; } \
+             struct Right { Left left; } \
+             state Left root;",
         );
         assert_eq!(
             indirect.message,
@@ -15419,7 +15662,7 @@ mod tests {
 
     #[test]
     fn get_private_input_requires_build_configured_zk_mode() {
-        let err = analyze_error("fn read() -> i64 { return crypto::private_input(0); }");
+        let err = analyze_error("fn read() -> int { return crypto::private_input(0); }");
         assert_eq!(
             err.message,
             "builtin `crypto::private_input` requires ZK mode in compiler build configuration"
@@ -15427,7 +15670,7 @@ mod tests {
 
         let source = r#"
             seiyaku ZkContract {
-                fn read() -> Secret<i64> { return crypto::private_input(0); }
+                fn read() -> Secret<int> { return crypto::private_input(0); }
             }
             "#;
         let program = parse(source).expect("ZK-enabled source should parse");
@@ -15440,7 +15683,7 @@ mod tests {
     fn return_type_match() {
         let ok1 = analyze(&parse("fn f() -> bool { return true; } ").unwrap());
         assert!(ok1.is_ok());
-        let ok2 = analyze(&parse("fn g() -> i64 { return 1; } ").unwrap());
+        let ok2 = analyze(&parse("fn g() -> int { return 1; } ").unwrap());
         assert!(ok2.is_ok());
         let ok3 = analyze(&parse("fn h() { return; } ").unwrap());
         assert!(ok3.is_ok());
@@ -15456,10 +15699,10 @@ mod tests {
 
     #[test]
     fn non_unit_must_return_all_paths() {
-        let err = analyze(&parse("fn f() -> i64 { if true { return 1; } } ").unwrap());
+        let err = analyze(&parse("fn f() -> int { if true { return 1; } } ").unwrap());
         assert!(err.is_err());
         let ok =
-            analyze(&parse("fn g() -> i64 { if true { return 1; } else { return 2; } } ").unwrap());
+            analyze(&parse("fn g() -> int { if true { return 1; } else { return 2; } } ").unwrap());
         assert!(ok.is_ok());
     }
 
@@ -15474,24 +15717,24 @@ mod tests {
     #[test]
     fn param_type_enforcement_primitives() {
         // Boolean-to-integer coercion is intentionally absent from V1.
-        let bool_arithmetic = analyze(&parse("fn f(x: bool) { let y = x + 1; } ").unwrap());
+        let bool_arithmetic = analyze(&parse("fn f(bool x) { let y = x + 1; } ").unwrap());
         assert!(bool_arithmetic.is_err());
         // string param cannot be used in arithmetic
-        let err2 = analyze(&parse("fn g(s: string) { let y = s + 1; } ").unwrap());
+        let err2 = analyze(&parse("fn g(string s) { let y = s + 1; } ").unwrap());
         assert!(err2.is_err());
         // Canonical parameters always declare their type.
-        let ok = analyze(&parse("fn h(x: i64, y: i64) -> i64 { return x + y; } ").unwrap());
+        let ok = analyze(&parse("fn h(int x, int y) -> int { return x + y; } ").unwrap());
         assert!(ok.is_ok());
     }
 
     #[test]
     fn typed_id_parameters_reject_arithmetic() {
         // Typed ledger identifiers are not numeric.
-        let err = analyze(&parse("fn f(who: AccountId) { let y = who + 1; } ").unwrap());
+        let err = analyze(&parse("fn f(AccountId who) { let y = who + 1; } ").unwrap());
         assert!(err.is_err());
         // Equality on same named struct references is allowed
         let ok = analyze(
-            &parse("fn g(a: AccountId, b: AccountId) -> bool { return a == b; } ").unwrap(),
+            &parse("fn g(AccountId a, AccountId b) -> bool { return a == b; } ").unwrap(),
         );
         assert!(ok.is_ok());
     }
@@ -15520,7 +15763,7 @@ mod tests {
     #[test]
     fn state_map_iteration_accepts_pointer_keys() {
         let program = parse(
-            "state Items: StateMap<Name, i64>; \
+            "state StateMap<Name, int> Items; \
              fn main() { \
                  for (k, v) in Items.take(1) { \
                      let _x = v; \
@@ -15535,7 +15778,7 @@ mod tests {
     fn static_state_map_iteration_limit_is_inclusive_and_fail_closed() {
         for iteration in ["M.take(64)", "M.range(10, 74)"] {
             let program = parse(&format!(
-                "state M: StateMap<i64, i64>; \
+                "state StateMap<int, int> M; \
                  fn main() {{ for (key, value) in {iteration} {{ let _value = value; }} }}"
             ))
             .expect("boundary iteration source parses");
@@ -15549,7 +15792,7 @@ mod tests {
             ("M.range(10, 75)", "StateMap.range(start, end)"),
         ] {
             let program = parse(&format!(
-                "state M: StateMap<i64, i64>; \
+                "state StateMap<int, int> M; \
                  fn main() {{ for (key, value) in {iteration} {{ let _value = value; }} }}"
             ))
             .expect("over-limit iteration source parses");
@@ -15565,8 +15808,8 @@ mod tests {
     #[test]
     fn dynamic_map_take_rejects_non_literal_bounds() {
         let program = parse(
-            "state M: StateMap<i64, i64>; \
-             fn main(n: i64) { \
+            "state StateMap<int, int> M; \
+             fn main(int n) { \
                  for (k, v) in M.take(n) { \
                      let _x = v; \
                  } \
@@ -15577,15 +15820,15 @@ mod tests {
         assert!(
             error
                 .message
-                .contains("requires a non-negative i64 literal")
+                .contains("requires a non-negative int literal")
         );
     }
 
     #[test]
     fn dynamic_map_range_rejects_non_literal_bounds() {
         let program = parse(
-            "state M: StateMap<i64, i64>; \
-             fn main(start: i64, end: i64) { \
+            "state StateMap<int, int> M; \
+             fn main(int start, int end) { \
                  for (k, v) in M.range(start, end) { \
                      let _x = v; \
                  } \
@@ -15593,13 +15836,13 @@ mod tests {
         )
         .expect("parse dynamic range");
         let error = analyze(&program).expect_err("dynamic range must fail closed in V1");
-        assert!(error.message.contains("requires non-negative i64 literals"));
+        assert!(error.message.contains("requires non-negative int literals"));
     }
 
     #[test]
     fn state_map_alias_is_rejected() {
         let program = parse(
-            "state M: StateMap<i64, i64>; \
+            "state StateMap<int, int> M; \
              fn main() { \
                  let m = M; \
              }",
@@ -15612,7 +15855,7 @@ mod tests {
     #[test]
     fn state_map_reassignment_is_rejected() {
         let program = parse(
-            "state M: StateMap<i64, i64>; \
+            "state StateMap<int, int> M; \
              fn main() { \
                  M = StateMap::new(); \
              }",
@@ -15625,8 +15868,8 @@ mod tests {
     #[test]
     fn state_map_cannot_be_passed_to_user_fn() {
         let program = parse(
-            "state M: StateMap<i64, i64>; \
-             fn f(m: StateMap<i64, i64>) { let _x = 0; } \
+            "state StateMap<int, int> M; \
+             fn f(StateMap<int, int> m) { let _x = 0; } \
              fn main() { f(M); }",
         )
         .expect("parse state map arg");
@@ -15636,7 +15879,7 @@ mod tests {
 
     #[test]
     fn scalar_state_requires_hajimari() {
-        let err = analyze_error("state counter: i64; fn read() -> i64 { return counter; }");
+        let err = analyze_error("state int counter; fn read() -> int { return counter; }");
         assert_eq!(err.code, "E_STATE_HAJIMARI_REQUIRED");
         assert_eq!(
             err.message,
@@ -15646,7 +15889,7 @@ mod tests {
 
     #[test]
     fn scalar_state_hajimari_reports_every_missing_write() {
-        let err = analyze_error("state first: i64; state second: i64; hajimari() { first = 0; }");
+        let err = analyze_error("state int first; state int second; hajimari() { first = 0; }");
         assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
         assert_eq!(
             err.message,
@@ -15657,14 +15900,14 @@ mod tests {
     #[test]
     fn scalar_state_initialization_intersects_conditional_paths() {
         let accepted = parse(
-            "state value: i64; \
+            "state int value; \
              hajimari() { if true { value = 1; } else { value = 2; } }",
         )
         .expect("parse complete conditional hajimari");
         analyze(&accepted).expect("both conditional paths initialize scalar state");
 
         let err = analyze_error(
-            "state value: i64; \
+            "state int value; \
              hajimari() { if true { value = 1; } }",
         );
         assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
@@ -15673,13 +15916,13 @@ mod tests {
     #[test]
     fn scalar_state_initialization_checks_early_returns() {
         let err = analyze_error(
-            "state value: i64; \
+            "state int value; \
              hajimari() { if true { return; } value = 1; }",
         );
         assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
 
         let accepted = parse(
-            "state value: i64; \
+            "state int value; \
              hajimari() { if true { value = 1; return; } value = 2; }",
         )
         .expect("parse initialized early return");
@@ -15689,13 +15932,13 @@ mod tests {
     #[test]
     fn scalar_state_initialization_does_not_trust_optional_execution() {
         let loop_error = analyze_error(
-            "state value: i64; \
+            "state int value; \
              hajimari() { for index in range(1) { value = index; } }",
         );
         assert_eq!(loop_error.code, "E_STATE_HAJIMARI_INCOMPLETE");
 
         let short_circuit_error = analyze_error(
-            "state value: i64; \
+            "state int value; \
              fn seed() -> bool { value = 1; return true; } \
              hajimari() { let ignored = false && seed(); }",
         );
@@ -15705,9 +15948,9 @@ mod tests {
     #[test]
     fn scalar_state_hajimari_accepts_transitive_complete_initialization() {
         let program = parse(
-            "state counter: i64; \
-             struct Ledger { total: i64; } \
-             state ledger: Ledger; \
+            "state int counter; \
+             struct Ledger { int total; } \
+             state Ledger ledger; \
              fn seed() { counter = 0; ledger = Ledger { total: 0 }; } \
              hajimari() { seed(); }",
         )
@@ -15725,8 +15968,8 @@ mod tests {
     #[test]
     fn assignment_rejects_bool_to_int() {
         let program =
-            parse("fn f() { var x: i64 = true; x = false; }").expect("parse bool assignment");
-        analyze(&program).expect_err("bool assignment must not coerce to i64");
+            parse("fn f() { var int x = true; x = false; }").expect("parse bool assignment");
+        analyze(&program).expect_err("bool assignment must not coerce to int");
     }
 
     #[test]
@@ -15741,14 +15984,14 @@ mod tests {
 
     #[test]
     fn mutable_local_reassignment_is_accepted() {
-        let program = parse("fn f() -> i64 { var value = 1; value += 2; return value; }")
+        let program = parse("fn f() -> int { var value = 1; value += 2; return value; }")
             .expect("parse mutable binding");
         analyze(&program).expect("var bindings should permit reassignment");
     }
 
     #[test]
     fn function_parameters_are_immutable() {
-        let err = analyze_error("fn f(value: i64) { value = 2; }");
+        let err = analyze_error("fn f(int value) { value = 2; }");
         assert_eq!(err.code, "E_IMMUTABLE_ASSIGNMENT");
         assert_eq!(
             err.message,
@@ -15760,7 +16003,7 @@ mod tests {
     fn local_declarations_cannot_duplicate_or_shadow_bindings() {
         for source in [
             "fn f() { let value = 1; let value = 2; }",
-            "fn f(value: i64) { let value = 2; }",
+            "fn f(int value) { let value = 2; }",
             "fn f() { let (left, left) = (1, 2); }",
         ] {
             analyze_error(source);
@@ -15770,8 +16013,8 @@ mod tests {
     #[test]
     fn parameters_and_locals_cannot_shadow_any_source_declaration() {
         for source in [
-            "seiyaku App { fn helper() {} fn inspect(helper: i64) {} }",
-            "seiyaku App { struct Receipt { value: i64; } fn inspect() { let Receipt = 1; } }",
+            "seiyaku App { fn helper() {} fn inspect(int helper) {} }",
+            "seiyaku App { struct Receipt { int value; } fn inspect() { let Receipt = 1; } }",
             "seiyaku App { fn inspect() { let App = 1; } }",
         ] {
             let program = parse(source).expect("parse global shadowing fixture");
@@ -15810,7 +16053,7 @@ mod tests {
     #[test]
     fn state_shadowing_is_rejected_in_let() {
         let program =
-            parse("state counter: i64; fn f() { let counter = 1; }").expect("parse shadowing let");
+            parse("state int counter; fn f() { let counter = 1; }").expect("parse shadowing let");
         let err = analyze(&program).expect_err("state shadowing should error");
         assert_eq!(err.code, "E_STATE_SHADOWED");
     }
@@ -15818,7 +16061,7 @@ mod tests {
     #[test]
     fn state_shadowing_is_rejected_in_params() {
         let program =
-            parse("state counter: i64; fn f(counter: i64) {}").expect("parse shadowing param");
+            parse("state int counter; fn f(int counter) {}").expect("parse shadowing param");
         let err = analyze(&program).expect_err("state shadowing should error");
         assert_eq!(err.code, "E_STATE_SHADOWED");
     }
@@ -15826,7 +16069,7 @@ mod tests {
     #[test]
     fn state_shadowing_is_rejected_in_map_loop_vars() {
         let program = parse(
-            "state counter: i64; state M: StateMap<i64, i64>; \
+            "state int counter; state StateMap<int, int> M; \
              fn f() { for (counter, v) in M.take(1) { let _x = v; } }",
         )
         .expect("parse shadowing loop vars");
@@ -15874,7 +16117,7 @@ mod tests {
                 mutable: true,
                 pat: Pattern::Name("i".to_owned()),
                 ty: None,
-                value: Expr::IntLiteral(0),
+                value: Expr::IntLiteral(BigInt::zero()),
             })),
             cond: Some(Expr::Binary {
                 op: BinaryOp::Lt,
@@ -15886,7 +16129,7 @@ mod tests {
                 value: Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::Ident("i".to_owned())),
-                    right: Box::new(Expr::IntLiteral(1)),
+                    right: Box::new(Expr::IntLiteral(BigInt::one())),
                 },
             })),
             body: Block {
@@ -16023,7 +16266,7 @@ mod tests {
     #[test]
     fn struct_pattern_requires_arity_match() {
         let program = parse(
-            "struct Pair { a: i64, b: i64 } \
+            "struct Pair { int a, int b } \
              fn f() { let (a) = Pair { a: 1, b: 2 }; }",
         )
         .expect("parse struct pattern");
@@ -16042,13 +16285,13 @@ mod tests {
             .expect_err("assert message type should error");
         assert!(
             err.message
-                .contains("assert expects (bool) or (bool, string|i64)")
+                .contains("assert expects (bool) or (bool, string|int)")
         );
     }
 
     #[test]
     fn in_memory_map_constructor_is_rejected() {
-        let program = parse("fn f() { let m: StateMap<Name, i64> = StateMap::new(); let _x = m; }")
+        let program = parse("fn f() { let StateMap<Name, int> m = StateMap::new(); let _x = m; }")
             .expect("parse StateMap::new");
         let err = analyze(&program).expect_err("V1 StateMap values must be durable state");
         assert!(
@@ -16066,14 +16309,14 @@ mod tests {
     #[test]
     fn bytes_equality_is_allowed() {
         let program =
-            parse(r#"fn f() { let b: bytes = b"hi"; let c: bytes = b"hi"; let _x = b == c; }"#)
+            parse(r#"fn f() { let bytes b = b"hi"; let bytes c = b"hi"; let _x = b == c; }"#)
                 .expect("parse bytes equality");
         analyze(&program).expect("bytes equality should be allowed");
     }
 
     #[test]
     fn bytes_literal_types_as_bytes() {
-        let program = parse(r#"fn f() { let b: bytes = b"ab"; }"#).expect("parse bytes literal");
+        let program = parse(r#"fn f() { let bytes b = b"ab"; }"#).expect("parse bytes literal");
         let typed = analyze(&program).expect("analyze bytes literal");
         let TypedItem::Function(f) = &typed.items[0];
         let stmt = f.body.statements.first().expect("statement present");
@@ -16088,7 +16331,7 @@ mod tests {
 
     #[test]
     fn state_map_key_type_is_validated() {
-        let program = parse("state M: StateMap<Json, i64>; fn f() {}").expect("parse state map");
+        let program = parse("state StateMap<Json, int> M; fn f() {}").expect("parse state map");
         let err = analyze(&program).expect_err("state map key should be validated");
         assert!(
             err.message
@@ -16108,7 +16351,7 @@ mod tests {
     #[test]
     fn info_accepts_int() {
         let program = parse("fn f() { debug::info(42); }").expect("parse info");
-        analyze(&program).expect("info should accept i64");
+        analyze(&program).expect("info should accept int");
     }
 
     #[test]
@@ -16230,7 +16473,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Run") { return count + 1; }
+                kotoage fn run(int count) -> int authorize("Run") { return count + 1; }
 
                 #[test]
                 fn drive_run() {
@@ -16249,7 +16492,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Run") { return count; }
+                kotoage fn run(int count) -> int authorize("Run") { return count; }
 
                 fn helper() {
                     let _next = test::invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
@@ -16267,7 +16510,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Run") { return count + 1; }
+                kotoage fn run(int count) -> int authorize("Run") { return count + 1; }
 
                 #[test]
                 fn drive_run() {
@@ -16286,7 +16529,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Run") { return count; }
+                kotoage fn run(int count) -> int authorize("Run") { return count; }
 
                 #[test]
                 fn drive_run() {
@@ -16306,7 +16549,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Run") { return count; }
+                kotoage fn run(int count) -> int authorize("Run") { return count; }
 
                 #[test]
                 fn drive_run() {
@@ -16325,7 +16568,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                fn helper() -> i64 { return 7; }
+                fn helper() -> int { return 7; }
 
                 #[test]
                 fn drive_run() {
@@ -16347,7 +16590,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> i64 authorize("Run") { return count + 1; }
+                kotoage fn run(int count) -> int authorize("Run") { return count + 1; }
 
                 #[test]
                 fn drive_run() {
@@ -16378,7 +16621,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Demo {
-                kotoage fn run(count: i64) -> (i64, i64) authorize("Run") { return (count, count + 1); }
+                kotoage fn run(int count) -> (int, int) authorize("Run") { return (count, count + 1); }
 
                 #[test]
                 fn drive_run() {
@@ -16414,7 +16657,7 @@ mod tests {
     #[test]
     fn view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter() {
         let program = parse(
-            "seiyaku Demo { view fn f(ev: Json) -> Option<i64> { return ev.get_int(Name::parse(\"n\")); } }",
+            "seiyaku Demo { view fn f(Json ev) -> Option<int> { return ev.get_int(Name::parse(\"n\")); } }",
         )
         .expect("parse view get_int");
         analyze(&program).expect("typed Json parameters may use explicit JSON getters");
@@ -16423,7 +16666,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_ensure() {
         let program = parse(
-            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> i64 { return balances.ensure(key: 7, default: 9); } }",
+            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.ensure(key: 7, default: 9); } }",
         )
         .expect("parse ensure");
         let err = analyze(&program).expect_err("view ensure should fail");
@@ -16438,7 +16681,7 @@ mod tests {
     #[test]
     fn view_entrypoints_accept_get_or() {
         let program = parse(
-            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> i64 { return balances.get_or(key: 7, default: 9); } }",
+            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get_or(key: 7, default: 9); } }",
         )
         .expect("parse get_or");
         analyze(&program).expect("view get_or should type-check");
@@ -16448,10 +16691,10 @@ mod tests {
     fn state_map_get_returns_option_without_intercepting_user_get_function() {
         let program = parse(
             "seiyaku Demo { \
-                state balances: StateMap<i64, i64>; \
-                fn get(value: i64) -> i64 { return value; } \
-                view fn lookup(key: i64) -> Option<i64> { return balances.get(key); } \
-                view fn echo(value: i64) -> i64 { return get(value); } \
+                state StateMap<int, int> balances; \
+                fn get(int value) -> int { return value; } \
+                view fn lookup(int key) -> Option<int> { return balances.get(key); } \
+                view fn echo(int value) -> int { return get(value); } \
             }",
         )
         .expect("parse canonical and user-defined get calls");
@@ -16474,15 +16717,15 @@ mod tests {
     fn state_map_reads_require_explicit_option_handling() {
         for (source, expected) in [
             (
-                "seiyaku Demo { state balances: StateMap<i64, i64>; view fn read() -> i64 { return balances[1]; } }",
+                "seiyaku Demo { state StateMap<int, int> balances; view fn read() -> int { return balances[1]; } }",
                 "E_STATE_MAP_OPTIONAL_READ",
             ),
             (
-                "seiyaku Demo { state balances: StateMap<i64, i64>; kotoage fn add() authorize(\"Write\") { balances[1] += 1; } }",
+                "seiyaku Demo { state StateMap<int, int> balances; kotoage fn add() authorize(\"Write\") { balances[1] += 1; } }",
                 "E_STATE_MAP_OPTIONAL_READ",
             ),
             (
-                "seiyaku Demo { state balances: StateMap<i64, i64>; view fn read() -> Option<i64> { return get(balances, 1); } }",
+                "seiyaku Demo { state StateMap<int, int> balances; view fn read() -> Option<int> { return get(balances, 1); } }",
                 "unknown function or builtin `get`",
             ),
         ] {
@@ -16503,7 +16746,7 @@ mod tests {
         }
 
         let write = parse(
-            "seiyaku Demo { state balances: StateMap<i64, i64>; kotoage fn set(key: i64, value: i64) authorize(\"Write\") { balances[key] = value; } }",
+            "seiyaku Demo { state StateMap<int, int> balances; kotoage fn set(int key, int value) authorize(\"Write\") { balances[key] = value; } }",
         )
         .expect("parse indexed StateMap write");
         analyze(&write).expect("simple indexed StateMap assignment must remain valid");
@@ -16512,7 +16755,7 @@ mod tests {
     #[test]
     fn state_map_remove_returns_option_for_scalar_values() {
         let program = parse(
-            "seiyaku Demo { state balances: StateMap<Name, i64>; kotoage fn f(key: Name) -> Option<i64> authorize(\"WriteState\") { return balances.remove(key); } }",
+            "seiyaku Demo { state StateMap<Name, int> balances; kotoage fn f(Name key) -> Option<int> authorize(\"WriteState\") { return balances.remove(key); } }",
         )
         .expect("parse StateMap.remove");
         let typed = analyze(&program).expect("scalar StateMap.remove should type-check");
@@ -16532,7 +16775,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_state_map_remove() {
         let program = parse(
-            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> Option<i64> { return balances.remove(7); } }",
+            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> Option<int> { return balances.remove(7); } }",
         )
         .expect("parse StateMap.remove in view");
         let err = analyze(&program).expect_err("view remove must fail");
@@ -16547,7 +16790,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_direct_durable_state_assignment() {
         let program = parse(
-            "seiyaku Demo { state counter: i64; hajimari() { counter = 0; } view fn f() -> i64 { counter = 1; return counter; } }",
+            "seiyaku Demo { state int counter; hajimari() { counter = 0; } view fn f() -> int { counter = 1; return counter; } }",
         )
         .expect("parse direct durable state assignment");
         let err = analyze(&program).expect_err("view durable state assignment should fail");
@@ -16562,7 +16805,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_state_map_mutation() {
         let program = parse(
-            "seiyaku Demo { state balances: StateMap<i64, i64>; view fn f() -> i64 { balances[7] = 9; return 1; } }",
+            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { balances[7] = 9; return 1; } }",
         )
         .expect("parse state map mutation");
         let err = analyze(&program).expect_err("view state map mutation should fail");
@@ -16577,7 +16820,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_transitive_durable_state_mutation() {
         let program = parse(
-            "seiyaku Demo { state counter: i64; hajimari() { counter = 0; } fn helper() { counter = counter + 1; } view fn f() -> i64 { helper(); return counter; } }",
+            "seiyaku Demo { state int counter; hajimari() { counter = 0; } fn helper() { counter = counter + 1; } view fn f() -> int { helper(); return counter; } }",
         )
         .expect("parse transitive durable state mutation");
         let err = analyze(&program).expect_err("view transitive durable mutation should fail");
@@ -16651,7 +16894,7 @@ mod tests {
 
     #[test]
     fn generic_execute_instruction_is_not_a_builtin() {
-        let program = parse("fn f(payload: bytes) { execute_instruction(payload); }")
+        let program = parse("fn f(bytes payload) { execute_instruction(payload); }")
             .expect("unknown call should parse before semantic resolution");
         let err = analyze(&program).expect_err("generic instruction execution must be unknown");
         assert_eq!(
@@ -16706,7 +16949,7 @@ mod tests {
     #[test]
     fn public_entrypoints_reject_zk_verify_without_permission() {
         let program = parse(
-            "seiyaku Demo { kotoage fn verify(payload: bytes) { crypto::zk::verify_unshield(payload); } }",
+            "seiyaku Demo { kotoage fn verify(bytes payload) { crypto::zk::verify_unshield(payload); } }",
         )
         .expect("parse public zk verify");
         let err = SemanticContext::with_zk_enabled(true)
@@ -16765,10 +17008,10 @@ mod tests {
             r#"
             seiyaku Payments {
                 kotoage fn transfer(
-                    recipient: AccountId,
-                    asset: AssetDefinitionId,
-                    amount: Amount,
-                    dataspace: DataSpaceId
+                    AccountId recipient,
+                    AssetDefinitionId asset,
+                    quantity amount,
+                    DataSpaceId dataspace
                 ) authorize("TransferAsset") {
                     let sender = context::authority();
                     ledger::asset::transfer(
@@ -16792,10 +17035,10 @@ mod tests {
             r#"
             seiyaku Escrow {
                 fn open(
-                    escrow: Name,
-                    asset: AssetDefinitionId,
-                    amount: Amount,
-                    evidence: bytes
+                    Name escrow,
+                    AssetDefinitionId asset,
+                    quantity amount,
+                    bytes evidence
                 ) {
                     ledger::escrow::open_offer(
                         offer: escrow,
@@ -16819,10 +17062,10 @@ mod tests {
             r#"
             seiyaku Escrow {
                 fn open(
-                    escrow: Name,
-                    account: AccountId,
-                    asset: AssetDefinitionId,
-                    amount: Amount
+                    Name escrow,
+                    AccountId account,
+                    AssetDefinitionId asset,
+                    quantity amount
                 ) {
                     ledger::escrow::open_offer(
                         offer: escrow,
@@ -16848,7 +17091,7 @@ mod tests {
     #[test]
     fn public_entrypoints_reject_state_mutation_without_permission() {
         let program = parse(
-            "seiyaku Demo { state counter: i64; hajimari() { counter = 0; } kotoage fn set() { counter = 1; } }",
+            "seiyaku Demo { state int counter; hajimari() { counter = 0; } kotoage fn set() { counter = 1; } }",
         )
         .expect("parse public state mutation");
         let err = analyze(&program).expect_err("public state mutation should require permission");
@@ -16880,7 +17123,7 @@ mod tests {
     #[test]
     fn view_entrypoints_reject_transitive_zk_verify() {
         let program = parse(
-            "seiyaku Demo { fn helper(payload: bytes) { crypto::zk::verify_transfer(payload); } view fn f(payload: bytes) -> i64 { helper(payload); return 1; } }",
+            "seiyaku Demo { fn helper(bytes payload) { crypto::zk::verify_transfer(payload); } view fn f(bytes payload) -> int { helper(payload); return 1; } }",
         )
         .expect("parse transitive zk verify");
         let err = SemanticContext::with_zk_enabled(true)
@@ -16918,16 +17161,16 @@ mod tests {
         let program = parse(
             r#"seiyaku Demo {
                 struct Request {
-                    status: i64,
-                    alias_blob: bytes,
-                    requested_by_actor_id: bytes,
-                    requested_by_actor: Json
+                    int status,
+                    bytes alias_blob,
+                    bytes requested_by_actor_id,
+                    Json requested_by_actor
                 }
-                state Requests: StateMap<Name, Request>;
-                kotoage fn create_request(proposal_id: Name,
-                                          alias_literal: bytes,
-                                          requested_by_actor_id: bytes,
-                                          requested_by_actor: Json) authorize("CreateRequest") {
+                state StateMap<Name, Request> Requests;
+                kotoage fn create_request(Name proposal_id,
+                                          bytes alias_literal,
+                                          bytes requested_by_actor_id,
+                                          Json requested_by_actor) authorize("CreateRequest") {
                     Requests[proposal_id] = Request {
                         status: 1,
                         alias_blob: alias_literal,
@@ -16966,19 +17209,19 @@ mod tests {
     }
 
     #[test]
-    fn get_amount_returns_an_optional_trigger_amount() {
+    fn get_quantity_returns_an_optional_trigger_quantity() {
         let program = parse(
-            "fn f() { let ev = context::trigger_event(); let _amount: Option<Amount> = ev.get_amount(Name::parse(\"amount\")); }",
+            "fn f() { let ev = context::trigger_event(); let Option<quantity> value = ev.get_quantity(Name::parse(\"amount\")); }",
         )
-        .expect("parse get_amount");
-        analyze(&program).expect("get_amount should type-check as Option<Amount>");
+        .expect("parse get_quantity");
+        analyze(&program).expect("get_quantity should type-check as Option<quantity>");
     }
 
     #[test]
     fn durable_string_state_is_supported() {
         let program = parse(
             r#"seiyaku C {
-                state label: string;
+                state string label;
                 hajimari() { label = "ready"; }
             }"#,
         )
@@ -16990,8 +17233,8 @@ mod tests {
     fn durable_struct_string_field_is_supported() {
         let program = parse(
             r#"seiyaku C {
-                struct S { label: string }
-                state s: S;
+                struct S { string label }
+                state S s;
                 hajimari() { s = S { label: "ready" }; }
             }"#,
         )
@@ -17020,9 +17263,9 @@ mod tests {
     fn durable_option_and_result_accept_aggregate_payloads() {
         let program = parse(
             r#"seiyaku C {
-                struct Pair { count: i64, ready: bool }
-                state maybe: Option<Pair>;
-                state outcome: Result<Pair, Pair>;
+                struct Pair { int count, bool ready }
+                state Option<Pair> maybe;
+                state Result<Pair, Pair> outcome;
                 hajimari() {
                     maybe = Option::none;
                     outcome = Result::ok(Pair { count: 1, ready: true });
@@ -17037,15 +17280,15 @@ mod tests {
     fn local_sum_annotations_resolve_aggregate_payloads_contextually() {
         let program = parse(
             r#"seiyaku C {
-                struct Pair { count: i64, ready: bool }
+                struct Pair { int count, bool ready }
                 fn values() {
-                    let some: Option<Pair> = Option::some(Pair { count: 1, ready: true });
-                    let none: Option<Pair> = Option::none;
-                    let ok: Result<Pair, Pair> = Result::ok(Pair { count: 2, ready: true });
-                    let err: Result<Pair, Pair> = Result::err(Pair { count: 3, ready: false });
-                    var changing_option: Option<Pair> = Option::some(Pair { count: 4, ready: true });
+                    let Option<Pair> some = Option::some(Pair { count: 1, ready: true });
+                    let Option<Pair> none = Option::none;
+                    let Result<Pair, Pair> ok = Result::ok(Pair { count: 2, ready: true });
+                    let Result<Pair, Pair> err = Result::err(Pair { count: 3, ready: false });
+                    var Option<Pair> changing_option = Option::some(Pair { count: 4, ready: true });
                     changing_option = Option::none;
-                    var changing_result: Result<Pair, Pair> = Result::ok(Pair { count: 5, ready: true });
+                    var Result<Pair, Pair> changing_result = Result::ok(Pair { count: 5, ready: true });
                     changing_result = Result::err(Pair { count: 6, ready: false });
                 }
             }"#,
@@ -17057,121 +17300,77 @@ mod tests {
     #[test]
     fn explicit_numeric_conversions_preserve_nominal_types() {
         let program = parse(
-            "seiyaku C { fn f(value: i64) -> Amount { \
-                let wide: u128 = u128::from_i64(value); \
-                let amount: Amount = Amount::from_u128(wide); \
-                return amount; \
+            "seiyaku C { fn f(int value) -> decimal { \
+                return decimal::from_int(value); \
             } }",
         )
         .expect("parse explicit conversions");
         let typed = analyze(&program).expect("analyze explicit conversions");
         let TypedItem::Function(f) = &typed.items[0];
-        assert_eq!(f.ret_ty, Some(Type::Quantity));
+        assert_eq!(f.ret_ty, Some(Type::Decimal));
     }
 
     #[test]
     fn numeric_types_do_not_mix_implicitly() {
         let program = parse(
-            "seiyaku C { fn f(a: Amount, b: u128, c: i64) { \
+            "seiyaku C { fn f(quantity a, int b) { \
                 let _x = a + b; \
-                let _y: u128 = c; \
             } }",
         )
         .expect("parse nominal numeric types");
         let err = analyze(&program).expect_err("mixed numeric types should error");
-        assert!(
-            err.message.contains("identical numeric operand types")
-                || err.message.contains("expected u128, got i64"),
-            "unexpected error: {}",
-            err.message
-        );
+        assert!(err.message.contains("identical numeric operand types"));
     }
 
     #[test]
-    fn amount_rejects_remainder_and_negation_surfaces() {
-        let remainder = parse("seiyaku C { fn f(a: Amount, b: Amount) { let _x = a % b; } }")
-            .expect("parse Amount remainder");
-        let error = analyze(&remainder).expect_err("Amount remainder must fail");
-        assert_eq!(error.code, "E_AMOUNT_REMAINDER");
+    fn quantity_rejects_remainder_and_negation_surfaces() {
+        let remainder = parse("seiyaku C { fn f(quantity a, quantity b) { let _x = a % b; } }")
+            .expect("parse quantity remainder");
+        let error = analyze(&remainder).expect_err("quantity remainder must fail");
+        assert_eq!(error.code, "E_QUANTITY_REMAINDER");
 
-        let negation = parse("seiyaku C { fn f(a: Amount) { let _x = numeric::neg(a); } }")
+        let negation = parse("seiyaku C { fn f(quantity a) { let _x = -a; } }")
             .expect("parse numeric negation");
-        let error = analyze(&negation).expect_err("Amount negation must fail");
-        assert_eq!(error.code, "E_UNSIGNED_NEGATION");
+        let error = analyze(&negation).expect_err("quantity negation must fail");
+        assert_eq!(error.code, "E_QUANTITY_NEGATION");
     }
 
     #[test]
-    fn unsuffixed_integer_is_not_an_implicit_u128_literal() {
-        let program = parse("seiyaku C { fn f() { let value: u128 = 1; } }")
+    fn unsuffixed_whole_literal_is_contextual_in_a_quantity_position() {
+        let program = parse("seiyaku C { fn f() -> quantity { return 1; } }")
             .expect("parse unsuffixed literal");
-        let error = analyze(&program).expect_err("implicit i64-to-u128 conversion must fail");
-        assert!(
-            error.message.contains("expected u128, got i64"),
-            "unexpected error: {}",
-            error.message
-        );
+        analyze(&program).expect("whole literal must coerce exactly in a quantity context");
     }
 
     #[test]
-    fn u128_max_literal_is_accepted_and_typed_as_u128() {
+    fn values_wider_than_u128_are_accepted_as_int() {
         let program = parse(
-            "seiyaku C { fn wide_value() -> u128 { \
-                return 340282366920938463463374607431768211455u128; \
+            "seiyaku C { fn wide_value() -> int { \
+                return 340282366920938463463374607431768211456; \
             } }",
         )
-        .expect("parse u128::MAX");
-        let typed = analyze(&program).expect("analyze u128::MAX");
+        .expect("parse adaptive-width int");
+        let typed = analyze(&program).expect("analyze adaptive-width int");
         let TypedItem::Function(function) = &typed.items[0];
         assert_eq!(function.ret_ty, Some(Type::Int));
     }
 
     #[test]
-    fn u128_negation_builtin_is_rejected() {
-        let program =
-            parse("seiyaku C { fn f(value: u128) -> u128 { return numeric::neg(value); } }")
-                .expect("parse u128 negation");
-        let error = analyze(&program).expect_err("numeric::neg(u128) must fail");
-        assert_eq!(error.code, "E_UNSIGNED_NEGATION");
+    fn int_values_work_with_int_builtins_without_host_width_conversions() {
+        let program = parse("seiyaku C { fn f(int value) -> int { return math::abs(value); } }")
+            .expect("parse int math argument");
+        analyze(&program).expect("int builtin must accept the language int type");
     }
 
     #[test]
-    fn explicit_i64_to_u128_rejects_negative_literal() {
-        let program = parse("seiyaku C { fn f() -> u128 { return u128::from_i64(-1); } }")
-            .expect("parse explicit conversion");
-        let error = analyze(&program).expect_err("negative conversion must fail");
-        assert!(
-            error.message.contains("cannot convert a negative i64"),
-            "unexpected error: {}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn wide_values_are_not_implicitly_narrowed_for_i64_builtins() {
-        let program = parse("seiyaku C { fn f(value: u128) -> i64 { return math::abs(value); } }")
-            .expect("parse wide math argument");
-        let error = analyze(&program).expect_err("u128-to-i64 builtin coercion must fail");
-        assert!(
-            error.message.contains("expects (i64)"),
-            "unexpected error: {}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn ledger_amount_parameters_reject_implicit_i64_conversion() {
+    fn ledger_quantity_parameters_contextually_accept_whole_literals() {
         let program = parse(
-            "seiyaku C { fn f(account: AccountId, asset: AssetDefinitionId) { \
+            "seiyaku C { fn f(AccountId account, AssetDefinitionId asset) { \
                 ledger::asset::mint(account: account, asset_definition: asset, amount: 1); \
             } }",
         )
         .expect("parse ledger amount call");
-        let error = analyze(&program).expect_err("i64-to-Amount builtin coercion must fail");
-        assert!(
-            error.message.contains("AssetDefinitionId, Amount"),
-            "unexpected error: {}",
-            error.message
-        );
+        analyze(&program).expect("whole literal must coerce exactly at a quantity boundary");
     }
 
     #[test]
@@ -17723,11 +17922,11 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Queries {
-                fn account(id: AccountId) -> Option<AccountView> {
+                fn account(AccountId id) -> Option<AccountView> {
                     ledger::query::account(id)
                 }
 
-                fn accounts(offset: i64, limit: i64) -> QueryPage<AccountView> {
+                fn accounts(int offset, int limit) -> QueryPage<AccountView> {
                     ledger::query::accounts(offset: offset, limit: limit)
                 }
             }
@@ -17806,7 +18005,7 @@ mod tests {
 
     #[test]
     fn typed_core_singular_queries_reject_raw_bytes() {
-        let program = parse("fn account(raw: bytes) { let _view = ledger::query::account(raw); }")
+        let program = parse("fn account(bytes raw) { let _view = ledger::query::account(raw); }")
             .expect("parse raw-byte core query");
         let error = analyze(&program).expect_err("core queries require their declared typed ID");
         assert_eq!(error.code, "E_QUERY_KEY_TYPE");
@@ -17817,27 +18016,27 @@ mod tests {
         let program = parse(
             r#"
             seiyaku Sums {
-                fn option(input: Option<i64>) -> Option<i64> {
+                fn option(Option<int> input) -> Option<int> {
                     let value = input?;
                     Option::some(value)
                 }
 
-                fn result(input: Result<i64, string>) -> Result<i64, string> {
+                fn result(Result<int, string> input) -> Result<int, string> {
                     Result::ok(input?)
                 }
 
-                fn inspect(input: Option<i64>) -> i64 {
+                fn inspect(Option<int> input) -> int {
                     match input {
                         Option::some(value) => value,
                         Option::none => 0,
                     }
                 }
 
-                fn guarded(input: Option<i64>) -> i64 {
+                fn guarded(Option<int> input) -> int {
                     if let Option::some(value) = input { value } else { 0 }
                 }
 
-                fn absent() -> Option<i64> { Option::none }
+                fn absent() -> Option<int> { Option::none }
             }
             "#,
         )
@@ -17850,7 +18049,7 @@ mod tests {
         let program = parse(
             r#"
             seiyaku DivergentArms {
-                fn result(input: Result<i64, bool>) -> Result<(i64, i64), bool> {
+                fn result(Result<int, bool> input) -> Result<(int, int), bool> {
                     let payload = match input {
                         Result::ok(payload) => payload,
                         Result::err(failure) => { return Result::err(failure); },
@@ -17858,7 +18057,7 @@ mod tests {
                     Result::ok((payload, payload))
                 }
 
-                fn option(input: Option<i64>) -> Option<(i64, i64)> {
+                fn option(Option<int> input) -> Option<(int, int)> {
                     let payload = match input {
                         Option::some(payload) => payload,
                         Option::none => { return Option::none; },
@@ -17866,7 +18065,7 @@ mod tests {
                     Option::some((payload, payload))
                 }
 
-                fn choose(flag: bool) -> i64 {
+                fn choose(bool flag) -> int {
                     if flag { 7 } else { return 9; }
                 }
             }
@@ -17880,7 +18079,7 @@ mod tests {
     fn wholly_divergent_expression_without_a_type_context_fails_closed() {
         let program = parse(
             r#"
-            fn ambiguous(flag: bool) {
+            fn ambiguous(bool flag) {
                 let unreachable = if flag { return; } else { return; };
             }
             "#,
@@ -17899,27 +18098,27 @@ mod tests {
                 "E_SUM_MISSING_CONTEXT",
             ),
             (
-                "fn f(value: i64) -> Option<i64> { value?; Option::none }",
+                "fn f(int value) -> Option<int> { value?; Option::none }",
                 "E_PROPAGATE_TYPE",
             ),
             (
-                "fn f(value: Result<i64, string>) -> Result<i64, bytes> { Result::ok(value?) }",
+                "fn f(Result<int, string> value) -> Result<int, bytes> { Result::ok(value?) }",
                 "E_PROPAGATE_ERROR_TYPE",
             ),
             (
-                "fn f(value: Option<i64>) -> i64 { match value { Option::some(item) => item, } }",
+                "fn f(Option<int> value) -> int { match value { Option::some(item) => item, } }",
                 "E_MATCH_NON_EXHAUSTIVE",
             ),
             (
-                "fn f(value: Option<i64>) -> i64 { match value { Option::some(item) => item, Option::some(other) => other, Option::none => 0, } }",
+                "fn f(Option<int> value) -> int { match value { Option::some(item) => item, Option::some(other) => other, Option::none => 0, } }",
                 "E_MATCH_DUPLICATE_PATTERN",
             ),
             (
-                "fn f(value: Option<i64>) -> i64 { match value { Result::ok(item) => item, Result::err(_) => 0, } }",
+                "fn f(Option<int> value) -> int { match value { Result::ok(item) => item, Result::err(_) => 0, } }",
                 "E_PATTERN_FAMILY",
             ),
             (
-                "fn f(flag: bool) -> i64 { if flag { 1 } else { false } }",
+                "fn f(bool flag) -> int { if flag { 1 } else { false } }",
                 "E_BRANCH_TYPE_MISMATCH",
             ),
         ] {

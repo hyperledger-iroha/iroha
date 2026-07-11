@@ -635,6 +635,7 @@ impl std::error::Error for OpenVerifyEnvelopeValidationError {}
 /// This structure is serialized with Norito and used as the TLV payload for
 /// `&NoritoBytes` pointer-ABI types passed to IVM verify syscalls or host vendor bridges.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

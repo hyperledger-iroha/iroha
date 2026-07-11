@@ -32,7 +32,7 @@ pub const G_ESCROW: u64 = 16;
 pub const G_SORACLOUD: u64 = 16;
 
 /// Version of the consensus-visible host-syscall gas formulas.
-pub const HOST_GAS_FORMULA_VERSION: u16 = 3;
+pub const HOST_GAS_FORMULA_VERSION: u16 = 4;
 /// Fixed durable-state syscall charge before path, value, scan, or response bytes.
 pub const STATE_QUERY_GAS_BASE: u64 = 16;
 /// Charge for visiting one durable-state key in an ordered scan.
@@ -83,9 +83,9 @@ pub const HOST_ZK_VERIFY_GAS_PER_BYTE: u64 = 5;
 /// Version of the canonical ZK syscall gas schedule snapshot.
 pub const HOST_ZK_GAS_SCHEDULE_VERSION: u16 = 1;
 /// Hard V1 cap for a single ZK envelope or an encoded batch request.
-pub const HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES: u64 = 1024 * 1024;
+pub const HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 /// Hard V1 cap for proofs in one ZK batch syscall.
-pub const HOST_ZK_VERIFY_MAX_BATCH_PROOFS: u32 = 16;
+pub const HOST_ZK_VERIFY_MAX_BATCH_PROOFS: usize = 16;
 /// Bytes in one canonical field-element-sized public-input unit.
 pub const HOST_ZK_VERIFY_PUBLIC_INPUT_UNIT_BYTES: u32 = 32;
 /// Fixed bytes in the hashed batch status TLV, excluding status bytes.
@@ -119,17 +119,13 @@ pub struct ZkGasScheduleV1 {
 impl ZkGasScheduleV1 {
     /// Construct a V1 schedule using configured rates and fixed ABI caps/layout.
     #[must_use]
-    pub const fn from_rates(
-        proof_base: u64,
-        per_public_input: u64,
-        per_proof_byte: u64,
-    ) -> Self {
+    pub const fn from_rates(proof_base: u64, per_public_input: u64, per_proof_byte: u64) -> Self {
         Self {
             proof_base,
             per_public_input,
             per_proof_byte,
-            max_payload_bytes: HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES,
-            max_batch_proofs: HOST_ZK_VERIFY_MAX_BATCH_PROOFS,
+            max_payload_bytes: HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES as u64,
+            max_batch_proofs: HOST_ZK_VERIFY_MAX_BATCH_PROOFS as u32,
             public_input_unit_bytes: HOST_ZK_VERIFY_PUBLIC_INPUT_UNIT_BYTES,
             batch_output_fixed_bytes: HOST_ZK_VERIFY_BATCH_OUTPUT_FIXED_BYTES,
             batch_output_bytes_per_proof: HOST_ZK_VERIFY_BATCH_OUTPUT_BYTES_PER_PROOF,
@@ -171,19 +167,11 @@ impl ZkGasScheduleV1 {
             .div_ceil(unit)
     }
 
-    fn gas(
-        self,
-        proof_count: usize,
-        metered_bytes: u64,
-        public_input_count: u64,
-    ) -> u64 {
+    fn gas(self, proof_count: usize, metered_bytes: u64, public_input_count: u64) -> u64 {
         self.proof_base
             .saturating_mul(u64::try_from(proof_count).unwrap_or(u64::MAX))
             .saturating_add(self.per_proof_byte.saturating_mul(metered_bytes))
-            .saturating_add(
-                self.per_public_input
-                    .saturating_mul(public_input_count),
-            )
+            .saturating_add(self.per_public_input.saturating_mul(public_input_count))
     }
 
     /// Conservative single-envelope quote derived before decoding.
@@ -646,7 +634,7 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
         ),
         (
             "host_zk_verify_max_payload_bytes",
-            HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES,
+            HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES as u64,
         ),
         (
             "host_zk_verify_max_batch_proofs",
@@ -697,10 +685,31 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
             crate::syscalls::STATE_MAP_MAX_PAGE_BYTES as u64,
         ),
     ];
-    values
+    let mut parameters: Vec<_> = values
         .into_iter()
         .map(|(name, value)| GasParameter { name, value })
-        .collect()
+        .collect();
+    let zk_schedule_hash: [u8; 32] = ZkGasScheduleV1::default().hash().into();
+    let hash_parameter_names = [
+        "host_zk_schedule_hash_word_0",
+        "host_zk_schedule_hash_word_1",
+        "host_zk_schedule_hash_word_2",
+        "host_zk_schedule_hash_word_3",
+    ];
+    parameters.extend(
+        hash_parameter_names
+            .into_iter()
+            .zip(zk_schedule_hash.chunks_exact(8))
+            .map(|(name, chunk)| GasParameter {
+                name,
+                value: u64::from_le_bytes(
+                    chunk
+                        .try_into()
+                        .expect("32-byte hash consists of four complete u64 words"),
+                ),
+            }),
+    );
+    parameters
 }
 
 fn metering_tag(metering: crate::syscall_metering::SyscallMetering) -> u8 {
@@ -747,7 +756,7 @@ fn formula_tag(formula: crate::host::HostSyscallGasFormula) -> u8 {
         Formula::StateCount => 10,
         Formula::ReserveAvailable => 11,
         Formula::ConservativeEnvelope => 12,
-        Formula::ZkVerify => 14,
+        Formula::ZkVerifyV1 => 14,
     }
 }
 
@@ -763,7 +772,7 @@ fn parameters_tag(parameters: crate::host::HostSyscallGasParameters) -> u8 {
         Parameters::HostCommit => 5,
         Parameters::DurableState => 6,
         Parameters::Conservative => 7,
-        Parameters::ZkVerify => 9,
+        Parameters::ZkVerifyV1 => 9,
     }
 }
 
@@ -914,20 +923,87 @@ mod tests {
     fn zk_verification_gas_scales_with_every_proof_and_encoded_byte() {
         assert_eq!(
             zk_verify_gas(7),
-            HOST_ZK_VERIFY_GAS_PER_PROOF + 7 * HOST_ZK_VERIFY_GAS_PER_BYTE
+            HOST_ZK_VERIFY_GAS_PER_PROOF
+                + HOST_ZK_VERIFY_GAS_PER_PUBLIC_INPUT
+                + 7 * HOST_ZK_VERIFY_GAS_PER_BYTE
         );
         let one = zk_verify_batch_gas(1, 100);
         let two = zk_verify_batch_gas(2, 100);
         assert_eq!(
             two - one,
             HOST_ZK_VERIFY_GAS_PER_PROOF
-                + HOST_ZK_VERIFY_GAS_PER_BYTE * HOST_ZK_VERIFY_BATCH_OVERHEAD_BYTES_PER_PROOF
+                + HOST_ZK_VERIFY_GAS_PER_PUBLIC_INPUT
+                + HOST_ZK_VERIFY_GAS_PER_BYTE
         );
         assert_eq!(
             zk_verify_batch_gas(2, 101) - two,
             HOST_ZK_VERIFY_GAS_PER_BYTE
         );
+        assert_eq!(
+            zk_verify_batch_gas(2, 129) - zk_verify_batch_gas(2, 128),
+            HOST_ZK_VERIFY_GAS_PER_BYTE + HOST_ZK_VERIFY_GAS_PER_PUBLIC_INPUT
+        );
         assert_eq!(zk_verify_batch_gas(usize::MAX, usize::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn zk_batch_output_bound_matches_canonical_hashed_tlv() {
+        let schedule = ZkGasScheduleV1::default();
+        for count in [1_usize, 2, 16] {
+            let body = norito::to_bytes(&vec![0_u8; count]).expect("encode status vector");
+            let complete_tlv_bytes = 7 + body.len() + iroha_crypto::Hash::LENGTH;
+            assert_eq!(
+                u64::try_from(complete_tlv_bytes).expect("bounded response length"),
+                schedule.batch_output_bytes(count),
+                "count={count}"
+            );
+            assert_eq!(schedule.batch_output_bytes(count), 87 + count as u64);
+        }
+    }
+
+    #[test]
+    fn zk_schedule_subhash_binds_every_rate_cap_and_layout_field() {
+        let canonical = ZkGasScheduleV1::default();
+        let canonical_hash = canonical.hash();
+        let changed = [
+            ZkGasScheduleV1 {
+                proof_base: canonical.proof_base + 1,
+                ..canonical
+            },
+            ZkGasScheduleV1 {
+                per_public_input: canonical.per_public_input + 1,
+                ..canonical
+            },
+            ZkGasScheduleV1 {
+                per_proof_byte: canonical.per_proof_byte + 1,
+                ..canonical
+            },
+            ZkGasScheduleV1 {
+                max_payload_bytes: canonical.max_payload_bytes + 1,
+                ..canonical
+            },
+            ZkGasScheduleV1 {
+                max_batch_proofs: canonical.max_batch_proofs + 1,
+                ..canonical
+            },
+            ZkGasScheduleV1 {
+                public_input_unit_bytes: canonical.public_input_unit_bytes + 1,
+                ..canonical
+            },
+            ZkGasScheduleV1 {
+                batch_output_fixed_bytes: canonical.batch_output_fixed_bytes + 1,
+                ..canonical
+            },
+            ZkGasScheduleV1 {
+                batch_output_bytes_per_proof: canonical.batch_output_bytes_per_proof + 1,
+                ..canonical
+            },
+        ];
+        assert!(
+            changed
+                .into_iter()
+                .all(|schedule| schedule.hash() != canonical_hash)
+        );
     }
 
     #[test]

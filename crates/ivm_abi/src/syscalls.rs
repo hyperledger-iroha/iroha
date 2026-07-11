@@ -549,13 +549,13 @@ pub const SYSCALL_INT_LE: u32 = 0x01_010D;
 pub const SYSCALL_INT_GT: u32 = 0x01_010E;
 /// Numeric integer greater-or-equal comparison.
 pub const SYSCALL_INT_GE: u32 = 0x01_010F;
-/// Integer negation modulo `2^4096`, interpreted in the signed domain.
+/// Integer negation modulo `2^512`, interpreted in the signed domain.
 pub const SYSCALL_INT_WRAP_NEG: u32 = 0x01_0110;
-/// Integer addition modulo `2^4096`, interpreted in the signed domain.
+/// Integer addition modulo `2^512`, interpreted in the signed domain.
 pub const SYSCALL_INT_WRAP_ADD: u32 = 0x01_0111;
-/// Integer subtraction modulo `2^4096`, interpreted in the signed domain.
+/// Integer subtraction modulo `2^512`, interpreted in the signed domain.
 pub const SYSCALL_INT_WRAP_SUB: u32 = 0x01_0112;
-/// Integer multiplication modulo `2^4096`, interpreted in the signed domain.
+/// Integer multiplication modulo `2^512`, interpreted in the signed domain.
 pub const SYSCALL_INT_WRAP_MUL: u32 = 0x01_0113;
 
 /// Convert an `int` to an exact scale-zero `decimal`.
@@ -568,7 +568,7 @@ pub const SYSCALL_DECIMAL_ADD: u32 = 0x01_0122;
 pub const SYSCALL_DECIMAL_SUB: u32 = 0x01_0123;
 /// Exact decimal multiplication; canonical results requiring scale above 28 fail.
 pub const SYSCALL_DECIMAL_MUL: u32 = 0x01_0124;
-/// Exact finite decimal division, trying canonical scales `0..=28` in order.
+/// Exact finite decimal division at the denominator's proven minimum scale.
 pub const SYSCALL_DECIMAL_DIV_EXACT: u32 = 0x01_0125;
 /// Decimal division rounded at an explicit output scale.
 pub const SYSCALL_DECIMAL_DIV_ROUND: u32 = 0x01_0126;
@@ -1073,10 +1073,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         v.push(SYSCALL_SCHEMA_INFO);
         // Legacy numeric aliases are intentionally absent. The first-release
         // surface exposes only the schema-bound exact numeric families below.
-        v.extend_from_slice(&[
-            SYSCALL_SCHEMA_ENCODE_DIRECT,
-            SYSCALL_SCHEMA_DECODE_DIRECT,
-        ]);
+        v.extend_from_slice(&[SYSCALL_SCHEMA_ENCODE_DIRECT, SYSCALL_SCHEMA_DECODE_DIRECT]);
         // Name decode is part of base ABI in V1
         v.push(SYSCALL_NAME_DECODE);
         // Account and asset ops (bridged by hosts)
@@ -1644,7 +1641,7 @@ pub fn render_abi_hashes_markdown_table() -> String {
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
 const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 1;
-const NUMERIC_MANTISSA_BITS_V1: u16 = 4096;
+const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
 
 // This is the base for invalid-surface sentinels. They cannot be emitted by
@@ -1710,6 +1707,12 @@ struct AbiNumericRoundingSurface {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiNumericFaultSurface {
+    name: &'static str,
+    tag: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericSurface {
     int_pointer_type_id: u16,
     decimal_pointer_type_id: u16,
@@ -1723,6 +1726,7 @@ struct AbiNumericSurface {
     integer_division: &'static str,
     wrapping_modulus: &'static str,
     rounding_modes: Vec<AbiNumericRoundingSurface>,
+    faults: Vec<AbiNumericFaultSurface>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2064,12 +2068,12 @@ fn semantic_abi_surface_v1() -> Result<
             quantity_pointer_type_id,
             mantissa_bits: NUMERIC_MANTISSA_BITS_V1,
             max_scale: DECIMAL_MAX_SCALE_V1,
-            int_domain: "-2^4095..=2^4095-1",
+            int_domain: "-2^511..=2^511-1",
             decimal_domain: "signed-mantissa-times-10^-scale;scale=0..28;exact",
             quantity_domain: "nonnegative-decimal;nominal-ledger-quantity",
             canonicalization: "minimal-signed-little-endian;zero-empty;strip-fractional-trailing-zeroes;zero-scale-is-zero",
             integer_division: "quotient-truncates-toward-zero;remainder-sign-is-dividend",
-            wrapping_modulus: "2^4096;reinterpret-as-signed-domain",
+            wrapping_modulus: "2^512;reinterpret-as-signed-domain",
             rounding_modes: vec![
                 AbiNumericRoundingSurface {
                     name: "toward_zero",
@@ -2098,6 +2102,56 @@ fn semantic_abi_surface_v1() -> Result<
                 AbiNumericRoundingSurface {
                     name: "nearest_toward_zero",
                     tag: crate::numeric::RoundingModeV1::NearestTowardZero.tag(),
+                },
+            ],
+            faults: vec![
+                AbiNumericFaultSurface {
+                    name: "mantissa_overflow",
+                    tag: crate::numeric::NumericFaultV1::MantissaOverflow.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "scale_overflow",
+                    tag: crate::numeric::NumericFaultV1::ScaleOverflow.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "division_by_zero",
+                    tag: crate::numeric::NumericFaultV1::DivisionByZero.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "repeating_decimal",
+                    tag: crate::numeric::NumericFaultV1::RepeatingDecimal.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "exact_division_scale_overflow",
+                    tag: crate::numeric::NumericFaultV1::ExactDivisionScaleOverflow.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "invalid_scale",
+                    tag: crate::numeric::NumericFaultV1::InvalidScale.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "inexact_conversion",
+                    tag: crate::numeric::NumericFaultV1::InexactConversion.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "negative_quantity",
+                    tag: crate::numeric::NumericFaultV1::NegativeQuantity.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "quantity_underflow",
+                    tag: crate::numeric::NumericFaultV1::QuantityUnderflow.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "invalid_rounding_mode",
+                    tag: crate::numeric::NumericFaultV1::InvalidRoundingMode.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "invalid_failure_mode",
+                    tag: crate::numeric::NumericFaultV1::InvalidFailureMode.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "reserved_register_nonzero",
+                    tag: crate::numeric::NumericFaultV1::ReservedRegisterNonZero.tag(),
                 },
             ],
         },
@@ -2251,10 +2305,7 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         state.u64("keys_max_items", surface.durable_state.keys_max_items)?;
         state.u64("max_path_bytes", surface.durable_state.max_path_bytes)?;
         state.u64("max_value_bytes", surface.durable_state.max_value_bytes)?;
-        state.u64(
-            "map_max_key_bytes",
-            surface.durable_state.map_max_key_bytes,
-        )?;
+        state.u64("map_max_key_bytes", surface.durable_state.map_max_key_bytes)?;
         state.u64(
             "map_max_base_bytes",
             surface.durable_state.map_max_base_bytes,
@@ -2332,7 +2383,11 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
                 rounding.text("name", mode.name)?;
                 rounding.u64("tag", mode.tag)
             },
-        )
+        )?;
+        numeric.sequence("faults", &surface.numeric.faults, |fault, value| {
+            fault.text("name", value.name)?;
+            fault.u64("tag", value.tag)
+        })
     })?;
     Ok(descriptor.finish())
 }
@@ -2675,7 +2730,9 @@ mod tests {
         assert_eq!(state.map_max_base_bytes, STATE_MAP_MAX_BASE_BYTES as u64);
         assert_eq!(state.map_max_page_bytes, STATE_MAP_MAX_PAGE_BYTES as u64);
 
-        assert_surface_mutation_changes_hash(|changed| changed.durable_state.semantics_version += 1);
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.semantics_version += 1
+        });
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.keys_max_items += 1);
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_path_bytes += 1);
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_value_bytes += 1);
@@ -2933,7 +2990,11 @@ mod tests {
         use crate::pointer_abi::PointerType;
 
         let surface = canonical_surface();
-        for expected in [PointerType::Int, PointerType::Decimal, PointerType::Quantity] {
+        for expected in [
+            PointerType::Int,
+            PointerType::Decimal,
+            PointerType::Quantity,
+        ] {
             assert_eq!(
                 surface
                     .pointer_type_ids
@@ -2943,9 +3004,7 @@ mod tests {
                 1
             );
         }
-        assert!(!surface
-            .pointer_type_ids
-            .contains(&(PointerType::RetiredAmount as u16)));
+        assert!(!surface.pointer_type_ids.contains(&0x0013));
         assert_eq!(surface.numeric.int_pointer_type_id, PointerType::Int as u16);
         assert_eq!(
             surface.numeric.decimal_pointer_type_id,
@@ -2955,7 +3014,7 @@ mod tests {
             surface.numeric.quantity_pointer_type_id,
             PointerType::Quantity as u16
         );
-        assert_eq!(surface.numeric.mantissa_bits, 4096);
+        assert_eq!(surface.numeric.mantissa_bits, 512);
         assert_eq!(surface.numeric.max_scale, 28);
         assert_eq!(
             surface
@@ -2972,6 +3031,28 @@ mod tests {
                 ("nearest_even", 4),
                 ("nearest_away", 5),
                 ("nearest_toward_zero", 6),
+            ]
+        );
+        assert_eq!(
+            surface
+                .numeric
+                .faults
+                .iter()
+                .map(|fault| (fault.name, fault.tag))
+                .collect::<Vec<_>>(),
+            vec![
+                ("mantissa_overflow", 1),
+                ("scale_overflow", 2),
+                ("division_by_zero", 3),
+                ("repeating_decimal", 4),
+                ("exact_division_scale_overflow", 5),
+                ("invalid_scale", 6),
+                ("inexact_conversion", 7),
+                ("negative_quantity", 8),
+                ("quantity_underflow", 9),
+                ("invalid_rounding_mode", 10),
+                ("invalid_failure_mode", 11),
+                ("reserved_register_nonzero", 12),
             ]
         );
 
@@ -3022,6 +3103,14 @@ mod tests {
             });
             assert_surface_mutation_changes_hash(|changed| {
                 changed.numeric.rounding_modes[mode_index].tag += 10;
+            });
+        }
+        for fault_index in 0..surface.numeric.faults.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.faults[fault_index].name = "mutated_fault";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.faults[fault_index].tag += 20;
             });
         }
     }
@@ -3138,11 +3227,7 @@ mod tests {
         for &pointer_type in crate::pointer_abi::PointerType::all() {
             assert_eq!(
                 allowed.contains(&pointer_type),
-                !matches!(
-                    pointer_type,
-                    crate::pointer_abi::PointerType::RetiredAmount
-                        | crate::pointer_abi::PointerType::TestOnly
-                ),
+                !matches!(pointer_type, crate::pointer_abi::PointerType::TestOnly),
                 "pointer policy completeness for {pointer_type:?}"
             );
         }

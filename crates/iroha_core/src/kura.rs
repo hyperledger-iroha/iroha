@@ -1723,7 +1723,12 @@ impl Kura {
     ) -> Result<(Arc<Self>, BlockCount)> {
         let store_dir = config.store_dir.resolve_relative_path();
         if let Some(configured_catalog_hash) = configured_catalog_hash {
-            Self::preflight_configured_lane_catalog_baseline(&store_dir, configured_catalog_hash)?;
+            Self::establish_or_verify_configured_lane_catalog_baseline(
+                &store_dir,
+                configured_catalog_hash,
+            )?;
+            #[cfg(test)]
+            Self::configured_catalog_preflight_crash_boundary(&store_dir)?;
         }
         let store_root = store_dir.clone();
         let primary_lane = lane_config.primary();

@@ -4,11 +4,12 @@ use std::{env, fs, path::Path};
 
 use iroha_crypto::Hash;
 use iroha_primitives::{
-    bigint::{BigInt, MAX_ENCODED_BYTES},
-    numeric::{Numeric, Quantity},
+    bigint::BigInt,
+    numeric::{MAX_MANTISSA_BITS, MAX_MANTISSA_BYTES, Numeric, Quantity},
     numeric_abi::{
         DECIMAL_SCHEMA_HASH_V1, DecimalValueV1, INT_SCHEMA_HASH_V1, IntValueV1,
-        NUMERIC_FRAME_HEADER_BYTES_V1, QUANTITY_SCHEMA_HASH_V1, QuantityValueV1,
+        MAX_INT_FRAME_BYTES_V1, NUMERIC_FRAME_HEADER_BYTES_V1, QUANTITY_SCHEMA_HASH_V1,
+        QuantityValueV1,
     },
 };
 use ivm::{PointerType, numeric_tlv};
@@ -63,7 +64,8 @@ fn invalid(
 }
 
 fn int_vector(id: &'static str, value: BigInt) -> Value {
-    let frame = IntValueV1::new(value.clone())
+    let frame = IntValueV1::try_new(value.clone())
+        .expect("bounded fixture integer")
         .encode_frame()
         .expect("fixture int frame");
     let envelope = numeric_tlv::encode_int(&value).expect("fixture int envelope");
@@ -159,11 +161,11 @@ fn envelope(pointer_type: u16, version: u8, frame: &[u8]) -> Vec<u8> {
 }
 
 fn signed_endpoints() -> (BigInt, BigInt) {
-    let maximum = vec![0xff_u8; MAX_ENCODED_BYTES - 1]
+    let maximum = vec![0xff_u8; MAX_MANTISSA_BYTES - 1]
         .into_iter()
         .chain([0x7f])
         .collect::<Vec<_>>();
-    let minimum = vec![0_u8; MAX_ENCODED_BYTES - 1]
+    let minimum = vec![0_u8; MAX_MANTISSA_BYTES - 1]
         .into_iter()
         .chain([0x80])
         .collect::<Vec<_>>();
@@ -186,10 +188,7 @@ pub fn render_fixture() -> String {
         int_vector("int_max", maximum),
         decimal_vector("decimal_zero", Numeric::new(0, 0)),
         decimal_vector("decimal_neg_1_25", Numeric::new(-125, 2)),
-        decimal_vector(
-            "decimal_scale_28",
-            Numeric::try_new_raw(BigInt::one(), 28).expect("scale-28 decimal"),
-        ),
+        decimal_vector("decimal_scale_28", Numeric::new(BigInt::one(), 28)),
         quantity_vector("quantity_zero", "0".parse().expect("zero quantity")),
         quantity_vector("quantity_1_25", "1.25".parse().expect("quantity")),
     ];
@@ -200,7 +199,11 @@ pub fn render_fixture() -> String {
     let decimal_trailing_zero_frame = frame(DECIMAL_SCHEMA_HASH_V1, &body(&[10], Some(1)));
     let decimal_scale_29_frame = frame(DECIMAL_SCHEMA_HASH_V1, &body(&[1], Some(29)));
     let negative_quantity_frame = frame(QUANTITY_SCHEMA_HASH_V1, &body(&[0xff], Some(0)));
-    let canonical_int_frame = IntValueV1::new(BigInt::one())
+    let mut positive_overflow = vec![0_u8; MAX_MANTISSA_BYTES + 1];
+    positive_overflow[MAX_MANTISSA_BYTES - 1] = 0x80;
+    let positive_overflow_frame = frame(INT_SCHEMA_HASH_V1, &body(&positive_overflow, None));
+    let canonical_int_frame = IntValueV1::try_new(BigInt::one())
+        .expect("bounded attack integer")
         .encode_frame()
         .expect("canonical attack base");
 
@@ -217,7 +220,11 @@ pub fn render_fixture() -> String {
     bad_hash_envelope[last] ^= 1;
 
     let mut oversized_envelope = canonical_int_envelope.clone();
-    oversized_envelope[3..7].copy_from_slice(&557_u32.to_be_bytes());
+    oversized_envelope[3..7].copy_from_slice(
+        &u32::try_from(MAX_INT_FRAME_BYTES_V1 + 1)
+            .expect("numeric frame bound fits u32")
+            .to_be_bytes(),
+    );
 
     let invalid_values = vec![
         invalid(
@@ -263,6 +270,13 @@ pub fn render_fixture() -> String {
             negative_quantity_frame,
         ),
         invalid(
+            "positive_mantissa_overflow",
+            "frame",
+            "int",
+            "frame_too_large",
+            positive_overflow_frame,
+        ),
+        invalid(
             "wrong_frame_schema",
             "frame",
             "int",
@@ -291,11 +305,25 @@ pub fn render_fixture() -> String {
             canonical_int_envelope.clone(),
         ),
         invalid(
-            "retired_amount_pointer",
+            "retired_amount_pointer_type",
             "envelope",
             "int",
             "type_not_allowed",
             envelope(PointerType::RetiredAmount as u16, 1, &canonical_int_frame),
+        ),
+        invalid(
+            "unassigned_pointer_type",
+            "envelope",
+            "int",
+            "unknown_type",
+            envelope(0x0014, 2, &canonical_int_frame),
+        ),
+        invalid(
+            "known_nonnumeric_pointer_precedes_version",
+            "envelope",
+            "int",
+            "wrong_type",
+            envelope(PointerType::AccountId as u16, 2, &canonical_int_frame),
         ),
         invalid(
             "unknown_pointer_type",
@@ -327,14 +355,29 @@ pub fn render_fixture() -> String {
         ),
     ];
 
+    let removable_scale_input = format!("1.{}", "0".repeat(29));
+    let removable_scale_value = removable_scale_input
+        .parse::<Numeric>()
+        .expect("normalization precedes scale validation");
+    let text_values = vec![object([
+        ("id", Value::from("decimal_removable_scale_29")),
+        ("kind", Value::from("decimal")),
+        ("input", Value::from(removable_scale_input)),
+        ("canonical", Value::from(removable_scale_value.to_string())),
+    ])];
+
     let document = object([
         ("format", Value::from("iroha.numeric.v1")),
         (
             "generator",
             Value::from("ivm::numeric_tlv + iroha_primitives::numeric_abi"),
         ),
-        ("signed_bits", Value::from(4096_u64)),
+        (
+            "signed_bits",
+            Value::from(u64::try_from(MAX_MANTISSA_BITS).expect("numeric bit bound fits u64")),
+        ),
         ("maximum_scale", Value::from(28_u64)),
+        ("text", Value::Array(text_values)),
         ("valid", Value::Array(valid_values)),
         ("invalid", Value::Array(invalid_values)),
     ]);
@@ -348,7 +391,8 @@ fn verify(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let actual = fs::read_to_string(path)?;
     if actual != expected {
         return Err(format!(
-            "{} is stale; regenerate it with `cargo run -p ivm --example numeric_v1_fixture`",
+            "{} is stale; regenerate it with `cargo run -p ivm --example numeric_v1_fixture -- --write {}`",
+            path.display(),
             path.display()
         )
         .into());
@@ -359,16 +403,22 @@ fn verify(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args_os().skip(1);
     if let Some(flag) = arguments.next() {
-        if flag == "--check" {
+        if flag == "--check" || flag == "--write" {
             let path = arguments
                 .next()
-                .ok_or("--check requires a fixture path")?;
+                .ok_or("--check/--write requires a fixture path")?;
             if arguments.next().is_some() {
                 return Err("unexpected arguments after fixture path".into());
             }
-            return verify(Path::new(&path));
+            let path = Path::new(&path);
+            if flag == "--check" {
+                verify(path)?;
+            } else {
+                fs::write(path, render_fixture())?;
+            }
+            return Ok(());
         }
-        return Err("only `--check <path>` is supported".into());
+        return Err("only `--check <path>` or `--write <path>` is supported".into());
     }
     print!("{}", render_fixture());
     Ok(())

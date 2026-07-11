@@ -56,7 +56,8 @@ REQUIRED_SEMANTICS = (
     "sccp-message-leaf-v1",
     "sccp-merkle-inclusion-v1",
     "sora-taira-block-commitment-v1",
-    "sora-taira-commit-qc-v1",
+    "sora-taira-v2-finality-artifact-v1",
+    "sora-taira-v2-dual-quorum-v1",
     "sora-taira-anchor-continuity-v1",
 )
 RELEASE_CIRCUIT_IDS = (
@@ -376,12 +377,12 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
         keys=(
             "version",
             "source_profile",
+            "protocol_version",
             "chain_id_hash_hex",
             "checkpoint_height",
             "checkpoint_block_hash_hex",
-            "validator_set_epoch",
-            "validator_set_hash_hex",
-            "validator_set_hash_version",
+            "checkpoint_context_id_hex",
+            "checkpoint_finality_artifact_hash_hex",
         ),
     )
     anchor_version = _require_int(
@@ -392,6 +393,12 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
     )
     if anchor_version != 1 or source_profile != "sora-taira":
         _fail("SORA finality anchor must identify exact Taira V1")
+    protocol_version = _require_int(
+        value["protocol_version"],
+        label="SORA anchor protocol_version",
+        minimum=2,
+        maximum=2,
+    )
     chain_id_hash = bytes.fromhex(
         _require_hex(
             value["chain_id_hash_hex"], label="SORA anchor chain id", byte_length=32
@@ -412,35 +419,39 @@ def sora_finality_anchor_hash(anchor: Mapping[str, Any]) -> bytes:
             byte_length=32,
         )
     )
-    epoch = _require_int(
-        value["validator_set_epoch"],
-        label="SORA anchor validator_set_epoch",
-        minimum=0,
-        maximum=2**64 - 1,
-    )
-    validator_hash = bytes.fromhex(
+    context_id = bytes.fromhex(
         _require_hex(
-            value["validator_set_hash_hex"],
-            label="SORA anchor validator set",
+            value["checkpoint_context_id_hex"],
+            label="SORA anchor checkpoint context id",
             byte_length=32,
         )
     )
-    version = _require_int(
-        value["validator_set_hash_version"],
-        label="SORA anchor validator_set_hash_version",
-        minimum=1,
-        maximum=2**16 - 1,
+    finality_artifact_hash = bytes.fromhex(
+        _require_hex(
+            value["checkpoint_finality_artifact_hash_hex"],
+            label="SORA anchor checkpoint finality artifact hash",
+            byte_length=32,
+        )
     )
-    if version != 1 or len({chain_id_hash, block_hash, validator_hash}) != 3:
-        _fail("SORA finality anchor roles are invalid or aliased")
+    _require_pairwise_distinct(
+        (
+            ("SORA anchor chain id", chain_id_hash.hex()),
+            ("SORA anchor checkpoint block", block_hash.hex()),
+            ("SORA anchor checkpoint context id", context_id.hex()),
+            (
+                "SORA anchor checkpoint finality artifact",
+                finality_artifact_hash.hex(),
+            ),
+        )
+    )
     canonical = (
         b"\x01\x01"
+        + _push_u16(protocol_version)
         + chain_id_hash
         + checkpoint_height.to_bytes(8, "little")
         + block_hash
-        + epoch.to_bytes(8, "little")
-        + validator_hash
-        + version.to_bytes(2, "little")
+        + context_id
+        + finality_artifact_hash
     )
     return keccak256(SORA_FINALITY_ANCHOR_HASH_DOMAIN + canonical)
 
@@ -815,6 +826,10 @@ def _require_pairwise_distinct(values: Sequence[tuple[str, str]]) -> None:
 
 def _push_u32(value: int) -> bytes:
     return struct.pack("<I", value)
+
+
+def _push_u16(value: int) -> bytes:
+    return struct.pack("<H", value)
 
 
 def _push_u64(value: int) -> bytes:
@@ -1292,7 +1307,11 @@ def load_trust_policy(
             ("sora_finality_anchor_hash_hex", anchor_hash.hex()),
             ("anchor_chain_id_hash_hex", anchor["chain_id_hash_hex"]),
             ("anchor_checkpoint_block_hash_hex", anchor["checkpoint_block_hash_hex"]),
-            ("anchor_validator_set_hash_hex", anchor["validator_set_hash_hex"]),
+            ("anchor_checkpoint_context_id_hex", anchor["checkpoint_context_id_hex"]),
+            (
+                "anchor_checkpoint_finality_artifact_hash_hex",
+                anchor["checkpoint_finality_artifact_hash_hex"],
+            ),
             ("verifier_key_hash_hex", proof["verifier_key_hash_hex"]),
             ("verifying_key_sha256_hex", proof["verifying_key_sha256_hex"]),
             ("prover_build_sha256_hex", proof["prover_build_sha256_hex"]),
@@ -2851,8 +2870,43 @@ def bundle_root_hash_hex(
     return hashlib.sha256(payload).hexdigest()
 
 
+def _validate_bundle_artifact_kind_counts(kind_counts: Mapping[str, int]) -> None:
+    """Require either the closed fixture or complete production inventory shape."""
+
+    if kind_counts["release-evidence"] != 1:
+        _fail("bundle must contain exactly one release-evidence entry")
+    if kind_counts["phase-transcript"] != len(REQUIRED_PHASES):
+        _fail("bundle phase-transcript count does not match the signed corridor")
+    if kind_counts["lane-evidence"] != len(PROFILE_ORDER):
+        _fail("bundle lane-evidence count does not match the SCCP V1 profile set")
+
+    semantic_kinds = tuple(kind for _, kind, _ in SEMANTIC_ARTIFACT_ROLES)
+    semantic_count = kind_counts["circuit-audit-report"] + sum(
+        kind_counts[kind] for kind in semantic_kinds
+    )
+    if semantic_count == 0:
+        return
+
+    if kind_counts["circuit-audit-report"] != (
+        len(PROFILE_ORDER) * len(CIRCUIT_AUDITOR_ROLES)
+    ):
+        _fail("production bundle must contain exactly two audit reports per profile")
+    for kind in semantic_kinds:
+        count = kind_counts[kind]
+        if not 1 <= count <= len(PROFILE_ORDER):
+            _fail(f"production bundle has an invalid {kind} entry count")
+    if kind_counts["honest-proof"] != len(PROFILE_ORDER):
+        _fail("production bundle must contain one distinct honest proof per profile")
+
+
 def validate_bundle_index(value: Any) -> dict[str, Any]:
-    """Validate the exact deterministic SCCP release-bundle index schema."""
+    """Validate the bounded standalone SCCP release-bundle index schema.
+
+    This pass deliberately does not guess the complete artifact inventory from
+    kind counts.  After the signed evidence is loaded, callers must also invoke
+    :func:`validate_bundle_index_against_evidence` to compare the index with the
+    exact signed paths, kinds, sizes, and hashes.
+    """
 
     index = _require_object(
         value,
@@ -2887,12 +2941,17 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
         byte_length=32,
     )
     entries = _require_list(index["entries"], label="bundle entries")
-    expected_entry_count = 1 + len(REQUIRED_PHASES) + len(PROFILE_ORDER)
-    if len(entries) != expected_entry_count:
-        _fail(f"bundle entries must contain exactly {expected_entry_count} files")
+    minimum_entry_count = 1 + len(REQUIRED_PHASES) + len(PROFILE_ORDER)
+    maximum_entry_count = 1 + MAX_ARTIFACTS
+    if not minimum_entry_count <= len(entries) <= maximum_entry_count:
+        _fail(
+            "bundle entries must contain the release evidence and a bounded "
+            "signed artifact inventory"
+        )
     previous = ""
     seen_hashes: set[str] = set()
-    kind_counts = {"release-evidence": 0, "phase-transcript": 0, "lane-evidence": 0}
+    allowed_kinds = ARTIFACT_KINDS | {"release-evidence"}
+    kind_counts = {kind: 0 for kind in allowed_kinds}
     total_size = 0
     for position, raw in enumerate(entries):
         entry = _require_object(
@@ -2906,7 +2965,6 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
             _fail("bundle entries must be strictly sorted by unique path")
         previous = path
         kind = _require_string(entry["kind"], label=f"bundle entries[{position}].kind")
-        allowed_kinds = ARTIFACT_KINDS | {"release-evidence"}
         if kind not in allowed_kinds:
             _fail("bundle entry kind is not part of the SCCP V1 schema")
         kind_counts[kind] += 1
@@ -2916,9 +2974,7 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
         if digest in seen_hashes:
             _fail("bundle entries must have distinct SHA-256 digests")
         seen_hashes.add(digest)
-        limit = MAX_EVIDENCE_BYTES if kind == "release-evidence" else (
-            MAX_TRANSCRIPT_BYTES if kind == "phase-transcript" else MAX_ARTIFACT_BYTES
-        )
+        limit = MAX_EVIDENCE_BYTES if kind == "release-evidence" else artifact_limit(kind)
         size = _require_int(
             entry["size_bytes"],
             label=f"bundle entries[{position}].size_bytes",
@@ -2928,12 +2984,7 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
         total_size += size
         if total_size > MAX_TOTAL_ARTIFACT_BYTES + MAX_EVIDENCE_BYTES:
             _fail("bundle entries exceed the total SCCP release size bound")
-    if kind_counts != {
-        "release-evidence": 1,
-        "phase-transcript": len(REQUIRED_PHASES),
-        "lane-evidence": len(PROFILE_ORDER),
-    }:
-        _fail("bundle entry kinds do not match the exact SCCP V1 inventory")
+    _validate_bundle_artifact_kind_counts(kind_counts)
     evidence_entries = [entry for entry in entries if entry["kind"] == "release-evidence"]
     if len(evidence_entries) != 1 or evidence_entries[0]["path"] != "evidence.json":
         _fail("bundle must contain exactly one release-evidence entry at evidence.json")
@@ -2948,6 +2999,43 @@ def validate_bundle_index(value: Any) -> dict[str, Any]:
         validator_executable_sha256_hex=index["validator_executable_sha256_hex"],
     ):
         _fail("bundle_root_hash_hex does not match the canonical entry inventory")
+    return index
+
+
+def validate_bundle_index_against_evidence(
+    index: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    evidence_bytes: bytes,
+) -> Mapping[str, Any]:
+    """Bind a structurally valid index to the exact signed evidence inventory."""
+
+    expected_entries = [
+        {
+            "path": "evidence.json",
+            "kind": "release-evidence",
+            "sha256_hex": sha256_hex(evidence_bytes),
+            "size_bytes": len(evidence_bytes),
+        },
+        *[dict(entry) for entry in evidence["artifacts"]],
+    ]
+    expected_entries.sort(key=lambda entry: entry["path"])
+    if index["release_id"] != evidence["release_id"]:
+        _fail("bundle release_id does not match signed release evidence")
+    if (
+        index["trust_policy_id"] != evidence["trust_policy_id"]
+        or index["trust_policy_sha256_hex"]
+        != evidence["trust_policy_sha256_hex"]
+    ):
+        _fail("bundle trust-policy commitment does not match signed release evidence")
+    if index["validator"] != evidence["validator"]:
+        _fail("bundle validator identity does not match signed release evidence")
+    if (
+        index["validator_executable_sha256_hex"]
+        != evidence["validator"]["executable_sha256_hex"]
+    ):
+        _fail("bundle executable commitment does not match signed release evidence")
+    if index["entries"] != expected_entries:
+        _fail("bundle entry inventory does not exactly equal signed release evidence")
     return index
 
 
@@ -2987,7 +3075,9 @@ def make_bundle_index(
         validator=index["validator"],
         validator_executable_sha256_hex=index["validator_executable_sha256_hex"],
     )
-    return validate_bundle_index(index)
+    validated = validate_bundle_index(index)
+    validate_bundle_index_against_evidence(validated, evidence, evidence_bytes)
+    return validated
 
 
 def _directory_open_flags() -> int:

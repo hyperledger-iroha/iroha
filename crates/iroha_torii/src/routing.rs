@@ -141,8 +141,7 @@ use iroha_data_model::soranet::privacy_metrics::{
 };
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_sccp::{
-    SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, TairaBridgeFinalityProofV1,
-    TairaCommitQcV1, TairaConsensusPhaseV1, TairaQcRefV1, TairaSccpMessageProofV1,
+    SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, TairaSccpMessageProofV1,
     sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
     sccp_payload_projection,
 };
@@ -6030,23 +6029,8 @@ pub async fn handle_v1_bridge_finality(
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height).map_err(
-        |err| match err {
-            iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
-            | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
-            | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                ))
-            }
-            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => Error::Query(
-                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
-            ),
-            iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
-                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
-            ),
-        },
-    )?;
+    let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height)
+        .map_err(map_bridge_finality_error)?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6066,30 +6050,15 @@ pub async fn handle_v1_bridge_finality(
     Ok(resp)
 }
 
-/// GET /v1/bridge/finality/bundle/{height} — Commitment + justification bundle for a block.
+/// GET /v1/bridge/finality/bundle/{height} — MMR commitment + exact v2 proof for a block.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height).map_err(
-        |err| match err {
-            iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
-            | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
-            | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                ))
-            }
-            iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. } => Error::Query(
-                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
-            ),
-            iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
-                iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
-            ),
-        },
-    )?;
+    let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
+        .map_err(map_bridge_finality_error)?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6113,13 +6082,15 @@ fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Er
     match err {
         iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
         | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
-        | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
+        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactNotFound(_) => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         }
-        iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. }
-        | iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
+        iroha_core::bridge::BridgeFinalityError::FinalityArtifactRead { .. }
+        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. }
+        | iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. }
+        | iroha_core::bridge::BridgeFinalityError::InvalidFinalityArtifact { .. } => Error::Query(
             iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
         ),
     }
@@ -7452,37 +7423,33 @@ mod sccp_first_release_api_tests {
             norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
         );
     }
-}
 
-fn hash_of_to_h256<T>(hash: &iroha_crypto::HashOf<T>) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out.copy_from_slice(hash.as_ref().as_ref());
-    out
-}
+    #[test]
+    fn sccp_finality_encoding_is_the_exact_v2_bridge_proof() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let proof = iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+            .expect("exact SCCP finality fixture");
+        assert_eq!(
+            build_sccp_finality_proof_bytes(&proof, fixture.bundle.commitment_root)
+                .expect("exact v2 proof encodes"),
+            to_bytes(&proof).expect("canonical bridge proof")
+        );
 
-fn hash_to_h256(hash: &iroha_crypto::Hash) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out.copy_from_slice(hash.as_ref());
-    out
-}
+        let error = build_sccp_finality_proof_bytes(&proof, [0xa5; 32])
+            .expect_err("cross-root proof projection must reject");
+        assert!(
+            conversion_message(&error)
+                .is_some_and(|message| message.contains("does not match the finalized"))
+        );
 
-fn sccp_consensus_phase(
-    phase: iroha_data_model::block::consensus::CertPhase,
-) -> TairaConsensusPhaseV1 {
-    match phase {
-        iroha_data_model::block::consensus::CertPhase::Prepare => TairaConsensusPhaseV1::Prepare,
-        iroha_data_model::block::consensus::CertPhase::Commit => TairaConsensusPhaseV1::Commit,
-        iroha_data_model::block::consensus::CertPhase::NewView => TairaConsensusPhaseV1::NewView,
-    }
-}
-
-fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> TairaQcRefV1 {
-    TairaQcRefV1 {
-        height: reference.height,
-        view: reference.view,
-        epoch: reference.epoch,
-        subject_block_hash: hash_of_to_h256(&reference.subject_block_hash),
-        phase: sccp_consensus_phase(reference.phase),
+        let mut rootless = proof;
+        rootless.block_header.set_sccp_commitment_root(None);
+        let error = build_sccp_finality_proof_bytes(&rootless, fixture.bundle.commitment_root)
+            .expect_err("rootless finalized header must reject");
+        assert!(
+            conversion_message(&error)
+                .is_some_and(|message| message.contains("does not anchor an SCCP"))
+        );
     }
 }
 
@@ -7500,56 +7467,9 @@ fn build_sccp_finality_proof_bytes(
             "requested SCCP commitment root does not match the finalized Taira block header",
         ));
     }
-    let block_header_bytes = to_bytes(&finality_proof.block_header).map_err(|err| {
+    to_bytes(finality_proof).map_err(|err| {
         sccp_internal_error(format!(
-            "failed to encode finalized Taira block header for SCCP proof: {err}"
-        ))
-    })?;
-
-    to_bytes(&TairaBridgeFinalityProofV1 {
-        version: 1,
-        chain_id: finality_proof.chain_id.as_str().to_owned(),
-        height: finality_proof.height,
-        block_hash: hash_of_to_h256(&finality_proof.block_hash),
-        commitment_root,
-        block_header_bytes,
-        commit_qc: TairaCommitQcV1 {
-            version: 1,
-            phase: sccp_consensus_phase(finality_proof.commit_qc.phase),
-            height: finality_proof.commit_qc.height,
-            view: finality_proof.commit_qc.view,
-            epoch: finality_proof.commit_qc.epoch,
-            mode_tag: finality_proof.commit_qc.mode_tag.clone(),
-            subject_block_hash: hash_of_to_h256(&finality_proof.commit_qc.subject_block_hash),
-            parent_state_root: hash_to_h256(&finality_proof.commit_qc.parent_state_root),
-            post_state_root: hash_to_h256(&finality_proof.commit_qc.post_state_root),
-            chain_order_hash: hash_to_h256(&finality_proof.commit_qc.chain_order_hash),
-            rechain_seq: finality_proof.commit_qc.rechain_seq,
-            highest_qc: finality_proof
-                .commit_qc
-                .highest_qc
-                .as_ref()
-                .map(sccp_qc_ref),
-            validator_set_hash: hash_of_to_h256(&finality_proof.commit_qc.validator_set_hash),
-            validator_set_hash_version: finality_proof.commit_qc.validator_set_hash_version,
-            validator_public_keys: finality_proof
-                .commit_qc
-                .validator_set
-                .iter()
-                .map(|peer| peer.public_key().to_string())
-                .collect(),
-            validator_set_pops: finality_proof.validator_set_pops.clone(),
-            signers_bitmap: finality_proof.commit_qc.aggregate.signers_bitmap.clone(),
-            bls_aggregate_signature: finality_proof
-                .commit_qc
-                .aggregate
-                .bls_aggregate_signature
-                .clone(),
-        },
-    })
-    .map_err(|err| {
-        sccp_internal_error(format!(
-            "failed to encode Taira SCCP finality proof payload: {err}"
+            "failed to encode exact Sumeragi-v2 Taira finality proof: {err}"
         ))
     })
 }
@@ -15246,12 +15166,11 @@ pub async fn handle_post_contract_call(
 }
 
 /// POST /v1/contracts/call/simulate — execute a public contract entrypoint locally without submission.
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_contract_call_simulate(
+pub fn handle_post_contract_call_simulate(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractCallSimulateDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<Vec<u8>> {
     let ContractCallSimulateDto {
         authority,
         contract_address,
@@ -15339,13 +15258,11 @@ pub async fn handle_post_contract_call_simulate(
         },
     };
 
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    let body = encode_contract_call_simulation_response_bounded(
+        &response,
+        CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+    )?;
+    Ok(body)
 }
 
 /// POST /v1/bridge/proofs/submit — submit a bridge proof derived from a live SCCP bundle.
@@ -15699,60 +15616,51 @@ pub async fn handle_post_bridge_message_submit(
 }
 
 /// POST /v1/contracts/view — execute a read-only contract view entrypoint locally.
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_contract_view(
+pub fn handle_post_contract_view(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractViewDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<(StatusCode, Vec<u8>)> {
     let view = evaluate_contract_view_request(state, req)?;
     let (status, body) = match view {
         Ok(response) => (
             StatusCode::OK,
-            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+            encode_contract_view_success_bounded(
+                &response,
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?,
         ),
         Err(response) => (
             StatusCode::UNPROCESSABLE_ENTITY,
-            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+            encode_contract_view_error_bounded(&response, CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES)?,
         ),
     };
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    *resp.status_mut() = status;
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok((status, body))
 }
 
 #[cfg(feature = "app_api")]
 /// POST /v1/contracts/view/batch — execute multiple read-only contract view entrypoints locally.
-pub async fn handle_post_contract_view_batch(
+pub fn handle_post_contract_view_batch(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractViewBatchDto>,
-) -> Result<impl IntoResponse> {
+) -> Result<Vec<u8>> {
+    validate_contract_view_batch_request(&req)?;
     let ContractViewBatchDto {
         authority,
         gas_limit,
         items,
     } = req;
-    if items.is_empty() {
-        return Err(conversion_error(
-            "contract view batch must include at least one item".to_owned(),
-        ));
-    }
-
     let default_gas_limit = gas_limit.unwrap_or(DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT);
-    if default_gas_limit == 0 {
-        return Err(conversion_error(
-            "contract view batch gas_limit must be positive".to_owned(),
-        ));
-    }
 
-    let mut response_items = Vec::with_capacity(items.len());
+    let mut body = Vec::with_capacity(CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES.min(16 * 1024));
+    append_contract_simulation_json_literal(
+        &mut body,
+        b"{\"items\":[",
+        CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+    )?;
     let mut all_ok = true;
-    for item in items {
-        let request_id = item.request_id.clone();
+    for (index, item) in items.into_iter().enumerate() {
+        let request_id = item.request_id;
         let item_response = evaluate_contract_view_request(
             Arc::clone(&state),
             ContractViewDto {
@@ -15764,64 +15672,92 @@ pub async fn handle_post_contract_view_batch(
                 gas_limit: item.gas_limit.unwrap_or(default_gas_limit),
             },
         )?;
-
-        let mut object = Map::new();
-        if let Some(request_id) = request_id {
-            object.insert("request_id".into(), Value::from(request_id));
+        if index > 0 {
+            append_contract_simulation_json_literal(
+                &mut body,
+                b",",
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
+        }
+        append_contract_simulation_json_literal(
+            &mut body,
+            b"{",
+            CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+        )?;
+        let mut has_field = false;
+        if let Some(request_id) = request_id.as_deref() {
+            append_contract_simulation_json_literal(
+                &mut body,
+                b"\"request_id\":",
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
+            append_contract_json_string(
+                &mut body,
+                request_id,
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
+            has_field = true;
+        }
+        if has_field {
+            append_contract_simulation_json_literal(
+                &mut body,
+                b",",
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?;
         }
         match item_response {
-            Ok(ok) => {
-                object.insert("ok".into(), Value::Bool(true));
-                object.insert("dataspace".into(), Value::from(ok.dataspace));
-                if let Some(contract_address) = ok.contract_address {
-                    object.insert(
-                        "contract_address".into(),
-                        Value::from(contract_address.to_string()),
-                    );
-                }
-                object.insert("code_hash_hex".into(), Value::from(ok.code_hash_hex));
-                object.insert("abi_hash_hex".into(), Value::from(ok.abi_hash_hex));
-                object.insert("entrypoint".into(), Value::from(ok.entrypoint));
-                object.insert(
-                    "result".into(),
-                    json::parse_value(ok.result.get()).unwrap_or(Value::Null),
-                );
-            }
+            Ok(ok) => append_contract_view_success_fields(
+                &mut body,
+                &ok,
+                CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            )?,
             Err(err) => {
                 all_ok = false;
-                object.insert("ok".into(), Value::Bool(false));
-                object.insert("dataspace".into(), Value::from(err.dataspace));
-                if let Some(contract_address) = err.contract_address {
-                    object.insert(
-                        "contract_address".into(),
-                        Value::from(contract_address.to_string()),
-                    );
-                }
-                object.insert("code_hash_hex".into(), Value::from(err.code_hash_hex));
-                object.insert("abi_hash_hex".into(), Value::from(err.abi_hash_hex));
-                object.insert("entrypoint".into(), Value::from(err.entrypoint));
-                object.insert("error".into(), Value::from(err.error));
-                if let Some(diag) = err.vm_diagnostic {
-                    object.insert(
-                        "vm_diagnostic".into(),
-                        norito::json::to_value(&diag).unwrap_or(Value::Null),
-                    );
-                }
+                append_contract_view_error_fields(
+                    &mut body,
+                    &err,
+                    CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+                )?;
             }
         }
-        response_items.push(Value::Object(object));
+        append_contract_simulation_json_literal(
+            &mut body,
+            b"}",
+            CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+        )?;
     }
 
-    let mut top = Map::new();
-    top.insert("ok".into(), Value::Bool(all_ok));
-    top.insert("items".into(), Value::Array(response_items));
-    let body = norito::json::to_json_pretty(&Value::Object(top)).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    append_contract_simulation_json_literal(
+        &mut body,
+        if all_ok {
+            b"],\"ok\":true}"
+        } else {
+            b"],\"ok\":false}"
+        },
+        CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+    )?;
+    Ok(body)
+}
+
+#[cfg(feature = "app_api")]
+/// Validate contract-view batch admission before routing or VM execution.
+pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Result<()> {
+    if req.items.is_empty() {
+        return Err(conversion_error(
+            "contract view batch must include at least one item".to_owned(),
+        ));
+    }
+    if req.items.len() > CONTRACT_VIEW_BATCH_MAX_ITEMS {
+        return Err(conversion_error(format!(
+            "contract view batch exceeds the {CONTRACT_VIEW_BATCH_MAX_ITEMS}-item limit"
+        )));
+    }
+    if req.gas_limit == Some(0) || req.items.iter().any(|item| item.gas_limit == Some(0)) {
+        return Err(conversion_error(
+            "contract view batch gas_limit values must be positive".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -16354,7 +16290,7 @@ struct ContractViewExecutionError {
 struct ContractCallSimulationExecution {
     normalized_payload: Option<IrohaJson>,
     gas_used: u64,
-    queued_instructions: Vec<norito::json::Value>,
+    queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
     result: Option<IrohaJson>,
 }
 
@@ -16364,7 +16300,363 @@ struct ContractCallSimulationError {
     vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
     normalized_payload: Option<IrohaJson>,
     gas_used: u64,
-    queued_instructions: Vec<norito::json::Value>,
+    queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
+}
+
+/// Canonical server/client ceiling for `/v1/contracts/call/simulate` JSON.
+pub const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum number of VM executions admitted by one contract view batch.
+pub const CONTRACT_VIEW_BATCH_MAX_ITEMS: usize = 256;
+
+#[cfg(feature = "app_api")]
+fn append_contract_simulation_json_literal(
+    out: &mut Vec<u8>,
+    literal: &[u8],
+    max_bytes: usize,
+) -> Result<()> {
+    if out.len().saturating_add(literal.len()) > max_bytes {
+        return Err(conversion_error(format!(
+            "contract tooling response exceeds the {max_bytes}-byte JSON limit"
+        )));
+    }
+    out.extend_from_slice(literal);
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_string(out: &mut Vec<u8>, value: &str, max_bytes: usize) -> Result<()> {
+    append_contract_simulation_json_literal(out, b"\"", max_bytes)?;
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        let escape: Option<&[u8]> = match byte {
+            b'\"' => Some(b"\\\""),
+            b'\\' => Some(b"\\\\"),
+            b'\x08' => Some(b"\\b"),
+            b'\x0c' => Some(b"\\f"),
+            b'\n' => Some(b"\\n"),
+            b'\r' => Some(b"\\r"),
+            b'\t' => Some(b"\\t"),
+            0x00..=0x1f => {
+                if start < index {
+                    append_contract_simulation_json_literal(out, &bytes[start..index], max_bytes)?;
+                }
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let encoded = [
+                    b'\\',
+                    b'u',
+                    b'0',
+                    b'0',
+                    HEX[(byte >> 4) as usize],
+                    HEX[(byte & 0xf) as usize],
+                ];
+                append_contract_simulation_json_literal(out, &encoded, max_bytes)?;
+                start = index + 1;
+                None
+            }
+            _ => None,
+        };
+        if let Some(escape) = escape {
+            if start < index {
+                append_contract_simulation_json_literal(out, &bytes[start..index], max_bytes)?;
+            }
+            append_contract_simulation_json_literal(out, escape, max_bytes)?;
+            start = index + 1;
+        }
+    }
+    if start < bytes.len() {
+        append_contract_simulation_json_literal(out, &bytes[start..], max_bytes)?;
+    }
+    append_contract_simulation_json_literal(out, b"\"", max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_number<T: core::fmt::Display>(
+    out: &mut Vec<u8>,
+    value: &T,
+    max_bytes: usize,
+) -> Result<()> {
+    let value = value.to_string();
+    append_contract_simulation_json_literal(out, value.as_bytes(), max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_string(
+    out: &mut Vec<u8>,
+    value: Option<&str>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(value) => append_contract_json_string(out, value, max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_number<T: core::fmt::Display>(
+    out: &mut Vec<u8>,
+    value: Option<T>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(value) => append_contract_json_number(out, &value, max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_bool(
+    out: &mut Vec<u8>,
+    value: Option<bool>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(true) => append_contract_simulation_json_literal(out, b"true", max_bytes),
+        Some(false) => append_contract_simulation_json_literal(out, b"false", max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_iroha(
+    out: &mut Vec<u8>,
+    value: Option<&IrohaJson>,
+    max_bytes: usize,
+) -> Result<()> {
+    match value {
+        Some(value) => {
+            append_contract_simulation_json_literal(out, value.get().as_bytes(), max_bytes)
+        }
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_vm_diagnostic(
+    out: &mut Vec<u8>,
+    diagnostic: &ContractViewVmDiagnosticDto,
+    max_bytes: usize,
+) -> Result<()> {
+    macro_rules! prefix {
+        ($literal:literal) => {
+            append_contract_simulation_json_literal(out, $literal, max_bytes)?
+        };
+    }
+    prefix!(b"{\"trap_kind\":");
+    append_contract_json_string(out, &diagnostic.trap_kind, max_bytes)?;
+    prefix!(b",\"message\":");
+    append_contract_json_string(out, &diagnostic.message, max_bytes)?;
+    prefix!(b",\"pc\":");
+    append_contract_json_number(out, &diagnostic.pc, max_bytes)?;
+    prefix!(b",\"function\":");
+    append_contract_json_optional_string(out, diagnostic.function.as_deref(), max_bytes)?;
+    prefix!(b",\"source_path\":");
+    append_contract_json_optional_string(out, diagnostic.source_path.as_deref(), max_bytes)?;
+    prefix!(b",\"line\":");
+    append_contract_json_optional_number(out, diagnostic.line, max_bytes)?;
+    prefix!(b",\"column\":");
+    append_contract_json_optional_number(out, diagnostic.column, max_bytes)?;
+    prefix!(b",\"gas_limit\":");
+    append_contract_json_number(out, &diagnostic.gas_limit, max_bytes)?;
+    prefix!(b",\"gas_remaining\":");
+    append_contract_json_number(out, &diagnostic.gas_remaining, max_bytes)?;
+    prefix!(b",\"gas_used\":");
+    append_contract_json_number(out, &diagnostic.gas_used, max_bytes)?;
+    prefix!(b",\"cycles\":");
+    append_contract_json_number(out, &diagnostic.cycles, max_bytes)?;
+    prefix!(b",\"max_cycles\":");
+    append_contract_json_number(out, &diagnostic.max_cycles, max_bytes)?;
+    prefix!(b",\"stack_limit_bytes\":");
+    append_contract_json_number(out, &diagnostic.stack_limit_bytes, max_bytes)?;
+    prefix!(b",\"stack_bytes_used\":");
+    append_contract_json_number(out, &diagnostic.stack_bytes_used, max_bytes)?;
+    prefix!(b",\"entrypoint_pc\":");
+    append_contract_json_optional_number(out, diagnostic.entrypoint_pc, max_bytes)?;
+    prefix!(b",\"current_function\":");
+    append_contract_json_optional_string(out, diagnostic.current_function.as_deref(), max_bytes)?;
+    prefix!(b",\"opcode\":");
+    append_contract_json_optional_number(out, diagnostic.opcode, max_bytes)?;
+    prefix!(b",\"syscall\":");
+    append_contract_json_optional_number(out, diagnostic.syscall, max_bytes)?;
+    prefix!(b",\"predecoded_loaded\":");
+    append_contract_simulation_json_literal(
+        out,
+        if diagnostic.predecoded_loaded {
+            b"true"
+        } else {
+            b"false"
+        },
+        max_bytes,
+    )?;
+    prefix!(b",\"predecoded_hit\":");
+    append_contract_json_optional_bool(out, diagnostic.predecoded_hit, max_bytes)?;
+    append_contract_simulation_json_literal(out, b"}", max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_json_optional_diagnostic(
+    out: &mut Vec<u8>,
+    diagnostic: Option<&ContractViewVmDiagnosticDto>,
+    max_bytes: usize,
+) -> Result<()> {
+    match diagnostic {
+        Some(diagnostic) => append_contract_vm_diagnostic(out, diagnostic, max_bytes),
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn append_bounded_instruction_json(
+    out: &mut Vec<u8>,
+    instruction: &iroha_data_model::isi::InstructionBox,
+    max_bytes: usize,
+) -> Result<()> {
+    // Host admission limits each instruction's canonical representation to a
+    // conservative fraction of this response bound before it is retained.
+    let fragment = norito::json::to_vec(instruction).map_err(|err| {
+        conversion_error(format!("failed to encode simulation instruction: {err}"))
+    })?;
+    append_contract_simulation_json_literal(out, &fragment, max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_view_target_fields(
+    out: &mut Vec<u8>,
+    dataspace: &str,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+    code_hash_hex: &str,
+    abi_hash_hex: &str,
+    entrypoint: &str,
+    max_bytes: usize,
+) -> Result<()> {
+    append_contract_simulation_json_literal(out, b",\"dataspace\":", max_bytes)?;
+    append_contract_json_string(out, dataspace, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"contract_address\":", max_bytes)?;
+    match contract_address {
+        Some(address) => append_contract_json_string(out, &address.to_string(), max_bytes)?,
+        None => append_contract_simulation_json_literal(out, b"null", max_bytes)?,
+    }
+    append_contract_simulation_json_literal(out, b",\"code_hash_hex\":", max_bytes)?;
+    append_contract_json_string(out, code_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"abi_hash_hex\":", max_bytes)?;
+    append_contract_json_string(out, abi_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"entrypoint\":", max_bytes)?;
+    append_contract_json_string(out, entrypoint, max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_view_success_fields(
+    out: &mut Vec<u8>,
+    response: &ContractViewResponseDto,
+    max_bytes: usize,
+) -> Result<()> {
+    append_contract_simulation_json_literal(out, b"\"ok\":true", max_bytes)?;
+    append_contract_view_target_fields(
+        out,
+        &response.dataspace,
+        response.contract_address.as_ref(),
+        &response.code_hash_hex,
+        &response.abi_hash_hex,
+        &response.entrypoint,
+        max_bytes,
+    )?;
+    append_contract_simulation_json_literal(out, b",\"result\":", max_bytes)?;
+    append_contract_simulation_json_literal(out, response.result.get().as_bytes(), max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_view_error_fields(
+    out: &mut Vec<u8>,
+    response: &ContractViewErrorResponseDto,
+    max_bytes: usize,
+) -> Result<()> {
+    append_contract_simulation_json_literal(out, b"\"ok\":false", max_bytes)?;
+    append_contract_view_target_fields(
+        out,
+        &response.dataspace,
+        response.contract_address.as_ref(),
+        &response.code_hash_hex,
+        &response.abi_hash_hex,
+        &response.entrypoint,
+        max_bytes,
+    )?;
+    append_contract_simulation_json_literal(out, b",\"error\":", max_bytes)?;
+    append_contract_json_string(out, &response.error, max_bytes)?;
+    append_contract_simulation_json_literal(out, b",\"vm_diagnostic\":", max_bytes)?;
+    append_contract_json_optional_diagnostic(out, response.vm_diagnostic.as_ref(), max_bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_view_success_bounded(
+    response: &ContractViewResponseDto,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(max_bytes.min(16 * 1024));
+    append_contract_simulation_json_literal(&mut out, b"{", max_bytes)?;
+    append_contract_view_success_fields(&mut out, response, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_view_error_bounded(
+    response: &ContractViewErrorResponseDto,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(max_bytes.min(16 * 1024));
+    append_contract_simulation_json_literal(&mut out, b"{", max_bytes)?;
+    append_contract_view_error_fields(&mut out, response, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
+    Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn encode_contract_call_simulation_response_bounded(
+    response: &ContractCallSimulateResponseDto,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(max_bytes.min(16 * 1024));
+    append_contract_simulation_json_literal(&mut out, b"{\"ok\":", max_bytes)?;
+    append_contract_simulation_json_literal(
+        &mut out,
+        if response.ok { b"true" } else { b"false" },
+        max_bytes,
+    )?;
+    append_contract_simulation_json_literal(&mut out, b",\"dataspace\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.dataspace, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"contract_address\":", max_bytes)?;
+    match response.contract_address.as_ref() {
+        Some(address) => append_contract_json_string(&mut out, &address.to_string(), max_bytes)?,
+        None => append_contract_simulation_json_literal(&mut out, b"null", max_bytes)?,
+    }
+    append_contract_simulation_json_literal(&mut out, b",\"code_hash_hex\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.code_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"abi_hash_hex\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.abi_hash_hex, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"entrypoint\":", max_bytes)?;
+    append_contract_json_string(&mut out, &response.entrypoint, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"normalized_payload\":", max_bytes)?;
+    append_contract_json_optional_iroha(&mut out, response.normalized_payload.as_ref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"gas_limit\":", max_bytes)?;
+    append_contract_json_number(&mut out, &response.gas_limit, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"gas_used\":", max_bytes)?;
+    append_contract_json_number(&mut out, &response.gas_used, max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"queued_instructions\":[", max_bytes)?;
+    for (index, instruction) in response.queued_instructions.iter().enumerate() {
+        if index > 0 {
+            append_contract_simulation_json_literal(&mut out, b",", max_bytes)?;
+        }
+        append_bounded_instruction_json(&mut out, instruction, max_bytes)?;
+    }
+    append_contract_simulation_json_literal(&mut out, b"]", max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"result\":", max_bytes)?;
+    append_contract_json_optional_iroha(&mut out, response.result.as_ref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"error\":", max_bytes)?;
+    append_contract_json_optional_string(&mut out, response.error.as_deref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b",\"vm_diagnostic\":", max_bytes)?;
+    append_contract_json_optional_diagnostic(&mut out, response.vm_diagnostic.as_ref(), max_bytes)?;
+    append_contract_simulation_json_literal(&mut out, b"}", max_bytes)?;
+    Ok(out)
 }
 
 #[cfg(feature = "app_api")]
@@ -16394,23 +16686,6 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
         predecoded_loaded: diag.context.predecoded_loaded,
         predecoded_hit: diag.context.predecoded_hit,
     }
-}
-
-#[cfg(feature = "app_api")]
-fn render_contract_queued_instructions(
-    queued: &[iroha_data_model::isi::InstructionBox],
-) -> std::result::Result<Vec<norito::json::Value>, ContractCallSimulationError> {
-    queued
-        .iter()
-        .map(norito::json::to_value)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|err| ContractCallSimulationError {
-            message: format!("failed to serialize queued instructions: {err}"),
-            vm_diagnostic: None,
-            normalized_payload: None,
-            gas_used: 0,
-            queued_instructions: Vec::new(),
-        })
 }
 
 #[cfg(feature = "app_api")]
@@ -16680,6 +16955,9 @@ fn execute_contract_view(
             message: format!("failed to prepare contract view runtime: {err}"),
             vm_diagnostic: None,
         })?;
+    // Views are not allowed to retain any instruction, durable-state write,
+    // FastPQ entry, or completed AXT artifact. Reject before those containers grow.
+    host.set_output_limits(iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(0, 0));
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
@@ -16710,6 +16988,13 @@ fn execute_contract_view(
             message: format!("contract view execution failed: {err}"),
             vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
         })?;
+
+    if let Some(violation) = host.output_budget_violation() {
+        return Err(ContractViewExecutionError {
+            message: format!("contract view attempted bounded output: {violation:?}"),
+            vm_diagnostic: None,
+        });
+    }
 
     let queued = host.drain_instructions();
     if !queued.is_empty() {
@@ -16857,6 +17142,21 @@ fn execute_contract_call_simulation(
                 gas_used: 0,
                 queued_instructions: Vec::new(),
             })?;
+    let max_items = usize::try_from(
+        query_view
+            .world
+            .parameters()
+            .transaction()
+            .max_instructions()
+            .get(),
+    )
+    .unwrap_or(usize::MAX);
+    host.set_output_limits(
+        iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(
+            max_items,
+            CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+        ),
+    );
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
@@ -16890,14 +17190,19 @@ fn execute_contract_call_simulation(
         })?;
 
     let run_result = vm.run_with_host(&mut host);
+    if let Some(violation) = host.output_budget_violation() {
+        return Err(ContractCallSimulationError {
+            message: format!("contract call simulation output budget exceeded: {violation:?}"),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            normalized_payload: normalized_payload.clone(),
+            gas_used: gas_limit.saturating_sub(vm.gas_remaining),
+            queued_instructions: Vec::new(),
+        });
+    }
     let queued = host.drain_instructions();
     let _durable_state_overlay = host.drain_durable_state_overlay();
     let gas_used = gas_limit.saturating_sub(vm.gas_remaining);
-    let queued_instructions = render_contract_queued_instructions(&queued).map_err(|mut err| {
-        err.gas_used = gas_used;
-        err.normalized_payload = normalized_payload.clone();
-        err
-    })?;
+    let queued_instructions = queued;
 
     if let Err(err) = run_result {
         return Err(ContractCallSimulationError {
@@ -26732,8 +27037,8 @@ pub struct ContractCallSimulateResponseDto {
     pub gas_limit: u64,
     /// Gas consumed by the VM run.
     pub gas_used: u64,
-    /// Queued instructions produced by the `kotoage` entrypoint.
-    pub queued_instructions: Vec<norito::json::Value>,
+    /// Queued instructions produced by the public entrypoint.
+    pub queued_instructions: Vec<iroha_data_model::isi::InstructionBox>,
     /// Decoded return value when the entrypoint returns a non-unit result.
     #[norito(default)]
     pub result: Option<IrohaJson>,

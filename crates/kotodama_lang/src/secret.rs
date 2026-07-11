@@ -702,9 +702,9 @@ mod tests {
     fn commitments_are_the_explicit_declassification_boundary() {
         let source = r#"
             seiyaku Privacy {
-                fn commitment() -> i64 {
-                    let value: Secret<i64> = crypto::private_input(0);
-                    let blinding: Secret<i64> = crypto::private_input(1);
+                fn commitment() -> int {
+                    let Secret<int> value = crypto::private_input(0);
+                    let Secret<int> blinding = crypto::private_input(1);
                     return crypto::valcom(left: value, right: blinding);
                 }
             }
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn secret_requires_zk_build_configuration() {
-        let program = parse("fn keep(value: Secret<i64>) -> Secret<i64> { return value; }")
+        let program = parse("fn keep(Secret<int> value) -> Secret<int> { return value; }")
             .expect("secret-flow fixture should parse");
         let error = analyze(&program).expect_err("ZK-disabled secret type must fail");
         assert_eq!(error.code, "E_SECRET_REQUIRES_ZK");
@@ -737,7 +737,7 @@ mod tests {
         let error = analyze_error(
             r#"
                 seiyaku Privacy {
-                    kotoage fn leak() -> Secret<i64> authorize("ReadPrivate") {
+                    kotoage fn leak() -> Secret<int> authorize("ReadPrivate") {
                         return crypto::private_input(0);
                     }
                 }
@@ -751,7 +751,7 @@ mod tests {
         let error = analyze_error(
             r#"
                 seiyaku Privacy {
-                    fn branch() -> i64 {
+                    fn branch() -> int {
                         let left = crypto::private_input(0);
                         let right = crypto::private_input(1);
                         if (left == right) { return 1; }
@@ -789,8 +789,8 @@ mod tests {
         let key_error = analyze_error(
             r#"
                 seiyaku Privacy {
-                    state values: StateMap<i64, i64>;
-                    fn leak() -> i64 { return values[crypto::private_input(0)]; }
+                    state StateMap<int, int> values;
+                    fn leak() -> int { return values[crypto::private_input(0)]; }
                 }
             "#,
         );
@@ -799,7 +799,7 @@ mod tests {
         let value_error = analyze_error(
             r#"
                 seiyaku Privacy {
-                    state values: StateMap<i64, i64>;
+                    state StateMap<int, int> values;
                     fn leak() { values[0] = crypto::private_input(0); }
                 }
             "#,
@@ -812,7 +812,7 @@ mod tests {
         let error = analyze_error(
             r#"
                 seiyaku Privacy {
-                    fn weak_commitment() -> i64 {
+                    fn weak_commitment() -> int {
                         return crypto::poseidon2(
                             left: crypto::private_input(0),
                             right: 7,

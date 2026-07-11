@@ -208,3 +208,4 @@ export class NexusAppClient {
 
 export const NexusSignatureAlgorithmEd25519: "ed25519";
 export function nexusPayloadHashHex(payloadBytes: Buffer | Uint8Array | ArrayBuffer): string;
+export { validateBrowserTransferSignable } from "./transaction-codec.js";

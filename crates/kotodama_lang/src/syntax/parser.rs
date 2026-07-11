@@ -266,9 +266,9 @@ mod tests {
     }
 
     #[test]
-    fn cst_preserves_amount_literal_text() {
-        let text = "seiyaku Demo { view fn amount() -> Amount { return 1.250_0amt; } }";
-        let source = SourceFile::new(SourceId(0), "amount.ko", text);
+    fn cst_preserves_decimal_literal_text() {
+        let text = "seiyaku Demo { view fn value() -> decimal { return 1.250_0; } }";
+        let source = SourceFile::new(SourceId(0), "decimal.ko", text);
         let output = parse(&source, FrontendBudget::v1());
         assert!(output.is_ok(), "{:?}", output.diagnostics);
         assert_eq!(output.tree.text(&source), text);
@@ -285,12 +285,12 @@ mod tests {
     fn compiler_uses_one_direct_cst_lowering_without_a_token_only_reparse() {
         crate::parser::reset_direct_cst_lowering_count();
         let text = r#"seiyaku Direct {
-            struct Pair { left: i64, right: i64 }
-            const limit: i64 = 2;
-            state value: i64;
+            struct Pair { int left, int right }
+            const int limit = 2;
+            state int value;
             hajimari() { value = 0; }
-            kotoage fn set(next: i64) authorize("Set") { value = next; }
-            view fn read() -> i64 { value }
+            kotoage fn set(int next) authorize("Set") { value = next; }
+            view fn read() -> int { value }
         }"#;
         let source = SourceFile::new(SourceId(41), "direct.ko", text);
         let output = parse_program(&source, FrontendBudget::v1());
@@ -303,7 +303,7 @@ mod tests {
     fn public_ast_is_plain_but_internal_ast_retains_direct_node_ids() {
         use crate::ast::{Item, Statement};
 
-        let text = "誓約 Direct { 始まり() { let value: i64 = 1; } }";
+        let text = "誓約 Direct { 始まり() { let int value = 1; } }";
         let source = SourceFile::new(SourceId(45), "direct-node-ids.ko", text);
         let public = parse_program(&source, FrontendBudget::v1());
         assert!(public.sourced_program.is_none());
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn structured_missing_tokens_are_independent_of_diagnostic_wording() {
-        let text = "seiyaku Broken { fn bad(value i64) { return; } }";
+        let text = "seiyaku Broken { fn bad(value int) { return; } }";
         let source = SourceFile::new(SourceId(46), "structured-missing.ko", text);
         let lexed = lex(&source, FrontendBudget::v1());
         let lossless = lexed.tokens.clone();
@@ -351,7 +351,7 @@ mod tests {
             .expect("lower significant token view");
         let mut parsed = crate::parser::parse_with_syntax(&source, &tokens);
         let missing_offset =
-            u32::try_from(text.find("i64").expect("unexpected type")).expect("source budget");
+            u32::try_from(text.find("int").expect("unexpected type")).expect("source budget");
         assert!(parsed.missing.iter().any(|missing| {
             missing.offset == missing_offset && missing.expected == SyntaxKind::Colon
         }));
@@ -372,16 +372,16 @@ mod tests {
         use crate::ast::{FunctionKind, Item, SourceUnitKind};
 
         let text = r#"誓約 Branded {
-            struct Pair { left: i64, right: i64 }
+            struct Pair { int left, int right }
             error enum Failure { Bad = 1 }
-            const limit: i64 = 2;
-            state value: i64;
+            const int limit = 2;
+            state int value;
             trigger tick -> apply { on time pre_commit; }
             始まり() { value = 0; }
             改善() { value = value + 1; }
-            言挙げ fn apply(next: i64) authorize("Apply") { value = next; }
-            view fn read() -> i64 { value }
-            fn helper(value: i64) -> i64 { value }
+            言挙げ fn apply(int next) authorize("Apply") { value = next; }
+            view fn read() -> int { value }
+            fn helper(int value) -> int { value }
         }"#;
         let source = SourceFile::new(SourceId(42), "branded-direct.ko", text);
         let output = parse_program(&source, FrontendBudget::v1());
@@ -411,9 +411,9 @@ mod tests {
     #[test]
     fn direct_cst_lowering_recovers_multiple_malformed_items() {
         let text = r#"seiyaku Broken {
-            fn first(value i64) { return; }
-            fn second() { let missing: i64 = ; return; }
-            fn third(flag: bool) { if flag { return } }
+            fn first(value int) { return; }
+            fn second() { let int missing = ; return; }
+            fn third(bool flag) { if flag { return } }
         }"#;
         let source = SourceFile::new(SourceId(43), "multi-error.ko", text);
         let output = parse_program(&source, FrontendBudget::v1());
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn japanese_keyword_name_facts_keep_exact_utf8_byte_ranges() {
-        let text = "誓約 Demo { 始まり() { let message: string = \"雪\"; } }";
+        let text = "誓約 Demo { 始まり() { let string message = \"雪\"; } }";
         let source = SourceFile::new(SourceId(44), "unicode-spans.ko", text);
         let (spanned, _) =
             parse_spanned_program(&source, FrontendBudget::v1()).expect("direct-ID compiler AST");
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(source.slice(name.range), Some("始まり"));
         assert_eq!(
             source.slice(declaration.range),
-            Some("始まり() { let message: string = \"雪\"; }")
+            Some("始まり() { let string message = \"雪\"; }")
         );
         assert_eq!(
             name.range.start,
@@ -475,25 +475,24 @@ mod tests {
     }
 
     #[test]
-    fn cst_recovers_without_losing_unsuffixed_fraction_text() {
-        let text = "seiyaku Demo { fn invalid() { let value = 1.25; } }";
-        let source = SourceFile::new(SourceId(0), "invalid-amount.ko", text);
+    fn cst_accepts_and_preserves_unsuffixed_fraction_text() {
+        let text = "seiyaku Demo { fn valid() { let value = 1.25; } }";
+        let source = SourceFile::new(SourceId(0), "decimal.ko", text);
         let output = parse(&source, FrontendBudget::v1());
-        assert!(!output.is_ok());
-        assert_eq!(output.diagnostics.diagnostics[0].code, "E_AMOUNT_SUFFIX");
+        assert!(output.is_ok(), "{:?}", output.diagnostics);
         assert_eq!(output.tree.text(&source), text);
         assert!(
             output
                 .tree
                 .tokens()
                 .iter()
-                .any(|token| token.kind == SyntaxKind::ErrorToken)
+                .any(|token| token.kind == SyntaxKind::Decimal)
         );
     }
 
     #[test]
     fn cst_preserves_named_call_and_struct_literal_tokens() {
-        let text = "seiyaku Demo { struct Pair { first: i64, second: string } fn build(first: i64) -> Pair { return Pair { second: \"two\", first, }; } fn call() { build(first: 1,); } }";
+        let text = "seiyaku Demo { struct Pair { int first, string second } fn build(int first) -> Pair { return Pair { second: \"two\", first, }; } fn call() { build(first: 1,); } }";
         let source = SourceFile::new(SourceId(0), "named.ko", text);
         let output = parse(&source, FrontendBudget::v1());
         assert!(output.is_ok(), "{:?}", output.diagnostics);
@@ -537,18 +536,18 @@ mod tests {
     #[test]
     fn statement_boundaries_lower_only_source_tokens() {
         let text = r#"seiyaku Statements {
-            state value: i64;
+            state int value;
             hajimari() {
                 value = 0;
             }
-            kotoage fn update(limit: i64) authorize("Update") {
-                var total: i64 = 0;
+            kotoage fn update(int limit) authorize("Update") {
+                var int total = 0;
                 for item in range(4) {
                     if item < limit { total += item; } else { continue; }
                 }
                 value = total;
             }
-            view fn read() -> i64 { return value; }
+            view fn read() -> int { return value; }
         }"#;
         let source = SourceFile::new(SourceId(0), "statements.ko", text);
         let output = parse_program(&source, FrontendBudget::v1());
@@ -560,9 +559,9 @@ mod tests {
     #[test]
     fn cst_terminated_items_do_not_leak_recovery_tokens_into_the_ast_stream() {
         let text = r#"seiyaku Demo {
-    state values: StateMap<i64, i64>;
-    const limit: i64 = 2;
-    view fn read() -> i64 { values.get(limit).unwrap_or(0) }
+    state StateMap<int, int> values;
+    const int limit = 2;
+    view fn read() -> int { values.get(limit).unwrap_or(0) }
 }"#;
         let source = SourceFile::new(SourceId(0), "terminated-items.ko", text);
         let output = parse_program(&source, FrontendBudget::v1());
@@ -576,10 +575,10 @@ mod tests {
     #[test]
     fn cst_terminated_items_track_braced_initializers() {
         let text = r#"seiyaku Demo {
-    struct Entry { value: i64 }
-    const payload: Json = json { value: 1, };
-    const entry: Entry = Entry { value: 2, };
-    view fn read() -> i64 { entry.value }
+    struct Entry { int value }
+    const Json payload = json { value: 1, };
+    const Entry entry = Entry { value: 2, };
+    view fn read() -> int { entry.value }
 }"#;
         let source = SourceFile::new(SourceId(0), "braced-consts.ko", text);
         let output = parse_program(&source, FrontendBudget::v1());
@@ -592,7 +591,7 @@ mod tests {
     #[test]
     fn cst_missing_semicolon_recovers_before_an_attributed_item() {
         let text = r#"seiyaku Demo {
-    const limit: i64 = 2
+    const int limit = 2
     #[test]
     fn check() {}
 }"#;
@@ -611,7 +610,7 @@ mod tests {
     #[test]
     fn cst_missing_semicolon_recovers_before_a_plain_item() {
         let text = r#"seiyaku Demo {
-    const limit: i64 = 2
+    const int limit = 2
     fn check() {}
 }"#;
         let source = SourceFile::new(SourceId(0), "plain-recovery.ko", text);
@@ -628,9 +627,9 @@ mod tests {
     #[test]
     fn pseudo_item_spellings_remain_ordinary_expression_identifiers() {
         let text = r#"seiyaku Demo {
-    const fixture: i64 = 1;
-    const selected: i64 = fixture;
-    view fn read() -> i64 { selected }
+    const int fixture = 1;
+    const int selected = fixture;
+    view fn read() -> int { selected }
 }"#;
         let source = SourceFile::new(SourceId(0), "pseudo-item-identifiers.ko", text);
         let output = parse_program(&source, FrontendBudget::v1());
@@ -655,7 +654,7 @@ mod tests {
 
     #[test]
     fn cst_structures_tail_match_arms_and_sum_patterns_losslessly() {
-        let text = "seiyaku Demo { fn unwrap(value: Option<i64>) -> i64 { match value { Option::some(item) => item, Option::none => 0, } } }";
+        let text = "seiyaku Demo { fn unwrap(Option<int> value) -> int { match value { Option::some(item) => item, Option::none => 0, } } }";
         let source = SourceFile::new(SourceId(0), "match.ko", text);
         let output = parse(&source, FrontendBudget::v1());
         assert!(output.is_ok(), "{:?}", output.diagnostics);
@@ -670,7 +669,7 @@ mod tests {
 
     #[test]
     fn cst_structures_lists_and_comprehensions_losslessly() {
-        let text = "seiyaku Demo { fn lists() -> List<i64, 4> { let source: List<i64, 4> = [1, [2].get(0).unwrap_or(0),]; [value * 2 for value in source if value > 0] } }";
+        let text = "seiyaku Demo { fn lists() -> List<int, 4> { let List<int, 4> source = [1, [2].get(0).unwrap_or(0),]; [value * 2 for value in source if value > 0] } }";
         let source = SourceFile::new(SourceId(0), "lists.ko", text);
         let output = parse(&source, FrontendBudget::v1());
         assert!(output.is_ok(), "{:?}", output.diagnostics);
@@ -683,7 +682,7 @@ mod tests {
 
     #[test]
     fn cst_structures_recursive_native_json_losslessly() {
-        let text = r#"seiyaku Demo { fn build(label: string) -> Json { json { owner: "alice", labels: json ["primary", label], nested: json { "owner": 1, }, } } }"#;
+        let text = r#"seiyaku Demo { fn build(string label) -> Json { json { owner: "alice", labels: json ["primary", label], nested: json { "owner": 1, }, } } }"#;
         let source = SourceFile::new(SourceId(0), "json.ko", text);
         let output = parse(&source, FrontendBudget::v1());
         assert!(output.is_ok(), "{:?}", output.diagnostics);
@@ -730,7 +729,7 @@ mod tests {
 
     #[test]
     fn cst_snapshot_locks_expression_json_list_and_recovery_structure() {
-        let text = "seiyaku C { fn f(v: Option<i64>) { let choice = v? ? 1 : 2; let payload = json { values: json [1, [x for x in [1, 2] if x > 0]; }; } }";
+        let text = "seiyaku C { fn f(Option<int> v) { let choice = v? ? 1 : 2; let payload = json { values: json [1, [x for x in [1, 2] if x > 0]; }; } }";
         let source = SourceFile::new(SourceId(0), "snapshot.ko", text);
         let output = parse(&source, FrontendBudget::v1());
         assert!(!output.is_ok(), "fixture must retain its recovery token");
@@ -754,7 +753,7 @@ mod tests {
           Colon=":"@18..19
           Ident="Option"@20..26
           Less="<"@26..27
-          Ident="i64"@27..30
+          Ident="int"@27..30
           Greater=">"@30..31
           RParen=")"@31..32
         Block@33..129

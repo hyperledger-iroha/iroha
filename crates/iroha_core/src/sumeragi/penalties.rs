@@ -928,6 +928,7 @@ mod tests {
                 kura_retry_interval: Duration::from_millis(1),
                 kura_retry_max_attempts: 1,
                 commit_inflight_timeout: Duration::from_millis(5_000),
+                post_finality_cleanup_timeout: Duration::from_millis(5_000),
                 commit_work_queue_cap:
                     iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
                 commit_result_queue_cap:

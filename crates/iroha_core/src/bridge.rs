@@ -12,28 +12,19 @@ use iroha_data_model::{
     ChainId,
     block::{BlockHeader, SignedBlock},
     bridge::{
-        BridgeAuthoritySet, BridgeCommitment, BridgeCommitmentJustification, BridgeFinalityBundle,
+        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment, BridgeFinalityBundle,
         BridgeFinalityProof, SccpOutboundMessageKeyV1,
     },
-    consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1},
     isi::InstructionBox,
     name::Name,
-    peer::PeerId,
     transaction::{Executable, TransactionEntrypoint},
 };
-use iroha_sccp::{
-    SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1, TairaConsensusPhaseV1,
-    TairaQcRefV1,
-};
+use iroha_sccp::{SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1};
 use thiserror::Error;
 
 use crate::{
     mmr::BlockMmr,
-    state::{
-        State as CoreState, StateReadOnly, StateTransaction, commit_qc_matches_block,
-        consensus_key_pop_for_public_key, trusted_world_commit_qc_for_block,
-    },
-    sumeragi,
+    state::{State as CoreState, StateReadOnly, consensus_key_pop_for_public_key},
     tx::AcceptedTransaction,
 };
 
@@ -45,12 +36,11 @@ pub trait BridgeStateReadOnly {
     fn bridge_chain_id(&self) -> &ChainId;
     /// Load a committed block at `height`.
     fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>>;
-    /// Load the commit certificate persisted for `height`/`block_hash`.
-    fn bridge_commit_qc_for_block(
+    /// Load the exact durable Sumeragi-v2 finality artifact for `height`.
+    fn bridge_v2_finality_artifact(
         &self,
         height: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Option<Qc>;
+    ) -> Result<Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>, String>;
     /// Resolve a validator consensus-key proof-of-possession by public key.
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>>;
 }
@@ -64,16 +54,14 @@ impl<T: StateReadOnly> BridgeStateReadOnly for T {
         self.kura().get_block(height)
     }
 
-    fn bridge_commit_qc_for_block(
+    fn bridge_v2_finality_artifact(
         &self,
         height: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Option<Qc> {
+    ) -> Result<Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>, String>
+    {
         self.kura()
-            .read_roster_metadata(height)
-            .and_then(|sidecar| sidecar.commit_qc)
-            .filter(|commit_qc| commit_qc_matches_block(commit_qc, height, block_hash))
-            .or_else(|| trusted_world_commit_qc_for_block(self.world(), height, block_hash))
+            .v2_finality_artifact(height)
+            .map_err(|error| error.to_string())
     }
 
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
@@ -90,59 +78,19 @@ impl BridgeStateReadOnly for CoreState {
         self.block_by_height(height)
     }
 
-    fn bridge_commit_qc_for_block(
+    fn bridge_v2_finality_artifact(
         &self,
         height: u64,
-        block_hash: HashOf<BlockHeader>,
-    ) -> Option<Qc> {
-        self.commit_roster_snapshot_for_block(height, block_hash)
-            .map(|snapshot| snapshot.commit_qc)
-            .or_else(|| self.commit_qc_for_block(height, block_hash))
+    ) -> Result<Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>, String>
+    {
+        self.kura()
+            .v2_finality_artifact(height)
+            .map_err(|error| error.to_string())
     }
 
     fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
         let world = self.world_view();
         consensus_key_pop_for_public_key(&world, public_key)
-    }
-}
-
-/// Narrow read-only surface used to validate SCCP finality proofs against local state.
-pub trait SccpFinalityStateReadOnly {
-    /// Chain identifier bound to the local committed chain.
-    fn sccp_chain_id(&self) -> &ChainId;
-    /// Load the locally committed block at `height`.
-    fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>>;
-    /// Load the locally trusted commit QC for `height` and `block_hash`.
-    fn sccp_commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc>;
-}
-
-impl SccpFinalityStateReadOnly for CoreState {
-    fn sccp_chain_id(&self) -> &ChainId {
-        self.chain_id_ref()
-    }
-
-    fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.block_by_height(height)
-    }
-
-    fn sccp_commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc> {
-        self.commit_roster_snapshot_for_block(height, block_hash)
-            .map(|snapshot| snapshot.commit_qc)
-            .or_else(|| self.commit_qc_for_block(height, block_hash))
-    }
-}
-
-impl SccpFinalityStateReadOnly for StateTransaction<'_, '_> {
-    fn sccp_chain_id(&self) -> &ChainId {
-        &self.chain_id
-    }
-
-    fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.block_by_height(height)
-    }
-
-    fn sccp_commit_qc_for_block(&self, height: u64, block_hash: HashOf<BlockHeader>) -> Option<Qc> {
-        self.commit_qc_for_block(height, block_hash)
     }
 }
 
@@ -1070,7 +1018,7 @@ pub fn sccp_commitment_root_from_messages(messages: &[RecordedSccpMessage]) -> O
 
 /// Errors returned when constructing a bridge finality proof.
 #[allow(variant_size_differences)]
-#[derive(Debug, Error, Copy, Clone)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum BridgeFinalityError {
     /// The requested block height is zero or does not fit into the host pointer width.
     #[error("invalid block height {0}")]
@@ -1078,26 +1026,36 @@ pub enum BridgeFinalityError {
     /// The block at the requested height was not found.
     #[error("block at height {0} not found")]
     BlockNotFound(u64),
-    /// No commit certificate was found for the requested height.
-    #[error("commit certificate for height {0} not found")]
-    QcNotFound(u64),
-    /// The commit certificate references a different block hash than the stored block.
-    #[error(
-        "commit certificate hash {cert_hash:?} does not match block hash {block_hash:?} at height {height}"
-    )]
-    QcHashMismatch {
+    /// No durable Sumeragi-v2 finality artifact exists for the requested height.
+    #[error("Sumeragi-v2 finality artifact for height {0} not found")]
+    FinalityArtifactNotFound(u64),
+    /// Kura could not decode or validate the durable artifact.
+    #[error("failed to load Sumeragi-v2 finality artifact for height {height}: {reason}")]
+    FinalityArtifactRead {
         /// Height being proven.
         height: u64,
-        /// Hash recorded inside the commit certificate.
-        cert_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-        /// Hash of the stored block header.
-        block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+        /// Bounded Kura validation diagnostic.
+        reason: String,
+    },
+    /// The durable artifact does not match the selected block header or chain.
+    #[error("Sumeragi-v2 finality artifact for height {height} does not match the selected block")]
+    FinalityArtifactMismatch {
+        /// Height being proven.
+        height: u64,
     },
     /// Validator `PoP` missing for the validator set entry.
     #[error("validator PoP missing for index {index}")]
     MissingValidatorPop {
         /// Index into the validator set.
         index: usize,
+    },
+    /// The exact durable artifact failed v2 quorum or BLS verification.
+    #[error("Sumeragi-v2 finality artifact for height {height} failed verification: {reason}")]
+    InvalidFinalityArtifact {
+        /// Height being proven.
+        height: u64,
+        /// Typed verifier diagnostic.
+        reason: String,
     },
 }
 
@@ -1176,15 +1134,14 @@ fn block_hash_at(
 
 /// Build a self-contained finality proof for the block at `height`.
 ///
-/// The proof bundles the block header, its hash, and the commit certificate
-/// collected for that block. Verifiers recompute the block hash from the header
-/// and validate the commit certificate signatures against the provided
-/// validator set.
+/// The proof bundles the block header, Kura's exact immutable v2 finality
+/// artifact, and BLS PoPs aligned with the frozen powered roster.
 ///
 /// # Errors
 ///
-/// Returns [`BridgeFinalityError`] when the height is invalid, the block or commit
-/// certificate is missing, or their hashes do not match.
+/// Returns [`BridgeFinalityError`] when the height is invalid, the block or
+/// durable artifact is missing/malformed, a validator PoP is unavailable, or
+/// the exact v2 artifact fails cryptographic verification.
 pub fn build_finality_proof(
     state: &impl BridgeStateReadOnly,
     height: u64,
@@ -1200,53 +1157,41 @@ pub fn build_finality_proof(
         .ok_or(BridgeFinalityError::BlockNotFound(height))?;
     let block_header = block.header();
     let block_hash = block.hash();
-
-    let cert_candidates: Vec<_> = sumeragi::status::commit_qc_history()
-        .into_iter()
-        .filter(|entry| entry.height == height)
-        .collect();
-    let cert = if let Some(cert) = cert_candidates
-        .iter()
-        .find(|candidate| commit_qc_matches_block(candidate, height, block_hash))
+    let finality_artifact = state
+        .bridge_v2_finality_artifact(height)
+        .map_err(|reason| BridgeFinalityError::FinalityArtifactRead { height, reason })?
+        .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?;
+    if finality_artifact.height_context.chain_id != *state.bridge_chain_id()
+        || finality_artifact
+            .validate_for_block(height, block_hash)
+            .is_err()
     {
-        cert.clone()
-    } else if let Some(cert) = state.bridge_commit_qc_for_block(height, block_hash) {
-        cert
-    } else if let Some(cert) = cert_candidates
-        .into_iter()
-        .find(|candidate| candidate.subject_block_hash != block_hash)
-    {
-        return Err(BridgeFinalityError::QcHashMismatch {
-            height,
-            cert_hash: cert.subject_block_hash,
-            block_hash,
-        });
-    } else {
-        return Err(BridgeFinalityError::QcNotFound(height));
-    };
+        return Err(BridgeFinalityError::FinalityArtifactMismatch { height });
+    }
 
-    let mut validator_set_pops = Vec::with_capacity(cert.validator_set.len());
-    for (index, peer) in cert.validator_set.iter().enumerate() {
-        let Some(pop) = state.bridge_validator_pop(peer.public_key()) else {
+    let mut validator_set_pops = Vec::with_capacity(finality_artifact.height_context.roster.len());
+    for (index, entry) in finality_artifact.height_context.roster.iter().enumerate() {
+        let Some(pop) = state.bridge_validator_pop(entry.validator.public_key()) else {
             return Err(BridgeFinalityError::MissingValidatorPop { index });
         };
         validator_set_pops.push(pop);
     }
+    finality_artifact
+        .verify_with_validator_pops(&validator_set_pops)
+        .map_err(|error| BridgeFinalityError::InvalidFinalityArtifact {
+            height,
+            reason: error.to_string(),
+        })?;
 
     Ok(BridgeFinalityProof {
-        height,
-        chain_id: state.bridge_chain_id().clone(),
+        version: BRIDGE_FINALITY_PROOF_VERSION_V1,
         block_header,
-        block_hash,
-        commit_qc: cert,
+        finality_artifact,
         validator_set_pops,
     })
 }
 
-/// Build a commitment + justification bundle for the block at `height`.
-///
-/// The bundle relies on the commit certificate aggregate signature for
-/// justification; the historical signature list is left empty.
+/// Build an MMR commitment plus exact typed finality proof for `height`.
 ///
 /// # Errors
 ///
@@ -1259,425 +1204,76 @@ pub fn build_finality_bundle(
     let proof = build_finality_proof(state, height)?;
     let mmr = compute_block_mmr(state, height)?;
     let mmr_root = mmr.root();
-    let authority_set = BridgeAuthoritySet {
-        id: height, // simple monotonically increasing id derived from height; future revisions can carry explicit ids
-        validator_set: proof.commit_qc.validator_set.clone(),
-        validator_set_hash: proof.commit_qc.validator_set_hash,
-        validator_set_hash_version: proof.commit_qc.validator_set_hash_version,
-    };
     let commitment = BridgeCommitment {
-        chain_id: proof.chain_id.clone(),
-        authority_set: authority_set.clone(),
-        block_height: proof.height,
-        block_hash: proof.block_hash,
+        chain_id: proof.finality_artifact.height_context.chain_id.clone(),
+        height_context_id: proof.finality_artifact.context_id(),
+        block_height: proof.finality_artifact.height,
+        block_hash: proof.finality_artifact.block_hash,
         mmr_root,
         mmr_leaf_index: mmr.leaves().checked_sub(1),
         mmr_peaks: Some(mmr.peaks.iter().map(|p| p.hash).collect()),
-        next_authority_set: None,
-    };
-    let justification = BridgeCommitmentJustification {
-        signatures: Vec::new(),
     };
     Ok(BridgeFinalityBundle {
         commitment,
-        justification,
-        block_header: proof.block_header,
-        commit_qc: proof.commit_qc,
+        finality_proof: proof,
     })
 }
 
-/// Verification errors raised when checking a [`BridgeFinalityProof`].
+/// Verification errors raised when checking a BridgeFinalityProof.
+#[allow(variant_size_differences)]
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum BridgeFinalityVerificationError {
-    /// The proof carries a different chain id than expected.
-    #[error("finality proof chain_id mismatch: expected {expected}, actual {actual}")]
-    ChainIdMismatch {
-        /// Chain id the verifier expects.
-        expected: ChainId,
-        /// Chain id carried inside the proof.
-        actual: ChainId,
-    },
-    /// The caller expected a different height than the proof advertises.
-    #[error("finality proof height mismatch: expected {expected}, proof {actual}")]
+    /// The caller expected a different finalized height.
+    #[error("finality proof height mismatch: expected {expected}, actual {actual}")]
     HeightMismatch {
-        /// Height the verifier expected.
+        /// Height requested by the caller.
         expected: u64,
-        /// Height carried in the proof.
+        /// Height carried by the exact v2 artifact.
         actual: u64,
     },
-    /// The block header height disagrees with the proof height.
-    #[error("block header height {header_height} does not match proof height {proof_height}")]
-    BlockHeaderHeightMismatch {
-        /// Height in the proof.
-        proof_height: u64,
-        /// Height carried in the block header.
-        header_height: u64,
-    },
-    /// The commit certificate height disagrees with the proof height.
-    #[error("commit certificate height {cert_height} does not match proof height {proof_height}")]
-    QcHeightMismatch {
-        /// Height in the proof.
-        proof_height: u64,
-        /// Height carried in the commit certificate.
-        cert_height: u64,
-    },
-    /// Commit certificate phase is not `Commit`.
-    #[error("unexpected commit certificate phase {actual:?}")]
-    UnexpectedCertificatePhase {
-        /// Phase carried in the commit certificate.
-        actual: sumeragi::consensus::Phase,
-    },
-    /// Recomputed block hash does not match the proof/certificate payloads.
-    #[error(
-        "block hash mismatch: header {header_hash:?}, proof {proof_hash:?}, certificate {certificate_hash:?}"
-    )]
-    BlockHashMismatch {
-        /// Hash recomputed from the block header.
-        header_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-        /// Hash carried in the proof.
-        proof_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-        /// Hash advertised inside the commit certificate.
-        certificate_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
-    },
-    /// Validator set hash version advertised by the certificate is unsupported.
-    #[error("unsupported validator_set_hash_version {version}")]
-    UnsupportedValidatorSetHashVersion {
-        /// Unsupported version encountered.
-        version: u16,
-    },
-    /// Recomputed validator set hash does not match the certificate payload.
-    #[error("validator_set_hash mismatch: computed {computed:?}, advertised {advertised:?}")]
-    ValidatorSetHashMismatch {
-        /// Hash recomputed from the validator set.
-        computed: HashOf<Vec<PeerId>>,
-        /// Hash advertised in the commit certificate.
-        advertised: HashOf<Vec<PeerId>>,
-    },
-    /// The verifier pinned a validator set hash that does not match the proof.
-    #[error("trusted validator_set_hash mismatch: trusted {trusted:?}, certificate {advertised:?}")]
-    TrustedValidatorSetHashMismatch {
-        /// Trusted validator set hash supplied by the verifier.
-        trusted: HashOf<Vec<PeerId>>,
-        /// Hash recomputed from the proof validator set.
-        advertised: HashOf<Vec<PeerId>>,
-    },
-    /// Validator set is empty, so no quorum can be reached.
-    #[error("validator set is empty")]
-    EmptyValidatorSet,
-    /// Validator-set `PoP` length does not match the validator-set length.
-    #[error("validator set pop length mismatch: expected {expected}, got {actual}")]
-    ValidatorSetPopLengthMismatch {
-        /// Expected `PoP` count.
-        expected: usize,
-        /// Actual `PoP` count.
-        actual: usize,
-    },
-    /// Signer bitmap length does not match the validator set size.
-    #[error("signer bitmap length mismatch: expected {expected}, got {actual}")]
-    SignerBitmapLengthMismatch {
-        /// Expected bitmap length in bytes.
-        expected: usize,
-        /// Actual bitmap length in bytes.
-        actual: usize,
-    },
-    /// A signer index falls outside the validator set bounds.
-    #[error("signer index {signer} is out of bounds for roster length {roster_len}")]
-    SignerOutOfBounds {
-        /// Offending signer index.
-        signer: u64,
-        /// Length of the validator set.
-        roster_len: usize,
-    },
-    /// Duplicate signer index detected inside the commit certificate.
-    #[error("duplicate signer index {signer} in commit certificate signatures")]
-    DuplicateSigner {
-        /// Signer index that appears multiple times.
-        signer: u64,
-    },
-    /// Quorum was not met when counting unique signatures.
-    #[error("insufficient signatures: collected {collected}, required {required}")]
-    InsufficientSignatures {
-        /// Unique signatures collected.
-        collected: usize,
-        /// Required quorum.
-        required: usize,
-    },
-    /// Commit certificate carries no aggregate signature.
-    #[error("commit certificate aggregate signature is missing")]
-    AggregateSignatureMissing,
-    /// Commit certificate aggregate signature failed verification.
-    #[error("commit certificate aggregate signature is invalid")]
-    AggregateSignatureInvalid,
+    /// Exact proof verification failed.
+    #[error(transparent)]
+    Verification(#[from] iroha_data_model::bridge::BridgeFinalityVerifyError),
 }
 
-/// Verification knobs for [`verify_finality_proof`].
+/// Verification knobs for verify_finality_proof.
 #[derive(Debug, Clone)]
 pub struct FinalityProofVerificationConfig<'a> {
     /// Chain identifier expected by the verifier.
     pub expected_chain_id: &'a ChainId,
     /// Optional expected height to bind the proof to a specific block.
     pub expected_height: Option<u64>,
-    /// Optional trusted validator set hash anchor to guard against roster replays.
-    pub trusted_validator_set_hash: Option<HashOf<Vec<PeerId>>>,
+    /// Trusted context id for the exact height being verified.
+    pub trusted_context_id: iroha_data_model::block::consensus_v2::HeightContextId,
 }
 
-/// Verify a [`BridgeFinalityProof`] against chain/height/validator set expectations.
-///
-/// Callers supply the expected chain id and may optionally bind the proof to a specific
-/// height and validator set hash. Verification recomputes the block hash, enforces
-/// validator set hashing rules, and checks signatures for quorum and validity.
+/// Verify a BridgeFinalityProof against chain, height, context, powered quorum,
+/// PoP, and aggregate-signature expectations.
 ///
 /// # Errors
-/// Returns [`BridgeFinalityVerificationError`] when the proof fails chain/height checks,
-/// validator set hashing/anchors, or signature validation.
-#[allow(clippy::too_many_lines)]
+///
+/// Returns BridgeFinalityVerificationError when the expected height differs or
+/// the exact typed Sumeragi-v2 proof fails verification.
 pub fn verify_finality_proof(
     proof: &BridgeFinalityProof,
     config: &FinalityProofVerificationConfig<'_>,
 ) -> Result<(), BridgeFinalityVerificationError> {
-    if proof.chain_id != *config.expected_chain_id {
-        return Err(BridgeFinalityVerificationError::ChainIdMismatch {
-            expected: config.expected_chain_id.clone(),
-            actual: proof.chain_id.clone(),
-        });
-    }
-
     if let Some(expected_height) = config.expected_height {
-        if proof.height != expected_height {
+        let actual = proof.finality_artifact.height;
+        if actual != expected_height {
             return Err(BridgeFinalityVerificationError::HeightMismatch {
                 expected: expected_height,
-                actual: proof.height,
+                actual,
             });
         }
     }
 
-    let header_height = proof.block_header.height().get();
-    if header_height != proof.height {
-        return Err(BridgeFinalityVerificationError::BlockHeaderHeightMismatch {
-            proof_height: proof.height,
-            header_height,
-        });
-    }
-
-    let certificate = &proof.commit_qc;
-    if certificate.height != proof.height {
-        return Err(BridgeFinalityVerificationError::QcHeightMismatch {
-            proof_height: proof.height,
-            cert_height: certificate.height,
-        });
-    }
-
-    if certificate.phase != sumeragi::consensus::Phase::Commit {
-        return Err(
-            BridgeFinalityVerificationError::UnexpectedCertificatePhase {
-                actual: certificate.phase,
-            },
-        );
-    }
-
-    let header_hash = proof.block_header.hash();
-    if header_hash != proof.block_hash || header_hash != certificate.subject_block_hash {
-        return Err(BridgeFinalityVerificationError::BlockHashMismatch {
-            header_hash,
-            proof_hash: proof.block_hash,
-            certificate_hash: certificate.subject_block_hash,
-        });
-    }
-
-    if certificate.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
-        return Err(
-            BridgeFinalityVerificationError::UnsupportedValidatorSetHashVersion {
-                version: certificate.validator_set_hash_version,
-            },
-        );
-    }
-
-    let computed_set_hash = HashOf::new(&certificate.validator_set);
-    if computed_set_hash != certificate.validator_set_hash {
-        return Err(BridgeFinalityVerificationError::ValidatorSetHashMismatch {
-            computed: computed_set_hash,
-            advertised: certificate.validator_set_hash,
-        });
-    }
-
-    if let Some(trusted) = config.trusted_validator_set_hash {
-        if trusted != computed_set_hash {
-            return Err(
-                BridgeFinalityVerificationError::TrustedValidatorSetHashMismatch {
-                    trusted,
-                    advertised: computed_set_hash,
-                },
-            );
-        }
-    }
-
-    let roster_len = certificate.validator_set.len();
-    if roster_len == 0 {
-        return Err(BridgeFinalityVerificationError::EmptyValidatorSet);
-    }
-    if proof.validator_set_pops.len() != roster_len {
-        return Err(
-            BridgeFinalityVerificationError::ValidatorSetPopLengthMismatch {
-                expected: roster_len,
-                actual: proof.validator_set_pops.len(),
-            },
-        );
-    }
-    let expected_bitmap_len = roster_len.div_ceil(8);
-    if certificate.aggregate.signers_bitmap.len() != expected_bitmap_len {
-        return Err(
-            BridgeFinalityVerificationError::SignerBitmapLengthMismatch {
-                expected: expected_bitmap_len,
-                actual: certificate.aggregate.signers_bitmap.len(),
-            },
-        );
-    }
-    let required = sumeragi::network_topology::commit_quorum_from_len(roster_len);
-    let mut seen = BTreeSet::new();
-    for (byte_idx, byte) in certificate.aggregate.signers_bitmap.iter().enumerate() {
-        if *byte == 0 {
-            continue;
-        }
-        for bit in 0..8 {
-            if (byte >> bit) & 1 == 0 {
-                continue;
-            }
-            let idx = byte_idx * 8 + bit;
-            let signer = u64::try_from(idx).unwrap_or(u64::MAX);
-            if idx >= roster_len {
-                return Err(BridgeFinalityVerificationError::SignerOutOfBounds {
-                    signer,
-                    roster_len,
-                });
-            }
-            if !seen.insert(signer) {
-                return Err(BridgeFinalityVerificationError::DuplicateSigner { signer });
-            }
-        }
-    }
-
-    if certificate.aggregate.bls_aggregate_signature.is_empty() {
-        return Err(BridgeFinalityVerificationError::AggregateSignatureMissing);
-    }
-
-    let collected = seen.len();
-    if collected < required {
-        return Err(BridgeFinalityVerificationError::InsufficientSignatures {
-            collected,
-            required,
-        });
-    }
-
-    let vote = sumeragi::consensus::Vote {
-        phase: certificate.phase,
-        block_hash: certificate.subject_block_hash,
-        parent_state_root: certificate.parent_state_root,
-        post_state_root: certificate.post_state_root,
-        height: certificate.height,
-        view: certificate.view,
-        epoch: certificate.epoch,
-        chain_order_hash: certificate.chain_order_hash,
-        rechain_seq: certificate.rechain_seq,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    let preimage =
-        sumeragi::consensus::vote_preimage(config.expected_chain_id, &certificate.mode_tag, &vote);
-    let mut public_keys: Vec<&iroha_crypto::PublicKey> = Vec::with_capacity(seen.len());
-    let mut pops: Vec<&[u8]> = Vec::with_capacity(seen.len());
-    for signer in &seen {
-        let idx = usize::try_from(*signer).map_err(|_| {
-            BridgeFinalityVerificationError::SignerOutOfBounds {
-                signer: *signer,
-                roster_len,
-            }
-        })?;
-        let Some(peer) = certificate.validator_set.get(idx) else {
-            return Err(BridgeFinalityVerificationError::SignerOutOfBounds {
-                signer: *signer,
-                roster_len,
-            });
-        };
-        public_keys.push(peer.public_key());
-        pops.push(proof.validator_set_pops[idx].as_slice());
-    }
-    if iroha_crypto::bls_normal_verify_preaggregated_same_message(
-        &preimage,
-        &certificate.aggregate.bls_aggregate_signature,
-        &public_keys,
-        &pops,
-    )
-    .is_err()
-    {
-        return Err(BridgeFinalityVerificationError::AggregateSignatureInvalid);
-    }
-
+    let mut verifier = iroha_data_model::bridge::BridgeFinalityVerifier::with_context(
+        config.expected_chain_id.clone(),
+        config.trusted_context_id,
+    );
+    verifier.verify(proof)?;
     Ok(())
-}
-
-fn sccp_block_hash_from_h256(hash: [u8; 32]) -> HashOf<BlockHeader> {
-    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(hash))
-}
-
-fn sccp_block_hash_to_h256(hash: &HashOf<BlockHeader>) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out.copy_from_slice(hash.as_ref().as_ref());
-    out
-}
-
-fn sccp_hash_to_h256(hash: &Hash) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out.copy_from_slice(hash.as_ref());
-    out
-}
-
-fn sccp_consensus_phase(phase: sumeragi::consensus::Phase) -> TairaConsensusPhaseV1 {
-    match phase {
-        sumeragi::consensus::Phase::Prepare => TairaConsensusPhaseV1::Prepare,
-        sumeragi::consensus::Phase::Commit => TairaConsensusPhaseV1::Commit,
-        sumeragi::consensus::Phase::NewView => TairaConsensusPhaseV1::NewView,
-    }
-}
-
-fn sccp_qc_ref(reference: &iroha_data_model::block::consensus::QcRef) -> TairaQcRefV1 {
-    TairaQcRefV1 {
-        height: reference.height,
-        view: reference.view,
-        epoch: reference.epoch,
-        subject_block_hash: sccp_block_hash_to_h256(&reference.subject_block_hash),
-        phase: sccp_consensus_phase(reference.phase),
-    }
-}
-
-fn sccp_qc_projection_matches_local(
-    finality: &TairaBridgeFinalityProofV1,
-    trusted_qc: &Qc,
-) -> bool {
-    let qc = &finality.commit_qc;
-    qc.version == 1
-        && qc.phase == TairaConsensusPhaseV1::Commit
-        && trusted_qc.phase == sumeragi::consensus::Phase::Commit
-        && qc.height == trusted_qc.height
-        && qc.view == trusted_qc.view
-        && qc.epoch == trusted_qc.epoch
-        && qc.mode_tag == trusted_qc.mode_tag
-        && qc.subject_block_hash == sccp_block_hash_to_h256(&trusted_qc.subject_block_hash)
-        && qc.parent_state_root == sccp_hash_to_h256(&trusted_qc.parent_state_root)
-        && qc.post_state_root == sccp_hash_to_h256(&trusted_qc.post_state_root)
-        && qc.chain_order_hash == sccp_hash_to_h256(&trusted_qc.chain_order_hash)
-        && qc.rechain_seq == trusted_qc.rechain_seq
-        && qc.highest_qc == trusted_qc.highest_qc.as_ref().map(sccp_qc_ref)
-        && qc.validator_set_hash_version == trusted_qc.validator_set_hash_version
-        && qc.validator_public_keys
-            == trusted_qc
-                .validator_set
-                .iter()
-                .map(|peer| peer.public_key().to_string())
-                .collect::<Vec<_>>()
-        && qc.validator_set_pops.len() == trusted_qc.validator_set.len()
-        && qc.signers_bitmap == trusted_qc.aggregate.signers_bitmap
-        && qc.bls_aggregate_signature == trusted_qc.aggregate.bls_aggregate_signature
 }
 
 fn validate_local_sccp_records_against_commitment_root(
@@ -1725,17 +1321,16 @@ fn validate_local_sccp_records_against_commitment_root(
     Ok(())
 }
 
-/// Verify an SCCP finality proof against local committed blocks and trusted commit-roster data.
+/// Verify an SCCP finality proof against local committed block and v2 artifact data.
 ///
 /// This intentionally rejects proofs when the local node cannot load the committed block or
-/// trusted commit QC for the referenced height.
+/// exact durable Sumeragi-v2 artifact for the referenced height.
 ///
 /// # Errors
 /// Returns a human-readable rejection reason when the SCCP proof is not anchored to local state
-/// or when the trusted local QC fails full finality verification.
-#[allow(clippy::too_many_lines)]
+/// or when the trusted local artifact fails full finality verification.
 pub fn verify_sccp_finality_proof_against_local_state(
-    state: &impl SccpFinalityStateReadOnly,
+    state: &impl BridgeStateReadOnly,
     finality: &TairaBridgeFinalityProofV1,
 ) -> Result<BridgeFinalityProof, String> {
     if !iroha_sccp::verify_taira_bridge_finality_proof_structure(finality) {
@@ -1745,101 +1340,86 @@ pub fn verify_sccp_finality_proof_against_local_state(
 }
 
 /// Bind an opaque route/Groth16-verified destination context to local committed
-/// block and QC state without repeating proof-controlled parsing or crypto.
+/// block and durable v2 artifact state without repeating proof-controlled parsing.
 ///
 /// # Errors
 /// Returns a human-readable rejection reason when the context's finality
-/// projection differs from authoritative local state or the trusted local QC
-/// fails its single BLS aggregate verification.
+/// artifact differs from authoritative local state or its one BLS aggregate
+/// verification fails.
 pub fn verify_sccp_destination_context_against_local_state(
-    state: &impl SccpFinalityStateReadOnly,
+    state: &impl BridgeStateReadOnly,
     context: &iroha_sccp::SccpVerifiedDestinationContextV1,
 ) -> Result<BridgeFinalityProof, String> {
     verify_structural_sccp_finality_proof_against_local_state(state, context.finality())
 }
 
-#[allow(clippy::too_many_lines)]
 fn verify_structural_sccp_finality_proof_against_local_state(
-    state: &impl SccpFinalityStateReadOnly,
+    state: &impl BridgeStateReadOnly,
     finality: &TairaBridgeFinalityProofV1,
 ) -> Result<BridgeFinalityProof, String> {
-    if finality.chain_id != state.sccp_chain_id().as_str() {
-        return Err(format!(
-            "SCCP finality proof chain_id mismatch: expected {}, actual {}",
-            state.sccp_chain_id(),
-            finality.chain_id
-        ));
+    let artifact = &finality.finality_artifact;
+    let height = artifact.height;
+    let height_usize = usize::try_from(height)
+        .map_err(|_| format!("SCCP finality proof height {height} exceeds the host range"))?;
+    let height_index = NonZeroUsize::new(height_usize)
+        .ok_or_else(|| "SCCP finality proof height must be nonzero".to_owned())?;
+    if artifact.height_context.chain_id != *state.bridge_chain_id() {
+        return Err("SCCP finality proof chain id does not match local state".to_owned());
     }
 
-    let height_usize: usize = finality
-        .height
-        .try_into()
-        .map_err(|_| format!("invalid SCCP finality height {}", finality.height))?;
-    let nonzero_height = NonZeroUsize::new(height_usize)
-        .ok_or_else(|| format!("invalid SCCP finality height {}", finality.height))?;
     let local_block = state
-        .sccp_block_by_height(nonzero_height)
-        .ok_or_else(|| format!("local committed block {} not found", finality.height))?;
-    let local_header = local_block.header();
-    let local_hash = local_block.hash();
-    let proof_hash = sccp_block_hash_from_h256(finality.block_hash);
-    if proof_hash != local_hash {
+        .bridge_block_by_height(height_index)
+        .ok_or_else(|| format!("SCCP finality proof block {height} is not available locally"))?;
+    if local_block.header() != finality.block_header || local_block.hash() != artifact.block_hash {
         return Err(
-            "SCCP finality proof block hash does not match local committed block".to_owned(),
+            "SCCP finality proof block header does not match the local canonical block".to_owned(),
         );
     }
+    let commitment_root = finality
+        .block_header
+        .sccp_commitment_root()
+        .ok_or_else(|| "SCCP finality proof block has no SCCP commitment root".to_owned())?;
+    validate_local_sccp_records_against_commitment_root(&local_block, commitment_root)?;
 
-    let local_header_bytes = norito::to_bytes(&local_header)
-        .map_err(|err| format!("failed to encode local block header: {err}"))?;
-    if local_header_bytes != finality.block_header_bytes {
-        return Err(
-            "SCCP finality proof block header bytes do not match local committed block".to_owned(),
-        );
-    }
-    if local_header.sccp_commitment_root() != Some(finality.commitment_root) {
-        return Err(
-            "SCCP finality proof commitment root does not match local block header".to_owned(),
-        );
-    }
-
-    validate_local_sccp_records_against_commitment_root(
-        local_block.as_ref(),
-        finality.commitment_root,
-    )?;
-
-    let trusted_qc = state
-        .sccp_commit_qc_for_block(finality.height, local_hash)
-        .ok_or_else(|| {
+    let local_artifact = state
+        .bridge_v2_finality_artifact(height)
+        .map_err(|reason| {
             format!(
-                "trusted local commit QC for SCCP proof height {} is missing",
-                finality.height
+                "failed to load local Sumeragi-v2 finality artifact at height {height}: {reason}"
             )
+        })?
+        .ok_or_else(|| {
+            format!("local Sumeragi-v2 finality artifact at height {height} is missing")
         })?;
-    if !sccp_qc_projection_matches_local(finality, &trusted_qc) {
+    if local_artifact != *artifact {
         return Err(
-            "SCCP finality QC projection does not match the trusted local commit QC".to_owned(),
+            "SCCP finality proof artifact does not match the exact durable local artifact"
+                .to_owned(),
         );
     }
 
-    let proof = BridgeFinalityProof {
-        height: finality.height,
-        chain_id: state.sccp_chain_id().clone(),
-        block_header: local_header,
-        block_hash: local_hash,
-        commit_qc: trusted_qc,
-        validator_set_pops: finality.commit_qc.validator_set_pops.clone(),
-    };
+    let mut local_pops = Vec::with_capacity(artifact.height_context.roster.len());
+    for (index, validator) in artifact.height_context.roster.iter().enumerate() {
+        let pop = state
+            .bridge_validator_pop(validator.validator.public_key())
+            .ok_or_else(|| {
+                format!("local validator proof of possession is missing at roster index {index}")
+            })?;
+        local_pops.push(pop);
+    }
+    if local_pops != finality.validator_set_pops {
+        return Err(
+            "SCCP finality proof PoPs do not match the authoritative local validator records"
+                .to_owned(),
+        );
+    }
+
     count_sccp_local_bls_verification_for_tests();
-    verify_finality_proof(
-        &proof,
-        &FinalityProofVerificationConfig {
-            expected_chain_id: state.sccp_chain_id(),
-            expected_height: Some(finality.height),
-            trusted_validator_set_hash: Some(proof.commit_qc.validator_set_hash),
-        },
-    )
-    .map_err(|err| format!("trusted local finality QC failed verification: {err}"))?;
-    Ok(proof)
+    iroha_data_model::bridge::verify_bridge_finality_proof(finality, state.bridge_chain_id())
+        .map_err(|error| {
+            format!("SCCP finality proof cryptographic verification failed: {error}")
+        })?;
+    Ok(finality.clone())
 }
 
 #[cfg(test)]
@@ -1876,10 +1456,8 @@ mod tests {
         ChainId,
         account::AccountId,
         block::{BlockSignature, SignedBlock},
-        consensus::{CertPhase, QcAggregate, default_chain_order_hash},
         isi::InstructionBox,
         nexus::DataSpaceId,
-        peer::PeerId,
         prelude::TransactionBuilder,
         smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
         transaction::{
@@ -1918,83 +1496,48 @@ mod tests {
         assert_eq!(checked_bls_keypair().algorithm(), Algorithm::BlsNormal);
     }
 
-    struct EmptySccpFinalityState {
+    #[derive(Clone)]
+    struct TestSccpFinalityState {
         chain_id: ChainId,
+        block: Option<Arc<SignedBlock>>,
+        artifact: Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>,
+        validator_pops: Vec<(PublicKey, Vec<u8>)>,
+        artifact_error: Option<String>,
     }
 
-    struct PersistedSccpFinalityState {
-        chain_id: ChainId,
-        block: Arc<SignedBlock>,
-        commit_qc: Qc,
-    }
-
-    struct PersistedQcBridgeState {
-        chain_id: ChainId,
-        block: Arc<SignedBlock>,
-        commit_qc: Qc,
-        validator_public_key: PublicKey,
-        validator_pop: Vec<u8>,
-    }
-
-    impl BridgeStateReadOnly for PersistedQcBridgeState {
+    impl BridgeStateReadOnly for TestSccpFinalityState {
         fn bridge_chain_id(&self) -> &ChainId {
             &self.chain_id
         }
 
         fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-            (u64::try_from(height.get()).ok() == Some(self.block.header().height().get()))
-                .then(|| self.block.clone())
+            self.block.as_ref().and_then(|block| {
+                (u64::try_from(height.get()).ok() == Some(block.header().height().get()))
+                    .then(|| Arc::clone(block))
+            })
         }
 
-        fn bridge_commit_qc_for_block(
+        fn bridge_v2_finality_artifact(
             &self,
             height: u64,
-            block_hash: HashOf<BlockHeader>,
-        ) -> Option<Qc> {
-            (self.commit_qc.height == height && self.commit_qc.subject_block_hash == block_hash)
-                .then(|| self.commit_qc.clone())
+        ) -> Result<
+            Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>,
+            String,
+        > {
+            if let Some(error) = &self.artifact_error {
+                return Err(error.clone());
+            }
+            Ok(self
+                .artifact
+                .as_ref()
+                .filter(|artifact| artifact.height == height)
+                .cloned())
         }
 
         fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
-            (public_key == &self.validator_public_key).then(|| self.validator_pop.clone())
-        }
-    }
-
-    impl SccpFinalityStateReadOnly for EmptySccpFinalityState {
-        fn sccp_chain_id(&self) -> &ChainId {
-            &self.chain_id
-        }
-
-        fn sccp_block_by_height(&self, _height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-            None
-        }
-
-        fn sccp_commit_qc_for_block(
-            &self,
-            _height: u64,
-            _block_hash: HashOf<BlockHeader>,
-        ) -> Option<Qc> {
-            None
-        }
-    }
-
-    impl SccpFinalityStateReadOnly for PersistedSccpFinalityState {
-        fn sccp_chain_id(&self) -> &ChainId {
-            &self.chain_id
-        }
-
-        fn sccp_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-            (u64::try_from(height.get()).ok() == Some(self.block.header().height().get()))
-                .then(|| Arc::clone(&self.block))
-        }
-
-        fn sccp_commit_qc_for_block(
-            &self,
-            height: u64,
-            block_hash: HashOf<BlockHeader>,
-        ) -> Option<Qc> {
-            (self.commit_qc.height == height && self.commit_qc.subject_block_hash == block_hash)
-                .then(|| self.commit_qc.clone())
+            self.validator_pops
+                .iter()
+                .find_map(|(candidate, pop)| (candidate == public_key).then(|| pop.clone()))
         }
     }
 
@@ -2189,51 +1732,6 @@ mod tests {
         SignedBlock::presigned(signature, header, transactions)
     }
 
-    #[test]
-    fn build_finality_proof_uses_persisted_qc_when_status_history_misses_height() {
-        let height = 987_654;
-        let chain_id: ChainId = "bridge-sccp-persisted-qc".parse().expect("chain id");
-        let block = Arc::new(signed_block_with_transactions(Vec::new(), height));
-        let block_hash = block.hash();
-        let validator_keypair = checked_bls_keypair();
-        let validator_public_key = validator_keypair.public_key().clone();
-        let validator_set = vec![PeerId::new(validator_public_key.clone())];
-        let commit_qc = Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: Hash::new(b"persisted-qc-parent"),
-            post_state_root: Hash::new(b"persisted-qc-post"),
-            height,
-            view: 3,
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: iroha_data_model::block::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0x01],
-                bls_aggregate_signature: vec![0xAA; 96],
-            },
-        };
-        let validator_pop = vec![0x42; 48];
-        let state = PersistedQcBridgeState {
-            chain_id,
-            block,
-            commit_qc: commit_qc.clone(),
-            validator_public_key,
-            validator_pop: validator_pop.clone(),
-        };
-
-        let proof = build_finality_proof(&state, height)
-            .expect("persisted commit QC should satisfy finality proof build");
-
-        assert_eq!(proof.commit_qc, commit_qc);
-        assert_eq!(proof.validator_set_pops, vec![validator_pop]);
-    }
-
     fn signed_block_with_sccp_payloads(
         payloads: &[Vec<u8>],
         height: u64,
@@ -2280,6 +1778,48 @@ mod tests {
         (block, decoded_payloads)
     }
 
+    fn persisted_state_for_exact_sccp_fixture(
+        fixture: &iroha_sccp::SccpExactOutboundTestFixtureV1,
+        finality: &TairaBridgeFinalityProofV1,
+    ) -> TestSccpFinalityState {
+        let payload = canonical_test_sccp_payload_bytes(&fixture.bundle.payload);
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
+        ]));
+        let entry_hash = tx.hash_as_entrypoint();
+        let block_signer = checked_keypair();
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(block_signer.private_key(), finality.block_header.hash())
+                .expect("fixture local block signature"),
+        );
+        let mut block = SignedBlock::presigned(signature, finality.block_header.clone(), vec![tx]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("fixture local block results");
+        assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+
+        let validator_pops = finality
+            .finality_artifact
+            .height_context
+            .roster
+            .iter()
+            .zip(&finality.validator_set_pops)
+            .map(|(validator, pop)| (validator.validator.public_key().clone(), pop.clone()))
+            .collect();
+        TestSccpFinalityState {
+            chain_id: finality.finality_artifact.height_context.chain_id.clone(),
+            block: Some(Arc::new(block)),
+            artifact: Some(finality.finality_artifact.clone()),
+            validator_pops,
+            artifact_error: None,
+        }
+    }
+
     #[test]
     fn destination_context_uses_one_decode_pairing_and_local_bls() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
@@ -2297,76 +1837,11 @@ mod tests {
                 bls_verifications: 0,
             }
         );
-
-        let finality = verified.finality();
-        let header = norito::decode_from_bytes::<BlockHeader>(&finality.block_header_bytes)
-            .expect("fixture finality header decodes");
-        let payload = canonical_test_sccp_payload_bytes(&fixture.bundle.payload);
-        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
-            InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
-        ]));
-        let entry_hash = tx.hash_as_entrypoint();
-        let block_signer = checked_keypair();
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(block_signer.private_key(), header.hash())
-                .expect("fixture local block signature"),
-        );
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("fixture local block results");
-        assert_eq!(sccp_block_hash_to_h256(&block.hash()), finality.block_hash);
-
-        let validator_set = finality
-            .commit_qc
-            .validator_public_keys
-            .iter()
-            .map(|key| {
-                key.parse::<PublicKey>()
-                    .map(PeerId::from)
-                    .expect("fixture BLS public key")
-            })
-            .collect::<Vec<_>>();
-        let validator_set_hash = HashOf::new(&validator_set);
-        assert_eq!(
-            sccp_hash_to_h256(&validator_set_hash),
-            finality.commit_qc.validator_set_hash
-        );
-        assert!(finality.commit_qc.highest_qc.is_none());
-        let trusted_qc = Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: block.hash(),
-            parent_state_root: Hash::prehashed(finality.commit_qc.parent_state_root),
-            post_state_root: Hash::prehashed(finality.commit_qc.post_state_root),
-            height: finality.height,
-            view: finality.commit_qc.view,
-            epoch: finality.commit_qc.epoch,
-            chain_order_hash: Hash::prehashed(finality.commit_qc.chain_order_hash),
-            rechain_seq: finality.commit_qc.rechain_seq,
-            mode_tag: finality.commit_qc.mode_tag.clone(),
-            highest_qc: None,
-            validator_set_hash,
-            validator_set_hash_version: finality.commit_qc.validator_set_hash_version,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: finality.commit_qc.signers_bitmap.clone(),
-                bls_aggregate_signature: finality.commit_qc.bls_aggregate_signature.clone(),
-            },
-        };
-        let state = PersistedSccpFinalityState {
-            chain_id: finality.chain_id.parse().expect("fixture chain id"),
-            block: Arc::new(block),
-            commit_qc: trusted_qc,
-        };
+        let state = persisted_state_for_exact_sccp_fixture(&fixture, verified.finality());
         reset_sccp_local_bls_verifications_for_tests();
 
         verify_sccp_destination_context_against_local_state(&state, &verified)
-            .expect("route-bound context must anchor to exact local block and QC");
+            .expect("route-bound context must anchor to exact local v2 artifact");
         assert_eq!(sccp_local_bls_verifications_for_tests(), 1);
         assert_eq!(
             iroha_sccp::sccp_destination_proof_work_counters_v1(),
@@ -2381,64 +1856,97 @@ mod tests {
     }
 
     #[test]
-    fn sccp_finality_local_state_check_rejects_unanchored_qc_before_bls() {
-        let chain_id: ChainId = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
-            .parse()
-            .expect("chain id");
-        let validator_keypair = checked_bls_keypair();
-        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
-        let validator_set = vec![PeerId::new(validator_keypair.public_key().clone())];
-        let validator_set_hash = HashOf::new(&validator_set);
-        let mut validator_set_hash_bytes = [0u8; 32];
-        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
-        let payload = canonical_test_sccp_payload_bytes(&sample_transfer_payload(7, [0x22; 20]));
-        let (block, _) = signed_block_with_sccp_payloads(&[payload], 7);
-        let messages = collect_sccp_messages_from_signed_block(&block);
-        let commitment_root =
-            sccp_commitment_root_from_messages(&messages).expect("commitment root");
-        let mut block_header = block.header().clone();
-        block_header.set_sccp_commitment_root(Some(commitment_root));
-        let block_hash = sccp_block_hash_to_h256(&block_header.hash());
-        let block_header_bytes = norito::to_bytes(&block_header).expect("encode block header");
-        let finality = TairaBridgeFinalityProofV1 {
-            version: 1,
-            chain_id: chain_id.to_string(),
-            height: 7,
-            block_hash,
-            commitment_root,
-            block_header_bytes,
-            commit_qc: iroha_sccp::TairaCommitQcV1 {
-                version: 1,
-                phase: TairaConsensusPhaseV1::Commit,
-                height: 7,
-                view: 0,
-                epoch: 0,
-                mode_tag: "iroha2-consensus::permissioned-sumeragi@v2".to_owned(),
-                subject_block_hash: block_hash,
-                parent_state_root: [1; 32],
-                post_state_root: [2; 32],
-                chain_order_hash: [3; 32],
-                rechain_seq: 0,
-                highest_qc: None,
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set_hash: validator_set_hash_bytes,
-                validator_public_keys,
-                validator_set_pops: vec![vec![1; 48]],
-                signers_bitmap: vec![0b0000_0001],
-                bls_aggregate_signature: vec![2; 96],
-            },
+    fn sccp_finality_local_state_check_rejects_missing_block_before_bls() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact fixture finality proof");
+        let state = TestSccpFinalityState {
+            chain_id: finality.finality_artifact.height_context.chain_id.clone(),
+            block: None,
+            artifact: None,
+            validator_pops: Vec::new(),
+            artifact_error: None,
         };
-        assert!(iroha_sccp::verify_taira_bridge_finality_proof_structure(
-            &finality
-        ));
-        assert!(!iroha_sccp::verify_taira_bridge_finality_proof_cryptographic(&finality));
-
-        let state = EmptySccpFinalityState { chain_id };
         reset_sccp_local_bls_verifications_for_tests();
         let err = verify_sccp_finality_proof_against_local_state(&state, &finality)
-            .expect_err("unanchored SCCP finality must fail before trusted-QC crypto");
-        assert!(err.contains("local committed block 7 not found"), "{err}");
+            .expect_err("unanchored SCCP finality must fail before local crypto");
+        assert!(err.contains("block 1 is not available locally"), "{err}");
         assert_eq!(sccp_local_bls_verifications_for_tests(), 0);
+    }
+
+    #[test]
+    fn sccp_local_anchor_rejects_artifact_pop_chain_and_record_substitution_before_bls() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact fixture finality proof");
+        let base = persisted_state_for_exact_sccp_fixture(&fixture, &finality);
+
+        let assert_rejected_before_bls = |state: &TestSccpFinalityState, expected: &str| {
+            reset_sccp_local_bls_verifications_for_tests();
+            let error = verify_sccp_finality_proof_against_local_state(state, &finality)
+                .expect_err("adversarial local substitution must fail");
+            assert!(
+                error.contains(expected),
+                "expected {expected:?}, got {error:?}"
+            );
+            assert_eq!(sccp_local_bls_verifications_for_tests(), 0);
+        };
+
+        let mut attack = base.clone();
+        attack.chain_id = "attacker-chain".into();
+        assert_rejected_before_bls(&attack, "chain id");
+
+        let mut attack = base.clone();
+        attack.artifact = None;
+        assert_rejected_before_bls(&attack, "artifact at height 1 is missing");
+
+        let mut attack = base.clone();
+        attack.artifact_error = Some("corrupt sidecar".to_owned());
+        assert_rejected_before_bls(&attack, "corrupt sidecar");
+
+        let mut attack = base.clone();
+        attack
+            .artifact
+            .as_mut()
+            .expect("base artifact")
+            .commit_qc
+            .aggregate_signature[0] ^= 1;
+        assert_rejected_before_bls(&attack, "exact durable local artifact");
+
+        let mut attack = base.clone();
+        attack.validator_pops.pop();
+        assert_rejected_before_bls(&attack, "missing at roster index");
+
+        let mut attack = base.clone();
+        attack.validator_pops[0].1[0] ^= 1;
+        assert_rejected_before_bls(&attack, "authoritative local validator records");
+
+        let hostile_payload =
+            canonical_test_sccp_payload_bytes(&sample_transfer_payload(999, [0x44; 20]));
+        let hostile_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(crate::bridge::test_record_sccp_message(hostile_payload)),
+        ]));
+        let hostile_entry_hash = hostile_tx.hash_as_entrypoint();
+        let signer = checked_keypair();
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(signer.private_key(), finality.block_header.hash())
+                .expect("hostile local block signature"),
+        );
+        let mut hostile_block =
+            SignedBlock::presigned(signature, finality.block_header.clone(), vec![hostile_tx]);
+        hostile_block
+            .set_transaction_results(
+                Vec::new(),
+                &[hostile_entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("hostile local block results");
+        let mut attack = base;
+        attack.block = Some(Arc::new(hostile_block));
+        assert_rejected_before_bls(&attack, "commitment root does not match local SCCP records");
     }
 
     #[test]

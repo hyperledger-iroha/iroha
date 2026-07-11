@@ -162,7 +162,7 @@ mod tests {
     use norito::json as norito_json_mod;
 
     const DEPLOYABLE_FUZZ_FIXTURE: &str =
-        "seiyaku BytecodeAnalysis { view fn fuzz_seed() -> i64 { return 0; } }";
+        "seiyaku BytecodeAnalysis { view fn fuzz_seed() -> int { return 0; } }";
 
     fn build_metadata_payload(
         meta: &ProgramMetadata,
@@ -202,7 +202,7 @@ mod tests {
     fn analyze_detects_arithmetic_instruction() {
         let code = KotodamaCompiler::new()
             .compile_source(
-                "seiyaku BytecodeAnalysis { view fn multiply(left: i64, right: i64) -> i64 { return left * right; } }",
+                "seiyaku BytecodeAnalysis { view fn multiply(int left, int right) -> int { return left * right; } }",
             )
             .expect("compile");
         let analysis = analyze_bytecode(&code).expect("analyze");

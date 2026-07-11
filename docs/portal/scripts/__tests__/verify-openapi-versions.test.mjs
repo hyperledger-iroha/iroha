@@ -6,6 +6,149 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 
 import {isIsoTimestamp, verifyOpenApiVersions} from '../verify-openapi-versions.mjs';
+import {validateOpenApiGeneratorProvenance} from '../lib/openapi-provenance.mjs';
+
+test('OpenAPI provenance accepts explicit dirty unsigned state and legacy clean state', () => {
+  assert.deepEqual(
+    validateOpenApiGeneratorProvenance({
+      generator_commit: null,
+      generator_dirty: true,
+      generator_source_sha256_hex: 'ab'.repeat(32),
+    }),
+    {
+      dirty: true,
+      commit: null,
+      sourceSha256Hex: 'ab'.repeat(32),
+    },
+  );
+  assert.deepEqual(
+    validateOpenApiGeneratorProvenance({generator_commit: 'cd'.repeat(20)}),
+    {
+      dirty: false,
+      commit: 'cd'.repeat(20),
+      sourceSha256Hex: null,
+    },
+  );
+});
+
+test('OpenAPI provenance rejects dirty-state ambiguity and release smuggling', () => {
+  for (const [name, manifest, options, pattern] of [
+    [
+      'dirty commit alias',
+      {
+        generator_commit: 'pretend-clean',
+        generator_dirty: true,
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
+      {},
+      /generator_commit to null/i,
+    ],
+    [
+      'missing dirty digest',
+      {generator_commit: null, generator_dirty: true},
+      {},
+      /requires generator_source_sha256_hex/i,
+    ],
+    [
+      'uppercase dirty digest',
+      {
+        generator_commit: null,
+        generator_dirty: true,
+        generator_source_sha256_hex: 'AB'.repeat(32),
+      },
+      {},
+      /64 lowercase hexadecimal/i,
+    ],
+    [
+      'dirty signed manifest',
+      {
+        generator_commit: null,
+        generator_dirty: true,
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
+      {signed: true},
+      /must not be signed/i,
+    ],
+    [
+      'dirty release manifest',
+      {
+        generator_commit: null,
+        generator_dirty: true,
+        generator_source_sha256_hex: 'ab'.repeat(32),
+      },
+      {requireClean: true},
+      /cannot be release-verified/i,
+    ],
+    [
+      'dirty field type confusion',
+      {generator_commit: 'clean', generator_dirty: 'false'},
+      {},
+      /generator_dirty must be boolean/i,
+    ],
+    [
+      'short clean commit',
+      {generator_commit: 'ab'.repeat(19)},
+      {},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'uppercase clean commit',
+      {generator_commit: 'AB'.repeat(20)},
+      {},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'nonhex clean commit',
+      {generator_commit: 'gg'.repeat(20)},
+      {},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+    [
+      'padded clean commit',
+      {generator_commit: ` ${'ab'.repeat(20)} `},
+      {},
+      /exactly 40 lowercase hexadecimal/i,
+    ],
+  ]) {
+    assert.throws(
+      () => validateOpenApiGeneratorProvenance(manifest, options),
+      pattern,
+      name,
+    );
+  }
+});
+
+test('verifyOpenApiVersions requires explicit unsigned opt-in for dirty provenance', async () => {
+  const context = await setupFixture();
+  for (const manifestPath of [
+    join(context.outputDir, 'manifest.json'),
+    join(context.outputDir, 'versions', 'current', 'manifest.json'),
+  ]) {
+    await corruptManifest(manifestPath, (manifest) => {
+      manifest.generator_commit = null;
+      manifest.generator_dirty = true;
+      manifest.generator_source_sha256_hex = 'ab'.repeat(32);
+      manifest.artifact.signature = null;
+    });
+  }
+  const versionsPath = join(context.outputDir, 'versions.json');
+  const versions = JSON.parse(await readFile(versionsPath, 'utf8'));
+  for (const entry of versions.entries) {
+    if (entry.label === 'latest' || entry.label === 'current') {
+      entry.signed = false;
+      entry.signatureAlgorithm = null;
+      entry.signaturePublicKeyHex = null;
+      entry.signatureHex = null;
+    }
+  }
+  await writeFile(versionsPath, JSON.stringify(versions, null, 2), 'utf8');
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /dirty provenance cannot be release-verified/i,
+  );
+  await verifyOpenApiVersions({...context, allowUnsigned: true});
+});
 
 test('verifyOpenApiVersions validates recorded metadata', async () => {
   const context = await setupFixture();
@@ -243,7 +386,7 @@ async function writeManifest(manifestPath, artifactPath, options) {
   const payload = {
     version: 1,
     generated_unix_ms: 123,
-    generator_commit: options.generatorCommit ?? 'fixture-commit',
+    generator_commit: options.generatorCommit ?? 'ab'.repeat(20),
     artifact: {
       path: artifactPath,
       bytes: options.bytes ?? 0,

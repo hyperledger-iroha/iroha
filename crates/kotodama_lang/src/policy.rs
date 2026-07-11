@@ -279,7 +279,7 @@ impl Checker {
         let map_desc = format!("StateMap<{key_name}, {value_name}>");
         if self.seen.insert((origin.to_string(), map_desc.clone())) {
             let message = format!(
-                "on-chain profile forbids map with key type `{key_name}` in {origin}. Supported key types: i64, u128, Amount, bool, string, bytes, and typed Iroha IDs."
+                "on-chain profile forbids map with key type `{key_name}` in {origin}. Supported key int types, int, quantity, bool, string, bytes, and typed Iroha IDs."
             );
             self.errors.push(PolicyError { message });
         }
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].message,
-            "on-chain profile forbids map with key type `Json` in expression in `foo`. Supported key types: i64, u128, Amount, bool, string, bytes, and typed Iroha IDs."
+            "on-chain profile forbids map with key type `Json` in expression in `foo`. Supported key int types, int, quantity, bool, string, bytes, and typed Iroha IDs."
         );
     }
 

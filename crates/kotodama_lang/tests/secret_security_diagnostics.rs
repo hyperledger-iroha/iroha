@@ -31,9 +31,9 @@ const REJECT_CASES: &[RejectCase] = &[
     RejectCase {
         name: "helper-transitive-secret-control-flow",
         source: r#"seiyaku Privacy {
-    fn relay(value: Secret<i64>) -> Secret<i64> { return value; }
+    fn relay(Secret<int> value) -> Secret<int> { return value; }
     kotoage fn transitive() authorize("UsePrivacy") {
-        let value: Secret<i64> = crypto::private_input(0);
+        let Secret<int> value = crypto::private_input(0);
         if relay(value) { return; }
     }
 }"#,
@@ -43,20 +43,20 @@ const REJECT_CASES: &[RejectCase] = &[
     RejectCase {
         name: "public-secret-return",
         source: r#"seiyaku Privacy {
-    kotoage fn expose() -> Secret<i64> authorize("UsePrivacy") {
+    kotoage fn expose() -> Secret<int> authorize("UsePrivacy") {
         return crypto::private_input(0);
     }
 }"#,
         code: "E_SECRET_PUBLIC_RETURN",
-        primary: "Secret<i64>",
+        primary: "Secret<int>",
     },
     RejectCase {
         name: "public-secret-parameter",
         source: r#"seiyaku Privacy {
-    kotoage fn accept(value: Secret<i64>) authorize("UsePrivacy") {}
+    kotoage fn accept(Secret<int> value) authorize("UsePrivacy") {}
 }"#,
         code: "E_SECRET_PUBLIC_PARAMETER",
-        primary: "Secret<i64>",
+        primary: "Secret<int>",
     },
     RejectCase {
         name: "secret-log",
@@ -71,16 +71,16 @@ const REJECT_CASES: &[RejectCase] = &[
     RejectCase {
         name: "secret-bearing-durable-state-type",
         source: r#"seiyaku Privacy {
-    state leaked: Secret<i64>;
+    state Secret<int> leaked;
     hajimari() {}
 }"#,
         code: "E_SECRET_STATE_TYPE",
-        primary: "Secret<i64>",
+        primary: "Secret<int>",
     },
     RejectCase {
         name: "secret-durable-state-key",
         source: r#"seiyaku Privacy {
-    state values: StateMap<i64, i64>;
+    state StateMap<int, int> values;
     kotoage fn write() authorize("UsePrivacy") {
         values[crypto::private_input(0)] = 1;
     }
@@ -91,7 +91,7 @@ const REJECT_CASES: &[RejectCase] = &[
     RejectCase {
         name: "secret-durable-state-value",
         source: r#"seiyaku Privacy {
-    state values: StateMap<i64, i64>;
+    state StateMap<int, int> values;
     kotoage fn write() authorize("UsePrivacy") {
         values[0] = crypto::private_input(0);
     }
@@ -143,7 +143,7 @@ const REJECT_CASES: &[RejectCase] = &[
         name: "secret-private-input-index",
         source: r#"seiyaku Privacy {
     kotoage fn dynamic_index() authorize("UsePrivacy") {
-        let index: Secret<i64> = crypto::private_input(0);
+        let Secret<int> index = crypto::private_input(0);
         let value = crypto::private_input(index);
     }
 }"#,
@@ -154,7 +154,7 @@ const REJECT_CASES: &[RejectCase] = &[
         name: "mixed-public-secret-commitment",
         source: r#"seiyaku Privacy {
     kotoage fn weak_commitment() authorize("UsePrivacy") {
-        let value: Secret<i64> = crypto::private_input(0);
+        let Secret<int> value = crypto::private_input(0);
         let commitment = crypto::valcom(left: value, right: 7);
     }
 }"#,
@@ -256,9 +256,9 @@ fn approved_all_secret_commitment_checks_and_builds() {
     let source = r#"seiyaku Privacy {
     hajimari() {}
     kaizen() {}
-    kotoage fn commitment() -> i64 authorize("UsePrivacy") {
-        let value: Secret<i64> = crypto::private_input(0);
-        let blinding: Secret<i64> = crypto::private_input(1);
+    kotoage fn commitment() -> int authorize("UsePrivacy") {
+        let Secret<int> value = crypto::private_input(0);
+        let Secret<int> blinding = crypto::private_input(1);
         return crypto::valcom(left: value, right: blinding);
     }
 }"#;

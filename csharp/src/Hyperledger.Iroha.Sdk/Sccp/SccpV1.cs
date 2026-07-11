@@ -1178,17 +1178,37 @@ public static class SccpV1
 
     private static byte[] CanonicalFinalityAnchorBytes(SccpSoraFinalityAnchorV1 anchor)
     {
+        if (anchor.ProtocolVersion != 2 || anchor.CheckpointHeight == 0)
+        {
+            throw new ArgumentException("SCCP finality anchor must bind protocol version 2 and a nonzero height.");
+        }
+        foreach (var (value, name) in new[]
+        {
+            (anchor.ChainIdHash, "chain-id hash"),
+            (anchor.CheckpointBlockHash, "checkpoint block hash"),
+            (anchor.CheckpointContextId, "checkpoint context id"),
+            (anchor.CheckpointFinalityArtifactHash, "checkpoint finality-artifact hash"),
+        })
+        {
+            RequireHash(value, name);
+        }
+        RequireDistinctHashes(
+        [
+            anchor.ChainIdHash, anchor.CheckpointBlockHash,
+            anchor.CheckpointContextId, anchor.CheckpointFinalityArtifactHash,
+        ], "SCCP finality anchor");
+
         using var output = new MemoryStream();
         output.WriteByte(1);
         output.WriteByte((byte)SccpNetworkV1.SoraTaira);
+        Span<byte> protocol = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(protocol, anchor.ProtocolVersion);
+        output.Write(protocol);
         output.Write(anchor.ChainIdHash);
         WriteUInt64(output, anchor.CheckpointHeight);
         output.Write(anchor.CheckpointBlockHash);
-        WriteUInt64(output, anchor.ValidatorSetEpoch);
-        output.Write(anchor.ValidatorSetHash);
-        Span<byte> version = stackalloc byte[2];
-        BinaryPrimitives.WriteUInt16LittleEndian(version, anchor.ValidatorSetHashVersion);
-        output.Write(version);
+        output.Write(anchor.CheckpointContextId);
+        output.Write(anchor.CheckpointFinalityArtifactHash);
         return output.ToArray();
     }
 

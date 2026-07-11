@@ -37,15 +37,15 @@ class NumericV1Exception(
     message: String,
 ) : IllegalArgumentException(message)
 
-private val INT_MIN: BigInteger = BigInteger.ONE.shiftLeft(4095).negate()
-private val INT_MAX: BigInteger = BigInteger.ONE.shiftLeft(4095).subtract(BigInteger.ONE)
+private val INT_MIN: BigInteger = BigInteger.ONE.shiftLeft(511).negate()
+private val INT_MAX: BigInteger = BigInteger.ONE.shiftLeft(511).subtract(BigInteger.ONE)
 
 private fun fail(code: NumericV1ErrorCode, message: String): Nothing =
     throw NumericV1Exception(code, message)
 
 private fun checkedMantissa(value: BigInteger): BigInteger {
     if (value < INT_MIN || value > INT_MAX) {
-        fail(NumericV1ErrorCode.MANTISSA_OVERFLOW, "mantissa is outside the signed 4096-bit domain")
+        fail(NumericV1ErrorCode.MANTISSA_OVERFLOW, "mantissa is outside the signed 512-bit domain")
     }
     return value
 }
@@ -68,6 +68,9 @@ class KotodamaInt private constructor(val value: BigInteger) {
         fun parse(value: String): KotodamaInt {
             if (!CANONICAL_INTEGER.matches(value) || value == "-0") {
                 fail(NumericV1ErrorCode.INVALID_TEXT, "int must use canonical base-10 syntax")
+            }
+            if (value.length > MAX_INT_TEXT_BYTES) {
+                fail(NumericV1ErrorCode.MANTISSA_OVERFLOW, "integer text exceeds the signed 512-bit input bound")
             }
             return of(BigInteger(value))
         }
@@ -140,9 +143,23 @@ private fun parseScaled(value: String, quantity: Boolean): Pair<BigInteger, Int>
         ?: fail(NumericV1ErrorCode.INVALID_TEXT, "value must use exact decimal syntax")
     if (value == "-0") fail(NumericV1ErrorCode.INVALID_TEXT, "negative zero is not canonical")
     val fraction = match.groupValues[3]
-    if (fraction.length > 28) fail(NumericV1ErrorCode.INVALID_SCALE, "scale exceeds 28")
-    val mantissa = BigInteger(match.groupValues[1] + match.groupValues[2] + fraction)
-    return normalizeScaled(mantissa, fraction.length, quantity)
+    val rawDigits = match.groupValues[2] + fraction
+    var first = 0
+    while (first < rawDigits.length && rawDigits[first] == '0') first++
+    if (first == rawDigits.length) return normalizeScaled(BigInteger.ZERO, 0, quantity)
+    var end = rawDigits.length
+    var scale = fraction.length
+    while (scale > 0 && rawDigits[end - 1] == '0') {
+        end--
+        scale--
+    }
+    if (scale > 28) fail(NumericV1ErrorCode.INVALID_SCALE, "canonical scale exceeds 28")
+    if (end - first > MAX_SIGNIFICANT_DIGITS) {
+        fail(NumericV1ErrorCode.MANTISSA_OVERFLOW, "decimal mantissa exceeds the signed 512-bit input bound")
+    }
+    val magnitude = BigInteger(rawDigits.substring(first, end))
+    val mantissa = if (match.groupValues[1] == "-") magnitude.negate() else magnitude
+    return normalizeScaled(mantissa, scale, quantity)
 }
 
 private fun normalizeScaled(
@@ -150,8 +167,8 @@ private fun normalizeScaled(
     rawScale: Int,
     quantity: Boolean,
 ): Pair<BigInteger, Int> {
-    if (rawScale !in 0..28) fail(NumericV1ErrorCode.INVALID_SCALE, "scale must be in 0..28")
-    var mantissa = checkedMantissa(rawMantissa)
+    if (rawScale < 0) fail(NumericV1ErrorCode.INVALID_SCALE, "scale cannot be negative")
+    var mantissa = rawMantissa
     var scale = rawScale
     if (mantissa.signum() == 0) {
         scale = 0
@@ -161,6 +178,8 @@ private fun normalizeScaled(
             scale--
         }
     }
+    if (scale > 28) fail(NumericV1ErrorCode.INVALID_SCALE, "canonical scale exceeds 28")
+    checkedMantissa(mantissa)
     if (quantity && mantissa.signum() < 0) {
         fail(NumericV1ErrorCode.NEGATIVE_QUANTITY, "quantity cannot be negative")
     }
@@ -333,7 +352,7 @@ object NumericV1Codec {
         if (body.size < 4) fail(NumericV1ErrorCode.LENGTH_MISMATCH, "body has no mantissa length")
         val mantissaLength = ByteBuffer.wrap(body).order(ByteOrder.LITTLE_ENDIAN).int
         if (mantissaLength < 0 || mantissaLength > MAX_MANTISSA_BYTES) {
-            fail(NumericV1ErrorCode.MANTISSA_OVERFLOW, "mantissa length exceeds 512 bytes")
+            fail(NumericV1ErrorCode.MANTISSA_OVERFLOW, "mantissa length exceeds 64 bytes")
         }
         val expected = 4 + mantissaLength + if (kind.scaled) 1 else 0
         if (expected != body.size) fail(NumericV1ErrorCode.LENGTH_MISMATCH, "body length is inconsistent")
@@ -359,7 +378,7 @@ object NumericV1Codec {
             .put(1.toByte())
             .putInt(frame.size)
             .put(frame)
-            .put(Blake2b.digest256(frame))
+            .put(payloadHash(frame))
             .array()
 
     private fun decodeEnvelope(kind: NumericKind, envelope: ByteArray): ByteArray {
@@ -368,8 +387,11 @@ object NumericV1Codec {
         }
         val header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN)
         val pointerType = header.short.toInt() and 0xFFFF
-        if (pointerType !in 0x0010..0x0013) fail(NumericV1ErrorCode.UNKNOWN_TYPE, "unknown pointer type")
-        if (pointerType == 0x0010) fail(NumericV1ErrorCode.TYPE_NOT_ALLOWED, "retired Amount type is forbidden")
+        if (pointerType == 0x0010) {
+            fail(NumericV1ErrorCode.TYPE_NOT_ALLOWED, "retired Amount pointer type is permanently reserved")
+        }
+        val knownAllowedType = pointerType in 0x0001..0x000F || pointerType in 0x0011..0x0013
+        if (!knownAllowedType) fail(NumericV1ErrorCode.UNKNOWN_TYPE, "unknown pointer type")
         if (pointerType != kind.pointerType) fail(NumericV1ErrorCode.WRONG_TYPE, "pointer type does not match")
         if ((header.get().toInt() and 0xFF) != 1) {
             fail(NumericV1ErrorCode.INVALID_ENVELOPE_VERSION, "envelope version must be 1")
@@ -384,11 +406,15 @@ object NumericV1Codec {
         }
         val frame = envelope.copyOfRange(ENVELOPE_HEADER_BYTES, ENVELOPE_HEADER_BYTES + frameLength)
         val suppliedHash = envelope.copyOfRange(ENVELOPE_HEADER_BYTES + frameLength, envelope.size)
-        if (!constantTimeEquals(Blake2b.digest256(frame), suppliedHash)) {
+        if (!constantTimeEquals(payloadHash(frame), suppliedHash)) {
             fail(NumericV1ErrorCode.PAYLOAD_HASH_MISMATCH, "payload hash failed")
         }
         return frame
     }
+}
+
+private fun payloadHash(frame: ByteArray): ByteArray = Blake2b.digest256(frame).also {
+    it[it.lastIndex] = (it.last().toInt() or 1).toByte()
 }
 
 private fun encodeTwos(value: BigInteger): ByteArray {
@@ -428,7 +454,9 @@ private fun constantTimeEquals(left: ByteArray, right: ByteArray): Boolean {
     return difference == 0
 }
 
-private const val MAX_MANTISSA_BYTES = 512
+private const val MAX_MANTISSA_BYTES = 64
+private const val MAX_INT_TEXT_BYTES = 155
+private const val MAX_SIGNIFICANT_DIGITS = 154
 private const val FRAME_HEADER_BYTES = 40
 private const val ENVELOPE_HEADER_BYTES = 7
 private const val HASH_BYTES = 32

@@ -37,7 +37,7 @@ fn pointer_map_default_roundtrip() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     let src = r#"
         seiyaku PointerFFI {
-            state Owners: StateMap<i64, AccountId>;
+            state StateMap<int, AccountId> Owners;
             hajimari() {
                 Owners[7] = context::authority();
             }
@@ -92,7 +92,7 @@ fn pointer_asset_state_storage_wraps_inner_pointer() {
     let src = format!(
         r#"
         seiyaku PointerAssetStorage {{
-            state Assets: StateMap<i64, AssetDefinitionId>;
+            state StateMap<int, AssetDefinitionId> Assets;
 
             kotoage fn main() authorize("WriteState") {{
                 Assets[7] = AssetDefinitionId::parse("{asset_definition}");

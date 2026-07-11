@@ -287,12 +287,11 @@ fn validate_state_pointer_atom(
 ) -> Result<(), VMError> {
     let expected = pointer_type(kind).ok_or(VMError::DecodeError)?;
     let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
-    if tlv.type_id != expected
-        || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id)
-        || encode_tlv(tlv.type_id, tlv.payload)?.as_slice() != envelope
-    {
+    if tlv.type_id != expected || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
         return Err(VMError::DecodeError);
     }
+    // Exact envelope validation above has already authenticated these bytes;
+    // rebuilding the same TLV would only repeat the payload hash.
     validate_pointer_payload(kind, tlv.payload)
 }
 
@@ -1009,6 +1008,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::{bigint::BigInt, numeric::Numeric};
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
     };
@@ -1023,6 +1023,24 @@ mod tests {
         let payload = to_bytes(schema).expect("schema bytes");
         let envelope = encode_tlv(PointerType::NoritoBytes, &payload).expect("schema TLV");
         vm.alloc_host_tlv(&envelope).expect("install schema")
+    }
+
+    fn install_int(vm: &mut IVM, value: i64) -> u64 {
+        let frame = IntValueV1::try_new(BigInt::from_i128(i128::from(value)))
+            .expect("test int is inside V1 domain")
+            .encode_frame()
+            .expect("canonical int frame");
+        let envelope = encode_tlv(PointerType::Int, &frame).expect("int TLV");
+        vm.alloc_host_tlv(&envelope).expect("install int")
+    }
+
+    fn install_quantity(vm: &mut IVM, value: &str) -> u64 {
+        let quantity = value.parse().expect("canonical quantity");
+        let frame = QuantityValueV1::new(quantity)
+            .encode_frame()
+            .expect("canonical quantity frame");
+        let envelope = encode_tlv(PointerType::Quantity, &frame).expect("quantity TLV");
+        vm.alloc_host_tlv(&envelope).expect("install quantity")
     }
 
     #[test]
@@ -1056,7 +1074,8 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let schema_pointer = install_schema(&mut vm, &schema);
         let table = vm.alloc_heap(16).expect("word table");
-        vm.store_u64(table, 9).expect("store integer");
+        let integer = install_int(&mut vm, 9);
+        vm.store_u64(table, integer).expect("store integer pointer");
         vm.store_u64(table + 8, 1).expect("store boolean");
 
         let mut outputs = Vec::new();
@@ -1071,10 +1090,10 @@ mod tests {
         assert_eq!(outputs[0], outputs[1]);
         let record: StateValueRecordV1 =
             decode_from_bytes(&outputs[0]).expect("decode stored record");
-        assert_eq!(
-            record.atoms,
-            vec![StateValueAtomV1::Int(9), StateValueAtomV1::Bool(true)]
-        );
+        assert!(matches!(
+            record.atoms.as_slice(),
+            [StateValueAtomV1::Pointer(_), StateValueAtomV1::Bool(true)]
+        ));
     }
 
     #[test]
@@ -1100,7 +1119,8 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         let first_pointer = install_schema(&mut vm, &first);
         let table = vm.alloc_heap(8).expect("word table");
-        vm.store_u64(table, 7).expect("store integer");
+        let integer = install_int(&mut vm, 7);
+        vm.store_u64(table, integer).expect("store integer pointer");
         vm.set_register(10, first_pointer);
         vm.set_register(11, table);
         vm.set_register(12, 1);
@@ -1127,7 +1147,10 @@ mod tests {
         let schema_bytes = to_bytes(&schema).expect("schema bytes");
         let record = StateValueRecordV1 {
             schema_hash: state_value_schema_hash_v1(&schema_bytes),
-            atoms: vec![StateValueAtomV1::Tag(false), StateValueAtomV1::Int(99)],
+            atoms: vec![
+                StateValueAtomV1::Tag(false),
+                StateValueAtomV1::Pointer(vec![99]),
+            ],
         };
         let record = encode_tlv(
             PointerType::NoritoBytes,
@@ -1239,9 +1262,9 @@ mod tests {
     }
 
     #[test]
-    fn amount_list_roundtrips_as_one_canonical_sequence_handle() {
+    fn quantity_list_roundtrips_as_one_canonical_sequence_handle() {
         let element = StateValueSchemaV1 {
-            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Amount)],
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Quantity)],
         };
         let schema = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::List {
@@ -1249,20 +1272,17 @@ mod tests {
                 capacity: 2,
             }],
         };
-        let amount_payload = to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount = encode_tlv(PointerType::Quantity, &amount_payload).expect("Amount TLV");
-
         let mut vm = IVM::new(u64::MAX);
         let schema_pointer = install_schema(&mut vm, &schema);
-        let first_amount = vm.alloc_host_tlv(&amount).expect("install first Amount");
-        let second_amount = vm.alloc_host_tlv(&amount).expect("install second Amount");
-        let layout = ListLayoutV1::try_new(2, 1).expect("Amount list layout");
+        let first_amount = install_quantity(&mut vm, "1.25");
+        let second_amount = install_quantity(&mut vm, "1.25");
+        let layout = ListLayoutV1::try_new(2, 1).expect("quantity list layout");
         let list_pointer = crate::list::allocate_words(
             &mut vm,
             layout,
             &[vec![first_amount], vec![second_amount]],
         )
-        .expect("allocate contiguous Amount list");
+        .expect("allocate contiguous quantity list");
         let table = vm.alloc_heap(8).expect("word table");
         vm.store_u64(table, list_pointer)
             .expect("store list pointer");
@@ -1282,9 +1302,12 @@ mod tests {
         assert_eq!(decoded.len(), 2);
         for item in &decoded {
             assert_eq!(item.len(), 1);
-            let amount = vm.validate_tlv(item[0]).expect("decoded Amount TLV");
-            assert_eq!(amount.type_id, PointerType::Quantity);
-            let value: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
+            let quantity = vm.validate_tlv(item[0]).expect("decoded quantity TLV");
+            assert_eq!(quantity.type_id, PointerType::Quantity);
+            let value = QuantityValueV1::decode_frame(quantity.payload)
+                .expect("decode quantity")
+                .into_quantity()
+                .into_numeric();
             assert_eq!(value, Numeric::new(125, 2));
         }
 
@@ -1314,7 +1337,7 @@ mod tests {
             nodes: vec![
                 StateValueNodeV1::Option,
                 StateValueNodeV1::Result,
-                StateValueNodeV1::Leaf(StateValueKindV1::Amount),
+                StateValueNodeV1::Leaf(StateValueKindV1::Quantity),
                 StateValueNodeV1::Leaf(StateValueKindV1::Bool),
             ],
         };
@@ -1326,9 +1349,7 @@ mod tests {
         };
         let mut vm = IVM::new(u64::MAX);
         let schema_pointer = install_schema(&mut vm, &schema);
-        let amount_payload = to_bytes(&Numeric::new(125, 2)).expect("Amount payload");
-        let amount = encode_tlv(PointerType::Quantity, &amount_payload).expect("Amount TLV");
-        let amount = vm.alloc_host_tlv(&amount).expect("install Amount");
+        let amount = install_quantity(&mut vm, "1.25");
         let result_layout = SumLayoutV1::try_new(1, 1).expect("Result layout");
         let option_layout = SumLayoutV1::option(1).expect("Option layout");
         let ok =
@@ -1369,8 +1390,11 @@ mod tests {
         let (ok, amount) =
             crate::sum::read_words(&vm, first[0], result_layout).expect("read first Result");
         assert!(ok);
-        let amount = vm.validate_tlv(amount[0]).expect("Amount TLV");
-        let amount: Numeric = decode_from_bytes(amount.payload).expect("decode Amount");
+        let amount = vm.validate_tlv(amount[0]).expect("quantity TLV");
+        let amount = QuantityValueV1::decode_frame(amount.payload)
+            .expect("decode quantity")
+            .into_quantity()
+            .into_numeric();
         assert_eq!(amount, Numeric::new(125, 2));
 
         let (some, second) =

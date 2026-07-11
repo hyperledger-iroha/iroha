@@ -8,8 +8,8 @@ fn user_defined_call_returns_42() {
     // Repeated parameter types make the call named-only in V1.
     let src = r#"
         seiyaku UserCalls {
-            fn add(a: i64, b: i64) -> i64 { return a + b; }
-            view fn main() -> i64 { let z = add(a: 20, b: 22); return z; }
+            fn add(int a, int b) -> int { return a + b; }
+            view fn main() -> int { let z = add(a: 20, b: 22); return z; }
         }
     "#;
     let compiler = KotodamaCompiler::new();

@@ -437,7 +437,28 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertTrue(registry.lanes[0].nativeTrustAnchors.isEmpty)
         XCTAssertNil(registry.lanes[0].currentNativeTrustAnchorHash)
         XCTAssertEqual(registry.lanes[0].routes[0].destination.semanticProofProfile.publicSignalSchemaHash, publicSignalSchemaHash())
-        XCTAssertEqual(registry.lanes[0].routes[0].destination.soraFinalityAnchor.validatorSetHashVersion, 1)
+        let finalityAnchor = registry.lanes[0].routes[0].destination.soraFinalityAnchor
+        XCTAssertEqual(finalityAnchor.protocolVersion, 2)
+        XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
+        XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
+        XCTAssertEqual(
+            finalityAnchor.anchorHash,
+            Data(hexString: "4CE87BF7CF5AEFD0B3D41F9F26490BFE4465128F7E99A7DBB06F5B03C273B671")
+        )
+
+        let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
+            { $0["protocol_version"] = 1 },
+            { $0["protocol_version"] = "2" },
+            { $0["validator_set_epoch"] = 2 },
+            { $0["checkpoint_context_id"] = String(repeating: "0", count: 64) },
+            { $0["checkpoint_finality_artifact_hash"] = $0["checkpoint_block_hash"] },
+            { $0.removeValue(forKey: "checkpoint_finality_artifact_hash") },
+        ]
+        for mutation in invalidFinalityAnchors {
+            var hostile = try jsonObject(valid)
+            mutateFinalityAnchor(&hostile, mutation)
+            XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(hostile)))
+        }
 
         let tron = try SccpRegistryV1.parse(try registryJSON(source: .tronMainnet))
         XCTAssertEqual(tron.lanes[0].routes[0].routeId, "taira_tron_xor")
@@ -1286,23 +1307,25 @@ final class SccpV1Tests: XCTestCase {
         let chainId = Data(hexString: "fc56984b2be7431d840e21514d1883f0")!
         let chainHash = irohaKeccak256(chainId)
         let checkpoint = Data(repeating: 0xa1, count: 32)
-        let validator = Data(repeating: 0xa2, count: 32)
-        var canonical = Data([1, SccpNetworkV1.soraTaira.tag]) + chainHash
+        let contextId = Data(repeating: 0xa2, count: 32)
+        let artifactHash = Data(repeating: 0xa3, count: 32)
+        var canonical = Data([1, SccpNetworkV1.soraTaira.tag])
+        appendUInt16LE(2, to: &canonical)
+        canonical.append(chainHash)
         appendUInt64LE(7, to: &canonical)
         canonical.append(checkpoint)
-        appendUInt64LE(2, to: &canonical)
-        canonical.append(validator)
-        appendUInt16LE(1, to: &canonical)
+        canonical.append(contextId)
+        canonical.append(artifactHash)
         let anchorHash = irohaKeccak256(Data("sccp:sora-finality-anchor:v1".utf8) + canonical)
         return ([
             "version": 1,
             "source_network": network("sora-taira"),
+            "protocol_version": 2,
             "chain_id_hash": chainHash.hexEncodedString().uppercased(),
             "checkpoint_height": 7,
             "checkpoint_block_hash": checkpoint.hexEncodedString().uppercased(),
-            "validator_set_epoch": 2,
-            "validator_set_hash": validator.hexEncodedString().uppercased(),
-            "validator_set_hash_version": 1,
+            "checkpoint_context_id": contextId.hexEncodedString().uppercased(),
+            "checkpoint_finality_artifact_hash": artifactHash.hexEncodedString().uppercased(),
         ], anchorHash)
     }
 
@@ -1435,6 +1458,19 @@ final class SccpV1Tests: XCTestCase {
             body(&deployment)
             destination["deployment"] = deployment
             route["destination"] = destination
+        }
+    }
+
+    private func mutateFinalityAnchor(
+        _ root: inout [String: Any],
+        _ body: (inout [String: Any]) -> Void
+    ) {
+        mutateDeployment(&root) { deployment in
+            var policy = deployment["outbound_proof_policy"] as! [String: Any]
+            var anchor = policy["sora_finality_anchor"] as! [String: Any]
+            body(&anchor)
+            policy["sora_finality_anchor"] = anchor
+            deployment["outbound_proof_policy"] = policy
         }
     }
 

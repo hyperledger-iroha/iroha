@@ -1146,7 +1146,7 @@ mod tests {
             graph: SourceLinkRequest {
                 root: SourceModuleUnit {
                     source_name: "contracts/app.ko".to_owned(),
-                    source: "seiyaku App { view fn run() -> i64 { return helpers::value(); } }"
+                    source: "seiyaku App { view fn run() -> int { return helpers::value(); } }"
                         .to_owned(),
                 },
                 imports: vec![ImportBinding {
@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     fn authenticated_noop_build_writes_nothing_and_tampering_rebuilds() {
         let root = temp_root("fresh");
-        let source = "seiyaku Demo { view fn ping() -> i64 { return 1; } }";
+        let source = "seiyaku Demo { view fn ping() -> int { return 1; } }";
         let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
         let initial = driver
             .build_source(request(&root, source))
@@ -1276,7 +1276,7 @@ mod tests {
         let root = temp_root("linked-fresh");
         let graph = ModuleBuildGraph::default();
         let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
-        let module_v1 = "module Math { fn value() -> i64 { return 1; } }";
+        let module_v1 = "module Math { fn value() -> int { return 1; } }";
 
         let first = driver
             .build_linked_source(&graph, linked_request(&root, module_v1))
@@ -1325,7 +1325,7 @@ mod tests {
         let changed = driver
             .build_linked_source(
                 &graph,
-                linked_request(&root, "module Math { fn value() -> i64 { return 2; } }"),
+                linked_request(&root, "module Math { fn value() -> int { return 2; } }"),
             )
             .expect("changed module rebuild");
         assert_eq!(changed.status, BuildStatus::Built);
@@ -1342,7 +1342,7 @@ mod tests {
     #[test]
     fn sidecar_manifest_avoids_an_unrequested_sibling_and_remains_cacheable() {
         let root = temp_root("sidecar-manifest");
-        let source = "seiyaku Demo { view fn ping() -> i64 { return 1; } }";
+        let source = "seiyaku Demo { view fn ping() -> int { return 1; } }";
         let driver = BuildDriver::new(CompilerSession::default(), "test-toolchain");
         let mut build = request(&root, source);
         let sibling_manifest = build.layout.manifest.clone();
@@ -1382,7 +1382,7 @@ mod tests {
     #[test]
     fn batch_rejects_lexically_colliding_outputs_before_building() {
         let root = temp_root("collision");
-        let source = "seiyaku Demo { view fn ping() -> i64 { return 1; } }";
+        let source = "seiyaku Demo { view fn ping() -> int { return 1; } }";
         let first = request(&root, source);
         let mut second = request(&root, source);
         second.source_name = "contracts/other.ko".to_owned();
@@ -1401,7 +1401,7 @@ mod tests {
         let output = root.join("demo.to");
         let mut build = request(
             &root,
-            "seiyaku Demo { view fn ping() -> i64 { return 1; } }",
+            "seiyaku Demo { view fn ping() -> int { return 1; } }",
         );
         build.layout = PublishLayout::for_artifact(output.clone(), Some(output.clone()), None)
             .expect("construct adversarial layout");
@@ -1423,7 +1423,7 @@ mod tests {
         let alias = root.join("alias");
         fs::create_dir_all(&real).expect("create real output directory");
         symlink(&real, &alias).expect("create output directory alias");
-        let source = "seiyaku Demo { view fn ping() -> i64 { return 1; } }";
+        let source = "seiyaku Demo { view fn ping() -> int { return 1; } }";
         let mut first = request(&real, source);
         first.source_name = "contracts/first.ko".to_owned();
         let mut second = request(&alias, source);
@@ -1440,7 +1440,7 @@ mod tests {
     #[test]
     fn profile_and_policy_are_cache_dimensions() {
         let root = temp_root("policy");
-        let source = "seiyaku Demo { view fn ping() -> i64 { return 1; } }";
+        let source = "seiyaku Demo { view fn ping() -> int { return 1; } }";
         let plain = BuildDriver::new(CompilerSession::default(), "test-toolchain");
         let mut zk_options = crate::compiler::CompilerOptions::default();
         zk_options.force_zk = true;

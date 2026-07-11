@@ -28,25 +28,25 @@ fn collect_nodes<'tree>(node: &'tree GreenNode, nodes: &mut Vec<&'tree GreenNode
 #[test]
 fn valid_contract_has_declaration_and_statement_structure() {
     let text = r#"seiyaku Shape {
-        struct Pair { left: i64, right: i64 }
+        struct Pair { int left, int right }
         error enum Failure { Bad = 1 }
-        const LIMIT: i64 = 4;
-        state count: i64;
+        const int LIMIT = 4;
+        state int count;
         trigger tick -> run { on time pre_commit; }
 
         hajimari() {
-            var sum: i64 = 0;
+            var int sum = 0;
             for i in range(4) {
                 if i < 2 { sum += i; } else { continue; }
             }
         }
 
-        kotoage fn run(value: i64) authorize("Run") {
-            let copy: i64 = value;
+        kotoage fn run(int value) authorize("Run") {
+            let int copy = value;
             return;
         }
 
-        view fn read() -> i64 { return 1; }
+        view fn read() -> int { return 1; }
     }
 "#;
     let source = SourceFile::new(SourceId(11), "shape.ko", text);
@@ -111,8 +111,8 @@ fn local_test_declarations_and_attributes_are_structural_nodes() {
 fn hostile_recovery_is_lossless_and_inserts_specific_missing_tokens() {
     let text = r#"seiyaku Broken {
         #[test(fixture="actors")
-        fn bad(value: i64 {
-            let first: i64 = @
+        fn bad(value: int {
+            let int first = @
             if true { return }
             for i in range(2) { continue; }
         }
@@ -148,7 +148,7 @@ fn hostile_recovery_is_lossless_and_inserts_specific_missing_tokens() {
 
 #[test]
 fn tree_uses_the_one_lossless_token_stream_exactly_once() {
-    let text = "/* 前 */\n誓約 Demo { // 言葉\n 始まり() { let s: string = \"雪\"; }\n}\n";
+    let text = "/* 前 */\n誓約 Demo { // 言葉\n 始まり() { let string s = \"雪\"; }\n}\n";
     let source = SourceFile::new(SourceId(14), "branded.ko", text);
     let lexed = lex(&source, FrontendBudget::v1());
     let output = parse(&source, FrontendBudget::v1());

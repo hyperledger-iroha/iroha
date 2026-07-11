@@ -3,7 +3,7 @@ use std::vec::Vec;
 
 // --- CompactProofBundle helpers via syscalls (test-only utilities) ---
 use iroha_data_model::prelude::*;
-use iroha_primitives::json::Json;
+use iroha_primitives::{bigint::BigInt, json::Json, numeric_abi::IntValueV1};
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls};
 use ivm_abi::metadata::LITERAL_SECTION_MAGIC;
 use ivm_abi::state_value::{
@@ -43,31 +43,20 @@ fn i64_state_schema() -> StateValueSchemaV1 {
 
 /// Encode an `i64` using the schema-bound Kotodama V1 durable-value record.
 pub fn encode_i64_state_value(value: i64) -> Vec<u8> {
-    let schema = i64_state_schema();
-    let schema_bytes = norito::to_bytes(&schema).expect("encode i64 state schema");
-    norito::to_bytes(&StateValueRecordV1 {
-        schema_hash: state_value_schema_hash_v1(&schema_bytes),
-        atoms: vec![StateValueAtomV1::Int(value)],
-    })
-    .expect("encode i64 state record")
+    let frame = IntValueV1::try_new(BigInt::from_i128(i128::from(value)))
+        .expect("i64 is inside V1 int domain")
+        .encode_frame()
+        .expect("encode canonical int frame");
+    encode_pointer_state_value(StateValueKindV1::Int, PointerType::Int, &frame)
 }
 
 /// Decode and validate an `i64` Kotodama V1 durable-value record.
 pub fn decode_i64_state_value(payload: &[u8]) -> i64 {
-    let schema = i64_state_schema();
-    let schema_bytes = norito::to_bytes(&schema).expect("encode i64 state schema");
-    let record: StateValueRecordV1 =
-        norito::decode_from_bytes(payload).expect("decode i64 state record");
-    assert_eq!(
-        record.schema_hash,
-        state_value_schema_hash_v1(&schema_bytes),
-        "i64 state schema hash"
-    );
-    assert!(schema.validate_atoms(&record.atoms));
-    let [StateValueAtomV1::Int(value)] = record.atoms.as_slice() else {
-        panic!("i64 state record must contain exactly one integer atom");
-    };
-    *value
+    let envelope = decode_pointer_state_value(payload, StateValueKindV1::Int);
+    ivm::numeric_tlv::decode_int_bytes(&envelope)
+        .expect("decode canonical int envelope")
+        .try_to_i64()
+        .expect("test state int fits i64")
 }
 
 /// Encode one pointer-backed value using the schema-bound Kotodama V1 record.
@@ -267,11 +256,18 @@ pub fn assemble_with_literal_section(code: &[u8], literals: &[&[u8]]) -> (Vec<u8
     (program, literal_addrs)
 }
 
-/// Assemble a program that consists of one or more SCALL instructions followed by HALT.
-pub fn assemble_syscalls(syscalls: &[u8]) -> Vec<u8> {
+/// Assemble a program that consists of one or more syscall instructions followed by HALT.
+pub fn assemble_syscalls<T>(syscalls: &[T]) -> Vec<u8>
+where
+    T: Copy + Into<u32>,
+{
     let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
     for &num in syscalls {
-        let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, num);
+        let num = num.into();
+        let word = u8::try_from(num).map_or_else(
+            |_| encoding::wide::encode_syscallx(num),
+            |compact| encoding::wide::encode_sys(instruction::wide::system::SCALL, compact),
+        );
         code.extend_from_slice(&word.to_le_bytes());
     }
     code.extend_from_slice(&HALT);
@@ -280,13 +276,20 @@ pub fn assemble_syscalls(syscalls: &[u8]) -> Vec<u8> {
 
 /// Assemble a SCALL/HALT program with a literal-table prefix and return the
 /// program bytes plus literal addresses inside the loaded code region.
-pub fn assemble_syscalls_with_literal_section(
-    syscalls: &[u8],
+pub fn assemble_syscalls_with_literal_section<T>(
+    syscalls: &[T],
     literals: &[&[u8]],
-) -> (Vec<u8>, Vec<u64>) {
+) -> (Vec<u8>, Vec<u64>)
+where
+    T: Copy + Into<u32>,
+{
     let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
     for &num in syscalls {
-        let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, num);
+        let num = num.into();
+        let word = u8::try_from(num).map_or_else(
+            |_| encoding::wide::encode_syscallx(num),
+            |compact| encoding::wide::encode_sys(instruction::wide::system::SCALL, compact),
+        );
         code.extend_from_slice(&word.to_le_bytes());
     }
     code.extend_from_slice(&HALT);

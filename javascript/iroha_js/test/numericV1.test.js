@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -19,10 +20,27 @@ test("numeric V1 canonical construction and endpoint rejection", () => {
   assert.equal(new KotodamaDecimal("0.000").toString(), "0");
   assert.equal(new KotodamaQuantity("12.50").toString(), "12.5");
   assert.throws(() => new KotodamaQuantity("-0.1"), { code: "negative_quantity" });
+  assert.throws(() => new KotodamaQuantity(`-${"9".repeat(154)}`), {
+    code: "mantissa_overflow",
+  });
   assert.throws(() => new KotodamaInt(NumericV1.INT_MAX + 1n), { code: "mantissa_overflow" });
+  assert.throws(() => new KotodamaInt(NumericV1.INT_MIN - 1n), { code: "mantissa_overflow" });
+  assert.throws(() => new KotodamaInt("1".repeat(10_000)), { code: "mantissa_overflow" });
+  assert.throws(() => new KotodamaInt("x".repeat(10_000)), { code: "invalid_text" });
+  assert.throws(() => new KotodamaDecimal("1".repeat(10_000)), { code: "mantissa_overflow" });
   assert.throws(() => new KotodamaInt(1), TypeError);
   assert.throws(() => new KotodamaDecimal(1.5), TypeError);
-  assert.throws(() => new KotodamaDecimal("1.00000000000000000000000000000"), {
+  assert.equal(new KotodamaDecimal("1.00000000000000000000000000000").toString(), "1");
+  assert.equal(new KotodamaDecimal(`1.${"0".repeat(10_000)}`).toString(), "1");
+  assert.equal(new KotodamaDecimal(`${NumericV1.INT_MAX}.0`).toString(), NumericV1.INT_MAX.toString());
+  assert.equal(
+    new KotodamaDecimal(NumericV1.INT_MAX * 10n, 1).toString(),
+    NumericV1.INT_MAX.toString(),
+  );
+  assert.throws(() => new KotodamaDecimal(`${NumericV1.INT_MAX}.1`), {
+    code: "mantissa_overflow",
+  });
+  assert.throws(() => new KotodamaDecimal("0.00000000000000000000000000001"), {
     code: "invalid_scale",
   });
   assert.throws(() => new KotodamaDecimal("01"), { code: "invalid_text" });
@@ -37,16 +55,18 @@ test("numeric V1 canonical construction and endpoint rejection", () => {
 
 test("numeric V1 frames and pointer envelopes roundtrip all domains", () => {
   const values = [
-    [new KotodamaInt(-129n), NumericV1.encodeIntFrame, NumericV1.decodeIntFrame,
+    [0x0011, new KotodamaInt(-129n), NumericV1.encodeIntFrame, NumericV1.decodeIntFrame,
       NumericV1.encodeIntEnvelope, NumericV1.decodeIntEnvelope],
-    [new KotodamaDecimal("-1.25"), NumericV1.encodeDecimalFrame, NumericV1.decodeDecimalFrame,
+    [0x0012, new KotodamaDecimal("-1.25"), NumericV1.encodeDecimalFrame, NumericV1.decodeDecimalFrame,
       NumericV1.encodeDecimalEnvelope, NumericV1.decodeDecimalEnvelope],
-    [new KotodamaQuantity("1.25"), NumericV1.encodeQuantityFrame, NumericV1.decodeQuantityFrame,
+    [0x0013, new KotodamaQuantity("1.25"), NumericV1.encodeQuantityFrame, NumericV1.decodeQuantityFrame,
       NumericV1.encodeQuantityEnvelope, NumericV1.decodeQuantityEnvelope],
   ];
-  for (const [value, encodeFrame, decodeFrame, encodeEnvelope, decodeEnvelope] of values) {
+  for (const [pointerType, value, encodeFrame, decodeFrame, encodeEnvelope, decodeEnvelope] of values) {
     assert.equal(decodeFrame(encodeFrame(value)).toString(), value.toString());
-    assert.equal(decodeEnvelope(encodeEnvelope(value)).toString(), value.toString());
+    const envelope = encodeEnvelope(value);
+    assert.deepEqual(Array.from(envelope.subarray(0, 2)), [pointerType >> 8, pointerType & 0xff]);
+    assert.equal(decodeEnvelope(envelope).toString(), value.toString());
   }
   assert.throws(
     () => NumericV1.decodeDecimalEnvelope(NumericV1.encodeIntEnvelope(1n)),
@@ -71,5 +91,80 @@ test("numeric V1 rejects noncanonical and authenticated mutations", () => {
   const retired = NumericV1.encodeIntEnvelope(1n).slice();
   retired[0] = 0;
   retired[1] = 0x10;
+  retired[2] = 2;
   assert.throws(() => NumericV1.decodeIntEnvelope(retired), { code: "type_not_allowed" });
+
+  const knownWrong = NumericV1.encodeIntEnvelope(1n).slice();
+  knownWrong[0] = 0;
+  knownWrong[1] = 0x01;
+  knownWrong[2] = 2;
+  assert.throws(() => NumericV1.decodeIntEnvelope(knownWrong), { code: "wrong_type" });
+
+  const unknown = NumericV1.encodeIntEnvelope(1n).slice();
+  unknown[0] = 0;
+  unknown[1] = 0x14;
+  unknown[2] = 2;
+  assert.throws(() => NumericV1.decodeIntEnvelope(unknown), { code: "unknown_type" });
 });
+
+test("numeric V1 consumes the Rust-authored shared golden fixture", async () => {
+  const fixture = JSON.parse(await readFile(
+    new URL("../../../fixtures/numeric_v1_golden.json", import.meta.url),
+    "utf8",
+  ));
+  assert.equal(fixture.format, "iroha.numeric.v1");
+  assert.equal(fixture.signed_bits, 512);
+  assert.equal(fixture.maximum_scale, 28);
+
+  for (const vector of fixture.text) {
+    const decoded = vector.kind === "decimal"
+      ? new KotodamaDecimal(vector.input)
+      : new KotodamaQuantity(vector.input);
+    assert.equal(decoded.toString(), vector.canonical, vector.id);
+  }
+
+  for (const vector of fixture.valid) {
+    const value = vector.kind === "int"
+      ? NumericV1.decodeIntJson(vector.canonical)
+      : vector.kind === "decimal"
+        ? NumericV1.decodeDecimalJson(vector.canonical)
+        : NumericV1.decodeQuantityJson(vector.canonical);
+    const frame = vector.kind === "int"
+      ? NumericV1.encodeIntFrame(value)
+      : vector.kind === "decimal"
+        ? NumericV1.encodeDecimalFrame(value)
+        : NumericV1.encodeQuantityFrame(value);
+    const envelope = vector.kind === "int"
+      ? NumericV1.encodeIntEnvelope(value)
+      : vector.kind === "decimal"
+        ? NumericV1.encodeDecimalEnvelope(value)
+        : NumericV1.encodeQuantityEnvelope(value);
+    assert.equal(toHex(frame.subarray(40)), vector.body_hex, `${vector.id} body`);
+    assert.equal(toHex(frame), vector.frame_hex, `${vector.id} frame`);
+    assert.equal(toHex(envelope), vector.envelope_hex, `${vector.id} envelope`);
+  }
+
+  for (const vector of fixture.invalid) {
+    const bytes = fromHex(vector.hex);
+    const decode = vector.input === "frame"
+      ? vector.decode_as === "int"
+        ? NumericV1.decodeIntFrame
+        : vector.decode_as === "decimal"
+          ? NumericV1.decodeDecimalFrame
+          : NumericV1.decodeQuantityFrame
+      : vector.decode_as === "int"
+        ? NumericV1.decodeIntEnvelope
+        : vector.decode_as === "decimal"
+          ? NumericV1.decodeDecimalEnvelope
+          : NumericV1.decodeQuantityEnvelope;
+    assert.throws(() => decode(bytes), { code: vector.expected }, vector.id);
+  }
+});
+
+function fromHex(value) {
+  return Uint8Array.from(value.match(/../gu) ?? [], (byte) => Number.parseInt(byte, 16));
+}
+
+function toHex(value) {
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}

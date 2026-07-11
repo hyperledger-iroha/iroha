@@ -80,7 +80,7 @@ fn long_unary_chain_hits_depth_budget_without_recursive_parsing() {
 #[test]
 fn deeply_nested_type_hits_depth_budget_without_recursive_parsing() {
     let available = MAX_NESTING_DEPTH - 1;
-    let mut ty = String::from("i64");
+    let mut ty = String::from("int");
     for _ in 0..available {
         ty = format!("Option<{ty}>");
     }

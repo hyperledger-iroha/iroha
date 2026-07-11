@@ -14,6 +14,7 @@ import {
   browserTransactionPayloadHashHex,
   buildBrowserTransferPayload,
   finalizeBrowserSignedTransaction,
+  validateBrowserTransferSignable,
 } from "../src/transactionCodec.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -741,6 +742,64 @@ test("browser numeric parsing rejects multi-megabyte decimal strings before conv
       code,
     );
   }
+});
+
+test("browser rejects non-canonical scaled Numeric archives with trailing zeros", () => {
+  const canonicalPayload = buildBrowserTransferPayload(
+    sampleInput({ quantity: "1.2" }),
+  );
+  const nonCanonicalNumeric = struct([
+    Buffer.concat([u32(1), Buffer.of(120)]),
+    u32(2),
+  ]);
+  const nonCanonicalPayload = replaceTransferExecutable(canonicalPayload, {
+    numericArchive: nonCanonicalNumeric,
+  });
+  const nonCanonicalHash = browserTransactionPayloadHashHex(nonCanonicalPayload);
+  const nonCanonicalSignature = signPayload(nonCanonicalPayload).signature;
+  const signable = {
+    payloadBytes: nonCanonicalPayload,
+    payloadHashHex: nonCanonicalHash,
+    authority: AUTHORITY,
+    signingPublicKey: PUBLIC_KEY,
+    signatureAlgorithm: "ed25519",
+  };
+  expectCodecError(
+    () => validateBrowserTransferSignable(signable),
+    "malformed_payload",
+  );
+  expectCodecError(
+    () =>
+      finalizeBrowserSignedTransaction(
+        signable,
+        nonCanonicalSignature,
+        PUBLIC_KEY,
+      ),
+    "malformed_payload",
+  );
+
+  const canonicalSignature = signPayload(canonicalPayload).signature;
+  const canonicalSigned = finalizeBrowserSignedTransaction(
+    {
+      payloadBytes: canonicalPayload,
+      payloadHashHex: browserTransactionPayloadHashHex(canonicalPayload),
+      authority: AUTHORITY,
+      signingPublicKey: PUBLIC_KEY,
+    },
+    canonicalSignature,
+    PUBLIC_KEY,
+  ).signedTransaction;
+  expectCodecError(
+    () =>
+      browserSignedTransactionHashHex(
+        replaceSignedPayload(canonicalSigned, nonCanonicalPayload),
+      ),
+    "malformed_payload",
+  );
+
+  assert.doesNotThrow(() =>
+    buildBrowserTransferPayload(sampleInput({ quantity: "10" })),
+  );
 });
 
 test("browser signed payload validation enforces byte caps before decoding or bigint work", () => {

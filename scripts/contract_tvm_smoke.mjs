@@ -593,6 +593,11 @@ function collectPrivateKeys(value, output = []) {
 async function deploy(client, contractArtifact, parameters, label) {
   const constructorAbi = contractArtifact.abi.find((entry) => entry.type === "constructor");
   assert(constructorAbi, `${label} artifact omitted its constructor ABI`);
+  assert.equal(
+    parameters.length,
+    constructorAbi.inputs.length,
+    `${label} constructor argument count does not match the authenticated ABI`,
+  );
   const options = {
     abi: contractArtifact.abi,
     bytecode: strip0x(contractArtifact.creation_bytecode.hex),
@@ -666,6 +671,21 @@ if (!/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(endpoint || "")) {
 // official TRE proves that it is running the exact mainnet profile-10 chain.
 await assertMainnetChainId(endpoint);
 
+// The first-release token constructor must name the exact future route, while
+// the route constructor must name the already-deployed token. Unlike the EVM
+// nonce flow exercised by the Hardhat smoke, TRE does not expose an audited
+// deterministic address primitive that can close this dependency cycle.
+// Preserve the adversarial harness below for a future audited prebinding
+// provider, but never read test keys or construct a transaction until that
+// provider can return both exact addresses.
+const prebinding = (() => {
+  throw new Error(
+    "SCCP TVM live deployment is disabled: TRE does not expose a deterministic " +
+      "prebinding primitive for deploying the immutable token against the exact " +
+      "future route address. No contract deployment or transaction was broadcast.",
+  );
+})();
+
 const accountDocument = await fetchJson(endpoint, "/admin/accounts-json");
 const privateKeys = [...new Set(collectPrivateKeys(accountDocument))];
 assert(privateKeys.length >= 2, "TRE must expose at least two isolated test accounts");
@@ -724,7 +744,13 @@ const policy = [
   TAIRA_FINALITY_ANCHOR_HASH,
 ];
 await expectConfirmedTvmFailure(
-  () => deploy(bridgeClient, artifacts.bridge, [policy, 11, ROUTE_REVISION], "wrong-chain bridge"),
+  () =>
+    deploy(
+      bridgeClient,
+      artifacts.bridge,
+      [prebinding.tokenAddress, policy, 11, ROUTE_REVISION],
+      "wrong-chain bridge",
+    ),
   "bridge deployment for the Nile profile",
 );
 const wrongCodeHash = `0x${(BigInt(verifierCodeHash) ^ 1n).toString(16).padStart(64, "0")}`;
@@ -733,21 +759,37 @@ await expectConfirmedTvmFailure(
     deploy(
       bridgeClient,
       artifacts.bridge,
-      [[verifierAddress, wrongCodeHash, ...policy.slice(2)], TRON_MAINNET_PROFILE, ROUTE_REVISION],
+      [
+        prebinding.tokenAddress,
+        [verifierAddress, wrongCodeHash, ...policy.slice(2)],
+        TRON_MAINNET_PROFILE,
+        ROUTE_REVISION,
+      ],
       "wrong-code-hash bridge",
     ),
   "bridge deployment with a forged EXTCODEHASH policy",
 );
 await expectConfirmedTvmFailure(
-  () => deploy(bridgeClient, artifacts.bridge, [policy, TRON_MAINNET_PROFILE, 0], "zero-revision bridge"),
+  () =>
+    deploy(
+      bridgeClient,
+      artifacts.bridge,
+      [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, 0],
+      "zero-revision bridge",
+    ),
   "bridge deployment with a zero route revision",
 );
 
 const bridge = await deploy(
   bridgeClient,
   artifacts.bridge,
-  [policy, TRON_MAINNET_PROFILE, ROUTE_REVISION],
+  [prebinding.tokenAddress, policy, TRON_MAINNET_PROFILE, ROUTE_REVISION],
   "production TRON bridge",
+);
+assert.equal(
+  tronHexAddress(bridgeClient, bridge.address),
+  tronHexAddress(bridgeClient, prebinding.routeAddress),
+  "route deployment address drifted from the token's immutable binding",
 );
 assert.equal(asInteger(await bridge.tronProfile().call()), BigInt(TRON_MAINNET_PROFILE));
 assert.equal(bytes32(await bridge.networkId().call()), networkId);
@@ -756,7 +798,11 @@ assert.equal(
   tronHexAddress(bridgeClient, await bridge.verifier().call()),
   tronHexAddress(bridgeClient, verifier.address),
 );
-const tokenAddress = await bridge.token().call();
+const tokenAddress = prebinding.tokenAddress;
+assert.equal(
+  tronHexAddress(bridgeClient, await bridge.token().call()),
+  tronHexAddress(bridgeClient, tokenAddress),
+);
 const token = bridgeClient.contract(artifacts.token.abi, tokenAddress);
 const hostileToken = hostileClient.contract(artifacts.token.abi, tokenAddress);
 const hostileBridge = hostileClient.contract(artifacts.bridge.abi, bridge.address);

@@ -117,12 +117,12 @@ function finalityAnchor() {
   return {
     version: 1,
     source_network: network("sora-taira"),
+    protocol_version: 2,
     chain_id_hash: SORA_TAIRA_CHAIN_ID_HASH,
     checkpoint_height: 7,
     checkpoint_block_hash: UPPER(0xa1, 32),
-    validator_set_epoch: 2,
-    validator_set_hash: UPPER(0xa2, 32),
-    validator_set_hash_version: 1,
+    checkpoint_context_id: UPPER(0xa2, 32),
+    checkpoint_finality_artifact_hash: UPPER(0xa3, 32),
   };
 }
 
@@ -150,21 +150,19 @@ function policyHashes(policy = outboundPolicy()) {
   );
   const height = Buffer.alloc(8);
   height.writeBigUInt64LE(BigInt(anchorPolicy.checkpoint_height));
-  const epoch = Buffer.alloc(8);
-  epoch.writeBigUInt64LE(BigInt(anchorPolicy.validator_set_epoch));
-  const hashVersion = Buffer.alloc(2);
-  hashVersion.writeUInt16LE(anchorPolicy.validator_set_hash_version);
+  const protocolVersion = Buffer.alloc(2);
+  protocolVersion.writeUInt16LE(anchorPolicy.protocol_version);
   const anchor = Buffer.from(
     keccak_256(
       Buffer.concat([
         Buffer.from("sccp:sora-finality-anchor:v1"),
         Buffer.from([1, 1]),
+        protocolVersion,
         Buffer.from(anchorPolicy.chain_id_hash, "hex"),
         height,
         Buffer.from(anchorPolicy.checkpoint_block_hash, "hex"),
-        epoch,
-        Buffer.from(anchorPolicy.validator_set_hash, "hex"),
-        hashVersion,
+        Buffer.from(anchorPolicy.checkpoint_context_id, "hex"),
+        Buffer.from(anchorPolicy.checkpoint_finality_artifact_hash, "hex"),
       ]),
     ),
   );
@@ -825,15 +823,15 @@ test("registry destination hashes match the canonical Rust EVM and TRON layouts"
   const vectors = [
     {
       source: "bsc-mainnet",
-      destinationBindingHash: "B8C0540590C95348B5234027C70E753FB2834FC22493C67079B8C14312431239",
-      deploymentConfigHash: "5369BB48AA1BDEF7C17E3A38D8669631B93C834FD5AC4B4BD1EF08678D86F461",
-      routeConfigurationHash: "C5D13B32A8F0C7BE668F8B4423816C927CCBB3729DD9080EEC6B6061BB575016",
+      destinationBindingHash: "E2CE4A5DF24EE62891F0F856B3E418F5BD3E2705BAEFD80A5FBF5E8CC2D3DE1E",
+      deploymentConfigHash: "2958DC4B874A166FBCA91D1D1342C57C5150264C96C8D65FD64DF8D57B46AB24",
+      routeConfigurationHash: "0FC9AACAB4FDA553FFF88AC434294FA879B4205E723C377A82754BDC2DB152C6",
     },
     {
       source: "tron-mainnet",
-      destinationBindingHash: "598871726A3E91CE724709F696CFD9E6C6311B5CB683FFFD7A8188F955719AC1",
-      deploymentConfigHash: "5CF69B4D4B581167A2C96E4AB35A9F3DFFA55A5C9C60AFD36FD760DF58F1C4CA",
-      routeConfigurationHash: "C8096AC49DDCC0391CC34636E302B2075A70CD6CB408A0D5EDB7249C66BE4E8F",
+      destinationBindingHash: "35BBBCF78573393047FE8393ED921A0617FF08C5C285F91AE7B85BACE1996E1C",
+      deploymentConfigHash: "34BE92FDC9638BE0A7122AB327E8FA541CD4D972657786BCDE8C89C23E3FF6E9",
+      routeConfigurationHash: "0D8A9CFD7501B39865633FAAC108852E9D045A9D1643799F84D920913BB60EB7",
     },
   ];
   for (const vector of vectors) {
@@ -886,6 +884,28 @@ test("registry rejects stale emitter hashes after either typed proof policy chan
         `${source} must reject a stale emitter after changing its ${mutation.label}`,
       );
     }
+  }
+});
+
+test("registry rejects legacy and ambiguous Sumeragi v2 finality anchors", () => {
+  const mutations = [
+    ["wrong protocol", (anchor) => { anchor.protocol_version = 1; }, /protocol_version/u],
+    ["protocol type confusion", (anchor) => { anchor.protocol_version = true; }, /integer/u],
+    ["zero context", (anchor) => { anchor.checkpoint_context_id = UPPER(0, 32); }, /nonzero/u],
+    ["aliased artifact", (anchor) => {
+      anchor.checkpoint_finality_artifact_hash = anchor.checkpoint_context_id;
+    }, /consensus hash role/u],
+    ["legacy validator fields", (anchor) => { anchor.validator_set_epoch = 2; }, /field/u],
+  ];
+  for (const [label, mutate, pattern] of mutations) {
+    const route = governedRoute({ source: "bsc-mainnet" });
+    const anchor = route.destination.deployment.outbound_proof_policy.sora_finality_anchor;
+    mutate(anchor);
+    assert.throws(
+      () => normalizeSccpRegistry(registry([route])),
+      pattern,
+      label,
+    );
   }
 });
 

@@ -5,8 +5,8 @@ use core::cmp::Ordering;
 use iroha_primitives::{
     bigint::{BigInt, BigIntError},
     numeric::{
-        Numeric, NumericOperationError, NumericWorkStep, ObservedNumericError, Quantity,
-        RoundingMode,
+        MAX_MANTISSA_BYTES, Numeric, NumericOperationError, NumericWorkStep,
+        ObservedNumericError, Quantity, RoundingMode,
     },
 };
 
@@ -30,18 +30,30 @@ enum FailureMode {
 
 fn failure_mode(vm: &IVM, reserved: &[usize]) -> Result<FailureMode, VMError> {
     if reserved.iter().any(|&register| vm.register(register) != 0) {
-        return Err(VMError::DecodeError);
+        return Err(VMError::NumericFault(
+            NumericFaultV1::ReservedRegisterNonZero,
+        ));
     }
     match vm.register(NUMERIC_FAILURE_MODE_REGISTER) {
         NUMERIC_FAILURE_TRAP => Ok(FailureMode::Trap),
         NUMERIC_FAILURE_STATUS => Ok(FailureMode::Status),
-        _ => Err(VMError::DecodeError),
+        _ => Err(VMError::NumericFault(NumericFaultV1::InvalidFailureMode)),
+    }
+}
+
+fn require_zero_registers(vm: &IVM, reserved: &[usize]) -> Result<(), VMError> {
+    if reserved.iter().any(|&register| vm.register(register) != 0) {
+        Err(VMError::NumericFault(
+            NumericFaultV1::ReservedRegisterNonZero,
+        ))
+    } else {
+        Ok(())
     }
 }
 
 fn rounding_mode(vm: &IVM) -> Result<RoundingMode, VMError> {
     let mode = RoundingModeV1::from_tag(vm.register(NUMERIC_ROUNDING_REGISTER))
-        .ok_or(VMError::DecodeError)?;
+        .ok_or(VMError::NumericFault(NumericFaultV1::InvalidRoundingMode))?;
     Ok(match mode {
         RoundingModeV1::TowardZero => RoundingMode::TowardZero,
         RoundingModeV1::AwayFromZero => RoundingMode::AwayFromZero,
@@ -76,10 +88,42 @@ fn bigint_fault(error: BigIntError) -> Result<NumericFaultV1, VMError> {
     match error {
         BigIntError::Overflow => Ok(NumericFaultV1::MantissaOverflow),
         BigIntError::DivisionByZero => Ok(NumericFaultV1::DivisionByZero),
-        BigIntError::NonCanonical => {
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical))
-        }
+        BigIntError::NonCanonical => Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical)),
     }
+}
+
+fn enforce_int_domain(value: BigInt) -> Result<BigInt, BigIntError> {
+    if value.twos_byte_len() <= MAX_MANTISSA_BYTES {
+        Ok(value)
+    } else {
+        Err(BigIntError::Overflow)
+    }
+}
+
+fn checked_int_result(result: Result<BigInt, BigIntError>) -> Result<BigInt, BigIntError> {
+    result.and_then(enforce_int_domain)
+}
+
+fn checked_int_div_rem(
+    result: Result<(BigInt, BigInt), BigIntError>,
+) -> Result<(BigInt, BigInt), BigIntError> {
+    let (quotient, remainder) = result?;
+    // The quotient is validated even for `%`: `MIN / -1` is one overflowing
+    // signed division operation, so both paired results have the same fault.
+    Ok((
+        enforce_int_domain(quotient)?,
+        enforce_int_domain(remainder)?,
+    ))
+}
+
+fn wrap_int_result(result: Result<BigInt, BigIntError>) -> Result<BigInt, BigIntError> {
+    let value = result?;
+    let source = value.to_twos_bytes();
+    let extension = if value.is_negative() { 0xff } else { 0x00 };
+    let mut low = vec![extension; MAX_MANTISSA_BYTES];
+    let copied = source.len().min(MAX_MANTISSA_BYTES);
+    low[..copied].copy_from_slice(&source[..copied]);
+    BigInt::from_twos_bytes(&low)
 }
 
 fn recover(vm: &mut IVM, fault: NumericFaultV1) -> Result<(), VMError> {
@@ -161,7 +205,10 @@ fn limb_count(value: &BigInt) -> u64 {
 }
 
 fn charge_limb_work(vm: &mut IVM, work: u64) -> Result<(), VMError> {
-    vm.charge_syscall_stage(SyscallMeteringPhase::Arithmetic, numeric_gas::work_gas(work)?)
+    vm.charge_syscall_stage(
+        SyscallMeteringPhase::Arithmetic,
+        numeric_gas::work_gas(work)?,
+    )
 }
 
 fn charge_unary(vm: &mut IVM, value: &BigInt) -> Result<(), VMError> {
@@ -182,7 +229,7 @@ fn charge_multiplication(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(),
 fn charge_division(vm: &mut IVM, lhs: &BigInt, rhs: &BigInt) -> Result<(), VMError> {
     charge_limb_work(
         vm,
-        numeric_gas::division_work(limb_count(lhs), limb_count(rhs))?,
+        numeric_gas::quotient_remainder_work(limb_count(lhs), limb_count(rhs))?,
     )
 }
 
@@ -298,54 +345,54 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             }
         }
         syscalls::SYSCALL_INT_NEG => {
-            let mode = failure_mode(vm, &[11, 12, 13])?;
             let value = decode_int_register(vm, 10)?;
+            let mode = failure_mode(vm, &[11, 12, 13])?;
             charge_unary(vm, &value)?;
-            if let Some(result) = resolve_bigint_failure(vm, mode, value.checked_neg())? {
+            if let Some(result) =
+                resolve_bigint_failure(vm, mode, checked_int_result(value.checked_neg()))?
+            {
                 publish_int(vm, &result)?;
             }
         }
         syscalls::SYSCALL_INT_ADD | syscalls::SYSCALL_INT_SUB => {
-            let mode = failure_mode(vm, &[12, 13])?;
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
+            let mode = failure_mode(vm, &[12, 13])?;
             charge_additive(vm, &lhs, &rhs)?;
             let result = if number == syscalls::SYSCALL_INT_ADD {
                 lhs.checked_add(&rhs)
             } else {
                 lhs.checked_sub(&rhs)
             };
-            if let Some(result) = resolve_bigint_failure(vm, mode, result)? {
+            if let Some(result) = resolve_bigint_failure(vm, mode, checked_int_result(result))? {
                 publish_int(vm, &result)?;
             }
         }
         syscalls::SYSCALL_INT_MUL => {
-            let mode = failure_mode(vm, &[12, 13])?;
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
+            let mode = failure_mode(vm, &[12, 13])?;
             charge_multiplication(vm, &lhs, &rhs)?;
-            if let Some(result) = resolve_bigint_failure(vm, mode, lhs.checked_mul(&rhs))? {
+            if let Some(result) =
+                resolve_bigint_failure(vm, mode, checked_int_result(lhs.checked_mul(&rhs)))?
+            {
                 publish_int(vm, &result)?;
             }
         }
         syscalls::SYSCALL_INT_DIV | syscalls::SYSCALL_INT_REM => {
-            let mode = failure_mode(vm, &[12, 13])?;
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
+            let mode = failure_mode(vm, &[12, 13])?;
             if rhs.is_zero() {
-                if resolve_bigint_failure::<()>(
-                    vm,
-                    mode,
-                    Err(BigIntError::DivisionByZero),
-                )?
-                .is_none()
+                if resolve_bigint_failure::<()>(vm, mode, Err(BigIntError::DivisionByZero))?
+                    .is_none()
                 {
                     return Ok(0);
                 }
             }
             charge_division(vm, &lhs, &rhs)?;
             if let Some((quotient, remainder)) =
-                resolve_bigint_failure(vm, mode, lhs.checked_div_rem(&rhs))?
+                resolve_bigint_failure(vm, mode, checked_int_div_rem(lhs.checked_div_rem(&rhs)))?
             {
                 publish_int(
                     vm,
@@ -372,24 +419,30 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         syscalls::SYSCALL_INT_WRAP_NEG => {
             let value = decode_int_register(vm, 10)?;
             charge_unary(vm, &value)?;
-            publish_int(vm, &value.wrapping_neg())?;
+            let result = wrap_int_result(value.checked_neg())
+                .expect("a 512-bit operand negation fits the generic bigint domain");
+            publish_int(vm, &result)?;
         }
         syscalls::SYSCALL_INT_WRAP_ADD | syscalls::SYSCALL_INT_WRAP_SUB => {
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
             charge_additive(vm, &lhs, &rhs)?;
             let result = if number == syscalls::SYSCALL_INT_WRAP_ADD {
-                lhs.wrapping_add(&rhs)
+                lhs.checked_add(&rhs)
             } else {
-                lhs.wrapping_sub(&rhs)
+                lhs.checked_sub(&rhs)
             };
+            let result = wrap_int_result(result)
+                .expect("512-bit add/sub intermediates fit the generic bigint domain");
             publish_int(vm, &result)?;
         }
         syscalls::SYSCALL_INT_WRAP_MUL => {
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
             charge_multiplication(vm, &lhs, &rhs)?;
-            publish_int(vm, &lhs.wrapping_mul(&rhs))?;
+            let result = wrap_int_result(lhs.checked_mul(&rhs))
+                .expect("512-bit multiplication intermediates fit the generic bigint domain");
+            publish_int(vm, &result)?;
         }
         syscalls::SYSCALL_DECIMAL_FROM_INT => {
             let value = decode_int_register(vm, 10)?;
@@ -397,8 +450,8 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             publish_decimal(vm, &Numeric::new(value, 0))?;
         }
         syscalls::SYSCALL_DECIMAL_NEG => {
-            let mode = failure_mode(vm, &[11, 12, 13])?;
             let value = decode_decimal_register(vm, 10)?;
+            let mode = failure_mode(vm, &[11, 12, 13])?;
             let result = value.try_decimal_neg_observed(&mut |step| observe_work(vm, step));
             if let Some(result) = resolve_observed(vm, mode, result)? {
                 publish_decimal(vm, &result)?;
@@ -407,9 +460,9 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         syscalls::SYSCALL_DECIMAL_ADD
         | syscalls::SYSCALL_DECIMAL_SUB
         | syscalls::SYSCALL_DECIMAL_MUL => {
-            let mode = failure_mode(vm, &[12, 13])?;
             let lhs = decode_decimal_register(vm, 10)?;
             let rhs = decode_decimal_register(vm, 11)?;
+            let mode = failure_mode(vm, &[12, 13])?;
             let result = match number {
                 syscalls::SYSCALL_DECIMAL_ADD => {
                     lhs.try_decimal_add_observed(&rhs, &mut |step| observe_work(vm, step))
@@ -424,30 +477,27 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             }
         }
         syscalls::SYSCALL_DECIMAL_DIV_EXACT => {
-            let mode = failure_mode(vm, &[12, 13])?;
             let lhs = decode_decimal_register(vm, 10)?;
             let rhs = decode_decimal_register(vm, 11)?;
+            let mode = failure_mode(vm, &[12, 13])?;
             let result = decimal_exact_division_observed(vm, &lhs, &rhs);
             if let Some(result) = resolve_observed(vm, mode, result)? {
                 publish_decimal(vm, &result)?;
             }
         }
         syscalls::SYSCALL_DECIMAL_DIV_ROUND => {
-            let mode = failure_mode(vm, &[])?;
             let lhs = decode_decimal_register(vm, 10)?;
             let rhs = decode_decimal_register(vm, 11)?;
             let decoded_scale = decode_scale(vm)?;
+            let rounding = rounding_mode(vm)?;
+            let mode = failure_mode(vm, &[])?;
             let scale = match resolve_failure(vm, mode, decoded_scale)? {
                 Some(scale) => scale,
                 None => return Ok(0),
             };
-            let rounding = rounding_mode(vm)?;
-            let result = lhs.try_decimal_div_round_observed(
-                &rhs,
-                scale,
-                rounding,
-                &mut |step| observe_work(vm, step),
-            );
+            let result = lhs.try_decimal_div_round_observed(&rhs, scale, rounding, &mut |step| {
+                observe_work(vm, step)
+            });
             if let Some(result) = resolve_observed(vm, mode, result)? {
                 publish_decimal(vm, &result)?;
             }
@@ -466,22 +516,22 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         syscalls::SYSCALL_DECIMAL_TRY_TO_INT_EXACT
         | syscalls::SYSCALL_DECIMAL_TO_INT_TRUNC
         | syscalls::SYSCALL_DECIMAL_TO_INT_ROUND => {
-            if number == syscalls::SYSCALL_DECIMAL_TO_INT_ROUND
-                && (vm.register(11) != 0 || vm.register(12) != 0)
-            {
-                return Err(VMError::DecodeError);
-            }
             let value = decode_decimal_register(vm, 10)?;
-            if number == syscalls::SYSCALL_DECIMAL_TO_INT_ROUND {
-            }
+            let rounded_mode = if number == syscalls::SYSCALL_DECIMAL_TO_INT_ROUND {
+                require_zero_registers(vm, &[11, 12])?;
+                Some(rounding_mode(vm)?)
+            } else {
+                None
+            };
             let result = match number {
-                syscalls::SYSCALL_DECIMAL_TRY_TO_INT_EXACT => value
-                    .try_decimal_to_int_exact_observed(&mut |step| observe_work(vm, step)),
+                syscalls::SYSCALL_DECIMAL_TRY_TO_INT_EXACT => {
+                    value.try_decimal_to_int_exact_observed(&mut |step| observe_work(vm, step))
+                }
                 syscalls::SYSCALL_DECIMAL_TO_INT_TRUNC => {
                     value.decimal_to_int_trunc_observed(&mut |step| observe_work(vm, step))
                 }
                 _ => value.decimal_to_int_round_observed(
-                    rounding_mode(vm)?,
+                    rounded_mode.expect("rounded conversion initialized its mode"),
                     &mut |step| observe_work(vm, step),
                 ),
             };
@@ -516,13 +566,13 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         syscalls::SYSCALL_QUANTITY_ADD
         | syscalls::SYSCALL_QUANTITY_SUB
         | syscalls::SYSCALL_QUANTITY_MUL_DECIMAL => {
-            let mode = failure_mode(vm, &[12, 13])?;
             let lhs = decode_quantity_register(vm, 10)?;
             let rhs = if number == syscalls::SYSCALL_QUANTITY_MUL_DECIMAL {
                 decode_decimal_register(vm, 11)?
             } else {
                 decode_quantity_register(vm, 11)?.into_numeric()
             };
+            let mode = failure_mode(vm, &[12, 13])?;
             if number == syscalls::SYSCALL_QUANTITY_SUB {
                 charge_decimal_comparison(vm, lhs.as_numeric(), &rhs)?;
                 if lhs.as_numeric() < &rhs {
@@ -559,15 +609,14 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 }
             }
         }
-        syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT
-        | syscalls::SYSCALL_QUANTITY_RATIO_EXACT => {
-            let mode = failure_mode(vm, &[12, 13])?;
+        syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT | syscalls::SYSCALL_QUANTITY_RATIO_EXACT => {
             let lhs = decode_quantity_register(vm, 10)?;
             let rhs = if number == syscalls::SYSCALL_QUANTITY_RATIO_EXACT {
                 decode_quantity_register(vm, 11)?.into_numeric()
             } else {
                 decode_decimal_register(vm, 11)?
             };
+            let mode = failure_mode(vm, &[12, 13])?;
             let result = decimal_exact_division_observed(vm, lhs.as_numeric(), &rhs);
             if let Some(result) = resolve_observed(vm, mode, result)? {
                 if number == syscalls::SYSCALL_QUANTITY_RATIO_EXACT {
@@ -584,9 +633,7 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 }
             }
         }
-        syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND
-        | syscalls::SYSCALL_QUANTITY_RATIO_ROUND => {
-            let mode = failure_mode(vm, &[])?;
+        syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND | syscalls::SYSCALL_QUANTITY_RATIO_ROUND => {
             let lhs = decode_quantity_register(vm, 10)?;
             let rhs = if number == syscalls::SYSCALL_QUANTITY_RATIO_ROUND {
                 decode_quantity_register(vm, 11)?.into_numeric()
@@ -594,11 +641,12 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 decode_decimal_register(vm, 11)?
             };
             let decoded_scale = decode_scale(vm)?;
+            let rounding = rounding_mode(vm)?;
+            let mode = failure_mode(vm, &[])?;
             let scale = match resolve_failure(vm, mode, decoded_scale)? {
                 Some(scale) => scale,
                 None => return Ok(0),
             };
-            let rounding = rounding_mode(vm)?;
             let result = lhs.as_numeric().try_decimal_div_round_observed(
                 &rhs,
                 scale,
@@ -638,24 +686,24 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
 
 fn comparison(number: u32, ordering: Ordering) -> bool {
     match number {
-        syscalls::SYSCALL_INT_EQ
-        | syscalls::SYSCALL_DECIMAL_EQ
-        | syscalls::SYSCALL_QUANTITY_EQ => ordering == Ordering::Equal,
-        syscalls::SYSCALL_INT_NE
-        | syscalls::SYSCALL_DECIMAL_NE
-        | syscalls::SYSCALL_QUANTITY_NE => ordering != Ordering::Equal,
-        syscalls::SYSCALL_INT_LT
-        | syscalls::SYSCALL_DECIMAL_LT
-        | syscalls::SYSCALL_QUANTITY_LT => ordering == Ordering::Less,
-        syscalls::SYSCALL_INT_LE
-        | syscalls::SYSCALL_DECIMAL_LE
-        | syscalls::SYSCALL_QUANTITY_LE => ordering != Ordering::Greater,
-        syscalls::SYSCALL_INT_GT
-        | syscalls::SYSCALL_DECIMAL_GT
-        | syscalls::SYSCALL_QUANTITY_GT => ordering == Ordering::Greater,
-        syscalls::SYSCALL_INT_GE
-        | syscalls::SYSCALL_DECIMAL_GE
-        | syscalls::SYSCALL_QUANTITY_GE => ordering != Ordering::Less,
+        syscalls::SYSCALL_INT_EQ | syscalls::SYSCALL_DECIMAL_EQ | syscalls::SYSCALL_QUANTITY_EQ => {
+            ordering == Ordering::Equal
+        }
+        syscalls::SYSCALL_INT_NE | syscalls::SYSCALL_DECIMAL_NE | syscalls::SYSCALL_QUANTITY_NE => {
+            ordering != Ordering::Equal
+        }
+        syscalls::SYSCALL_INT_LT | syscalls::SYSCALL_DECIMAL_LT | syscalls::SYSCALL_QUANTITY_LT => {
+            ordering == Ordering::Less
+        }
+        syscalls::SYSCALL_INT_LE | syscalls::SYSCALL_DECIMAL_LE | syscalls::SYSCALL_QUANTITY_LE => {
+            ordering != Ordering::Greater
+        }
+        syscalls::SYSCALL_INT_GT | syscalls::SYSCALL_DECIMAL_GT | syscalls::SYSCALL_QUANTITY_GT => {
+            ordering == Ordering::Greater
+        }
+        syscalls::SYSCALL_INT_GE | syscalls::SYSCALL_DECIMAL_GE | syscalls::SYSCALL_QUANTITY_GE => {
+            ordering != Ordering::Less
+        }
         _ => unreachable!("comparison helper called for non-comparison syscall"),
     }
 }

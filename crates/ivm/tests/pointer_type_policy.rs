@@ -25,8 +25,15 @@ fn abi_v1_policy_allows_full_pointer_surface() {
     ] {
         assert!(ivm::is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty))
     }
-    assert!(!ivm::is_type_allowed_for_policy(
-        SyscallPolicy::AbiV1,
-        RetiredAmount
-    ));
+}
+
+#[test]
+fn abi_v1_rejects_the_unassigned_numeric_pointer_id() {
+    assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::Quantity));
+    assert_eq!(PointerType::from_u16(0x0013), None);
+    assert!(
+        ivm::pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1)
+            .iter()
+            .all(|pointer_type| *pointer_type as u16 != 0x0013)
+    );
 }

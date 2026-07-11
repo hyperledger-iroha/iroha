@@ -195,7 +195,7 @@ differently. The production smoke enforces the 24,576-byte runtime limit for
 every deployed contract role.
 
 The checked-in artifact lock pins corridor manifest digest
-`92837bdfeb0a7a4df8b7ec7b158991445240c7c3ae88822ad79ae7fafb3ab200`
+`d2d595bc62e39eabc604a94c0c0b91660c80a8bfdb7d6d67ce04fcd3069303b0`
 and canonical compiler-lock digest
 `4e47b010e2c6475a3711d79f22ba58355534a5b519c99609094bf9b97d968c99`.
 Any compiler identity, setting, source input, creation bytecode, deployed

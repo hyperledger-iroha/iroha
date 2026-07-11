@@ -318,88 +318,130 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Change the inputs or use an explicit wrapping operation when modular arithmetic is intentional."
     ),
     explanation!(
-        "E_AMOUNT_SUFFIX",
-        Lex,
-        "an Amount literal has a missing or invalid suffix",
-        "Write the lowercase `amt` suffix directly after the base-10 digits, for example `10amt` or `1.25amt`."
-    ),
-    explanation!(
-        "E_AMOUNT_SUFFIX_SEPARATED",
-        Lex,
-        "whitespace separates an Amount value from its suffix",
-        "Remove the whitespace so the complete literal is one token, for example `10amt`."
-    ),
-    explanation!(
-        "E_AMOUNT_MALFORMED",
-        Lex,
-        "an Amount literal has invalid decimal spelling",
-        "Use base-10 digits, at most one decimal point, digit-separating underscores, and the exact lowercase `amt` suffix."
-    ),
-    explanation!(
-        "E_AMOUNT_NEGATIVE",
+        "E_INT_LITERAL_OVERFLOW",
         Parse,
-        "an Amount literal is negative",
-        "Amounts are non-negative; remove the unary minus or use a different numeric type."
+        "an integer literal is outside the signed 512-bit domain",
+        "Use a value from -2^511 through 2^511 - 1."
     ),
     explanation!(
-        "E_AMOUNT_SCALE_OVERFLOW",
+        "E_RETIRED_NUMERIC_SUFFIX",
+        Lex,
+        "a numeric literal uses a retired suffix",
+        "Use an unsuffixed literal in an explicit int, decimal, or quantity context; Kotodama V1 has no numeric literal suffixes."
+    ),
+    explanation!(
+        "E_RETIRED_NUMERIC_HELPER",
+        Parse,
+        "source calls a retired width-specific or generic numeric helper",
+        "Use exact operators, named int/decimal/quantity conversions, or native `json { ... }` construction."
+    ),
+    explanation!(
+        "E_DECIMAL_MALFORMED",
+        Lex,
+        "an exact decimal literal has invalid spelling",
+        "Use base-10 digits, at most one decimal point, an optional decimal exponent, and underscores only between digits."
+    ),
+    explanation!(
+        "E_DECIMAL_EXPONENT",
+        Lex,
+        "an exact decimal exponent has invalid spelling",
+        "Write at least one base-10 digit after `e` or `E`; a leading exponent sign is allowed."
+    ),
+    explanation!(
+        "E_RETIRED_NUMERIC_TYPE",
+        Parse,
+        "a declaration uses a retired numeric type name",
+        "Use `int`, `decimal`, or the nominal non-negative `quantity` type."
+    ),
+    explanation!(
+        "E_RETIRED_DECLARATION_ORDER",
+        Parse,
+        "a typed declaration uses the retired name-colon-type order",
+        "Place the type before the name, for example `const int limit`, `state int value`, `let int count`, or `fn add(int lhs)`."
+    ),
+    explanation!(
+        "E_NEGATIVE_QUANTITY",
         Semantic,
-        "an Amount literal exceeds the 28-digit scale limit",
+        "a value converted to quantity is negative",
+        "Use decimal when the value may be negative, or prove the value non-negative before an explicit quantity conversion."
+    ),
+    explanation!(
+        "E_DECIMAL_SCALE_OVERFLOW",
+        Semantic,
+        "an exact decimal value exceeds the 28-digit canonical scale limit",
         "Reduce the significant fractional precision to at most 28 digits. Trailing fractional zeros are canonicalized away before this limit is checked."
     ),
     explanation!(
-        "E_AMOUNT_MANTISSA_OVERFLOW",
+        "E_DECIMAL_MANTISSA_OVERFLOW",
         Semantic,
-        "an Amount literal exceeds the 512-bit mantissa limit",
-        "Reduce the magnitude of the literal so its unscaled decimal mantissa fits in 512 bits."
+        "an exact decimal value exceeds the signed 512-bit mantissa limit",
+        "Reduce the magnitude so the unscaled canonical mantissa fits the signed 512-bit domain."
     ),
     explanation!(
-        "E_AMOUNT_REMAINDER",
+        "E_QUANTITY_REMAINDER",
         Semantic,
-        "Amount does not define a remainder operation",
-        "Use exact division or amount.div_round with an explicit scale and rounding mode."
+        "quantity does not define a remainder operation",
+        "Use exact division, quantity.div_round, or quantity.ratio_round with an explicit scale and rounding mode."
     ),
     explanation!(
-        "E_AMOUNT_CONSTANT_ARITHMETIC",
+        "E_QUANTITY_UNDERFLOW",
         Semantic,
-        "constant Amount arithmetic is invalid",
-        "Change the literal operands so subtraction does not underflow, the mantissa and canonical scale remain in range, and plain division has an exact finite result; use div_round for intentional rounding."
+        "quantity subtraction would produce a negative result",
+        "Change the operands, or convert to decimal explicitly when a negative result is part of the domain."
     ),
     explanation!(
-        "E_AMOUNT_DIV_ROUND_ARITY",
+        "E_QUANTITY_NEGATION",
         Semantic,
-        "Amount.div_round has the wrong number of arguments",
-        "Pass exactly divisor, scale, and mode, using named arguments where the call policy requires them."
+        "the nominal `quantity` type cannot be negated",
+        "Use `int` or `decimal` for signed values."
     ),
     explanation!(
-        "E_AMOUNT_DIV_ROUND_RECEIVER",
+        "E_DIVISION_BY_ZERO",
         Semantic,
-        "div_round was called on a value that is not Amount",
-        "Call div_round on an Amount value and pass an Amount divisor."
+        "a numeric divisor is zero",
+        "Use a nonzero divisor or validate it before the operation."
     ),
     explanation!(
-        "E_AMOUNT_DIV_ROUND_SCALE",
+        "E_REPEATING_DECIMAL",
         Semantic,
-        "Amount.div_round received a scale outside zero through 28",
-        "Choose a compile-time scale from 0 through 28."
+        "exact decimal division has a nonterminating result",
+        "Use `div_round` with an explicit output scale and rounding mode when approximation is intentional."
     ),
     explanation!(
-        "E_AMOUNT_DIV_ROUND_SCALE_TYPE",
+        "E_EXACT_DIVISION_SCALE_OVERFLOW",
         Semantic,
-        "Amount.div_round scale is not an i64 constant",
-        "Pass the scale as a compile-time i64 value from 0 through 28."
+        "an exact terminating quotient needs more than 28 fractional digits",
+        "Use `div_round` with an explicit representable scale, or change the operands."
     ),
     explanation!(
-        "E_AMOUNT_ROUNDING_MODE",
+        "E_INEXACT_CONVERSION",
         Semantic,
-        "Amount.div_round received an unknown rounding mode",
-        "Use exactly Rounding::floor, Rounding::ceil, or Rounding::nearest_even."
+        "an exact numeric conversion would discard a fractional part",
+        "Use an explicitly truncating or rounded conversion when loss of precision is intentional."
     ),
     explanation!(
-        "E_UNSIGNED_NEGATION",
+        "E_NUMERIC_ROUND_ARITY",
         Semantic,
-        "a non-negative numeric type was negated",
-        "Remove the negation or choose a signed type for values that may be negative."
+        "an explicitly rounded numeric operation has the wrong number of arguments",
+        "Pass every declared argument with its canonical name; rounded division requires divisor, scale, and mode."
+    ),
+    explanation!(
+        "E_NUMERIC_ROUND_RECEIVER",
+        Semantic,
+        "an explicitly rounded numeric method was called on an unsupported receiver",
+        "Use decimal.div_round, quantity.div_round, or quantity.ratio_round with the operand types declared by the V1 numeric matrix."
+    ),
+    explanation!(
+        "E_INVALID_SCALE",
+        Semantic,
+        "an exact numeric operation received a scale outside zero through 28",
+        "Choose an int scale from 0 through 28."
+    ),
+    explanation!(
+        "E_NUMERIC_ROUNDING_MODE",
+        Semantic,
+        "an explicitly rounded numeric operation received an unknown rounding mode",
+        "Use one of the seven V1 modes: toward_zero, away_from_zero, floor, ceil, nearest_even, nearest_away, or nearest_toward_zero."
     ),
     explanation!(
         "E_LEGACY_SUM_CONSTRUCTOR",
@@ -525,7 +567,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "E_QUERY_PAGE_ARGUMENTS",
         Semantic,
         "a typed query page has invalid offset or limit arguments",
-        "Pass named offset: i64 and limit: i64 arguments."
+        "Pass named offset: int and limit: int arguments."
     ),
     explanation!(
         "E_QUERY_RESULT_TYPE",
@@ -621,7 +663,7 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "E_LIST_INDEX_TYPE",
         Semantic,
         "a List index has the wrong type",
-        "Use an i64 index with get or try_set."
+        "Use an int index with get or try_set."
     ),
     explanation!(
         "E_LIST_METHOD_ARITY",
@@ -680,8 +722,8 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     explanation!(
         "E_LEGACY_JSON_GETTER",
         Parse,
-        "source uses the retired Numeric name for the Amount JSON getter",
-        "Use value.get_amount(key) or json::get_amount(value, key); every typed JSON getter returns Option<T>."
+        "source uses a retired name for the quantity JSON getter",
+        "Use value.get_quantity(key) or json::get_quantity(value, key); every typed JSON getter returns Option<T>."
     ),
     explanation!(
         "E_MIXED_CALL_ARGUMENTS",
@@ -1450,12 +1492,17 @@ mod tests {
     #[test]
     fn v1_data_processing_diagnostics_are_explainable() {
         for code in [
-            "E_AMOUNT_CONSTANT_ARITHMETIC",
-            "E_AMOUNT_DIV_ROUND_ARITY",
-            "E_AMOUNT_DIV_ROUND_RECEIVER",
-            "E_AMOUNT_DIV_ROUND_SCALE",
-            "E_AMOUNT_DIV_ROUND_SCALE_TYPE",
-            "E_AMOUNT_ROUNDING_MODE",
+            "E_DIVISION_BY_ZERO",
+            "E_REPEATING_DECIMAL",
+            "E_EXACT_DIVISION_SCALE_OVERFLOW",
+            "E_INEXACT_CONVERSION",
+            "E_QUANTITY_UNDERFLOW",
+            "E_QUANTITY_REMAINDER",
+            "E_QUANTITY_NEGATION",
+            "E_NUMERIC_ROUND_ARITY",
+            "E_NUMERIC_ROUND_RECEIVER",
+            "E_INVALID_SCALE",
+            "E_NUMERIC_ROUNDING_MODE",
             "E_DIVERGING_EXPRESSION_CONTEXT",
             "E_LIST_CONTAINS_COMPARABILITY",
         ] {

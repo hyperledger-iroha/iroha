@@ -5918,6 +5918,10 @@ pub struct SumeragiPersistence {
     pub kura_retry_max_attempts: u32,
     /// Timeout for inflight commit jobs before liveness recovery reports a stall.
     pub commit_inflight_timeout: Duration,
+    /// Maximum synchronous wait for the height-local I/O worker to report body
+    /// cleanup after Kura-authorized finality. This node-local maintenance
+    /// policy is excluded from the shared consensus fingerprint.
+    pub post_finality_cleanup_timeout: Duration,
     /// Commit worker work-queue capacity.
     pub commit_work_queue_cap: usize,
     /// Commit worker result-queue capacity.
@@ -7120,6 +7124,8 @@ pub struct ProofApi {
     pub burst: Option<NonZeroU32>,
     /// Maximum accepted proof request payload size.
     pub max_body_bytes: Bytes<u64>,
+    /// Maximum proof request bodies buffered concurrently before handler admission.
+    pub body_max_inflight: NonZeroUsize,
     /// Egress budget for proof responses (bytes/sec). None disables.
     pub egress_bytes_per_sec: Option<NonZeroU64>,
     /// Burst budget for proof responses (bytes).
@@ -7424,12 +7430,16 @@ pub struct Torii {
     ///
     /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
     pub zk_ivm_prove_max_queue: usize,
+    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
+    pub zk_ivm_tooling_timeout_ms: u64,
     /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
     pub zk_ivm_prove_job_ttl_secs: u64,
     /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
     ///
     /// Set to 0 to disable the cap (not recommended).
     pub zk_ivm_prove_job_max_entries: usize,
+    /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
+    pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
     /// Iroha Connect configuration.
     pub connect: Connect,
     /// ISO 20022 bridge configuration.

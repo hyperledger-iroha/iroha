@@ -135,6 +135,7 @@ fn build_minimal_valid_program(tag: u8) -> Vec<u8> {
 
 fn build_program_mint_rose_for_authority() -> Vec<u8> {
     use iroha_data_model::prelude::AssetDefinitionId;
+    use iroha_primitives::numeric::Quantity;
     use ivm::{
         PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
         syscalls as ivm_sys,
@@ -146,6 +147,13 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     );
     let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
     let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
+    let amount_tlv =
+        ivm::numeric_tlv::encode_quantity(&Quantity::from(1_u64)).expect("encode quantity");
+    let amount_literal_offset = i16::try_from(
+        i32::from(LITERAL_DATA_START)
+            + i32::try_from(asset_tlv.len()).expect("asset literal length fits i32"),
+    )
+    .expect("amount literal offset fits i16");
 
     let mut code = Vec::new();
     // r10 <- &AccountId(authority)
@@ -168,15 +176,30 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         .to_le_bytes(),
     );
     code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = asset ptr
+    // r10 <- &Quantity(1) (literal TLV), then publish it into VM-owned memory.
+    code.extend_from_slice(
+        &encode_addi(10, 0, amount_literal_offset)
+            .expect("encode addi")
+            .to_le_bytes(),
+    );
+    code.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
+        )
+        .to_le_bytes(),
+    );
+    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = quantity ptr
     code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
-    code.extend_from_slice(&encode_addi(12, 0, 1).expect("encode addi").to_le_bytes()); // amount = 1
     code.extend_from_slice(
         &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_MINT_ASSET as u8)
             .to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    assemble_program_with_literals(&code, &asset_tlv)
+    let mut literals = asset_tlv;
+    literals.extend_from_slice(&amount_tlv);
+    assemble_program_with_literals(&code, &literals)
 }
 
 fn build_program_create_nft_for_authority() -> Vec<u8> {

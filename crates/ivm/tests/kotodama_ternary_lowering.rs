@@ -7,7 +7,7 @@ mod common;
 fn kotodama_ternary_executes() {
     let src = r#"
         seiyaku TernaryLowering {
-        view fn main() -> i64 {
+        view fn main() -> int {
             let a = 5;
             let b = 9;
             let min = (a < b) ? a : b;

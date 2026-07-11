@@ -26,7 +26,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "unknown-name",
-        source: "seiyaku UnknownName {\nfn read() -> i64 { return missing_value; }\n}",
+        source: "seiyaku UnknownName {\nfn read() -> int { return missing_value; }\n}",
         phase: DiagnosticPhase::Resolve,
         code: "K2002",
         message: "unknown value `missing_value`",
@@ -34,7 +34,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "unknown-type",
-        source: "seiyaku UnknownType {\nfn read() { let value: Missing = 1; }\n}",
+        source: "seiyaku UnknownType {\nfn read() { let Missing value = 1; }\n}",
         phase: DiagnosticPhase::Resolve,
         code: "K2002",
         message: "unknown type `Missing`",
@@ -50,7 +50,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "builtin-collision",
-        source: "seiyaku BuiltinCollision {\nfn account_id(value: string) -> i64 { return 1; }\n}",
+        source: "seiyaku BuiltinCollision {\nfn account_id(string value) -> int { return 1; }\n}",
         phase: DiagnosticPhase::Resolve,
         code: "E_RESERVED_DECLARATION",
         message: "function `account_id` uses a compiler-reserved name",
@@ -58,15 +58,15 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "implicit-conversion",
-        source: "seiyaku ImplicitConversion {\nfn run() { let value: i64 = true; }\n}",
+        source: "seiyaku ImplicitConversion {\nfn run() { let int value = true; }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_TYPE_ANNOTATION_MISMATCH",
-        message: "type annotation mismatch: expected i64, got bool",
+        message: "type annotation mismatch: expected int, got bool",
         line: 2,
     },
     CompileFailCase {
         name: "implicit-pointer-conversion",
-        source: "seiyaku ImplicitPointerConversion {\nfn run(value: bytes) { let id = AccountId::parse(value); }\n}",
+        source: "seiyaku ImplicitPointerConversion {\nfn run(bytes value) { let id = AccountId::parse(value); }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "K2003",
         message: "AccountId::parse expects string",
@@ -98,7 +98,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "dynamic-range-loop",
-        source: "seiyaku DynamicRangeLoop {\nfn run(limit: i64) { for index in range(limit) {} }\n}",
+        source: "seiyaku DynamicRangeLoop {\nfn run(int limit) { for index in range(limit) {} }\n}",
         phase: DiagnosticPhase::Parse,
         code: "E_UNBOUNDED_LOOP",
         message: "numeric range bounds must be non-negative integer literals",
@@ -170,7 +170,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "opaque-instruction-submission",
-        source: "seiyaku OpaqueInstruction {\nkotoage fn run(payload: bytes) authorize(\"Run\") { execute_instruction(payload); }\n}",
+        source: "seiyaku OpaqueInstruction {\nkotoage fn run(bytes payload) authorize(\"Run\") { execute_instruction(payload); }\n}",
         phase: DiagnosticPhase::Resolve,
         code: "K2002",
         message: "unknown function or builtin `execute_instruction`",
@@ -178,7 +178,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "cyclic-value-type",
-        source: "seiyaku CyclicValueType {\nstruct Node { next: Node; }\n}",
+        source: "seiyaku CyclicValueType {\nstruct Node { Node next; }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "K2006",
         message: "cyclic value struct definition: Node -> Node",
@@ -186,7 +186,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "retired-positional-struct",
-        source: "seiyaku PositionalStruct {\nstruct Pair { left: i64, right: i64 }\nfn run() { let pair = Pair(1, 2); }\n}",
+        source: "seiyaku PositionalStruct {\nstruct Pair { int left, int right }\nfn run() { let pair = Pair(1, 2); }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_POSITIONAL_STRUCT",
         message: "positional construction `Pair(...)` is retired",
@@ -194,7 +194,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "mixed-call-style",
-        source: "seiyaku MixedCall {\nfn target(first: i64, second: i64) {}\nfn run() { target(1, second: 2); }\n}",
+        source: "seiyaku MixedCall {\nfn target(int first, int second) {}\nfn run() { target(1, second: 2); }\n}",
         phase: DiagnosticPhase::Parse,
         code: "E_MIXED_CALL_ARGUMENTS",
         message: "calls must use either all positional or all named source arguments",
@@ -202,7 +202,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "unsafe-list-read",
-        source: "seiyaku UnsafeListRead {\nfn read(values: List<i64, 2>) -> Option<i64> { return values[0]; }\n}",
+        source: "seiyaku UnsafeListRead {\nfn read(List<int, 2> values) -> Option<int> { return values[0]; }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_LIST_UNSAFE_INDEX",
         message: "unchecked List indexing is not part of Kotodama V1",
@@ -210,7 +210,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "unsafe-list-write",
-        source: "seiyaku UnsafeListWrite {\nfn write() { var values: List<i64, 2> = [1]; values[0] = 2; }\n}",
+        source: "seiyaku UnsafeListWrite {\nfn write() { var List<int, 2> values = [1]; values[0] = 2; }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_LIST_UNSAFE_INDEX",
         message: "unchecked List writes are not part of Kotodama V1",
@@ -218,7 +218,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "legacy-option-placeholder",
-        source: "seiyaku LegacyOption {\nfn read() -> Option<i64> { option::none(0) }\n}",
+        source: "seiyaku LegacyOption {\nfn read() -> Option<int> { option::none(0) }\n}",
         phase: DiagnosticPhase::Parse,
         code: "E_LEGACY_SUM_CONSTRUCTOR",
         message: "`option::none` is retired",
@@ -226,7 +226,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "named-only-repeated-types",
-        source: "seiyaku NamedOnly {\nfn target(left: i64, right: i64) {} fn run() { target(1, 2); }\n}",
+        source: "seiyaku NamedOnly {\nfn target(int left, int right) {} fn run() { target(1, 2); }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_NAMED_ARGUMENTS_REQUIRED",
         message: "requires named arguments because repeated parameter types",
@@ -242,7 +242,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "option-propagation-context",
-        source: "seiyaku PropagationContext {\nfn read(value: Option<i64>) -> i64 { value? }\n}",
+        source: "seiyaku PropagationContext {\nfn read(Option<int> value) -> int { value? }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_PROPAGATE_CONTEXT",
         message: "postfix `?` on Option requires an Option-returning function",
@@ -250,7 +250,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "non-exhaustive-option-match",
-        source: "seiyaku NonExhaustive {\nfn read(value: Option<i64>) -> i64 { match value { Option::some(item) => { item }, } }\n}",
+        source: "seiyaku NonExhaustive {\nfn read(Option<int> value) -> int { match value { Option::some(item) => { item }, } }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_MATCH_NON_EXHAUSTIVE",
         message: "match must cover both namespaced variants",
@@ -258,7 +258,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "list-comprehension-capacity",
-        source: "seiyaku ComprehensionCapacity {\nfn copy() { let source: List<i64, 8> = [1]; let result: List<i64, 4> = [item for item in source if false]; }\n}",
+        source: "seiyaku ComprehensionCapacity {\nfn copy() { let List<int, 8> source = [1]; let List<int, 4> result = [item for item in source if false]; }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_LIST_COMPREHENSION_CAPACITY",
         message: "filters do not reduce the proven maximum",
@@ -273,32 +273,80 @@ const CASES: &[CompileFailCase] = &[
         line: 2,
     },
     CompileFailCase {
-        name: "malformed-amount",
-        source: "seiyaku MalformedAmount {\nfn amount() -> Amount { 1__0amt }\n}",
-        phase: DiagnosticPhase::Semantic,
-        code: "E_AMOUNT_MALFORMED",
-        message: "underscores must separate decimal digits",
+        name: "malformed-decimal",
+        source: "seiyaku MalformedDecimal {\nfn value() -> decimal { 1. }\n}",
+        phase: DiagnosticPhase::Lex,
+        code: "E_DECIMAL_MALFORMED",
+        message: "decimal literals require at least one digit after `.`",
         line: 2,
     },
     CompileFailCase {
-        name: "amount-constant-underflow",
-        source: "seiyaku AmountUnderflow {\nfn amount() -> Amount { 1amt - 2amt }\n}",
+        name: "quantity-constant-underflow",
+        source: "seiyaku QuantityUnderflow {\nfn value() -> quantity { 1 - 2 }\n}",
         phase: DiagnosticPhase::Semantic,
-        code: "E_AMOUNT_CONSTANT_ARITHMETIC",
-        message: "constant Amount `-` failed",
+        code: "E_QUANTITY_UNDERFLOW",
+        message: "Quantity subtraction would produce a negative result",
         line: 2,
     },
     CompileFailCase {
-        name: "implicit-u128-to-amount",
-        source: "seiyaku AmountConversion {\nfn amount() { let value: Amount = 10u128; }\n}",
+        name: "implicit-int-to-quantity",
+        source: "seiyaku QuantityConversion {\nfn value() { let int count = 10; let quantity result = count; }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_TYPE_ANNOTATION_MISMATCH",
-        message: "type annotation mismatch: expected Amount, got u128",
+        message: "type annotation mismatch: expected quantity, got int",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-amount-type",
+        source: "seiyaku RetiredAmountType {\nfn value(Amount input) { }\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_NUMERIC_TYPE",
+        message: "numeric type `Amount` is not part of Kotodama V1; use `quantity`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-i64-type",
+        source: "seiyaku RetiredIntType {\nfn value(i64 input) { }\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_NUMERIC_TYPE",
+        message: "numeric type `i64` is not part of Kotodama V1; use `int`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-amount-suffix",
+        source: "seiyaku RetiredAmountSuffix {\nfn value() -> quantity { 1.25amt }\n}",
+        phase: DiagnosticPhase::Lex,
+        code: "E_RETIRED_NUMERIC_SUFFIX",
+        message: "numeric literal suffixes are not part of Kotodama V1",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-u128-suffix",
+        source: "seiyaku RetiredIntSuffix {\nfn value() -> int { 10u128 }\n}",
+        phase: DiagnosticPhase::Lex,
+        code: "E_RETIRED_NUMERIC_SUFFIX",
+        message: "numeric literal suffixes are not part of Kotodama V1",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-scalar-json-setter",
+        source: "seiyaku RetiredJsonSetter {\nfn value() -> Json { json::set_i64(json::object(), Name::parse(\"n\"), 1) }\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_NUMERIC_HELPER",
+        message: "scalar JSON setters are not part of Kotodama V1",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-quantity-json-getter",
+        source: "seiyaku RetiredQuantityGetter {\nfn value(Json object, Name key) { object.get_amount(key); }\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_LEGACY_JSON_GETTER",
+        message: "legacy numeric JSON getters were retired; use `.get_quantity(key)`",
         line: 2,
     },
     CompileFailCase {
         name: "typed-query-key-mismatch",
-        source: "seiyaku QueryKeyMismatch {\nview fn account(raw: bytes) { let found = ledger::query::account(raw); }\n}",
+        source: "seiyaku QueryKeyMismatch {\nview fn account(bytes raw) { let found = ledger::query::account(raw); }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_QUERY_KEY_TYPE",
         message: "byte-returning core-query compatibility is not part of Kotodama V1",
@@ -306,7 +354,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "typed-query-result-mismatch",
-        source: "seiyaku QueryResultMismatch {\nview fn account(id: AccountId) { let encoded: bytes = ledger::query::account(id); }\n}",
+        source: "seiyaku QueryResultMismatch {\nview fn account(AccountId id) { let bytes encoded = ledger::query::account(id); }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "E_QUERY_RESULT_TYPE",
         message: "byte-returning compatibility is not part of Kotodama V1",
@@ -314,7 +362,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "argument-register-window",
-        source: "seiyaku ArgumentRegisterWindow {\nview fn run(value: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64)) -> i64 { return value.0; }\n}",
+        source: "seiyaku ArgumentRegisterWindow {\nview fn run((int, int, int, int, int, int, int, int, int, int, int, int, int, int) value) -> int { return value.0; }\n}",
         phase: DiagnosticPhase::Semantic,
         code: "K2007",
         message: "requiring 14 flattened argument words; V1 permits at most 13",
@@ -384,7 +432,7 @@ fn public_session_compile_fail_diagnostics_are_stable() {
 #[test]
 fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
     let source = r#"seiyaku Broken {
-  fn first() { let amount: Amount = 1; }
+  fn first() { let quantity amount = 1; }
   fn second() { let value = 1; value = 2; }
 }"#;
     let source_name = "multi-error-renderers.ko";

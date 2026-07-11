@@ -90,12 +90,12 @@ public sealed record SccpSemanticProofProfileV1(
     byte[] ProfileHash);
 
 public sealed record SccpSoraFinalityAnchorV1(
+    ushort ProtocolVersion,
     byte[] ChainIdHash,
     ulong CheckpointHeight,
     byte[] CheckpointBlockHash,
-    ulong ValidatorSetEpoch,
-    byte[] ValidatorSetHash,
-    ushort ValidatorSetHashVersion,
+    byte[] CheckpointContextId,
+    byte[] CheckpointFinalityArtifactHash,
     byte[] AnchorHash);
 
 public sealed record SccpDestinationDeploymentV1(
@@ -1032,8 +1032,8 @@ internal static class SccpExactParser
         RequireDistinctBytes(
         [
             semantic.CircuitCommitment, semantic.WitnessGeneratorCommitment, semantic.PublicSignalSchemaHash,
-            semantic.ProfileHash, anchor.ChainIdHash, anchor.CheckpointBlockHash, anchor.ValidatorSetHash,
-            anchor.AnchorHash,
+            semantic.ProfileHash, anchor.ChainIdHash, anchor.CheckpointBlockHash,
+            anchor.CheckpointContextId, anchor.CheckpointFinalityArtifactHash, anchor.AnchorHash,
         ], $"{label} hashes");
         return (semantic, anchor);
     }
@@ -1069,8 +1069,8 @@ internal static class SccpExactParser
     {
         SccpJson.ExactFields(item,
         [
-            "version", "source_network", "chain_id_hash", "checkpoint_height", "checkpoint_block_hash",
-            "validator_set_epoch", "validator_set_hash", "validator_set_hash_version",
+            "version", "source_network", "protocol_version", "chain_id_hash", "checkpoint_height",
+            "checkpoint_block_hash", "checkpoint_context_id", "checkpoint_finality_artifact_hash",
         ], label);
         RequireVersion(item, label);
         if (ParseNetwork(Object(item, "source_network"), $"{label}.source_network") != SccpNetworkV1.SoraTaira)
@@ -1078,6 +1078,7 @@ internal static class SccpExactParser
             throw new ArgumentException($"{label} source network must be Taira.");
         }
 
+        var protocolVersion = checked((ushort)SccpJson.UInt32(item, "protocol_version", 2, 2));
         var chainHash = UpperHex(item, "chain_id_hash", 32);
         if (!chainHash.AsSpan().SequenceEqual(SccpV1.Keccak256(TairaChainId)))
         {
@@ -1086,22 +1087,21 @@ internal static class SccpExactParser
 
         var checkpointHeight = SccpJson.UInt64(item, "checkpoint_height", 1);
         var checkpointHash = UpperHex(item, "checkpoint_block_hash", 32);
-        var epoch = SccpJson.UInt64(item, "validator_set_epoch", 0);
-        var validatorHash = UpperHex(item, "validator_set_hash", 32);
-        var hashVersion = checked((ushort)SccpJson.UInt32(item, "validator_set_hash_version", 1, 1));
-        RequireDistinctBytes([chainHash, checkpointHash, validatorHash], $"{label} consensus hashes");
+        var contextId = UpperHex(item, "checkpoint_context_id", 32);
+        var artifactHash = UpperHex(item, "checkpoint_finality_artifact_hash", 32);
+        RequireDistinctBytes([chainHash, checkpointHash, contextId, artifactHash], $"{label} finality hashes");
         using var canonical = new MemoryStream();
         canonical.WriteByte(1);
         canonical.WriteByte((byte)SccpNetworkV1.SoraTaira);
+        WriteUInt16LittleEndian(canonical, protocolVersion);
         canonical.Write(chainHash);
         WriteUInt64LittleEndian(canonical, checkpointHeight);
         canonical.Write(checkpointHash);
-        WriteUInt64LittleEndian(canonical, epoch);
-        canonical.Write(validatorHash);
-        WriteUInt16LittleEndian(canonical, hashVersion);
+        canonical.Write(contextId);
+        canonical.Write(artifactHash);
         var hash = SccpV1.Keccak256(Concat("sccp:sora-finality-anchor:v1"u8.ToArray(), canonical.ToArray()));
         return new SccpSoraFinalityAnchorV1(
-            chainHash, checkpointHeight, checkpointHash, epoch, validatorHash, hashVersion, hash);
+            protocolVersion, chainHash, checkpointHeight, checkpointHash, contextId, artifactHash, hash);
     }
 
     private static byte[] ParseVerifyingKey(JsonElement item, string label)

@@ -165,11 +165,11 @@
         },
         {
           "name": "amount_a",
-          "type_name": "Amount"
+          "type_name": "quantity"
         },
         {
           "name": "amount_b",
-          "type_name": "Amount"
+          "type_name": "quantity"
         }
       ],
       "argument_schema": {
@@ -209,7 +209,7 @@
                 {
                   "kind": "Leaf",
                   "value": {
-                    "kind": "Amount",
+                    "kind": "Quantity",
                     "value": null
                   }
                 }
@@ -223,7 +223,7 @@
                 {
                   "kind": "Leaf",
                   "value": {
-                    "kind": "Amount",
+                    "kind": "Quantity",
                     "value": null
                   }
                 }
@@ -270,7 +270,7 @@
         },
         {
           "name": "lp_amount",
-          "type_name": "Amount"
+          "type_name": "quantity"
         }
       ],
       "argument_schema": {
@@ -310,7 +310,7 @@
                 {
                   "kind": "Leaf",
                   "value": {
-                    "kind": "Amount",
+                    "kind": "Quantity",
                     "value": null
                   }
                 }
@@ -361,11 +361,11 @@
         },
         {
           "name": "amount_in",
-          "type_name": "Amount"
+          "type_name": "quantity"
         },
         {
           "name": "min_output",
-          "type_name": "Amount"
+          "type_name": "quantity"
         }
       ],
       "argument_schema": {
@@ -419,7 +419,7 @@
                 {
                   "kind": "Leaf",
                   "value": {
-                    "kind": "Amount",
+                    "kind": "Quantity",
                     "value": null
                   }
                 }
@@ -433,7 +433,7 @@
                 {
                   "kind": "Leaf",
                   "value": {
-                    "kind": "Amount",
+                    "kind": "Quantity",
                     "value": null
                   }
                 }
@@ -442,13 +442,13 @@
           }
         ]
       },
-      "return_type": "Amount",
+      "return_type": "quantity",
       "return_schema": {
         "nodes": [
           {
             "kind": "Leaf",
             "value": {
-              "kind": "Amount",
+              "kind": "Quantity",
               "value": null
             }
           }
@@ -491,15 +491,15 @@
     },
     {
       "name": "ReserveA",
-      "type_name": "StateMap<Name, Amount>"
+      "type_name": "StateMap<Name, quantity>"
     },
     {
       "name": "ReserveB",
-      "type_name": "StateMap<Name, Amount>"
+      "type_name": "StateMap<Name, quantity>"
     },
     {
       "name": "LpSupply",
-      "type_name": "StateMap<Name, Amount>"
+      "type_name": "StateMap<Name, quantity>"
     }
   ],
   "error_codes": [

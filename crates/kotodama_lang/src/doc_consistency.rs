@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(
             textmate_match(&textmate_value, "roundingVariants"),
             alternation_pattern(V1_ROUNDING_PATHS),
-            "TextMate rounding paths drifted from the exact Amount surface"
+            "TextMate rounding paths drifted from the exact quantity surface"
         );
         assert_eq!(
             textmate_match(&textmate_value, "jsonConstruction"),
@@ -305,6 +305,7 @@ mod tests {
 
         let mut member_names = V1_LIST_MEMBER_NAMES.to_vec();
         member_names.push("div_round");
+        member_names.push("ratio_round");
         for &builtin in Builtin::ALL {
             if !matches!(
                 builtin.surface(),
@@ -312,11 +313,7 @@ mod tests {
             ) {
                 continue;
             }
-            let member_name = if builtin == Builtin::GetNumeric {
-                "get_amount"
-            } else {
-                builtin.name()
-            };
+            let member_name = builtin.name();
             if !member_names.contains(&member_name) {
                 member_names.push(member_name);
             }
@@ -324,7 +321,7 @@ mod tests {
         assert_eq!(
             textmate_match(&textmate_value, "memberCalls"),
             format!(r"(?<=\.)(?:{})(?=\s*\()", member_names.join("|")),
-            "TextMate member calls drifted from bounded List, Amount, or typed JSON APIs"
+            "TextMate member calls drifted from bounded List, quantity, or typed JSON APIs"
         );
 
         let mut type_names = V1_SOURCE_TYPE_NAMES.to_vec();
@@ -335,9 +332,9 @@ mod tests {
             "TextMate types drifted from the canonical V1 source surface"
         );
         assert_eq!(
-            textmate_named_match(&textmate_value, "constant.numeric.amount.decimal.kotodama"),
-            r"\b\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)?amt\b",
-            "TextMate Amount literal highlighting drifted from the V1 suffix syntax"
+            textmate_named_match(&textmate_value, "constant.numeric.decimal.kotodama"),
+            r"\b(?:\d(?:[\d_]*\d)?\.\d(?:[\d_]*\d)?(?:[eE][+-]?\d(?:[\d_]*\d)?)?|\d(?:[\d_]*\d)?[eE][+-]?\d(?:[\d_]*\d)?)\b",
+            "TextMate decimal literal highlighting drifted from unsuffixed V1 syntax"
         );
 
         let definition_matches = textmate_definition_matches(&textmate_value);

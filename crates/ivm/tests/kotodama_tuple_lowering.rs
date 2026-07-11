@@ -5,8 +5,8 @@ use ivm::kotodama::{ir, parser::parse, semantic::analyze};
 fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
     let src = r#"
         seiyaku TupleCalls {
-            fn g(a: i64, b: i64) -> (i64, i64) { return (a, b); }
-            fn f(a: i64, b: i64) -> (i64, i64) {
+            fn g(int a, int b) -> (int, int) { return (a, b); }
+            fn f(int a, int b) -> (int, int) {
                 // Return the tuple produced by g(a,b). Repeated parameter
                 // types make the call named-only in Kotodama V1.
                 return g(a: a, b: b);
@@ -40,7 +40,7 @@ fn lower_call_tuple_return_emits_callmulti_and_tuplepack() {
 fn lower_return_tuple_emits_returnn() {
     let src = r#"
         seiyaku TupleReturns {
-            fn h(a: i64, b: i64, c: i64) -> (i64, i64, i64) {
+            fn h(int a, int b, int c) -> (int, int, int) {
                 let t = (a, b);
                 // Return three elements via tuple composition
                 return (t.0, t.1, c);

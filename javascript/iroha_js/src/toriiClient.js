@@ -69,14 +69,150 @@ import {
   parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
 import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
+import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
+const APPLICATION_JSON = "application/json";
+const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: APPLICATION_JSON });
+const JSON_REQUEST_HEADERS = Object.freeze({
+  "Content-Type": APPLICATION_JSON,
+  Accept: APPLICATION_JSON,
+});
 
 const DEFAULT_SUCCESS_STATUSES = ["Approved", "Committed", "Applied"];
 const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
 const DEFAULT_TX_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
+const IVM_ARTIFACT_MAX_BASE64_LENGTH =
+  Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+const CONTRACT_CODE_BYTES_JSON_MAX_BYTES =
+  IVM_ARTIFACT_MAX_BASE64_LENGTH + 1024;
+const CONTRACT_MANIFEST_JSON_MAX_BYTES =
+  IVM_ARTIFACT_MAX_BASE64_LENGTH + 256 * 1024;
+const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES = 8 * 1024 * 1024;
+const IVM_DERIVE_JSON_MAX_BYTES = 32 * 1024 * 1024;
+const IVM_PROOF_REQUEST_MAX_BYTES = 8 * 1024 * 1024;
+const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
+const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
+const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
+const NODE_CAPABILITIES_JSON_MAX_BYTES = 1024 * 1024;
+const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
+const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
+const BOUNDED_JSON_MAX_STREAM_CHUNKS = 64 * 1024;
+const JSON_CLONE_MAX_DEPTH = 128;
+const JSON_CLONE_MAX_NODES = 100_000;
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+).get;
+const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteOffset",
+).get;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+).get;
+const typedArrayTagGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  Symbol.toStringTag,
+).get;
+const typedArraySet = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "set",
+).value;
+const Uint8ArrayIntrinsic = Uint8Array;
+const dataViewBufferGetter = Object.getOwnPropertyDescriptor(
+  DataView.prototype,
+  "buffer",
+).get;
+const dataViewByteOffsetGetter = Object.getOwnPropertyDescriptor(
+  DataView.prototype,
+  "byteOffset",
+).get;
+const dataViewByteLengthGetter = Object.getOwnPropertyDescriptor(
+  DataView.prototype,
+  "byteLength",
+).get;
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength",
+).get;
+const sharedArrayBufferByteLengthGetter =
+  typeof SharedArrayBuffer === "undefined"
+    ? null
+    : Object.getOwnPropertyDescriptor(
+        SharedArrayBuffer.prototype,
+        "byteLength",
+      ).get;
+const responseBodyGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "body")?.get ?? null);
+const responseHeadersGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "headers")?.get ?? null);
+const responseStatusGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get ?? null);
+const responseStatusTextGetter =
+  typeof Response === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(Response.prototype, "statusText")?.get ??
+      null);
+const headersGet =
+  typeof Headers === "undefined" ? null : Headers.prototype.get;
+const readableStreamGetReader =
+  typeof ReadableStream === "undefined"
+    ? null
+    : ReadableStream.prototype.getReader;
+const readableStreamCancel =
+  typeof ReadableStream === "undefined"
+    ? null
+    : ReadableStream.prototype.cancel;
+const readableStreamLockedGetter =
+  typeof ReadableStream === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(
+        ReadableStream.prototype,
+        "locked",
+      )?.get ?? null);
+const readerRead =
+  typeof ReadableStreamDefaultReader === "undefined"
+    ? null
+    : ReadableStreamDefaultReader.prototype.read;
+const readerCancel =
+  typeof ReadableStreamDefaultReader === "undefined"
+    ? null
+    : ReadableStreamDefaultReader.prototype.cancel;
+const readerReleaseLock =
+  typeof ReadableStreamDefaultReader === "undefined"
+    ? null
+    : ReadableStreamDefaultReader.prototype.releaseLock;
+const abortSignalAbortedGetter =
+  typeof AbortSignal === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get ??
+      null);
+const abortSignalReasonGetter =
+  typeof AbortSignal === "undefined"
+    ? null
+    : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ??
+      null);
+const eventTargetAddEventListener =
+  typeof EventTarget === "undefined" ? null : EventTarget.prototype.addEventListener;
+const eventTargetRemoveEventListener =
+  typeof EventTarget === "undefined"
+    ? null
+    : EventTarget.prototype.removeEventListener;
+const BOUNDED_JSON_MAX_READ_TIMEOUT_MS = 30_000;
+const HTTP_ERROR_BODY_MAX_BYTES = 64 * 1024;
+const EXACT_JSON_MEDIA_TYPE_PATTERN =
+  /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/i;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 // SCCP response limits are part of the client-side resource boundary. They
@@ -233,6 +369,234 @@ const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
+
+function ownDataMethod(target, name) {
+  if (target === null || (typeof target !== "object" && typeof target !== "function")) {
+    return null;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(target, name);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "function"
+    ? descriptor.value
+    : null;
+}
+
+function callIntrinsicOrOwnMethod(target, intrinsic, name, ...args) {
+  const isStreamIntrinsic =
+    intrinsic === readableStreamGetReader || intrinsic === readableStreamCancel;
+  let branded = true;
+  if (isStreamIntrinsic && readableStreamLockedGetter !== null) {
+    try {
+      readableStreamLockedGetter.call(target);
+    } catch {
+      branded = false;
+    }
+  }
+  if (typeof intrinsic === "function" && branded) {
+    return Reflect.apply(intrinsic, target, args);
+  }
+  const own = ownDataMethod(target, name);
+  if (own === null) {
+    throw new TypeError(`${name} is unavailable`);
+  }
+  return Reflect.apply(own, target, args);
+}
+
+function responseBodyWithoutUserGetter(response) {
+  if (responseBodyGetter !== null) {
+    try {
+      return responseBodyGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(response, "body");
+  return descriptor && "value" in descriptor ? descriptor.value : null;
+}
+
+function responseHeadersWithoutUserGetter(response) {
+  if (responseHeadersGetter !== null) {
+    try {
+      return responseHeadersGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(response, "headers");
+  return descriptor && "value" in descriptor ? descriptor.value : null;
+}
+
+function headerValueWithoutUserGetter(headers, name) {
+  if (!headers) return null;
+  if (headersGet !== null) {
+    try {
+      return Reflect.apply(headersGet, headers, [name]);
+    } catch {
+      // Custom header bags may expose an own data method instead.
+    }
+  }
+  const get = ownDataMethod(headers, "get");
+  if (get === null) return null;
+  return Reflect.apply(get, headers, [name]);
+}
+
+function responseStatusWithoutUserGetter(response) {
+  let status;
+  if (responseStatusGetter !== null) {
+    try {
+      status = responseStatusGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  if (status === undefined) {
+    const descriptor = Object.getOwnPropertyDescriptor(response, "status");
+    if (!descriptor || !("value" in descriptor)) {
+      throw new TypeError("Torii response status must be an own data property");
+    }
+    status = descriptor.value;
+  }
+  if (!Number.isInteger(status) || status < 0 || status > 999) {
+    throw new TypeError("Torii response status must be an integer HTTP status");
+  }
+  return status;
+}
+
+function responseStatusTextWithoutUserGetter(response) {
+  if (responseStatusTextGetter !== null) {
+    try {
+      return responseStatusTextGetter.call(response);
+    } catch {
+      // Custom fetch responses may expose an own data property instead.
+    }
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(response, "statusText");
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : null;
+}
+
+function ignoreCancellationResult(result) {
+  if (result && typeof result.then === "function") {
+    Promise.resolve(result).catch(() => {});
+  }
+}
+
+function cancelReadableBodyBestEffort(body, reason) {
+  if (!body) return;
+  try {
+    ignoreCancellationResult(
+      callIntrinsicOrOwnMethod(body, readableStreamCancel, "cancel", reason),
+    );
+  } catch {
+    // Cancellation is cleanup and must not replace the authoritative error.
+  }
+}
+
+function cancelResponseBodyBestEffort(response, reason) {
+  cancelReadableBodyBestEffort(responseBodyWithoutUserGetter(response), reason);
+}
+
+function cancelReaderBestEffort(reader, reason, genuineReader = false) {
+  try {
+    ignoreCancellationResult(
+      callIntrinsicOrOwnMethod(
+        reader,
+        genuineReader ? readerCancel : null,
+        "cancel",
+        reason,
+      ),
+    );
+  } catch {
+    // Cancellation is cleanup and must not replace the authoritative error.
+  }
+}
+
+function hasReadableStreamBrand(value) {
+  if (readableStreamLockedGetter === null) return false;
+  try {
+    readableStreamLockedGetter.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasAbortSignalBrand(value) {
+  if (abortSignalAbortedGetter === null) return false;
+  try {
+    abortSignalAbortedGetter.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function signalIsAborted(signal) {
+  if (!signal) return false;
+  if (hasAbortSignalBrand(signal)) {
+    return abortSignalAbortedGetter.call(signal);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(signal, "aborted");
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "boolean") {
+    throw new TypeError("signal.aborted must be an own boolean data property");
+  }
+  return descriptor.value;
+}
+
+function signalAbortReason(signal) {
+  if (!signal) return undefined;
+  if (hasAbortSignalBrand(signal)) {
+    return abortSignalReasonGetter === null
+      ? undefined
+      : abortSignalReasonGetter.call(signal);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(signal, "reason");
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
+function addSignalAbortListener(signal, listener) {
+  if (!signal) return;
+  if (hasAbortSignalBrand(signal) && eventTargetAddEventListener !== null) {
+    Reflect.apply(eventTargetAddEventListener, signal, ["abort", listener, { once: true }]);
+    return;
+  }
+  const add = ownDataMethod(signal, "addEventListener");
+  if (add === null) throw new TypeError("signal.addEventListener is unavailable");
+  Reflect.apply(add, signal, ["abort", listener, { once: true }]);
+}
+
+function removeSignalAbortListener(signal, listener) {
+  if (!signal) return;
+  try {
+    if (hasAbortSignalBrand(signal) && eventTargetRemoveEventListener !== null) {
+      Reflect.apply(eventTargetRemoveEventListener, signal, ["abort", listener]);
+      return;
+    }
+    const remove = ownDataMethod(signal, "removeEventListener");
+    if (remove !== null) Reflect.apply(remove, signal, ["abort", listener]);
+  } catch {
+    // Listener removal is cleanup and must not replace the authoritative error.
+  }
+}
+
+function bodyReadAbortError(signal, context) {
+  const reason = signalAbortReason(signal);
+  if (reason instanceof Error) return reason;
+  const error = new Error(`${context} body read was aborted`);
+  error.name = "AbortError";
+  return error;
+}
+
+function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
+  const source = new Uint8ArrayIntrinsic(buffer, byteOffset, byteLength);
+  const copy = new Uint8ArrayIntrinsic(byteLength);
+  Reflect.apply(typedArraySet, copy, [source]);
+  return copy;
+}
+
+function isExactJsonMediaType(value) {
+  return typeof value === "string" && EXACT_JSON_MEDIA_TYPE_PATTERN.test(value);
+}
 const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
 const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
@@ -1536,7 +1900,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/explorer/nfts", {
       params,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
     });
     await this._expectStatus(response, [200]);
@@ -1693,7 +2057,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/explorer/rwas", {
       params,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal: normalized.signal,
     });
     await this._expectStatus(response, [200]);
@@ -1717,7 +2081,7 @@ export class ToriiClient {
       "GET",
       `/v1/explorer/rwas/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -1830,7 +2194,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", `/v1/accounts/${encodedId}/assets`, {
       params: Object.keys(params).length > 0 ? params : undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -2099,7 +2463,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/contracts/events", {
       params: Object.keys(params).length > 0 ? params : undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -2182,7 +2546,7 @@ export class ToriiClient {
       "GET",
       `/v1/accounts/${encodedId}/permissions`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         params: params ?? undefined,
         signal,
       },
@@ -2288,7 +2652,7 @@ export class ToriiClient {
   async listVerifyingKeys(options = {}) {
     const { signal, params } = buildVerifyingKeyListQuery(options);
     const response = await this._request("GET", "/v1/zk/vk", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -2342,7 +2706,7 @@ export class ToriiClient {
       "GET",
       `/v1/zk/vk/${normalizedBackend}/${normalizedName}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -2375,10 +2739,7 @@ export class ToriiClient {
       "registerVerifyingKey",
     );
     const response = await this._request("POST", "/v1/zk/vk/register", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -2395,10 +2756,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeVerifyingKeyUpdatePayload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "updateVerifyingKey");
     const response = await this._request("POST", "/v1/zk/vk/update", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -2426,10 +2784,7 @@ export class ToriiClient {
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const payload = { alias: normalizedAlias };
     const response = await this._request("POST", "/v1/aliases/resolve", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
       canonicalAuth,
@@ -2470,10 +2825,7 @@ export class ToriiClient {
     );
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const response = await this._request("POST", "/v1/aliases/resolve_index", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
       canonicalAuth,
@@ -2520,10 +2872,7 @@ export class ToriiClient {
         ? undefined
         : requireNonEmptyString(rest.domain, "lookupAliasesByAccount.options.domain");
     const response = await this._request("POST", "/v1/aliases/by_account", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify({
         account_id: normalizedAccountId,
         ...(dataspace ? { dataspace } : {}),
@@ -2575,10 +2924,7 @@ export class ToriiClient {
     );
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(rest.canonicalAuth);
     const response = await this._request("POST", "/v1/retail/recipients/lookup", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify({
         account_id: accountId,
         alias_fqn: aliasFqn,
@@ -2606,7 +2952,7 @@ export class ToriiClient {
     );
     assertSupportedOptionKeys(rest, new Set([]), "listIdentifierPolicies options");
     const response = await this._request("GET", "/v1/identifier-policies", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -2629,7 +2975,7 @@ export class ToriiClient {
     );
     assertSupportedOptionKeys(rest, new Set([]), "listRamLfeProgramPolicies options");
     const response = await this._request("GET", "/v1/ram-lfe/program-policies", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -2656,10 +3002,7 @@ export class ToriiClient {
     );
     const payload = buildIdentifierResolveRequest(rest, "resolveIdentifier");
     const response = await this._request("POST", "/v1/identifiers/resolve", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -2702,10 +3045,7 @@ export class ToriiClient {
       "POST",
       `/v1/ram-lfe/programs/${encodeURIComponent(normalizedProgramId)}/execute`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -2752,7 +3092,7 @@ export class ToriiClient {
       "GET",
       `/v1/identifiers/receipts/${encodeURIComponent(normalizedReceiptHash)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -2788,10 +3128,7 @@ export class ToriiClient {
       "POST",
       `/v1/accounts/${encodeURIComponent(normalizedAccountId)}/identifiers/claim-receipt`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -2826,10 +3163,7 @@ export class ToriiClient {
     );
     const payload = buildRamLfeReceiptVerifyRequest(rest, "verifyRamLfeReceipt");
     const response = await this._request("POST", "/v1/ram-lfe/receipts/verify", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -2856,7 +3190,7 @@ export class ToriiClient {
     );
     const params = buildSorafsAliasListParams(rest);
     const response = await this._request("GET", "/v1/sorafs/aliases", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -2894,7 +3228,7 @@ export class ToriiClient {
     );
     const params = buildSorafsPinListParams(rest);
     const response = await this._request("GET", "/v1/sorafs/pin", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -2932,7 +3266,7 @@ export class ToriiClient {
     );
     const params = buildSorafsReplicationListParams(rest);
     const response = await this._request("GET", "/v1/sorafs/replication", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -3477,7 +3811,7 @@ export class ToriiClient {
       "getSorafsPinManifest",
     );
     const headers = {
-      Accept: "application/json",
+      Accept: APPLICATION_JSON,
       ...(rest.headers ?? {}),
     };
     const response = await this._request(
@@ -3523,10 +3857,7 @@ export class ToriiClient {
       buildSorafsPinRegisterPayload(record, "registerSorafsPinManifest"),
     );
     const response = await this._request("POST", "/v1/sorafs/pin/register", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -3572,10 +3903,7 @@ export class ToriiClient {
       payload_b64: payloadB64,
     });
     const response = await this._request("POST", "/v1/sorafs/storage/pin", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal: record.signal,
     });
@@ -3636,10 +3964,7 @@ export class ToriiClient {
       );
     }
     const response = await this._request("POST", "/v1/sorafs/storage/fetch", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(body),
       signal: record.signal,
     });
@@ -3659,7 +3984,7 @@ export class ToriiClient {
   async getSorafsStorageState(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSorafsStorageState");
     const response = await this._request("GET", "/v1/sorafs/storage/state", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -3683,7 +4008,7 @@ export class ToriiClient {
       "GET",
       `/v1/sorafs/storage/manifest/${normalized}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -3723,7 +4048,7 @@ export class ToriiClient {
       "GET",
       path,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -3796,7 +4121,7 @@ export class ToriiClient {
       };
     }
     const response = await this._request("POST", "/v1/da/ingest", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(request),
       signal,
     });
@@ -4103,7 +4428,7 @@ export class ToriiClient {
       ),
     };
     const response = await this._request("POST", "/v1/sorafs/capacity/uptime", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4145,7 +4470,7 @@ export class ToriiClient {
       "POST",
       "/v1/sorafs/capacity/por-challenge",
       {
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -4185,7 +4510,7 @@ export class ToriiClient {
       ),
     };
     const response = await this._request("POST", "/v1/sorafs/capacity/por-proof", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4224,7 +4549,7 @@ export class ToriiClient {
       ),
     };
     const response = await this._request("POST", "/v1/sorafs/capacity/por-verdict", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4263,7 +4588,7 @@ export class ToriiClient {
       ),
     };
     const response = await this._request("POST", "/v1/sorafs/capacity/por", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4362,7 +4687,7 @@ export class ToriiClient {
       "GET",
       `/v1/accounts/${encodeURIComponent(canonicalUaid)}/portfolio`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
         params: Object.keys(params).length === 0 ? undefined : params,
       },
@@ -4388,7 +4713,7 @@ export class ToriiClient {
       "GET",
       `/v1/space-directory/uaids/${encodeURIComponent(canonicalUaid)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -4425,7 +4750,7 @@ export class ToriiClient {
       "GET",
       `/v1/space-directory/uaids/${encodeURIComponent(canonicalUaid)}/manifests`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         params,
         signal,
       },
@@ -4450,10 +4775,7 @@ export class ToriiClient {
     );
     const payload = normalizePublishSpaceDirectoryManifestRequest(request);
     const response = await this._request("POST", "/v1/space-directory/manifests", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -4476,10 +4798,7 @@ export class ToriiClient {
       "POST",
       "/v1/space-directory/manifests/revoke",
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -4492,10 +4811,14 @@ export class ToriiClient {
    * Submit a Norito-encoded transaction payload.
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>} Submission receipt (decoded from Norito) or JSON when present; otherwise null.
    */
-  async submitTransaction(payload) {
-    await this._ensureDataModelValidation();
+  async submitTransaction(payload, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "submitTransaction");
+    throwIfAborted(signal);
+    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
+    throwIfAborted(signal);
     const rawPayload = toBuffer(payload);
     const pipelinePayload = toVersionedTransactionPayload(rawPayload, this._nativeBinding);
     const requestOptions = {
@@ -4505,13 +4828,14 @@ export class ToriiClient {
       },
       body: pipelinePayload,
       retryProfile: "pipeline",
+      signal,
     };
     const response = await this._request(
       "POST",
       "/v1/pipeline/transactions",
       requestOptions,
     );
-    await this._expectStatus(response, [200, 201, 202, 204]);
+    await this._expectStatus(response, [200, 201, 202, 204], { signal });
     const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");
     const enrichSubmission = (value) => {
@@ -4526,14 +4850,34 @@ export class ToriiClient {
       }
       return { value, route };
     };
+    if (response.status === 204) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding empty transaction submission response body",
+      );
+      return enrichSubmission(null);
+    }
     if (contentType && contentType.toLowerCase().includes("application/x-norito")) {
-      const body = Buffer.from(await response.arrayBuffer());
+      const { bytes } = await this._readBoundedResponseBytes(
+        response,
+        PIPELINE_RECEIPT_MAX_BYTES,
+        "transaction submission receipt",
+        { signal },
+      );
+      const body = Buffer.from(bytes);
       if (body.length === 0) {
         return enrichSubmission(null);
       }
       return enrichSubmission(decodeTransactionReceiptPayload(body));
     }
-    return enrichSubmission(await this._maybeJson(response));
+    return enrichSubmission(
+      await this._maybeBoundedJson(
+        response,
+        PIPELINE_RECEIPT_MAX_BYTES,
+        "transaction submission receipt",
+        { signal },
+      ),
+    );
   }
 
   /**
@@ -4554,21 +4898,23 @@ export class ToriiClient {
     const versionedPayloads = payloads.map((payload) =>
       toVersionedTransactionPayloadStrict(toBuffer(payload), this._nativeBinding),
     );
-    await this._ensureDataModelValidation();
+    throwIfAborted(signal);
+    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
+    throwIfAborted(signal);
     const response = await this._request(
       "POST",
       "/v1/pipeline/transactions/batch",
       {
         headers: {
           "Content-Type": "application/x-norito",
-          Accept: "application/json",
+          Accept: APPLICATION_JSON,
         },
         body: encodeTransactionPayloadBatch(versionedPayloads, this._nativeBinding),
         retryProfile: "pipeline",
         signal,
       },
     );
-    await this._expectStatus(response, [202]);
+    await this._expectStatus(response, [202], { signal });
     const acceptedHeader = this._getHeader(response, "x-iroha-transactions-accepted");
     const acceptedCount =
       acceptedHeader == null || String(acceptedHeader).trim() === ""
@@ -4578,6 +4924,10 @@ export class ToriiClient {
             "submitTransactionBatch.acceptedCount",
           );
     const route = this._extractSubmissionRoute(response);
+    cancelResponseBodyBestEffort(
+      response,
+      "discarding transaction batch submission response body",
+    );
     return route ? { acceptedCount, route } : { acceptedCount };
   }
 
@@ -4763,10 +5113,26 @@ export class ToriiClient {
       },
     );
     if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding transaction status not-found response body",
+      );
       return null;
     }
-    await this._expectStatus(response, [200, 202, 204]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200, 202, 204], { signal });
+    if (response.status === 204) {
+      cancelResponseBodyBestEffort(
+        response,
+        "discarding empty transaction status response body",
+      );
+      return null;
+    }
+    const payload = await this._maybeBoundedJson(
+      response,
+      PIPELINE_STATUS_JSON_MAX_BYTES,
+      "transaction status response",
+      { signal },
+    );
     if (!payload) {
       return null;
     }
@@ -4913,7 +5279,7 @@ export class ToriiClient {
     );
     const { hashHex, ...pollOptions } = record;
     const normalizedHash = requireHexString(hashHex, "options.hashHex");
-    await this.submitTransaction(payload);
+    await this.submitTransaction(payload, { signal: pollOptions.signal });
     return this.waitForTransactionStatus(normalizedHash, pollOptions);
   }
 
@@ -4944,7 +5310,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/pipeline/recovery/${normalizedHeight}`,
-      { headers: { Accept: "application/json" } },
+      { headers: JSON_ACCEPT_HEADERS },
     );
     if (response.status === 404) {
       return null;
@@ -4978,7 +5344,7 @@ export class ToriiClient {
   async getPipelinePreflight(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getPipelinePreflight");
     const response = await this._request("GET", "/v1/pipeline/preflight", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5008,7 +5374,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/pipeline/recovery/${normalizedHeight}/fastpq-proofs`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -5043,7 +5409,7 @@ export class ToriiClient {
   async getHealth(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getHealth");
     const response = await this._request("GET", "/v1/health", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5060,7 +5426,7 @@ export class ToriiClient {
    */
   async getConfiguration() {
     const response = await this._request("GET", "/v1/configuration", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404 || response.status === 503) {
       return null;
@@ -5107,7 +5473,7 @@ export class ToriiClient {
   async getStatusSnapshot(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getStatusSnapshot");
     const response = await this._request("GET", "/v1/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5165,7 +5531,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/soracloud/apps/status", {
       params,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5194,7 +5560,7 @@ export class ToriiClient {
       `/v1/soracloud/apps/${normalizedAppName}/status`,
       {
         params,
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5212,10 +5578,7 @@ export class ToriiClient {
       );
     }
     const response = await this._request("POST", path, {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(request),
       signal,
     });
@@ -5231,7 +5594,7 @@ export class ToriiClient {
   async getNetworkTimeNow(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getNetworkTimeNow");
     const response = await this._request("GET", "/v1/time/now", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5247,7 +5610,7 @@ export class ToriiClient {
   async getNetworkTimeStatus(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getNetworkTimeStatus");
     const response = await this._request("GET", "/v1/time/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5263,11 +5626,16 @@ export class ToriiClient {
   async getNodeCapabilities(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getNodeCapabilities");
     const response = await this._request("GET", "/v1/node/capabilities", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      NODE_CAPABILITIES_JSON_MAX_BYTES,
+      "node capabilities response",
+      { signal },
+    );
     return normalizeNodeCapabilitiesResponse(payload);
   }
 
@@ -5279,12 +5647,13 @@ export class ToriiClient {
   async getSccpCapabilities(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSccpCapabilities");
     const response = await this._request("GET", "/v1/sccp/capabilities", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200], {
       maximumBodyBytes: SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
       responseLabel: "SCCP capabilities",
+      signal,
     });
     return readSccpJsonResponse(
       response,
@@ -5302,12 +5671,13 @@ export class ToriiClient {
   async getSccpRegistry(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSccpRegistry");
     const response = await this._request("GET", "/v1/sccp/registry", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200], {
       maximumBodyBytes: SCCP_JSON_RESPONSE_MAX_BYTES,
       responseLabel: "SCCP registry",
+      signal,
     });
     return readSccpJsonResponse(
       response,
@@ -5343,6 +5713,7 @@ export class ToriiClient {
           ? SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES
           : SCCP_JSON_RESPONSE_MAX_BYTES,
       responseLabel: "SCCP message bundle",
+      signal,
     });
     return format === "norito"
       ? readSccpNoritoResponse(
@@ -5385,6 +5756,7 @@ export class ToriiClient {
           ? SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES
           : SCCP_JSON_RESPONSE_MAX_BYTES,
       responseLabel: "SCCP proof request",
+      signal,
     });
     return format === "norito"
       ? readSccpNoritoResponse(
@@ -5439,6 +5811,7 @@ export class ToriiClient {
     await this._expectStatus(response, [200], {
       maximumBodyBytes: SCCP_RECENT_RESPONSE_MAX_BYTES,
       responseLabel: "SCCP recent messages",
+      signal: record.signal,
     });
     return readSccpJsonResponse(
       response,
@@ -5459,13 +5832,14 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "submitBridgeProof");
     const body = normalizeBridgeProofSubmitPayload(payload, "submitBridgeProof.payload");
     const response = await this._request("POST", "/v1/bridge/proofs/submit", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(body),
       signal,
     });
     await this._expectStatus(response, [200], {
       maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
       responseLabel: "SCCP bridge proof submit",
+      signal,
     });
     return readSccpBridgeSubmitResponse(response, body);
   }
@@ -5481,13 +5855,14 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "submitBridgeMessage");
     const body = normalizeBridgeMessageSubmitPayload(payload, "submitBridgeMessage.payload");
     const response = await this._request("POST", "/v1/bridge/messages", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(body),
       signal,
     });
     await this._expectStatus(response, [200], {
       maximumBodyBytes: SCCP_SUBMIT_RESPONSE_MAX_BYTES,
       responseLabel: "SCCP bridge message submit",
+      signal,
     });
     return readSccpBridgeSubmitResponse(response, body);
   }
@@ -5500,7 +5875,7 @@ export class ToriiClient {
   async getRuntimeAbiActive(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getRuntimeAbiActive");
     const response = await this._request("GET", "/v1/runtime/abi/active", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5516,7 +5891,7 @@ export class ToriiClient {
   async getRuntimeAbiHash(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getRuntimeAbiHash");
     const response = await this._request("GET", "/v1/runtime/abi/hash", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5532,7 +5907,7 @@ export class ToriiClient {
   async getRuntimeMetrics(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getRuntimeMetrics");
     const response = await this._request("GET", "/v1/runtime/metrics", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5548,7 +5923,7 @@ export class ToriiClient {
   async listRuntimeUpgrades(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listRuntimeUpgrades");
     const response = await this._request("GET", "/v1/runtime/upgrades", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5572,7 +5947,7 @@ export class ToriiClient {
       "proposeRuntimeUpgrade.manifest",
     );
     const response = await this._request("POST", "/v1/runtime/upgrades/propose", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -5594,7 +5969,7 @@ export class ToriiClient {
       "POST",
       `/v1/runtime/upgrades/activate/0x${hash}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5616,7 +5991,7 @@ export class ToriiClient {
       "POST",
       `/v1/runtime/upgrades/cancel/0x${hash}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5633,7 +6008,7 @@ export class ToriiClient {
   async listPeers(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listPeers");
     const response = await this._request("GET", "/v1/peers", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5660,7 +6035,7 @@ export class ToriiClient {
       allowExtras: false,
     });
     const response = await this._request("GET", "/v1/telemetry/peers-info", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5680,7 +6055,7 @@ export class ToriiClient {
   async getExplorerMetrics(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getExplorerMetrics");
     const response = await this._request("GET", "/v1/explorer/metrics", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 404 || response.status === 503) {
@@ -5707,7 +6082,7 @@ export class ToriiClient {
       "GET",
       `/v1/explorer/accounts/${encodeURIComponent(normalizedId)}/qr`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5728,7 +6103,7 @@ export class ToriiClient {
   async getVpnProfile(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getVpnProfile");
     const response = await this._request("GET", "/v1/vpn/profile", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 404 || response.status === 503) {
@@ -5756,10 +6131,7 @@ export class ToriiClient {
       "createVpnQuote",
     );
     const response = await this._request("POST", "/v1/vpn/quotes", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnQuoteCreateRequest(request)),
       signal,
       canonicalAuth,
@@ -5785,10 +6157,7 @@ export class ToriiClient {
       "createVpnSession",
     );
     const response = await this._request("POST", "/v1/vpn/sessions", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnSessionCreateRequest(request)),
       signal,
       canonicalAuth,
@@ -5818,7 +6187,7 @@ export class ToriiClient {
       "GET",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
         canonicalAuth,
       },
@@ -5851,7 +6220,7 @@ export class ToriiClient {
       "DELETE",
       `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
         canonicalAuth,
       },
@@ -5880,10 +6249,7 @@ export class ToriiClient {
       "submitVpnReceipt",
     );
     const response = await this._request("POST", "/v1/vpn/receipts", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(normalizeVpnReceiptSubmitRequest(request)),
       signal,
       canonicalAuth,
@@ -5907,7 +6273,7 @@ export class ToriiClient {
       "listVpnReceipts",
     );
     const response = await this._request("GET", "/v1/vpn/receipts", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -5936,7 +6302,7 @@ export class ToriiClient {
     }
     const { signal } = normalizeSignalOnlyOption(options, "getSnsPolicy");
     const response = await this._request("GET", `/v1/sns/policies/${resolvedId}`, {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -5976,7 +6342,7 @@ export class ToriiClient {
       "GET",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -5998,10 +6364,7 @@ export class ToriiClient {
     const payload = normalizeSnsRegisterRequest(request, "registerSnsName");
     const { signal } = normalizeSignalOnlyOption(options, "registerSnsName");
     const response = await this._request("POST", "/v1/sns/names", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -6028,10 +6391,7 @@ export class ToriiClient {
       "POST",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/renew`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -6059,10 +6419,7 @@ export class ToriiClient {
       "POST",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/transfer`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -6090,10 +6447,7 @@ export class ToriiClient {
       "POST",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -6121,10 +6475,7 @@ export class ToriiClient {
       "DELETE",
       `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -6149,7 +6500,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/proposals/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6189,7 +6540,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/referenda/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6229,7 +6580,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/tally/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6271,7 +6622,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/locks/${encodeURIComponent(normalized)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6307,7 +6658,7 @@ export class ToriiClient {
   async getGovernanceUnlockStats(options) {
     const { signal } = normalizeSignalOnlyOption(options, "getGovernanceUnlockStats");
     const response = await this._request("GET", "/v1/gov/unlocks/stats", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6341,7 +6692,7 @@ export class ToriiClient {
       "getGovernanceCouncilCurrent",
     );
     const response = await this._request("GET", "/v1/gov/council/current", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6361,10 +6712,7 @@ export class ToriiClient {
       "governanceDeriveCouncilVrf",
     );
     const response = await this._request("POST", "/v1/gov/council/derive-vrf", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6385,10 +6733,7 @@ export class ToriiClient {
       "governancePersistCouncil",
     );
     const response = await this._request("POST", "/v1/gov/council/persist", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6409,10 +6754,7 @@ export class ToriiClient {
       "governanceReplaceCouncil",
     );
     const response = await this._request("POST", "/v1/gov/council/replace", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6429,7 +6771,7 @@ export class ToriiClient {
   async getGovernanceCouncilAudit(options = {}) {
     const { signal, params } = buildGovernanceCouncilAuditQuery(options);
     const response = await this._request("GET", "/v1/gov/council/audit", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -6453,10 +6795,7 @@ export class ToriiClient {
       "POST",
       "/v1/ministry/agenda/proposals/draft",
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body,
         signal,
       },
@@ -6484,7 +6823,7 @@ export class ToriiClient {
       "GET",
       `/v1/ministry/agenda/proposals/${encodeURIComponent(normalizedProposalId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6511,10 +6850,7 @@ export class ToriiClient {
       "governanceFinalizeReferendum",
     );
     const response = await this._request("POST", "/v1/gov/finalize", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6542,10 +6878,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeGovernanceEnactPayload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "governanceEnactProposal");
     const response = await this._request("POST", "/v1/gov/enact", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6576,10 +6909,7 @@ export class ToriiClient {
     );
     const body = JSON.stringify(normalizeGovernanceDeployContractProposalPayload(payload));
     const response = await this._request("POST", "/v1/gov/proposals/deploy-contract", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6603,10 +6933,7 @@ export class ToriiClient {
       "governanceSubmitPlainBallot",
     );
     const response = await this._request("POST", "/v1/gov/ballots/plain", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6627,10 +6954,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeGovernanceZkBallotPayload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallot");
     const response = await this._request("POST", "/v1/gov/ballots/zk", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6651,10 +6975,7 @@ export class ToriiClient {
     const body = JSON.stringify(normalizeGovernanceZkBallotV1Payload(payload));
     const { signal } = normalizeSignalOnlyOption(options, "governanceSubmitZkBallotV1");
     const response = await this._request("POST", "/v1/gov/ballots/zk-v1", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6678,10 +6999,7 @@ export class ToriiClient {
       "governanceSubmitZkBallotProofV1",
     );
     const response = await this._request("POST", "/v1/gov/ballots/zk-v1/ballot-proof", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body,
       signal,
     });
@@ -6706,10 +7024,7 @@ export class ToriiClient {
     const values = normalizeProtectedNamespaceList(namespaces);
     const { signal } = normalizeSignalOnlyOption(options, "setProtectedNamespaces");
     const response = await this._request("POST", "/v1/gov/protected-namespaces", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify({ namespaces: values }),
       signal,
     });
@@ -6729,7 +7044,7 @@ export class ToriiClient {
   async getProtectedNamespaces(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getProtectedNamespaces");
     const response = await this._request("GET", "/v1/gov/protected-namespaces", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6776,7 +7091,7 @@ export class ToriiClient {
   async getSumeragiStatus(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiStatus");
     const response = await this._request("GET", "/v1/sumeragi/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6805,7 +7120,7 @@ export class ToriiClient {
       "getSumeragiPacemaker",
     );
     const response = await this._request("GET", "/v1/sumeragi/pacemaker", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 503) {
@@ -6827,7 +7142,7 @@ export class ToriiClient {
   async getSumeragiQc(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiQc");
     const response = await this._request("GET", "/v1/sumeragi/qc", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6858,7 +7173,7 @@ export class ToriiClient {
       "GET",
       `/v1/sumeragi/commit_qc/${normalizedHash}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -6878,7 +7193,7 @@ export class ToriiClient {
   async getSumeragiPhases(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiPhases");
     const response = await this._request("GET", "/v1/sumeragi/phases", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6900,7 +7215,7 @@ export class ToriiClient {
       "getSumeragiBlsKeys",
     );
     const response = await this._request("GET", "/v1/sumeragi/bls_keys", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6919,7 +7234,7 @@ export class ToriiClient {
   async getSumeragiLeader(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiLeader");
     const response = await this._request("GET", "/v1/sumeragi/leader", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6941,7 +7256,7 @@ export class ToriiClient {
       "getSumeragiCollectors",
     );
     const response = await this._request("GET", "/v1/sumeragi/collectors", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6963,7 +7278,7 @@ export class ToriiClient {
       "getSumeragiParams",
     );
     const response = await this._request("GET", "/v1/sumeragi/params", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -6985,7 +7300,7 @@ export class ToriiClient {
       "getSumeragiTelemetry",
     );
     const response = await this._request("GET", "/v1/sumeragi/telemetry", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7015,7 +7330,7 @@ export class ToriiClient {
   async getSumeragiRbc(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiRbc");
     const response = await this._request("GET", "/v1/sumeragi/rbc", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 503) {
@@ -7043,7 +7358,7 @@ export class ToriiClient {
       "getSumeragiRbcSessions",
     );
     const response = await this._request("GET", "/v1/sumeragi/rbc/sessions", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     if (response.status === 403 || response.status === 503) {
@@ -7082,7 +7397,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/sumeragi/rbc/delivered/${normalizedHeight}/${normalizedView}`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -7164,8 +7479,8 @@ export class ToriiClient {
       });
     }
     const headers = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
+      "Content-Type": APPLICATION_JSON,
+      Accept: APPLICATION_JSON,
     };
     if (record.apiToken) {
       headers["X-API-Token"] = String(record.apiToken);
@@ -7231,7 +7546,7 @@ export class ToriiClient {
       params.kind = kind;
     }
     const response = await this._request("GET", "/v1/sumeragi/evidence", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params: Object.keys(params).length > 0 ? params : undefined,
       signal,
     });
@@ -7245,7 +7560,7 @@ export class ToriiClient {
    */
   async getSumeragiEvidenceCount() {
     const response = await this._request("GET", "/v1/sumeragi/evidence/count", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     await this._expectStatus(response, [200]);
     const payload = ensureRecord(
@@ -7275,8 +7590,8 @@ export class ToriiClient {
       );
     }
     const headers = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
+      "Content-Type": APPLICATION_JSON,
+      Accept: APPLICATION_JSON,
     };
     if (record.apiToken) {
       headers["X-API-Token"] = String(record.apiToken);
@@ -7322,7 +7637,7 @@ export class ToriiClient {
       asText = normalizedOptions.asText;
     }
     const response = await this._request("GET", "/v1/metrics", {
-      headers: { Accept: asText ? "text/plain" : "application/json" },
+      headers: { Accept: asText ? "text/plain" : APPLICATION_JSON },
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7347,7 +7662,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "getBlock");
     const response = await this._request("GET", `/v1/explorer/blocks/${encodeURIComponent(normalized)}`, {
       signal,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404) {
       return null;
@@ -7376,7 +7691,7 @@ export class ToriiClient {
     }
     const response = await this._request("GET", "/v1/explorer/blocks", {
       params: Object.keys(params).length > 0 ? params : undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal: normalizedOptions.signal,
     });
     await this._expectStatus(response, [200]);
@@ -7517,7 +7832,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -7543,7 +7858,7 @@ export class ToriiClient {
       "GET",
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/signals`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         params,
         signal,
       },
@@ -7597,7 +7912,7 @@ export class ToriiClient {
   async listKaigiRelays(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listKaigiRelays");
     const response = await this._request("GET", "/v1/kaigi/relays", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7617,7 +7932,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/kaigi/relays/${encodeURIComponent(normalizedRelay)}`,
-      { headers: { Accept: "application/json" }, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
       return null;
@@ -7638,7 +7953,7 @@ export class ToriiClient {
   async getKaigiRelaysHealth(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getKaigiRelaysHealth");
     const response = await this._request("GET", "/v1/kaigi/relays/health", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7729,7 +8044,7 @@ export class ToriiClient {
    */
   async getConnectStatus() {
     const response = await this._request("GET", "/v1/connect/status", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404) {
       return null;
@@ -7762,10 +8077,7 @@ export class ToriiClient {
       payload.node = requireNonEmptyString(input.node, "node");
     }
     const response = await this._request("POST", "/v1/connect/session", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200]);
@@ -7832,7 +8144,7 @@ export class ToriiClient {
       params.cursor = requireNonEmptyString(resolvedOptions.cursor, "connectApps.cursor");
     }
     const response = await this._request("GET", "/v1/connect/app/apps", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params: Object.keys(params).length === 0 ? undefined : params,
       signal,
     });
@@ -7863,7 +8175,7 @@ export class ToriiClient {
       "GET",
       `/v1/connect/app/apps/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -7882,10 +8194,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "registerConnectApp");
     const payload = toConnectAppWritePayload(record, "registerConnectApp.record");
     const response = await this._request("POST", "/v1/connect/app/apps", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -7923,7 +8232,7 @@ export class ToriiClient {
   async getConnectAppPolicy(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getConnectAppPolicy");
     const response = await this._request("GET", "/v1/connect/app/policy", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7941,10 +8250,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "updateConnectAppPolicy");
     const payload = toConnectAppPolicyPayload(updates, "updateConnectAppPolicy.updates");
     const response = await this._request("POST", "/v1/connect/app/policy", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -7964,7 +8270,7 @@ export class ToriiClient {
       "getConnectAdmissionManifest",
     );
     const response = await this._request("GET", "/v1/connect/app/manifest", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -7988,10 +8294,7 @@ export class ToriiClient {
       "setConnectAdmissionManifest.manifest",
     );
     const response = await this._request("PUT", "/v1/connect/app/manifest", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8082,10 +8385,7 @@ export class ToriiClient {
   async registerContractCode(request = {}) {
     const payload = normalizeRegisterContractCodeRequest(request);
     const response = await this._request("POST", "/v1/contracts/code", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200, 202]);
@@ -8100,10 +8400,7 @@ export class ToriiClient {
   async deployContract(request = {}) {
     const payload = normalizeDeployContractRequest(request);
     const response = await this._request("POST", "/v1/contracts/deploy", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200, 202]);
@@ -8119,10 +8416,7 @@ export class ToriiClient {
   async setContractAlias(request = {}) {
     const payload = normalizeSetContractAliasRequest(request);
     const response = await this._request("POST", "/v1/contracts/aliases", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
     });
     await this._expectStatus(response, [200, 202]);
@@ -8140,10 +8434,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "callContract");
     const payload = normalizeContractCallRequest(request);
     const response = await this._request("POST", "/v1/contracts/call", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8166,15 +8457,17 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "simulateContractCall");
     const payload = normalizeContractCallSimulateRequest(request);
     const response = await this._request("POST", "/v1/contracts/call/simulate", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+      "contract call simulation response",
+      { signal },
+    );
     if (!body) {
       throw new Error("contract call simulation endpoint returned no payload");
     }
@@ -8194,16 +8487,23 @@ export class ToriiClient {
       context: "deriveIvmProved",
       includeProved: false,
     });
+    const requestBody = stringifyBoundedJsonRequest(
+      payload,
+      IVM_PROOF_REQUEST_MAX_BYTES,
+      "IVM derive request",
+    );
     const response = await this._request("POST", "/v1/zk/ivm/derive", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
+      headers: JSON_REQUEST_HEADERS,
+      body: requestBody,
       signal,
     });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_DERIVE_JSON_MAX_BYTES,
+      "IVM derive response",
+      { signal },
+    );
     if (!body) {
       throw new Error("IVM derive endpoint returned no payload");
     }
@@ -8224,16 +8524,23 @@ export class ToriiClient {
       context: "startIvmProve",
       includeProved: true,
     });
+    const requestBody = stringifyBoundedJsonRequest(
+      payload,
+      IVM_PROOF_REQUEST_MAX_BYTES,
+      "IVM prove request",
+    );
     const response = await this._request("POST", "/v1/zk/ivm/prove", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
+      headers: JSON_REQUEST_HEADERS,
+      body: requestBody,
       signal,
     });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200, 202], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES,
+      "IVM prove job creation response",
+      { signal },
+    );
     if (!body) {
       throw new Error("IVM prove endpoint returned no payload");
     }
@@ -8253,16 +8560,57 @@ export class ToriiClient {
       "GET",
       `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES,
+      "IVM prove job status response",
+      { signal },
+    );
     if (!body) {
       throw new Error("IVM prove job endpoint returned no payload");
     }
-    return normalizeZkIvmProveJobResponse(body);
+    const job = normalizeZkIvmProveJobResponse(body);
+    if (job.job_id !== normalizedJobId) {
+      throw new Error("IVM prove job status returned a different job id");
+    }
+    return job;
+  }
+
+  /**
+   * Delete and cancel an asynchronous IVM proof job
+   * (`DELETE /v1/zk/ivm/prove/{job_id}`).
+   * @param {string} jobId
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{job_id: string}>}
+   */
+  async cancelIvmProveJob(jobId, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "cancelIvmProveJob");
+    const normalizedJobId = normalizeIvmProveJobId(jobId, "jobId");
+    const response = await this._request(
+      "DELETE",
+      `/v1/zk/ivm/prove/${encodeURIComponent(normalizedJobId)}`,
+      { headers: JSON_ACCEPT_HEADERS, signal },
+    );
+    await this._expectStatus(response, [200], { signal });
+    const body = await this._maybeBoundedJson(
+      response,
+      IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES,
+      "IVM prove job cancellation response",
+      { signal },
+    );
+    if (!body) {
+      throw new Error("IVM prove job cancellation endpoint returned no payload");
+    }
+    const cancelled = normalizeZkIvmProveJobCreatedResponse(body);
+    if (cancelled.job_id !== normalizedJobId) {
+      throw new Error("IVM prove job cancellation returned a different job id");
+    }
+    return cancelled;
   }
 
   /**
@@ -8326,13 +8674,57 @@ export class ToriiClient {
    */
   async proveIvmAndWait(request = {}, options = {}) {
     const record = ensureRecord(options, "proveIvmAndWait options");
-    const { signal, intervalMs, timeoutMs } = record;
-    const created = await this.startIvmProve(request, { signal });
-    return this.waitForIvmProveJob(created.job_id, {
-      signal,
-      ...(intervalMs === undefined ? {} : { intervalMs }),
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    const signal = record.signal;
+    const intervalMs =
+      record.intervalMs === undefined
+        ? undefined
+        : ToriiClient._normalizeUnsignedInteger(
+            record.intervalMs,
+            "proveIvmAndWait options.intervalMs",
+            { allowZero: true },
+          );
+    const timeoutMs =
+      record.timeoutMs === undefined
+        ? undefined
+        : record.timeoutMs === null
+          ? null
+          : ToriiClient._normalizeUnsignedInteger(
+              record.timeoutMs,
+              "proveIvmAndWait options.timeoutMs",
+              { allowZero: true },
+            );
+    const normalizedRequest = normalizeZkIvmExecutionRequest(request, {
+      context: "proveIvmAndWait",
+      includeProved: true,
     });
+    const expectedProved = normalizedRequest.proved ?? null;
+    const { proved: _omittedProved, ...requestWithoutProved } = normalizedRequest;
+    const created = await this.startIvmProve(requestWithoutProved, { signal });
+    try {
+      const completed = await this.waitForIvmProveJob(created.job_id, {
+        signal,
+        ...(intervalMs === undefined ? {} : { intervalMs }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      if (
+        expectedProved !== null &&
+        JSON.stringify(completed.proved) !== JSON.stringify(expectedProved)
+      ) {
+        throw new Error(
+          "IVM proof job returned a proved payload that differs from the locally derived payload",
+        );
+      }
+      return completed;
+    } catch (error) {
+      try {
+        // Do not reuse an aborted caller signal: cancellation is best-effort
+        // cleanup and must never mask the original wait failure.
+        await this.cancelIvmProveJob(created.job_id);
+      } catch {
+        // Preserve the original timeout, abort, or proof error.
+      }
+      throw error;
+    }
   }
 
   /**
@@ -8348,7 +8740,7 @@ export class ToriiClient {
     const response = await this._request("POST", "/v1/multisig/propose", {
       headers: {
         "Content-Type": "application/x-norito",
-        Accept: "application/json",
+        Accept: APPLICATION_JSON,
       },
       body: noritoEncodeMultisigProposeRequest(payload),
       signal,
@@ -8371,10 +8763,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "proposeMultisigContractCall");
     const payload = normalizeMultisigContractCallProposeRequest(request);
     const response = await this._request("POST", "/v1/contracts/call/multisig/propose", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8399,10 +8788,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "approveMultisigContractCall");
     const payload = normalizeMultisigContractCallApproveRequest(request);
     const response = await this._request("POST", "/v1/contracts/call/multisig/approve", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8427,14 +8813,11 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigSpec");
     const payload = normalizeMultisigSelectorOnlyRequest(request, "getMultisigSpec request");
     const response = await this._request("POST", "/v1/multisig/spec", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [200], { signal });
     const body = await this._maybeJson(response);
     if (!body) {
       throw new Error("multisig spec endpoint returned no payload");
@@ -8455,10 +8838,7 @@ export class ToriiClient {
       "listMultisigProposals request",
     );
     const response = await this._request("POST", "/v1/multisig/proposals/list", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8480,10 +8860,7 @@ export class ToriiClient {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
     const payload = normalizeMultisigProposalLookupRequest(request);
     const response = await this._request("POST", "/v1/multisig/proposals/get", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8503,13 +8880,21 @@ export class ToriiClient {
   async getContractManifest(codeHashHex) {
     const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request("GET", `/v1/contracts/code/${normalizedHash}`, {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
     });
     if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "contract manifest response was not found",
+      );
       return null;
     }
     await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    const payload = await this._maybeBoundedJson(
+      response,
+      CONTRACT_MANIFEST_JSON_MAX_BYTES,
+      "contract manifest response",
+    );
     if (!payload) {
       return null;
     }
@@ -8519,20 +8904,39 @@ export class ToriiClient {
   /**
    * Fetch stored contract code bytes (`GET /v1/contracts/code-bytes/{hash}`).
    * @param {string} codeHashHex
+   * @param {{signal?: AbortSignalLike}} [options]
    * @returns {Promise<ContractCodeBytesRecord | null>}
    */
-  async getContractCodeBytes(codeHashHex) {
+  async getContractCodeBytes(codeHashHex, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getContractCodeBytes",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      new Set(),
+      "getContractCodeBytes options",
+    );
     const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request(
       "GET",
       `/v1/contracts/code-bytes/${normalizedHash}`,
-      { headers: { Accept: "application/json" } },
+      { headers: JSON_ACCEPT_HEADERS, signal },
     );
     if (response.status === 404) {
+      cancelResponseBodyBestEffort(
+        response,
+        "contract code bytes response was not found",
+      );
       return null;
     }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._maybeBoundedJson(
+      response,
+      CONTRACT_CODE_BYTES_JSON_MAX_BYTES,
+      "contract code bytes response",
+      { signal },
+    );
     if (!payload) {
       return null;
     }
@@ -8552,7 +8956,7 @@ export class ToriiClient {
       "GET",
       `/v1/gov/contracts/${encodeURIComponent(normalizedAddress)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal: signal ?? undefined,
       },
     );
@@ -8569,7 +8973,7 @@ export class ToriiClient {
   async listTriggers(options = {}) {
     const { signal, params } = buildTriggerListQuery(options);
     const response = await this._request("GET", "/v1/triggers", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -8591,7 +8995,7 @@ export class ToriiClient {
       "GET",
       `/v1/triggers/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -8616,10 +9020,7 @@ export class ToriiClient {
     const payload = normalizeTriggerUpsertPayload(trigger);
     const { signal } = normalizeSignalOnlyOption(options, "registerTrigger");
     const response = await this._request("POST", "/v1/triggers", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8654,7 +9055,7 @@ export class ToriiClient {
       "DELETE",
       `/v1/triggers/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -8689,10 +9090,7 @@ export class ToriiClient {
     const { signal, ...rest } = normalizedOptions;
     const envelope = ToriiClient._buildIterableQueryEnvelope(rest);
     const response = await this._request("POST", "/v1/triggers/query", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(envelope),
       signal,
     });
@@ -8727,7 +9125,7 @@ export class ToriiClient {
   async listSubscriptionPlans(options = {}) {
     const { signal, params } = buildSubscriptionPlanListQuery(options);
     const response = await this._request("GET", "/v1/subscriptions/plans", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -8755,10 +9153,7 @@ export class ToriiClient {
     const payload = normalizeSubscriptionPlanCreateRequest(request);
     const { signal } = normalizeSignalOnlyOption(options, "createSubscriptionPlan");
     const response = await this._request("POST", "/v1/subscriptions/plans", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8778,7 +9173,7 @@ export class ToriiClient {
   async listSubscriptions(options = {}) {
     const { signal, params } = buildSubscriptionListQuery(options);
     const response = await this._request("GET", "/v1/subscriptions", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       params,
       signal,
     });
@@ -8806,10 +9201,7 @@ export class ToriiClient {
     const payload = normalizeSubscriptionCreateRequest(request);
     const { signal } = normalizeSignalOnlyOption(options, "createSubscription");
     const response = await this._request("POST", "/v1/subscriptions", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
     });
@@ -8834,7 +9226,7 @@ export class ToriiClient {
       "GET",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}`,
       {
-        headers: { Accept: "application/json" },
+        headers: JSON_ACCEPT_HEADERS,
         signal,
       },
     );
@@ -8864,10 +9256,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/pause`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8895,10 +9284,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/resume`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8926,10 +9312,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/cancel`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8957,10 +9340,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/keep`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -8991,10 +9371,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/charge-now`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -9022,10 +9399,7 @@ export class ToriiClient {
       "POST",
       `/v1/subscriptions/${encodeURIComponent(normalizedId)}/usage`,
       {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: JSON_REQUEST_HEADERS,
         body: JSON.stringify(payload),
         signal,
       },
@@ -9046,7 +9420,7 @@ export class ToriiClient {
   async getOfflineReadiness(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getOfflineReadiness");
     const response = await this._request("GET", "/v1/offline/readiness", {
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
     });
     await this._expectStatus(response, [200]);
@@ -9108,7 +9482,7 @@ export class ToriiClient {
     const body = normalizeIsoPayload(message, "submitIsoPacs008.message");
     const headers = {
       "Content-Type": contentType ?? "application/xml",
-      Accept: "application/json",
+      Accept: APPLICATION_JSON,
     };
     if (profile) {
       headers["X-Iroha-Iso-Profile"] = profile;
@@ -9140,7 +9514,7 @@ export class ToriiClient {
     const body = normalizeIsoPayload(message, "submitIsoPacs009.message");
     const headers = {
       "Content-Type": contentType ?? "application/xml",
-      Accept: "application/json",
+      Accept: APPLICATION_JSON,
     };
     if (profile) {
       headers["X-Iroha-Iso-Profile"] = profile;
@@ -9170,7 +9544,7 @@ export class ToriiClient {
     const response = await this._request(
       "GET",
       `/v1/iso20022/status/${encodeURIComponent(normalizedId)}`,
-      { headers: { Accept: "application/json" }, signal, retryProfile },
+      { headers: JSON_ACCEPT_HEADERS, signal, retryProfile },
     );
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
@@ -9674,14 +10048,28 @@ export class ToriiClient {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
+        let responseStatus;
+        try {
+          responseStatus = responseStatusWithoutUserGetter(response);
+        } catch (error) {
+          cancelResponseBodyBestEffort(
+            response,
+            "discarding Torii response with an invalid status field",
+          );
+          throw error;
+        }
         if (
-          !this._shouldRetryResponse(methodUpper, response.status, retryPolicy) ||
+          !this._shouldRetryResponse(methodUpper, responseStatus, retryPolicy) ||
           attempt > maxRetries
         ) {
           return response;
         }
+        cancelResponseBodyBestEffort(
+          response,
+          "discarding retryable Torii response body",
+        );
         const durationMs = Math.max(0, Date.now() - attemptStartedAt);
-        lastError = new Error(`retryable status ${response.status}`);
+        lastError = new Error(`retryable status ${responseStatus}`);
         this._emitRetryTelemetry({
           phase: "response",
           attempt,
@@ -9689,7 +10077,7 @@ export class ToriiClient {
           maxRetries,
           method: methodUpper,
           url: url.toString(),
-          status: response.status,
+          status: responseStatus,
           backoffMs,
           profile: retryProfileName,
           durationMs,
@@ -9698,7 +10086,7 @@ export class ToriiClient {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
-        if (options.signal && options.signal.aborted) {
+        if (options.signal && signalIsAborted(options.signal)) {
           throw error;
         }
         if (
@@ -10029,7 +10417,7 @@ export class ToriiClient {
   }
 
   async _expectStatus(response, expected, options = {}) {
-    if (expected.includes(response.status)) {
+    if (expected.includes(responseStatusWithoutUserGetter(response))) {
       return;
     }
     throw await this._buildHttpError(response, expected, options);
@@ -10046,8 +10434,8 @@ export class ToriiClient {
       null;
     const errorMessage = this._extractErrorMessage(bodyJson, bodyText);
     return new ToriiHttpError({
-      status: response.status,
-      statusText: response.statusText ?? null,
+      status: responseStatusWithoutUserGetter(response),
+      statusText: responseStatusTextWithoutUserGetter(response),
       expected,
       code,
       rejectCode,
@@ -10059,53 +10447,70 @@ export class ToriiClient {
   }
 
   async _readErrorBody(response, options = {}) {
-    if (options.maximumBodyBytes !== undefined) {
-      const label = options.responseLabel ?? "Torii";
-      const bytes = await readBoundedSccpResponseBytes(
+    const { signal, maximumBodyBytes, responseLabel = "Torii" } = options;
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
         response,
-        options.maximumBodyBytes,
-        `${label} error`,
+        "Torii HTTP error response had unreadable headers",
       );
-      const text = decodeSccpUtf8(bytes, `${label} error`);
-      if (!text) {
-        return { bodyText: "", bodyJson: null };
-      }
-      const trimmed = text.trim();
-      if (!trimmed) {
-        return { bodyText: "", bodyJson: null };
-      }
-      try {
-        return { bodyText: text, bodyJson: JSON.parse(trimmed) };
-      } catch {
-        return { bodyText: text, bodyJson: null };
-      }
+      throw error;
     }
-    const contentType = this._getHeader(response, "content-type");
     const looksLikeJson =
-      typeof contentType === "string" &&
-      contentType.toLowerCase().includes("application/json");
-    if (looksLikeJson && typeof response.json === "function") {
-      try {
-        const bodyJson = await response.json();
-        const bodyText =
-          bodyJson == null
-            ? null
-            : typeof bodyJson === "string"
-              ? bodyJson
-              : JSON.stringify(bodyJson);
-        return { bodyText, bodyJson };
-      } catch {
-        // fall through to text parsing
+      maximumBodyBytes !== undefined || isExactJsonMediaType(contentType);
+    const maxBytes = maximumBodyBytes ?? HTTP_ERROR_BODY_MAX_BYTES;
+    const context =
+      maximumBodyBytes === undefined
+        ? "Torii HTTP error response"
+        : `${responseLabel} error`;
+    let bytes;
+    try {
+      ({ bytes } = await this._readBoundedResponseBytes(
+        response,
+        maxBytes,
+        context,
+        { signal },
+      ));
+    } catch (error) {
+      if (
+        signalIsAborted(signal) ||
+        error?.name === "AbortError" ||
+        error?.name === "TimeoutError"
+      ) {
+        throw error;
       }
-    }
-    if (typeof response.text !== "function") {
+      if (maximumBodyBytes !== undefined) {
+        if (
+          error instanceof RangeError ||
+          /Content-Length exceeds the safe integer range/u.test(error?.message ?? "")
+        ) {
+          throw new TypeError(
+            `${context} response exceeds its ${maxBytes}-byte size bound`,
+            { cause: error },
+          );
+        }
+        if (/Content-Length header/u.test(error?.message ?? "")) {
+          throw new TypeError(
+            `${context} response Content-Length must be a canonical unsigned decimal integer`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
       return { bodyText: null, bodyJson: null };
     }
-    let text = null;
+    let text;
     try {
-      text = await response.text();
-    } catch {
-      text = null;
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      if (maximumBodyBytes !== undefined) {
+        throw new TypeError(`${context} response body must be strict UTF-8`, {
+          cause: error,
+        });
+      }
+      return { bodyText: null, bodyJson: null };
     }
     if (!text) {
       return { bodyText: null, bodyJson: null };
@@ -10114,6 +10519,7 @@ export class ToriiClient {
     if (!trimmed) {
       return { bodyText: "", bodyJson: null };
     }
+    if (!looksLikeJson) return { bodyText: text, bodyJson: null };
     try {
       return { bodyText: text, bodyJson: JSON.parse(trimmed) };
     } catch {
@@ -10498,10 +10904,8 @@ export class ToriiClient {
   }
 
   _getHeader(response, name) {
-    if (!response.headers || typeof response.headers.get !== "function") {
-      return null;
-    }
-    const value = response.headers.get(name);
+    const headers = responseHeadersWithoutUserGetter(response);
+    const value = headerValueWithoutUserGetter(headers, name);
     return value === undefined ? null : value;
   }
 
@@ -10512,12 +10916,15 @@ export class ToriiClient {
         return String(value);
       }
     }
-    return "application/json";
+    return APPLICATION_JSON;
   }
 
   async _maybeJson(response) {
     const contentType = this._getHeader(response, "content-type");
-    if (!contentType || !contentType.toLowerCase().includes("application/json")) {
+    if (
+      typeof contentType !== "string" ||
+      !contentType.toLowerCase().includes(APPLICATION_JSON)
+    ) {
       return null;
     }
     try {
@@ -10525,6 +10932,258 @@ export class ToriiClient {
     } catch {
       return null;
     }
+  }
+
+  async _maybeBoundedJson(response, maxBytes, context, { signal } = {}) {
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Type header`,
+      );
+      throw error;
+    }
+    if (!isExactJsonMediaType(contentType)) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a non-JSON response body`,
+      );
+      return null;
+    }
+    const { bytes, body } = await this._readBoundedResponseBytes(
+      response,
+      maxBytes,
+      context,
+      { signal },
+    );
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (error) {
+      cancelReadableBodyBestEffort(body, `${context} rejected invalid UTF-8`);
+      throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
+    }
+    try {
+      const parsed = JSON.parse(text);
+      if (signalIsAborted(signal)) {
+        cancelReadableBodyBestEffort(body, `${context} was aborted`);
+        throw bodyReadAbortError(signal, context);
+      }
+      return parsed;
+    } catch (error) {
+      if (signalIsAborted(signal) || error?.name === "AbortError") {
+        cancelReadableBodyBestEffort(body, `${context} was aborted`);
+        throw error;
+      }
+      cancelReadableBodyBestEffort(body, `${context} rejected invalid JSON`);
+      throw new TypeError(`${context} must contain valid JSON`, { cause: error });
+    }
+  }
+
+  async _readBoundedResponseBytes(response, maxBytes, context, { signal } = {}) {
+    const rejectResponse = (error) => {
+      cancelResponseBodyBestEffort(response, `${context} rejected its response body`);
+      throw error;
+    };
+    if (signalIsAborted(signal)) {
+      rejectResponse(bodyReadAbortError(signal, context));
+    }
+    let contentLength;
+    try {
+      contentLength = this._getHeader(response, "content-length");
+    } catch (error) {
+      rejectResponse(error);
+    }
+    if (contentLength !== null) {
+      if (typeof contentLength !== "string") {
+        rejectResponse(
+          new TypeError(`${context} has a non-string Content-Length header`),
+        );
+      }
+      if (!/^(?:0|[1-9][0-9]*)$/u.test(contentLength)) {
+        rejectResponse(
+          new TypeError(`${context} has an invalid Content-Length header`),
+        );
+      }
+      const declaredBytes = Number(contentLength);
+      if (!Number.isSafeInteger(declaredBytes)) {
+        rejectResponse(
+          new RangeError(
+            `${context} Content-Length exceeds the safe integer range`,
+          ),
+        );
+      }
+      if (declaredBytes > maxBytes) {
+        rejectResponse(
+          new RangeError(
+            `${context} exceeds the ${maxBytes}-byte response limit`,
+          ),
+        );
+      }
+    }
+
+    const body = responseBodyWithoutUserGetter(response);
+    if (!body) {
+      rejectResponse(
+        new TypeError(
+          `${context} requires a byte-stream response body so its size can be bounded`,
+        ),
+      );
+    }
+    const genuineReader = hasReadableStreamBrand(body);
+    let reader;
+    try {
+      reader = callIntrinsicOrOwnMethod(
+        body,
+        readableStreamGetReader,
+        "getReader",
+      );
+    } catch (error) {
+      cancelReadableBodyBestEffort(
+        body,
+        `${context} could not acquire a bounded body reader`,
+      );
+      throw new TypeError(
+        `${context} requires a byte-stream response body so its size can be bounded`,
+        { cause: error },
+      );
+    }
+
+    const configuredTimeoutMs = Number(this._config?.timeoutMs);
+    const readTimeoutMs =
+      Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+        ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS)
+        : BOUNDED_JSON_MAX_READ_TIMEOUT_MS;
+    let rejectDeadline;
+    const deadline = new Promise((_, reject) => {
+      rejectDeadline = reject;
+    });
+    // A rejection may race with synchronous completion; keep it handled even
+    // after all read races have settled.
+    deadline.catch(() => {});
+    const timeoutId = setTimeout(() => {
+      const error = new Error(
+        `${context} body read timed out after ${readTimeoutMs}ms`,
+      );
+      error.name = "TimeoutError";
+      rejectDeadline(error);
+    }, readTimeoutMs);
+    const onAbort = () => rejectDeadline(bodyReadAbortError(signal, context));
+
+    const chunks = [];
+    let byteLength = 0;
+    let abortListenerAttempted = false;
+    try {
+      if (signal) {
+        abortListenerAttempted = true;
+        addSignalAbortListener(signal, onAbort);
+        if (signalIsAborted(signal)) onAbort();
+      }
+      while (true) {
+        const read = Promise.resolve().then(() =>
+          callIntrinsicOrOwnMethod(
+            reader,
+            genuineReader ? readerRead : null,
+            "read",
+          ),
+        );
+        const readResult = exactEnumerableDataRecord(
+          await Promise.race([read, deadline]),
+          ["done", "value"],
+          `${context} body stream read result`,
+        );
+        if (typeof readResult.done !== "boolean") {
+          throw new TypeError(
+            `${context} body stream read result.done must be a boolean`,
+          );
+        }
+        if (readResult.done) {
+          if (readResult.value !== undefined) {
+            throw new TypeError(
+              `${context} completed body stream read must not return a value`,
+            );
+          }
+          break;
+        }
+        const value = readResult.value;
+        let buffer;
+        let byteOffset;
+        let chunkByteLength;
+        try {
+          if (typedArrayTagGetter.call(value) !== "Uint8Array") {
+            throw new TypeError("not Uint8Array");
+          }
+          buffer = typedArrayBufferGetter.call(value);
+          byteOffset = typedArrayByteOffsetGetter.call(value);
+          chunkByteLength = typedArrayByteLengthGetter.call(value);
+        } catch {
+          throw new TypeError(`${context} body stream returned a non-byte chunk`);
+        }
+        let isShared = false;
+        if (sharedArrayBufferByteLengthGetter !== null) {
+          try {
+            sharedArrayBufferByteLengthGetter.call(buffer);
+            isShared = true;
+          } catch {
+            // A normal ArrayBuffer fails the SharedArrayBuffer brand check.
+          }
+        }
+        if (isShared) {
+          throw new TypeError(
+            `${context} body stream must not use SharedArrayBuffer-backed chunks`,
+          );
+        }
+        if (chunkByteLength === 0) {
+          throw new TypeError(
+            `${context} body stream returned an empty non-progress chunk`,
+          );
+        }
+        if (chunks.length >= BOUNDED_JSON_MAX_STREAM_CHUNKS) {
+          throw new RangeError(
+            `${context} body stream returned too many fragmented chunks`,
+          );
+        }
+        byteLength += chunkByteLength;
+        if (byteLength > maxBytes) {
+          throw new RangeError(`${context} exceeds the ${maxBytes}-byte response limit`);
+        }
+        // Snapshot immediately: custom readers may reuse or mutate their views.
+        chunks.push(copyArrayBufferBytes(buffer, byteOffset, chunkByteLength));
+      }
+    } catch (error) {
+      cancelReaderBestEffort(
+        reader,
+        `${context} rejected its response body`,
+        genuineReader,
+      );
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      try {
+        callIntrinsicOrOwnMethod(
+          reader,
+          genuineReader ? readerReleaseLock : null,
+          "releaseLock",
+        );
+      } catch {
+        // Some custom readers do not implement lock release correctly.
+      }
+      if (abortListenerAttempted) {
+        removeSignalAbortListener(signal, onAbort);
+      }
+    }
+    const bytes = new Uint8ArrayIntrinsic(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      Reflect.apply(typedArraySet, bytes, [chunk, offset]);
+      offset += typedArrayByteLengthGetter.call(chunk);
+    }
+    if (signalIsAborted(signal)) {
+      rejectResponse(bodyReadAbortError(signal, context));
+    }
+    return { bytes, body };
   }
 
   async _listIterable(
@@ -10544,7 +11203,7 @@ export class ToriiClient {
     const params = ToriiClient._encodeIterableListParams(rest, optionContext, allowedKeys);
     const response = await this._request("GET", path, {
       params: params ?? undefined,
-      headers: { Accept: "application/json" },
+      headers: JSON_ACCEPT_HEADERS,
       signal,
       canonicalAuth,
     });
@@ -10586,10 +11245,7 @@ export class ToriiClient {
         )
       : undefined;
     const response = await this._request("POST", path, {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(envelope),
       params: params ?? undefined,
       signal,
@@ -17602,7 +18258,7 @@ async function performNodeRawUtf8Request({
       }
     };
     const onAbort = () => {
-      const reason = signal?.reason ?? createAbortError();
+      const reason = signalAbortReason(signal) ?? createAbortError();
       try {
         socket.destroy(reason instanceof Error ? reason : undefined);
       } catch {
@@ -17616,7 +18272,7 @@ async function performNodeRawUtf8Request({
       socket.removeListener("end", onEnd);
       socket.removeListener("close", onClose);
       if (signal) {
-        signal.removeEventListener("abort", onAbort);
+        removeSignalAbortListener(signal, onAbort);
       }
     };
     const onError = (error) => {
@@ -17643,7 +18299,8 @@ async function performNodeRawUtf8Request({
     socket.once("end", onEnd);
     socket.once("close", onClose);
     if (signal) {
-      signal.addEventListener("abort", onAbort, { once: true });
+      addSignalAbortListener(signal, onAbort);
+      if (signalIsAborted(signal)) onAbort();
     }
     try {
       socket.write(requestBuffer);
@@ -17944,14 +18601,15 @@ function delay(ms, signal) {
   return new Promise((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason ?? new Error("The operation was aborted"));
+      removeSignalAbortListener(signal, onAbort);
+      reject(signalAbortReason(signal) ?? new Error("The operation was aborted"));
     };
     const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
+      removeSignalAbortListener(signal, onAbort);
       resolve();
     }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
+    addSignalAbortListener(signal, onAbort);
+    if (signalIsAborted(signal)) onAbort();
   });
 }
 
@@ -17968,16 +18626,38 @@ function throwIfAborted(signal) {
   if (!signal) {
     return;
   }
-  if (typeof signal.throwIfAborted === "function") {
-    signal.throwIfAborted();
-    return;
+  if (signalIsAborted(signal)) {
+    throw signalAbortReason(signal) ?? createAbortError();
   }
-  if (signal.aborted) {
-    throw (
-      signal.reason ??
-      new Error("The operation was aborted")
+}
+
+function waitForPromiseWithSignal(promise, signal) {
+  if (!signal) {
+    return promise;
+  }
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      removeSignalAbortListener(signal, onAbort);
+      callback(value);
+    };
+    const onAbort = () =>
+      finish(
+        reject,
+        signalAbortReason(signal) instanceof Error
+          ? signalAbortReason(signal)
+          : createAbortError(),
+      );
+    addSignalAbortListener(signal, onAbort);
+    if (signalIsAborted(signal)) onAbort();
+    Promise.resolve(promise).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
     );
-  }
+  });
 }
 
 const CONNECT_SID_BYTES = 32;
@@ -19717,7 +20397,26 @@ function normalizeOptionalHexString(value, name) {
   return requireHexString(value, name);
 }
 
-function cloneJsonValue(value, path) {
+function cloneJsonValue(value, path, { nullPrototype = false } = {}) {
+  return cloneJsonValueInternal(value, path, {
+    ancestors: new Set(),
+    nodes: 0,
+    nullPrototype,
+  }, 0);
+}
+
+function cloneJsonValueInternal(value, path, state, depth) {
+  state.nodes += 1;
+  if (state.nodes > JSON_CLONE_MAX_NODES) {
+    throw new RangeError(
+      `${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`,
+    );
+  }
+  if (depth > JSON_CLONE_MAX_DEPTH) {
+    throw new RangeError(
+      `${path} exceeds the ${JSON_CLONE_MAX_DEPTH}-level JSON nesting limit`,
+    );
+  }
   if (
     value === null ||
     typeof value === "string" ||
@@ -19734,20 +20433,76 @@ function cloneJsonValue(value, path) {
   if (typeof value === "bigint") {
     return value.toString(10);
   }
-  if (Array.isArray(value)) {
-    return value.map((entry, index) => cloneJsonValue(entry, `${path}[${index}]`));
+  if (typeof value !== "object") {
+    throw new TypeError(`${path} contains unsupported value type: ${typeof value}`);
   }
-  if (typeof value === "object") {
-    const result = {};
-    for (const [key, nested] of Object.entries(value)) {
-      if (typeof key !== "string" || key.length === 0) {
-        throw new TypeError(`${path} keys must be non-empty strings`);
+  if (state.ancestors.has(value)) {
+    throw new TypeError(`${path} must not contain cyclic references`);
+  }
+  state.ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      const length = lengthDescriptor?.value;
+      if (!Number.isSafeInteger(length) || length < 0) {
+        throw new TypeError(`${path} must be an exact JSON array`);
       }
-      result[key] = cloneJsonValue(nested, `${path}.${key}`);
+      if (length > JSON_CLONE_MAX_NODES) {
+        throw new RangeError(
+          `${path} exceeds the ${JSON_CLONE_MAX_NODES}-node JSON value limit`,
+        );
+      }
+      const ownKeys = Reflect.ownKeys(value);
+      if (
+        ownKeys.length !== length + 1 ||
+        ownKeys.some(
+          (key, index) =>
+            (index < length && key !== String(index)) ||
+            (index === length && key !== "length"),
+        )
+      ) {
+        throw new TypeError(`${path} must be a dense exact JSON array`);
+      }
+      const result = new Array(length);
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new TypeError(`${path}[${index}] must be an enumerable data property`);
+        }
+        result[index] = cloneJsonValueInternal(
+          descriptor.value,
+          `${path}[${index}]`,
+          state,
+          depth + 1,
+        );
+      }
+      return result;
+    }
+    const result = state.nullPrototype ? Object.create(null) : {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") {
+        throw new TypeError(`${path} keys must be strings without symbols`);
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError(`${path}.${key} must be an enumerable data property`);
+      }
+      Object.defineProperty(result, key, {
+        value: cloneJsonValueInternal(
+          descriptor.value,
+          `${path}.${key}`,
+          state,
+          depth + 1,
+        ),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return result;
+  } finally {
+    state.ancestors.delete(value);
   }
-  throw new TypeError(`${path} contains unsupported value type: ${typeof value}`);
 }
 
 function normalizeSpaceDirectoryManifestPayload(input, context) {
@@ -19857,10 +20612,13 @@ function normalizeRegisterContractCodeRequest(input) {
     manifest,
   };
   if (codeBytes !== undefined) {
-    payload.code_bytes = normalizeOptionalBase64Payload(
-      codeBytes,
-      "registerContractCode.codeBytes",
-    );
+    payload.code_bytes =
+      codeBytes === null
+        ? null
+        : normalizeIvmArtifactBytecodeInput(
+            codeBytes,
+            "registerContractCode.codeBytes",
+          );
   }
   return payload;
 }
@@ -19934,7 +20692,7 @@ function normalizeDeployContractRequest(input) {
   const contractAlias = record.contract_alias ?? record.contractAlias;
   const payload = {
     ...credentials,
-    code_b64: normalizeRequiredBase64Payload(
+    code_b64: normalizeIvmArtifactBytecodeInput(
       codeB64,
       "deployContract.codeB64",
     ),
@@ -20481,8 +21239,12 @@ function normalizeGovernanceWindow(value, name) {
 }
 
 function normalizeGovernanceVotingMode(value, name) {
-  if (value === "Zk" || value === "Plain") {
-    return value;
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "zk" || normalized === "zkballot" || normalized === "zk_vote") {
+    return "Zk";
+  }
+  if (normalized === "plain" || normalized === "plainballot") {
+    return "Plain";
   }
   throw createValidationError(
     ValidationErrorCode.INVALID_STRING,
@@ -21290,8 +22052,30 @@ function normalizeContractCallSimulateRequest(input) {
 
 function normalizeContractCallSimulateResponse(payload) {
   const record = ensureRecord(payload, "contractCall simulation response");
+  if (typeof record.ok !== "boolean") {
+    throw new TypeError(
+      "contractCall simulation response.ok must be a boolean",
+    );
+  }
+  const error =
+    record.error === undefined || record.error === null
+      ? null
+      : requireNonEmptyString(
+          record.error,
+          "contractCall simulation response.error",
+        );
+  if (record.ok && error !== null) {
+    throw new TypeError(
+      "successful contractCall simulation response must not contain an error",
+    );
+  }
+  if (!record.ok && error === null) {
+    throw new TypeError(
+      "failed contractCall simulation response must contain a non-empty error",
+    );
+  }
   const normalized = {
-    ok: Boolean(record.ok),
+    ok: record.ok,
     dataspace: requireNonEmptyString(
       record.dataspace,
       "contractCall simulation response.dataspace",
@@ -21348,13 +22132,7 @@ function normalizeContractCallSimulateResponse(payload) {
       record.result === undefined || record.result === null
         ? null
         : cloneJsonValue(record.result, "contractCall simulation response.result"),
-    error:
-      record.error === undefined || record.error === null
-        ? null
-        : requireNonEmptyString(
-            record.error,
-            "contractCall simulation response.error",
-          ),
+    error,
     vm_diagnostic:
       record.vm_diagnostic === undefined || record.vm_diagnostic === null
         ? null
@@ -21370,6 +22148,10 @@ function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
   const record = ensureRecord(input, `${context} request`);
   const vkRef = record.vk_ref ?? record.vkRef;
   const metadata = record.metadata ?? {};
+  const bytecode = normalizeIvmArtifactBytecodeInput(
+    record.bytecode,
+    `${context}.bytecode`,
+  );
   const normalized = {
     vk_ref: normalizeVerifyingKeyId(vkRef, `${context}.vk_ref`),
     authority: ToriiClient._normalizeAccountId(
@@ -21380,31 +22162,299 @@ function normalizeZkIvmExecutionRequest(input, { context, includeProved }) {
       ensureRecord(metadata, `${context}.metadata`),
       `${context}.metadata`,
     ),
-    bytecode: normalizeRequiredBase64Payload(
-      record.bytecode,
-      `${context}.bytecode`,
-    ),
+    bytecode,
   };
   if (includeProved) {
     const proved = record.proved;
     if (proved !== undefined && proved !== null) {
-      normalized.proved = cloneJsonValue(
-        ensureRecord(proved, `${context}.proved`),
+      normalized.proved = normalizeZkIvmProvedPayload(
+        proved,
         `${context}.proved`,
       );
+      if (normalized.proved.bytecode !== bytecode) {
+        throw new TypeError(
+          `${context}.proved.bytecode must exactly match ${context}.bytecode`,
+        );
+      }
     }
   }
   return normalized;
 }
 
+function stringifyBoundedJsonRequest(payload, maxBytes, context) {
+  const body = JSON.stringify(payload);
+  if (Buffer.byteLength(body, "utf8") > maxBytes) {
+    throw new RangeError(`${context} exceeds the ${maxBytes}-byte request limit`);
+  }
+  return body;
+}
+
 function normalizeZkIvmDeriveResponse(payload) {
-  const record = ensureRecord(payload, "IVM derive response");
+  const record = exactEnumerableDataRecord(
+    payload,
+    ["proved"],
+    "IVM derive response",
+  );
   return {
-    proved: cloneJsonValue(
-      ensureRecord(record.proved, "IVM derive response.proved"),
+    proved: normalizeZkIvmProvedPayload(
+      record.proved,
       "IVM derive response.proved",
     ),
   };
+}
+
+function normalizeZkIvmProvedPayload(value, context) {
+  const record = exactEnumerableDataRecord(
+    value,
+    ["bytecode", "overlay", "events_commitment", "gas_policy_commitment"],
+    context,
+  );
+  const bytecode = normalizeIvmArtifactBase64String(
+    record.bytecode,
+    `${context}.bytecode`,
+  );
+  if (!Array.isArray(record.overlay)) {
+    throw new TypeError(`${context}.overlay must be an array`);
+  }
+  const overlay = cloneJsonValue(record.overlay, `${context}.overlay`, {
+    nullPrototype: true,
+  });
+  return {
+    bytecode,
+    overlay,
+    events_commitment: normalizeHex32String(
+      record.events_commitment,
+      `${context}.events_commitment`,
+    ),
+    gas_policy_commitment: normalizeHex32String(
+      record.gas_policy_commitment,
+      `${context}.gas_policy_commitment`,
+    ),
+  };
+}
+
+function exactEnumerableDataRecord(value, expectedKeys, context) {
+  const record = ensureRecord(value, context);
+  const expected = new Set(expectedKeys);
+  const ownKeys = Reflect.ownKeys(record);
+  if (
+    ownKeys.length !== expectedKeys.length ||
+    ownKeys.some((key) => typeof key !== "string" || !expected.has(key))
+  ) {
+    throw new TypeError(
+      `${context} must contain exactly: ${expectedKeys.join(", ")}`,
+    );
+  }
+  const snapshot = {};
+  for (const key of expectedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(`${context}.${key} must be an enumerable data property`);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return snapshot;
+}
+
+function normalizePortableVerifyingKeyIdField(value, context) {
+  const field = requireExactNonEmptyString(value, context);
+  if (
+    Buffer.byteLength(field, "utf8") > 256 ||
+    !/^[a-z0-9](?:[a-z0-9._/:\-]*[a-z0-9])?$/u.test(field) ||
+    ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"].some(
+      (separator) => field.includes(separator),
+    )
+  ) {
+    throw new TypeError(`${context} must use portable registry syntax`);
+  }
+  return field;
+}
+
+function normalizeZkIvmProofAttachment(value, context) {
+  const candidate = ensureRecord(value, context);
+  const requiredKeys = ["backend", "proof", "vk_ref"];
+  const optionalKeys = ["vk_commitment", "envelope_hash", "lane_privacy"];
+  const allowed = new Set([...requiredKeys, ...optionalKeys]);
+  const ownKeys = Reflect.ownKeys(candidate);
+  if (
+    requiredKeys.some((key) => !ownKeys.includes(key)) ||
+    ownKeys.some((key) => typeof key !== "string" || !allowed.has(key))
+  ) {
+    throw new TypeError(
+      `${context} must contain backend, proof, vk_ref, and only supported optional fields`,
+    );
+  }
+  const presentOptionalKeys = optionalKeys.filter((key) => ownKeys.includes(key));
+  const record = exactEnumerableDataRecord(
+    candidate,
+    [...requiredKeys, ...presentOptionalKeys],
+    context,
+  );
+  const backend = assertProductionVerifyBackendLabel(
+    record.backend,
+    `${context}.backend`,
+  );
+  const proofCandidate = ensureRecord(record.proof, `${context}.proof`);
+  const proofKeys = Reflect.ownKeys(proofCandidate);
+  const hasCompactBytes = proofKeys.includes("bytes_b64");
+  const hasLegacyBytes = proofKeys.includes("bytes");
+  if (
+    proofKeys.length !== 2 ||
+    !proofKeys.includes("backend") ||
+    hasCompactBytes === hasLegacyBytes ||
+    proofKeys.some(
+      (key) =>
+        typeof key !== "string" ||
+        !new Set(["backend", "bytes_b64", "bytes"]).has(key),
+    )
+  ) {
+    throw new TypeError(
+      `${context}.proof must contain exactly backend and one of bytes_b64 or bytes`,
+    );
+  }
+  const proof = exactEnumerableDataRecord(
+    proofCandidate,
+    ["backend", hasCompactBytes ? "bytes_b64" : "bytes"],
+    `${context}.proof`,
+  );
+  const proofBackend = assertProductionVerifyBackendLabel(
+    proof.backend,
+    `${context}.proof.backend`,
+  );
+  if (proofBackend !== backend) {
+    throw new TypeError(`${context}.proof.backend must match ${context}.backend`);
+  }
+  const vkRefRecord = exactEnumerableDataRecord(
+    record.vk_ref,
+    ["backend", "name"],
+    `${context}.vk_ref`,
+  );
+  const vkBackend = assertProductionVerifyBackendLabel(
+    vkRefRecord.backend,
+    `${context}.vk_ref.backend`,
+  );
+  if (vkBackend !== backend) {
+    throw new TypeError(`${context}.vk_ref.backend must match ${context}.backend`);
+  }
+  const vkName = normalizePortableVerifyingKeyIdField(
+    vkRefRecord.name,
+    `${context}.vk_ref.name`,
+  );
+  const normalized = {
+    backend,
+    proof: {
+      backend: proofBackend,
+      bytes_b64: hasCompactBytes
+        ? normalizeBoundedCanonicalBase64String(
+            proof.bytes_b64,
+            `${context}.proof.bytes_b64`,
+            IVM_PROOF_MAX_BYTES,
+            "proof",
+          )
+        : Buffer.from(
+            normalizeExactJsonByteArray(
+              proof.bytes,
+              `${context}.proof.bytes`,
+              { maxLength: IVM_PROOF_MAX_BYTES },
+            ),
+          ).toString("base64"),
+    },
+    vk_ref: { backend: vkBackend, name: vkName },
+  };
+  for (const key of ["vk_commitment", "envelope_hash"]) {
+    if (!presentOptionalKeys.includes(key)) continue;
+    if (hasLegacyBytes && record[key] === null) continue;
+    const bytes = normalizeExactJsonByteArray(
+      record[key],
+      `${context}.${key}`,
+      { exactLength: 32 },
+    );
+    let nonZero = false;
+    for (let index = 0; index < 32; index += 1) {
+      if (bytes[index] !== 0) nonZero = true;
+    }
+    if (!nonZero) {
+      throw new TypeError(`${context}.${key} must be non-zero`);
+    }
+    normalized[key] = Array.from(bytes);
+  }
+  if (presentOptionalKeys.includes("lane_privacy")) {
+    if (hasLegacyBytes && record.lane_privacy === null) {
+      return validateNormalizedProofAttachmentEnvelope(normalized, context);
+    }
+    normalized.lane_privacy = cloneJsonValue(
+      ensureRecord(record.lane_privacy, `${context}.lane_privacy`),
+      `${context}.lane_privacy`,
+    );
+  }
+  return validateNormalizedProofAttachmentEnvelope(normalized, context);
+}
+
+function validateNormalizedProofAttachmentEnvelope(attachment, context) {
+  if (attachment.envelope_hash === undefined) return attachment;
+  const proofBytes = Buffer.from(attachment.proof.bytes_b64, "base64");
+  const expected = new Uint8ArrayIntrinsic(blake2b256(proofBytes));
+  expected[typedArrayByteLengthGetter.call(expected) - 1] |= 1;
+  for (let index = 0; index < 32; index += 1) {
+    if (attachment.envelope_hash[index] !== expected[index]) {
+      throw new TypeError(`${context}.envelope_hash must match proof bytes`);
+    }
+  }
+  return attachment;
+}
+
+function normalizeExactJsonByteArray(
+  value,
+  context,
+  { exactLength = null, maxLength = null } = {},
+) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an exact byte array`);
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || !("value" in lengthDescriptor)) {
+    throw new TypeError(`${context} must be an exact byte array`);
+  }
+  const length = lengthDescriptor.value;
+  if (exactLength !== null && length !== exactLength) {
+    throw new TypeError(`${context} must be an exact ${exactLength}-byte array`);
+  }
+  if (maxLength !== null && length > maxLength) {
+    throw new RangeError(`${context} exceeds the ${maxLength}-byte proof limit`);
+  }
+  if (length === 0) {
+    throw new TypeError(`${context} must not be empty`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) {
+    throw new TypeError(`${context} must be an exact byte array`);
+  }
+  const bytes = new Uint8ArrayIntrinsic(length);
+  let enumerableKeys = 0;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      throw new TypeError(`${context} must not inherit enumerable fields`);
+    }
+    if (key !== String(enumerableKeys) || enumerableKeys >= length) {
+      throw new TypeError(`${context} must be a dense exact byte array`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    const byte = descriptor && "value" in descriptor ? descriptor.value : null;
+    if (
+      !descriptor?.enumerable ||
+      typeof byte !== "number" ||
+      !Number.isInteger(byte) ||
+      byte < 0 ||
+      byte > 0xff
+    ) {
+      throw new TypeError(`${context}[${key}] must be an unsigned byte`);
+    }
+    bytes[enumerableKeys] = byte;
+    enumerableKeys += 1;
+  }
+  if (enumerableKeys !== length) {
+    throw new TypeError(`${context} must be a dense exact byte array`);
+  }
+  return bytes;
 }
 
 function normalizeIvmProveJobId(value, context) {
@@ -21415,10 +22465,24 @@ function normalizeIvmProveJobId(value, context) {
   return normalized.toLowerCase();
 }
 
+function normalizeIvmProveResponseJobId(value, context) {
+  const normalized = requireExactNonEmptyString(value, context);
+  if (!/^[0-9a-f]{32}$/u.test(normalized)) {
+    throw new TypeError(
+      `${context} must be an exact lowercase 16-byte hexadecimal IVM prove job id`,
+    );
+  }
+  return normalized;
+}
+
 function normalizeZkIvmProveJobCreatedResponse(payload) {
-  const record = ensureRecord(payload, "IVM prove job response");
+  const record = exactEnumerableDataRecord(
+    payload,
+    ["job_id"],
+    "IVM prove job response",
+  );
   return {
-    job_id: normalizeIvmProveJobId(
+    job_id: normalizeIvmProveResponseJobId(
       record.job_id,
       "IVM prove job response.job_id",
     ),
@@ -21426,47 +22490,66 @@ function normalizeZkIvmProveJobCreatedResponse(payload) {
 }
 
 function normalizeZkIvmProveJobResponse(payload) {
-  const record = ensureRecord(payload, "IVM prove job status response");
-  const status = requireNonEmptyString(
-    record.status,
+  const candidate = ensureRecord(payload, "IVM prove job status response");
+  const statusDescriptor = Object.getOwnPropertyDescriptor(candidate, "status");
+  if (
+    !statusDescriptor ||
+    !("value" in statusDescriptor) ||
+    !statusDescriptor.enumerable
+  ) {
+    throw new TypeError(
+      "IVM prove job status response.status must be an enumerable data property",
+    );
+  }
+  const status = requireExactNonEmptyString(
+    statusDescriptor.value,
     "IVM prove job status response.status",
-  ).toLowerCase();
+  );
   if (!new Set(["pending", "running", "done", "error"]).has(status)) {
     throw new TypeError(
       "IVM prove job status response.status must be pending, running, done, or error",
     );
   }
-  return {
-    job_id: normalizeIvmProveJobId(
+  const expectedKeys =
+    status === "done"
+      ? ["job_id", "status", "proved", "attachment"]
+      : status === "error"
+        ? ["job_id", "status", "error"]
+        : ["job_id", "status"];
+  const record = exactEnumerableDataRecord(
+    candidate,
+    expectedKeys,
+    "IVM prove job status response",
+  );
+  const normalized = {
+    job_id: normalizeIvmProveResponseJobId(
       record.job_id,
       "IVM prove job status response.job_id",
     ),
     status,
     error:
-      record.error === undefined || record.error === null
+      status !== "error"
         ? null
         : requireNonEmptyString(
             record.error,
             "IVM prove job status response.error",
           ),
     proved:
-      record.proved === undefined || record.proved === null
+      status !== "done"
         ? null
-        : cloneJsonValue(
-            ensureRecord(record.proved, "IVM prove job status response.proved"),
+        : normalizeZkIvmProvedPayload(
+            record.proved,
             "IVM prove job status response.proved",
           ),
     attachment:
-      record.attachment === undefined || record.attachment === null
+      status !== "done"
         ? null
-        : cloneJsonValue(
-            ensureRecord(
-              record.attachment,
-              "IVM prove job status response.attachment",
-            ),
+        : normalizeZkIvmProofAttachment(
+            record.attachment,
             "IVM prove job status response.attachment",
           ),
   };
+  return normalized;
 }
 
 function normalizeMultisigAccountSelector(input, context) {
@@ -22046,12 +23129,157 @@ function normalizeCanonicalManifestHash(value, name) {
 
 function normalizeContractCodeBytesResponse(payload) {
   const record = ensureRecord(payload, "contract code bytes response");
+  const ownKeys = Reflect.ownKeys(record);
+  if (ownKeys.length !== 1 || ownKeys[0] !== "code_b64") {
+    throw new TypeError(
+      "contract code bytes response must contain exactly the code_b64 field",
+    );
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(record, "code_b64");
+  if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+    throw new TypeError(
+      "contract code bytes response code_b64 must be an enumerable data property",
+    );
+  }
   return {
-    code_b64: normalizeRequiredBase64Payload(
-      record.code_b64,
+    code_b64: normalizeIvmArtifactBase64String(
+      descriptor.value,
       "contractCodeBytes.code_b64",
     ),
   };
+}
+
+function normalizeIvmArtifactBase64String(value, name) {
+  return normalizeBoundedCanonicalBase64String(
+    value,
+    name,
+    IVM_ARTIFACT_MAX_BYTES,
+    "artifact",
+  );
+}
+
+function normalizeBoundedCanonicalBase64String(
+  value,
+  name,
+  maxBytes,
+  limitLabel = "payload",
+) {
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a base64 string`,
+      name,
+    );
+  }
+  const maxEncodedLength = Math.ceil(maxBytes / 3) * 4;
+  if (value.length > maxEncodedLength) {
+    throw new RangeError(
+      `${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
+    );
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  if (
+    value.length % 4 === 0 &&
+    (value.length / 4) * 3 - padding > maxBytes
+  ) {
+    throw new RangeError(
+      `${name} exceeds the ${maxBytes}-byte ${limitLabel} limit`,
+    );
+  }
+  if (!hasExactStandardBase64Shape(value)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be canonical standard base64`,
+      name,
+    );
+  }
+  return value;
+}
+
+function isGenuineSharedArrayBuffer(value) {
+  if (sharedArrayBufferByteLengthGetter === null) return false;
+  try {
+    sharedArrayBufferByteLengthGetter.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeIvmArtifactBytecodeInput(value, name) {
+  if (typeof value === "string") {
+    return normalizeIvmArtifactBase64String(value, name);
+  }
+  if (isGenuineSharedArrayBuffer(value)) {
+    throw new TypeError(`${name} must not use SharedArrayBuffer`);
+  }
+
+  let buffer;
+  let byteOffset;
+  let byteLength;
+  try {
+    byteLength = arrayBufferByteLengthGetter.call(value);
+    buffer = value;
+    byteOffset = 0;
+  } catch {
+    try {
+      typedArrayTagGetter.call(value);
+      buffer = typedArrayBufferGetter.call(value);
+      byteOffset = typedArrayByteOffsetGetter.call(value);
+      byteLength = typedArrayByteLengthGetter.call(value);
+    } catch {
+      try {
+        buffer = dataViewBufferGetter.call(value);
+        byteOffset = dataViewByteOffsetGetter.call(value);
+        byteLength = dataViewByteLengthGetter.call(value);
+      } catch {
+        throw new TypeError(
+          `${name} must be canonical base64 or an ArrayBuffer view`,
+        );
+      }
+    }
+  }
+  if (isGenuineSharedArrayBuffer(buffer)) {
+    throw new TypeError(`${name} must not use SharedArrayBuffer`);
+  }
+  if (byteLength > IVM_ARTIFACT_MAX_BYTES) {
+    throw new RangeError(
+      `${name} exceeds the ${IVM_ARTIFACT_MAX_BYTES}-byte artifact limit`,
+    );
+  }
+  if (byteLength === 0) {
+    throw new TypeError(`${name} must not be empty`);
+  }
+  return Buffer.from(
+    copyArrayBufferBytes(buffer, byteOffset, byteLength),
+  ).toString("base64");
+}
+
+function hasExactStandardBase64Shape(value) {
+  if (value.length === 0 || value.length % 4 !== 0) return false;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const dataLength = value.length - padding;
+  for (let index = 0; index < dataLength; index += 1) {
+    const code = value.charCodeAt(index);
+    if (standardBase64Sextet(code) < 0) {
+      return false;
+    }
+  }
+  const trailingSextet = standardBase64Sextet(
+    value.charCodeAt(dataLength - 1),
+  );
+  if (padding === 2 && (trailingSextet & 0x0f) !== 0) return false;
+  if (padding === 1 && (trailingSextet & 0x03) !== 0) return false;
+  return true;
+}
+
+function standardBase64Sextet(code) {
+  if (code >= 0x41 && code <= 0x5a) return code - 0x41;
+  if (code >= 0x61 && code <= 0x7a) return code - 0x61 + 26;
+  if (code >= 0x30 && code <= 0x39) return code - 0x30 + 52;
+  if (code === 0x2b) return 62;
+  if (code === 0x2f) return 63;
+  return -1;
 }
 
 function normalizeManifestEntrypointsPayload(value, name) {
@@ -23768,7 +24996,7 @@ function normalizeReputationSnapshotIdHex(value, context) {
 }
 
 function buildSorafsReputationHeaders(options = {}, context) {
-  const headers = { Accept: "application/json" };
+  const headers = { Accept: APPLICATION_JSON };
   if (options.headers !== undefined && options.headers !== null) {
     if (!isPlainObject(options.headers)) {
       throw createValidationError(
@@ -23825,7 +25053,7 @@ function buildSorafsReputationEventsParams(options = {}, context) {
 }
 
 function buildSorafsOrderbookHeaders(options = {}, context, { cache = false } = {}) {
-  const headers = { Accept: "application/json" };
+  const headers = { Accept: APPLICATION_JSON };
   if (options.headers !== undefined && options.headers !== null) {
     if (!isPlainObject(options.headers)) {
       throw createValidationError(
@@ -28048,13 +29276,17 @@ function normalizeVerifyingKeyEventMatcherName(value, context) {
 }
 
 function isAbortSignalLike(value) {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof value.aborted === "boolean" &&
-    typeof value.addEventListener === "function" &&
-    typeof value.removeEventListener === "function"
-  );
+  if (typeof value !== "object" || value === null) return false;
+  if (hasAbortSignalBrand(value)) return true;
+  try {
+    return (
+      typeof signalIsAborted(value) === "boolean" &&
+      ownDataMethod(value, "addEventListener") !== null &&
+      ownDataMethod(value, "removeEventListener") !== null
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeAccountAssetListResponse(payload) {
@@ -30832,10 +32064,11 @@ async function* streamWebSocketJsonEvents(socket, options = {}) {
   ];
   const { signal } = options;
   if (signal) {
-    if (signal.aborted) {
+    if (signalIsAborted(signal)) {
       onAbort();
-    } else if (typeof signal.addEventListener === "function") {
-      signal.addEventListener("abort", onAbort, { once: true });
+    } else {
+      addSignalAbortListener(signal, onAbort);
+      if (signalIsAborted(signal)) onAbort();
     }
   }
 
@@ -30861,8 +32094,8 @@ async function* streamWebSocketJsonEvents(socket, options = {}) {
     for (const remove of removers) {
       remove();
     }
-    if (signal && typeof signal.removeEventListener === "function") {
-      signal.removeEventListener("abort", onAbort);
+    if (signal) {
+      removeSignalAbortListener(signal, onAbort);
     }
     if (closeOnReturn && !closed) {
       closeWebSocketQuietly(socket);

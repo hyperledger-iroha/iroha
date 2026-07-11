@@ -348,8 +348,14 @@ struct MergeKey {
 
 #[derive(Clone, Debug)]
 struct PendingMerge {
-    candidate: crate::merge::MergeLedgerCandidate,
+    stage: PendingMergeStage,
     signatures: BTreeMap<wire::ValidatorIndex, Vec<u8>>,
+}
+
+#[derive(Clone, Debug)]
+enum PendingMergeStage {
+    Collecting(crate::merge::MergeLedgerCandidate),
+    Certified(MergeLedgerEntry),
 }
 
 /// Authoritative bounded adapter retained for exactly one global height.
@@ -771,7 +777,9 @@ impl V2LaneWorkAdapter {
         let mut next_sessions = self.lane_sessions.clone();
         let mut inserted = false;
         for proposal in &proposals {
-            match next_sessions.insert_proposal(proposal.clone()) {
+            match next_sessions
+                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone())
+            {
                 Ok(LaneBlockSessionInsertOutcome::Inserted) => inserted = true,
                 Ok(LaneBlockSessionInsertOutcome::Duplicate) => {}
                 Err(_) => return V2LaneIngressOutcome::Rejected,
@@ -1233,20 +1241,15 @@ impl V2LaneWorkAdapter {
         }
         let mut merge_effects = Vec::new();
         if let Some(local_index) = self.local_validator_index() {
-            for pending in self.merge_entries.values() {
+            for (key, pending) in &self.merge_entries {
                 let Some(signature) = pending.signatures.get(&local_index) else {
                     continue;
                 };
                 merge_effects.push(V2LaneWorkEffect::BroadcastMerge(MergeCommitteeSignature {
-                    epoch_id: pending.candidate.epoch_id,
-                    view: pending.candidate.view,
+                    epoch_id: key.epoch_id,
+                    view: key.view,
                     signer: local_index,
-                    message_digest: crate::merge::merge_qc_message_digest(
-                        &self.context.chain_id,
-                        &pending.candidate,
-                        VALIDATOR_SET_HASH_VERSION_V1,
-                        self.frozen_validator_set_hash(),
-                    ),
+                    message_digest: key.digest,
                     bls_sig: signature.clone(),
                 }));
             }
@@ -2549,7 +2552,7 @@ impl V2LaneWorkAdapter {
                 continue;
             }
             self.merge_entries.entry(key).or_insert(PendingMerge {
-                candidate: candidate.clone(),
+                stage: PendingMergeStage::Collecting(candidate.clone()),
                 signatures: BTreeMap::new(),
             });
             let Some(local_index) = self.local_validator_index() else {
@@ -2601,13 +2604,16 @@ impl V2LaneWorkAdapter {
         let Some(pending) = self.merge_entries.get(&key) else {
             return V2LaneIngressOutcome::Rejected;
         };
-        if crate::merge::merge_qc_message_digest(
-            &self.context.chain_id,
-            &pending.candidate,
-            VALIDATOR_SET_HASH_VERSION_V1,
-            self.frozen_validator_set_hash(),
-        ) != signature.message_digest
-        {
+        let expected_digest = match &pending.stage {
+            PendingMergeStage::Collecting(candidate) => crate::merge::merge_qc_message_digest(
+                &self.context.chain_id,
+                candidate,
+                VALIDATOR_SET_HASH_VERSION_V1,
+                self.frozen_validator_set_hash(),
+            ),
+            PendingMergeStage::Certified(entry) => entry.merge_qc.message_digest,
+        };
+        if expected_digest != signature.message_digest {
             return V2LaneIngressOutcome::Rejected;
         }
         let Some(peer) = self
@@ -2659,11 +2665,26 @@ impl V2LaneWorkAdapter {
         let Some(pending) = self.merge_entries.get(&key) else {
             return;
         };
+        let cached_entry = match &pending.stage {
+            PendingMergeStage::Certified(entry) => Some(entry.clone()),
+            PendingMergeStage::Collecting(_) => None,
+        };
+        if let Some(entry) = cached_entry {
+            self.persist_certified_merge_entry(key, &entry);
+            return;
+        }
+        let Some(PendingMerge {
+            stage: PendingMergeStage::Collecting(candidate),
+            ..
+        }) = self.merge_entries.get(&key)
+        else {
+            return;
+        };
         let validator_set = self.frozen_validator_set();
         let validator_set_hash = HashOf::new(&validator_set);
         if crate::merge::merge_qc_message_digest(
             &self.context.chain_id,
-            &pending.candidate,
+            candidate,
             VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
         ) != key.digest
@@ -2717,8 +2738,8 @@ impl V2LaneWorkAdapter {
         let qc = MergeQuorumCertificate::new(
             key.view,
             key.epoch_id,
-            pending.candidate.carrier_height,
-            pending.candidate.carrier_parent_hash,
+            candidate.carrier_height,
+            candidate.carrier_parent_hash,
             crate::merge::merge_chain_id_digest(&self.context.chain_id),
             VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
@@ -2728,7 +2749,7 @@ impl V2LaneWorkAdapter {
             aggregate_signature,
             key.digest,
         );
-        let entry = pending.candidate.clone().into_entry(qc);
+        let entry = candidate.clone().into_entry(qc);
         if let Err(error) = self
             .state
             .validate_certified_merge_entry_for_global_order(&entry)
@@ -2741,6 +2762,14 @@ impl V2LaneWorkAdapter {
             );
             return;
         }
+        let Some(pending) = self.merge_entries.get_mut(&key) else {
+            return;
+        };
+        pending.stage = PendingMergeStage::Certified(entry.clone());
+        self.persist_certified_merge_entry(key, &entry);
+    }
+
+    fn persist_certified_merge_entry(&mut self, key: MergeKey, entry: &MergeLedgerEntry) {
         match self.kura.persist_pending_certified_merge_entry(&entry) {
             Ok(_) => {
                 self.merge_entries.remove(&key);
@@ -3425,7 +3454,7 @@ mod tests {
         adapter.merge_entries.insert(
             key,
             PendingMerge {
-                candidate: candidate.clone(),
+                stage: PendingMergeStage::Collecting(candidate.clone()),
                 signatures: BTreeMap::new(),
             },
         );
@@ -3441,7 +3470,7 @@ mod tests {
         adapter.merge_entries.insert(
             key,
             PendingMerge {
-                candidate,
+                stage: PendingMergeStage::Collecting(candidate),
                 signatures: BTreeMap::new(),
             },
         );
@@ -4926,7 +4955,7 @@ mod tests {
     }
 
     #[test]
-    fn locked_body_session_capacity_failure_keeps_kura_sidecars_state_inert() {
+    fn locked_body_protected_session_conflict_keeps_kura_sidecars_state_inert() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let entry = pending_sidecar_entry(&adapter, &keys, 1);
         let entry_hash = adapter
@@ -4939,27 +4968,33 @@ mod tests {
             .state
             .lane_incarnation_at_height(lane_id, adapter.context.height)
             .expect("fixture lane is active");
-        for lane_height in 100..100 + adapter.limits.session_capacity.get() as u64 {
-            let proposal = proposal_for_route(
-                &adapter,
-                &keys,
-                lane_id,
-                dataspace_id,
-                incarnation,
-                adapter.context.height,
-                lane_height,
-            );
-            assert_eq!(
-                adapter.lane_sessions.insert_proposal(proposal),
-                Ok(LaneBlockSessionInsertOutcome::Inserted)
-            );
-        }
-        let (block, _) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let (block, locked_proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let conflict = proposal_for_route_at_view(
+            &adapter,
+            &keys,
+            lane_id,
+            dataspace_id,
+            incarnation,
+            adapter.context.height + 1,
+            locked_proposal.descriptor.lane_block_height,
+            locked_proposal.descriptor.lane_block_view,
+        );
+        assert_ne!(conflict.proposal_hash, locked_proposal.proposal_hash);
+        assert_eq!(
+            adapter.lane_sessions.insert_proposal(conflict.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            adapter
+                .lane_sessions
+                .insert_qc_with_pops(lane_qc(&conflict, &keys), &lane_signer_pops(&keys)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
         assert!(adapter.mark_global_body_locked(block.hash()));
         assert_eq!(
             adapter.bind_locked_global_body(&block),
             V2LaneIngressOutcome::Rejected,
-            "a full lane-session cache must reject the locked body"
+            "a lane-local QC for a conflicting payload must remain safety-protected"
         );
         assert_eq!(
             adapter
@@ -4969,6 +5004,37 @@ mod tests {
             Some(entry),
             "rejected in-memory binding must not destructively prune Kura"
         );
+    }
+
+    #[test]
+    fn locked_body_replaces_uncommitted_same_slot_conflict() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let (block, locked_proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let descriptor = &locked_proposal.descriptor;
+        let conflict = proposal_for_route_at_view(
+            &adapter,
+            &keys,
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.lane_incarnation,
+            adapter.context.height + 1,
+            descriptor.lane_block_height,
+            descriptor.lane_block_view,
+        );
+        assert_ne!(conflict.proposal_hash, locked_proposal.proposal_hash);
+        assert_eq!(
+            adapter.lane_sessions.insert_proposal(conflict.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+
+        assert!(adapter.mark_global_body_locked(block.hash()));
+        assert_eq!(
+            adapter.bind_locked_global_body(&block),
+            V2LaneIngressOutcome::Inserted,
+            "the globally locked payload must displace an uncertified attacker shell"
+        );
+        assert!(adapter.lane_sessions.contains_proposal(&locked_proposal));
+        assert!(!adapter.lane_sessions.contains_proposal(&conflict));
     }
 
     #[test]
@@ -5313,10 +5379,14 @@ mod tests {
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        let certified_entry = pending_sidecar_entry(&adapter, &keys, 0);
         adapter.merge_entries.insert(
             key,
             PendingMerge {
-                candidate,
+                // Exercise the boundary after quorum authentication and full
+                // State validation: production caches this exact entry before
+                // its first fallible Kura publication attempt.
+                stage: PendingMergeStage::Certified(certified_entry),
                 signatures,
             },
         );
@@ -5328,6 +5398,13 @@ mod tests {
         assert!(
             adapter.merge_entries.contains_key(&key),
             "failed Kura publication must retain the complete quorum"
+        );
+        assert!(
+            matches!(
+                adapter.merge_entries[&key].stage,
+                PendingMergeStage::Certified(_)
+            ),
+            "a disk failure must retain the already-validated exact entry"
         );
         std::fs::remove_file(&pending_dir).expect("remove transient Kura obstruction");
 

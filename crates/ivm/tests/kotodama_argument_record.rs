@@ -151,7 +151,7 @@ fn shared_sdk_fixture_is_generated_and_validated_by_rust() {
 fn compiled_wrapper_decodes_record_and_loads_aligned_words() {
     let source = r#"
 seiyaku ArgumentRecordRuntime {
-  view fn run(count: i64, label: Name) -> i64 {
+  view fn run(int count, Name label) -> int {
     let _label = label;
     return count;
   }
@@ -173,7 +173,7 @@ seiyaku ArgumentRecordRuntime {
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
 
     let payload =
-        Json::from_str_norito(r#"{"count":41,"label":"ready"}"#).expect("valid boundary JSON");
+        Json::from_str_norito(r#"{"count":"41","label":"ready"}"#).expect("valid boundary JSON");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = host_with_arguments(BTreeMap::from([(key, argument_record_tlv(run, &payload))]));
 
@@ -191,7 +191,7 @@ seiyaku ArgumentRecordRuntime {
 fn single_json_parameter_is_a_named_record_field_not_the_transport_object() {
     let source = r#"
 seiyaku JsonArgumentRecordRuntime {
-  view fn run(event: Json) -> Option<i64> {
+  view fn run(Json event) -> Option<int> {
     event.get_int(Name::parse("value"))
   }
 }
@@ -210,7 +210,7 @@ seiyaku JsonArgumentRecordRuntime {
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
 
-    let payload = Json::from_str_norito(r#"{"event":{"value":29}}"#)
+    let payload = Json::from_str_norito(r#"{"event":{"value":"29"}}"#)
         .expect("valid named Json boundary field");
     let key: Name = "trigger_event_json".parse().expect("public input key");
     let host = host_with_arguments(BTreeMap::from([(key, argument_record_tlv(run, &payload))]));
@@ -221,7 +221,7 @@ seiyaku JsonArgumentRecordRuntime {
         .expect("select run wrapper");
     vm.set_host(host);
     vm.run().expect("execute Json argument wrapper");
-    let layout = ivm::sum::SumLayoutV1::option(1).expect("Option<i64> layout");
+    let layout = ivm::sum::SumLayoutV1::option(1).expect("Option<int> layout");
     assert_eq!(
         ivm::sum::read_words(&vm, vm.register(10), layout),
         Ok((true, vec![29]))
@@ -232,16 +232,16 @@ seiyaku JsonArgumentRecordRuntime {
 fn compiled_wrapper_rebuilds_recursive_public_types_from_one_record() {
     let source = r#"
 seiyaku RecursiveArgumentRecordRuntime {
-  struct Request { count: i64, ready: bool }
+  struct Request { int count, bool ready }
 
   view fn run(
-    request: Request,
-    pair: (i64, bool),
-    maybe: Option<i64>,
-    outcome: Result<i64, bool>
-  ) -> i64 {
-    let optional = maybe.unwrap_or(0);
-    let result = outcome.unwrap_or(0);
+    Request request,
+    (int, bool) pair,
+    Option<int> maybe,
+    Result<int, bool> outcome
+  ) -> int {
+    let optional = match maybe { Option::some(value) => value, Option::none => 0 };
+    let result = match outcome { Result::ok(value) => value, Result::err(error) => 0 };
     if (!request.ready || !pair.1) { return 0; }
     return request.count + pair.0 + optional + result;
   }
@@ -263,10 +263,10 @@ seiyaku RecursiveArgumentRecordRuntime {
 
     let payload = Json::from_str_norito(
         r#"{
-            "request":{"count":7,"ready":true},
-            "pair":[11,true],
-            "maybe":{"some":13},
-            "outcome":{"ok":17}
+            "request":{"count":"7","ready":true},
+            "pair":["11",true],
+            "maybe":{"some":"13"},
+            "outcome":{"ok":"17"}
         }"#,
     )
     .expect("valid recursive boundary JSON");

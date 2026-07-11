@@ -12,12 +12,12 @@ use kotodama_lang::{
 fn recovers_multiple_errors_inside_one_block_and_across_items() {
     let text = r#"seiyaku Broken {
         fn first() {
-            let first: i64 = ;
-            let second: bool = ;
+            let int first = ;
+            let bool second = ;
             return;
         }
         fn second() {
-            let third: i64 = ;
+            let int third = ;
         }
     }"#;
     let source = SourceFile::new(SourceId(1), "recovery.ko", text);
@@ -65,7 +65,7 @@ fn malformed_delimiters_keep_the_complete_tree_and_make_progress() {
 fn adversarial_error_fanout_is_bounded_and_reported() {
     let mut text = String::from("seiyaku Many { fn f() {\n");
     for index in 0..80 {
-        writeln!(text, "let value_{index}: i64 = ;").expect("write fixture");
+        writeln!(text, "let value_{index}: int = ;").expect("write fixture");
     }
     text.push_str("} }");
     let source = SourceFile::new(SourceId(3), "fanout.ko", text);

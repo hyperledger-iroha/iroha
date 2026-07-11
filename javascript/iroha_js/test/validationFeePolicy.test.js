@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { ed25519 } from "@noble/curves/ed25519";
+import { sha512 } from "@noble/hashes/sha512";
 import {
   encodeValidationFeePolicyNorito,
   validationFeePolicyHash,
@@ -14,6 +16,64 @@ import {
   VALIDATION_FEE_POLICY_SIGNATURE_PAYLOAD_HEX,
   validationFeePolicyFixture,
 } from "./fixtures/validationFeePolicyV1.js";
+
+function concatBytes(...chunks) {
+  const output = new Uint8Array(
+    chunks.reduce((length, chunk) => length + chunk.length, 0),
+  );
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+function littleEndianBigInt(bytes) {
+  let value = 0n;
+  for (let index = bytes.length - 1; index >= 0; index -= 1) {
+    value = (value << 8n) | BigInt(bytes[index]);
+  }
+  return value;
+}
+
+function littleEndianBytes(value, length) {
+  const output = new Uint8Array(length);
+  let remaining = value;
+  for (let index = 0; index < output.length; index += 1) {
+    output[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  return output;
+}
+
+function mixedTorsionSignature(signature, publicKey, message, privateKeySeed) {
+  const expanded = sha512(privateKeySeed);
+  expanded[0] &= 248;
+  expanded[31] &= 127;
+  expanded[31] |= 64;
+  const secretScalar = littleEndianBigInt(expanded.subarray(0, 32));
+  const encodedR = signature.subarray(0, 32);
+  const orderTwoPoint = ed25519.ExtendedPoint.fromHex(
+    Buffer.from(`ec${"ff".repeat(30)}7f`, "hex"),
+    false,
+  );
+  const mixedR = ed25519.ExtendedPoint.fromHex(encodedR, false)
+    .add(orderTwoPoint)
+    .toRawBytes();
+  const order = ed25519.CURVE.n;
+  const challenge =
+    littleEndianBigInt(sha512(concatBytes(encodedR, publicKey, message))) % order;
+  const mixedChallenge =
+    littleEndianBigInt(sha512(concatBytes(mixedR, publicKey, message))) % order;
+  const scalar = littleEndianBigInt(signature.subarray(32));
+  const mixedScalar =
+    (scalar + (mixedChallenge - challenge) * secretScalar) % order;
+  return concatBytes(
+    mixedR,
+    littleEndianBytes((mixedScalar + order) % order, 32),
+  );
+}
 
 test("ValidationFeePolicyV1 uses the canonical Norito bytes, hash, and ledger signature payload", () => {
   const fixture = validationFeePolicyFixture();
@@ -253,6 +313,121 @@ test("verifySignedValidationFeePolicy rejects malformed and insufficient keysets
   );
 });
 
+test("verifySignedValidationFeePolicy rejects duplicate keyset ids before selection", () => {
+  const fixture = validationFeePolicyFixture();
+  const duplicate = {
+    ...fixture.governanceKeyset,
+    public_keys_hex: [...fixture.governanceKeyset.public_keys_hex],
+  };
+  delete fixture.verificationContext.governanceKeyset;
+  fixture.verificationContext.governanceKeysets = [
+    duplicate,
+    fixture.governanceKeyset,
+  ];
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        fixture.signedPolicy,
+        fixture.verificationContext,
+      ),
+    (error) => error?.code === "DUPLICATE_GOVERNANCE_KEYSET_ID",
+  );
+  fixture.verificationContext.governanceKeysets.reverse();
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        fixture.signedPolicy,
+        fixture.verificationContext,
+      ),
+    (error) => error?.code === "DUPLICATE_GOVERNANCE_KEYSET_ID",
+  );
+});
+
+test("verifySignedValidationFeePolicy applies bounds before materializing adversarial inputs", () => {
+  const tooManySignatures = validationFeePolicyFixture();
+  tooManySignatures.signedPolicy.signatures = Array.from(
+    { length: tooManySignatures.governanceKeyset.public_keys_hex.length + 1 },
+    () => ({ ...tooManySignatures.signedPolicy.signatures[0] }),
+  );
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        tooManySignatures.signedPolicy,
+        tooManySignatures.verificationContext,
+      ),
+    (error) => error?.code === "TOO_MANY_SIGNATURES",
+  );
+
+  const oversizedSignature = validationFeePolicyFixture();
+  oversizedSignature.signedPolicy.signatures[0].signature = new Uint8Array(65);
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        oversizedSignature.signedPolicy,
+        oversizedSignature.verificationContext,
+      ),
+    (error) => error?.code === "INPUT_TOO_LARGE",
+  );
+
+  const tooManyKeysets = validationFeePolicyFixture();
+  delete tooManyKeysets.verificationContext.governanceKeyset;
+  tooManyKeysets.verificationContext.governanceKeysets = Array.from(
+    { length: 65 },
+    (_, index) => ({
+      ...tooManyKeysets.governanceKeyset,
+      keyset_id: `keyset-${index}`,
+    }),
+  );
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        tooManyKeysets.signedPolicy,
+        tooManyKeysets.verificationContext,
+      ),
+    (error) => error?.code === "INPUT_TOO_LARGE",
+  );
+
+  const tooManyKeys = validationFeePolicyFixture();
+  tooManyKeys.verificationContext.governanceKeyset = {
+    ...tooManyKeys.governanceKeyset,
+    public_keys_hex: Array(257).fill(
+      tooManyKeys.governanceKeyset.public_keys_hex[0],
+    ),
+  };
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        tooManyKeys.signedPolicy,
+        tooManyKeys.verificationContext,
+      ),
+    (error) => error?.code === "INPUT_TOO_LARGE",
+  );
+
+  const tooManyRegistryEntries = validationFeePolicyFixture();
+  tooManyRegistryEntries.policyRegistry.registered_policies = Array(4097).fill(
+    tooManyRegistryEntries.policyRegistry.registered_policies[0],
+  );
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        tooManyRegistryEntries.signedPolicy,
+        tooManyRegistryEntries.verificationContext,
+      ),
+    (error) => error?.code === "INPUT_TOO_LARGE",
+  );
+
+  const oversizedNetwork = validationFeePolicyFixture();
+  oversizedNetwork.signedPolicy.policy.network_id = "x".repeat(1025);
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        oversizedNetwork.signedPolicy,
+        oversizedNetwork.verificationContext,
+      ),
+    (error) => error?.code === "INPUT_TOO_LARGE",
+  );
+});
+
 test("verifySignedValidationFeePolicy rejects a small-order signature commitment", () => {
   const fixture = validationFeePolicyFixture();
   fixture.signedPolicy.signatures[0].signature =
@@ -264,6 +439,40 @@ test("verifySignedValidationFeePolicy rejects a small-order signature commitment
         fixture.verificationContext,
       ),
     (error) => error?.code === "MALFORMED_SIGNATURE",
+  );
+});
+
+test("verifySignedValidationFeePolicy rejects mixed-torsion signatures accepted by cofactored verify", () => {
+  const fixture = validationFeePolicyFixture();
+  const signature = Uint8Array.from(
+    Buffer.from(fixture.signedPolicy.signatures[0].signature, "hex"),
+  );
+  const publicKey = Uint8Array.from(
+    Buffer.from(fixture.signedPolicy.signatures[0].signer_public_key, "hex"),
+  );
+  const privateKeySeed = new Uint8Array(32).fill(1);
+  assert.deepEqual(ed25519.getPublicKey(privateKeySeed), publicKey);
+  const message = validationFeePolicyLedgerSignaturePayload(fixture.policy);
+  const mixedSignature = mixedTorsionSignature(
+    signature,
+    publicKey,
+    message,
+    privateKeySeed,
+  );
+  assert.equal(
+    ed25519.verify(mixedSignature, message, publicKey, { zip215: false }),
+    true,
+    "negative control must remain a signature accepted by cofactored verification",
+  );
+  fixture.signedPolicy.signatures[0].signature =
+    Buffer.from(mixedSignature).toString("hex");
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        fixture.signedPolicy,
+        fixture.verificationContext,
+      ),
+    (error) => error?.code === "INVALID_SIGNATURE",
   );
 });
 

@@ -19,10 +19,9 @@ fn pointer_type_ids_match_golden() {
         P::ProofBlob,
         P::SoracloudRequest,
         P::SoracloudResponse,
-        P::RetiredAmount,
+        P::Quantity,
         P::Int,
         P::Decimal,
-        P::Quantity,
     ];
     assert_eq!(
         P::all(),
@@ -46,10 +45,13 @@ fn pointer_type_ids_match_golden() {
     assert_eq!(P::ProofBlob as u16, 0x000D);
     assert_eq!(P::SoracloudRequest as u16, 0x000E);
     assert_eq!(P::SoracloudResponse as u16, 0x000F);
-    assert_eq!(P::RetiredAmount as u16, 0x0010);
+    assert_eq!(P::Quantity as u16, 0x0010);
     assert_eq!(P::Int as u16, 0x0011);
     assert_eq!(P::Decimal as u16, 0x0012);
-    assert_eq!(P::Quantity as u16, 0x0013);
+    assert_eq!(P::from_u16(0x0010), Some(P::Quantity));
+    assert_eq!(P::from_u16(0x0011), Some(P::Int));
+    assert_eq!(P::from_u16(0x0012), Some(P::Decimal));
+    assert_eq!(P::from_u16(0x0013), None);
 }
 
 #[test]
@@ -77,8 +79,23 @@ fn pointer_policy_allows_expected_types_for_v1() {
     ] {
         assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
     }
-    assert!(!is_type_allowed_for_policy(
-        SyscallPolicy::AbiV1,
-        P::RetiredAmount
-    ));
+}
+
+#[test]
+fn unassigned_numeric_pointer_id_is_not_known_or_allowed() {
+    use ivm::{PointerType as P, SyscallPolicy, is_type_allowed_for_policy};
+
+    assert_eq!(P::from_u16(0x0013), None);
+    assert!(P::all().iter().all(|ty| *ty as u16 != 0x0013));
+    assert!(
+        ivm::pointer_abi::policy_pointer_types(SyscallPolicy::AbiV1)
+            .iter()
+            .all(|ty| *ty as u16 != 0x0013)
+    );
+    for ty in P::all() {
+        assert!(
+            is_type_allowed_for_policy(SyscallPolicy::AbiV1, *ty),
+            "all known first-release pointer types are in the sole ABI-v1 policy: {ty:?}"
+        );
+    }
 }

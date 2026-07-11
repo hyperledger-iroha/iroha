@@ -17,7 +17,10 @@ use iroha_data_model::{
     smart_contract::ContractAddress,
 };
 use iroha_primitives::json::Json;
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::{
+    numeric::{Numeric, Quantity},
+    numeric_abi::QuantityValueV1,
+};
 use norito::{
     decode_from_bytes,
     derive::{Decode, Encode},
@@ -78,19 +81,6 @@ pub struct DataspaceAxtPolicy {
     pub min_handle_era: u64,
     pub min_sub_nonce: u64,
     pub current_slot: u64,
-}
-
-fn parse_json_amount_field(field: &njson::Value) -> Result<Numeric, VMError> {
-    let amount = match field {
-        njson::Value::String(raw) => raw.parse::<Numeric>().map_err(|_| VMError::DecodeError),
-        njson::Value::Number(njson::native::Number::I64(value)) => Ok(Numeric::from(*value)),
-        njson::Value::Number(njson::native::Number::U64(value)) => Ok(Numeric::from(*value)),
-        _ => Err(VMError::DecodeError),
-    }?
-    .canonicalize_amount()
-    .map_err(|_| VMError::DecodeError)?;
-    amount.validate_amount().map_err(|_| VMError::DecodeError)?;
-    Ok(amount)
 }
 
 fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
@@ -2492,10 +2482,6 @@ impl WsvHost {
         Self::axt_gas(entries)
     }
 
-    fn numeric_gas() -> u64 {
-        16
-    }
-
     fn input_publish_gas(envelope_len: usize) -> u64 {
         let bytes = u64::try_from(envelope_len).unwrap_or(u64::MAX);
         INPUT_PUBLISH_GAS_BASE.saturating_add(INPUT_PUBLISH_GAS_PER_BYTE.saturating_mul(bytes))
@@ -2731,59 +2717,16 @@ impl WsvHost {
         }
     }
 
-    fn ensure_u128_integer(numeric: Numeric) -> Result<Numeric, VMError> {
-        if numeric.scale() != 0 || numeric.try_mantissa_u128().is_none() {
-            return Err(VMError::AssertionFailed);
-        }
-        Ok(numeric)
-    }
-
-    /// Decode one canonical V1 `Amount` argument from a register.
+    /// Decode one canonical V1 `quantity` argument from a register.
     fn decode_amount_reg(&self, vm: &IVM, reg: usize) -> Result<Numeric, VMError> {
         let tlv = vm.validate_tlv(vm.register(reg))?;
         if tlv.type_id != PointerType::Quantity {
             return Err(VMError::NoritoInvalid);
         }
-        let amount = decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
-        if norito::to_bytes(&amount).map_err(|_| VMError::DecodeError)? != tlv.payload {
-            return Err(VMError::DecodeError);
-        }
-        amount.validate_amount().map_err(|_| VMError::DecodeError)?;
-        Ok(amount)
-    }
-
-    fn decode_numeric_ptr(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
-        match vm.memory.validate_tlv(ptr) {
-            Ok(tlv) => {
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let policy = vm.syscall_policy();
-                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: tlv.type_id as u16,
-                    });
-                }
-                let numeric =
-                    decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                if norito::to_bytes(&numeric).map_err(|_| VMError::DecodeError)? != tlv.payload {
-                    return Err(VMError::DecodeError);
-                }
-                Self::ensure_u128_integer(numeric)
-            }
-            Err(_) => {
-                let policy = vm.syscall_policy();
-                if !pointer_abi::is_type_allowed_for_policy(policy, PointerType::NoritoBytes) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: PointerType::NoritoBytes as u16,
-                    });
-                }
-                let numeric = self.decode_tlv_any_region(vm, ptr, PointerType::NoritoBytes)?;
-                Self::ensure_u128_integer(numeric)
-            }
-        }
+        QuantityValueV1::decode_frame(tlv.payload)
+            .map(QuantityValueV1::into_quantity)
+            .map(iroha_primitives::numeric::Quantity::into_numeric)
+            .map_err(|_| VMError::DecodeError)
     }
 
     /// Decode NftId from a register that may be an INPUT TLV pointer.
@@ -3195,9 +3138,13 @@ impl WsvHost {
         Ok(value)
     }
 
-    fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
+    fn alloc_tlv_payload(
+        vm: &mut IVM,
+        pointer_type: PointerType,
+        payload: &[u8],
+    ) -> Result<u64, VMError> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
-        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+        out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
         out.push(1);
         let len = u32::try_from(payload.len()).map_err(|_| VMError::NoritoInvalid)?;
         out.extend_from_slice(&len.to_be_bytes());
@@ -3205,6 +3152,10 @@ impl WsvHost {
         let h: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(payload).into();
         out.extend_from_slice(&h);
         vm.alloc_host_tlv(&out)
+    }
+
+    fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
+        Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
     }
 
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
@@ -3848,132 +3799,6 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(Self::numeric_payload_gas(0, body.len()))
             }
-            crate::syscalls::SYSCALL_NUMERIC_FROM_INT => {
-                let val = vm.register(10) as i64;
-                if val < 0 {
-                    return Err(VMError::AssertionFailed);
-                }
-                let payload =
-                    norito::to_bytes(&Numeric::new(val, 0)).map_err(|_| VMError::NoritoInvalid)?;
-                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, p);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_TO_INT
-            | crate::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT => {
-                let ptr = vm.register(10);
-                if ptr == 0 {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let numeric = self.decode_numeric_ptr(vm, ptr)?;
-                let value = numeric
-                    .try_mantissa_i128()
-                    .ok_or(VMError::AssertionFailed)?;
-                if value > i64::MAX as i128 {
-                    return Err(VMError::AssertionFailed);
-                }
-                vm.set_register(10, (value as i64) as u64);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_ADD | crate::syscalls::SYSCALL_NUMERIC_ADD_DIRECT => {
-                let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
-                let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
-                let out = Self::ensure_u128_integer(
-                    lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?,
-                )?;
-                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
-                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, p);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_SUB | crate::syscalls::SYSCALL_NUMERIC_SUB_DIRECT => {
-                let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
-                let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
-                let out = Self::ensure_u128_integer(
-                    lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?,
-                )?;
-                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
-                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, p);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_MUL | crate::syscalls::SYSCALL_NUMERIC_MUL_DIRECT => {
-                let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
-                let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
-                let out = Self::ensure_u128_integer(
-                    lhs.checked_mul(rhs, NumericSpec::unconstrained())
-                        .ok_or(VMError::AssertionFailed)?,
-                )?;
-                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
-                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, p);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_DIV | crate::syscalls::SYSCALL_NUMERIC_DIV_DIRECT => {
-                let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
-                let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
-                let out = Self::ensure_u128_integer(
-                    lhs.checked_div(rhs, NumericSpec::unconstrained())
-                        .ok_or(VMError::AssertionFailed)?,
-                )?;
-                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
-                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, p);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_REM | crate::syscalls::SYSCALL_NUMERIC_REM_DIRECT => {
-                let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
-                let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
-                let out = Self::ensure_u128_integer(
-                    lhs.checked_rem(rhs, NumericSpec::unconstrained())
-                        .ok_or(VMError::AssertionFailed)?,
-                )?;
-                let payload = norito::to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
-                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, p);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_NEG | crate::syscalls::SYSCALL_NUMERIC_NEG_DIRECT => {
-                let val = self.decode_numeric_ptr(vm, vm.register(10))?;
-                if !val.is_zero() {
-                    return Err(VMError::AssertionFailed);
-                }
-                let payload = norito::to_bytes(&val).map_err(|_| VMError::NoritoInvalid)?;
-                let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, p);
-                Ok(Self::numeric_gas())
-            }
-            crate::syscalls::SYSCALL_NUMERIC_EQ
-            | crate::syscalls::SYSCALL_NUMERIC_NE
-            | crate::syscalls::SYSCALL_NUMERIC_LT
-            | crate::syscalls::SYSCALL_NUMERIC_LE
-            | crate::syscalls::SYSCALL_NUMERIC_GT
-            | crate::syscalls::SYSCALL_NUMERIC_GE
-            | crate::syscalls::SYSCALL_NUMERIC_EQ_DIRECT
-            | crate::syscalls::SYSCALL_NUMERIC_NE_DIRECT
-            | crate::syscalls::SYSCALL_NUMERIC_LT_DIRECT
-            | crate::syscalls::SYSCALL_NUMERIC_LE_DIRECT
-            | crate::syscalls::SYSCALL_NUMERIC_GT_DIRECT
-            | crate::syscalls::SYSCALL_NUMERIC_GE_DIRECT => {
-                let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
-                let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
-                let cmp = lhs.cmp(&rhs);
-                let result = match crate::syscalls::canonical_helper_syscall(number) {
-                    crate::syscalls::SYSCALL_NUMERIC_EQ => cmp == core::cmp::Ordering::Equal,
-                    crate::syscalls::SYSCALL_NUMERIC_NE => cmp != core::cmp::Ordering::Equal,
-                    crate::syscalls::SYSCALL_NUMERIC_LT => cmp == core::cmp::Ordering::Less,
-                    crate::syscalls::SYSCALL_NUMERIC_LE => {
-                        cmp == core::cmp::Ordering::Less || cmp == core::cmp::Ordering::Equal
-                    }
-                    crate::syscalls::SYSCALL_NUMERIC_GT => cmp == core::cmp::Ordering::Greater,
-                    crate::syscalls::SYSCALL_NUMERIC_GE => {
-                        cmp == core::cmp::Ordering::Greater || cmp == core::cmp::Ordering::Equal
-                    }
-                    _ => false,
-                };
-                vm.set_register(10, if result { 1 } else { 0 });
-                Ok(Self::numeric_gas())
-            }
             crate::syscalls::SYSCALL_JSON_ENCODE => {
                 let tlv = vm.memory.validate_tlv(vm.register(10))?;
                 if tlv.type_id != PointerType::Json {
@@ -4145,181 +3970,6 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD => {
                 crate::argument_record::decode_argument_record(vm)
             }
-            crate::syscalls::SYSCALL_JSON_GET_I64
-            | crate::syscalls::SYSCALL_JSON_GET_JSON
-            | crate::syscalls::SYSCALL_JSON_GET_NAME
-            | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
-            | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
-            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX
-            | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
-            | crate::syscalls::SYSCALL_JSON_GET_AMOUNT
-            | crate::syscalls::SYSCALL_JSON_GET_I64_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
-            | crate::syscalls::SYSCALL_JSON_GET_AMOUNT_DIRECT => {
-                let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
-                let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
-                if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let policy = vm.syscall_policy();
-                if !pointer_abi::is_type_allowed_for_policy(policy, json_tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: json_tlv.type_id as u16,
-                    });
-                }
-                if !pointer_abi::is_type_allowed_for_policy(policy, key_tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: key_tlv.type_id as u16,
-                    });
-                }
-
-                let json: Json =
-                    decode_from_bytes(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let value: njson::Value = json
-                    .try_into_any_norito()
-                    .map_err(|_| VMError::DecodeError)?;
-                let obj = value.as_object().ok_or(VMError::DecodeError)?;
-                let key_name: Name =
-                    decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let field = obj.get(key_name.as_ref()).ok_or(VMError::DecodeError)?;
-                let input_len = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
-
-                match crate::syscalls::canonical_helper_syscall(number) {
-                    crate::syscalls::SYSCALL_JSON_GET_I64 => {
-                        let n = match field {
-                            njson::Value::Number(njson::native::Number::I64(v)) => *v,
-                            njson::Value::Number(njson::native::Number::U64(v)) => {
-                                i64::try_from(*v).map_err(|_| VMError::DecodeError)?
-                            }
-                            _ => return Err(VMError::DecodeError),
-                        };
-                        vm.set_register(10, n as u64);
-                        Ok(Self::json_gas(input_len, core::mem::size_of::<i64>()))
-                    }
-                    crate::syscalls::SYSCALL_JSON_GET_JSON => {
-                        let out_json =
-                            Json::from_norito_value_ref(field).map_err(|_| VMError::DecodeError)?;
-                        let body =
-                            norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = CryptoHash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_input_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::json_gas(input_len, body.len()))
-                    }
-                    crate::syscalls::SYSCALL_JSON_GET_NAME => {
-                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let nm = Name::from_str(raw).map_err(|_| VMError::DecodeError)?;
-                        let body = norito::to_bytes(&nm).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = CryptoHash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_input_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::json_gas(input_len, body.len()))
-                    }
-                    crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
-                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let acct = iroha_data_model::account::AccountId::parse_encoded(raw)
-                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                            .or_else(|_| {
-                                raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
-                                    .map(|address| address.subject_id())
-                            })
-                            .map_err(|_| VMError::DecodeError)?;
-                        let body = norito::to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = CryptoHash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_input_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::json_gas(input_len, body.len()))
-                    }
-                    crate::syscalls::SYSCALL_JSON_GET_NFT_ID => {
-                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let nft = NftId::from_str(raw).map_err(|_| VMError::DecodeError)?;
-                        let body = norito::to_bytes(&nft).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::NftId as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = CryptoHash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_input_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::json_gas(input_len, body.len()))
-                    }
-                    crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
-                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let bytes = decode_json_blob_hex_literal(raw)?;
-                        let mut out = Vec::with_capacity(7 + bytes.len() + 32);
-                        out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&bytes);
-                        let h: [u8; 32] = CryptoHash::new(&bytes).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_input_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::json_gas(input_len, bytes.len()))
-                    }
-                    crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID => {
-                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let asset = AssetDefinitionId::parse_address_literal(raw)
-                            .map_err(|_| VMError::DecodeError)?;
-                        let body = norito::to_bytes(&asset).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(
-                            &(PointerType::AssetDefinitionId as u16).to_be_bytes(),
-                        );
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = CryptoHash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_input_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::json_gas(input_len, body.len()))
-                    }
-                    crate::syscalls::SYSCALL_JSON_GET_AMOUNT => {
-                        let amount = parse_json_amount_field(field)?;
-                        let body = norito::to_bytes(&amount).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::Quantity as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = CryptoHash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_input_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::json_gas(input_len, body.len()))
-                    }
-                    _ => Err(VMError::UnknownSyscall(number)),
-                }
-            }
-
             crate::syscalls::SYSCALL_NAME_DECODE => {
                 // r10 = &NoritoBytes (prefer Norito Name; legacy UTF-8 string is also accepted)
                 // -> r10 = &Name
@@ -5115,7 +4765,9 @@ impl IVMHost for WsvHost {
                                     } else {
                                         return Err(VMError::NoritoInvalid);
                                     };
-                                    Self::ensure_u128_integer(numeric)
+                                    Quantity::from_canonical_numeric(numeric)
+                                        .map(Quantity::into_numeric)
+                                        .map_err(|_| VMError::NoritoInvalid)
                                 };
                             match Self::decode_instruction_envelope(ty_ref, payload.clone())? {
                                 Some(instr) => instr,
@@ -6339,8 +5991,12 @@ impl IVMHost for WsvHost {
                     .wsv
                     .balance_checked(&self.caller, &account_id, &asset_id)
                 {
-                    let payload = norito::to_bytes(&b).map_err(|_| VMError::NoritoInvalid)?;
-                    let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
+                    let quantity =
+                        Quantity::from_canonical_numeric(b).map_err(|_| VMError::DecodeError)?;
+                    let payload = QuantityValueV1::new(quantity)
+                        .encode_frame()
+                        .map_err(|_| VMError::NoritoInvalid)?;
+                    let p = Self::alloc_tlv_payload(vm, PointerType::Quantity, &payload)?;
                     vm.set_register(10, p);
                     Ok(Self::singular_query_gas(payload.len()))
                 } else {
@@ -7648,9 +7304,23 @@ mod tests_null_decode {
             .memory
             .validate_tlv(vm.register(10))
             .expect("balance tlv");
-        assert_eq!(out.type_id, PointerType::NoritoBytes);
-        let decoded: Numeric = norito::decode_from_bytes(out.payload).expect("decode numeric");
-        assert_eq!(decoded, Numeric::from(41_u64));
+        assert_eq!(out.type_id, PointerType::Quantity);
+        let decoded = QuantityValueV1::decode_frame(out.payload)
+            .expect("decode quantity frame")
+            .into_quantity();
+        assert_eq!(
+            decoded,
+            Quantity::try_from_numeric(Numeric::from(41_u64)).unwrap()
+        );
+        let canonical =
+            crate::numeric_tlv::encode_quantity(&decoded).expect("canonical quantity envelope");
+        assert_eq!(
+            vm.memory
+                .load_region(vm.register(10), u64::try_from(canonical.len()).unwrap())
+                .expect("complete balance envelope"),
+            canonical,
+            "the mock and production quantity pointer codecs must be byte-identical"
+        );
         assert_eq!(gas, WsvHost::singular_query_gas(out.payload.len()));
         assert!(gas <= quote);
         assert!(quote <= 1_000_000);
@@ -8045,10 +7715,9 @@ mod tests_null_decode {
         vm.set_register(10, 1);
         vm.set_register(11, 2);
         vm.set_register(12, 1);
-        let amount_payload = norito::to_bytes(&Numeric::from(10_u64)).expect("encode amount");
-        let amount_ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &amount_payload))
-            .expect("alloc amount");
+        let amount_tlv = crate::numeric_tlv::encode_quantity(&Quantity::from(10_u64))
+            .expect("encode quantity pointer envelope");
+        let amount_ptr = vm.alloc_input_tlv(&amount_tlv).expect("alloc amount");
         vm.set_register(13, amount_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm),
@@ -8278,21 +7947,19 @@ mod tests_null_decode {
         vm.set_register(10, object_with_value_ptr);
         vm.set_register(11, key_name_ptr);
         let get_gas =
-            call_syscall_with_quote(&mut vm, syscalls::SYSCALL_JSON_GET_I64).expect("json get");
+            call_syscall_with_quote(&mut vm, syscalls::SYSCALL_JSON_GET_INT).expect("json get");
         assert_eq!(
             crate::sum::read_words(
                 &vm,
                 vm.register(10),
-                crate::sum::SumLayoutV1::option(1).expect("i64 Option layout"),
+                crate::sum::SumLayoutV1::option(1).expect("int Option layout"),
             ),
-            Ok((true, vec![99]))
+            Ok((false, vec![])),
+            "numeric JSON tokens are not accepted as exact int strings"
         );
         assert_eq!(
             get_gas,
-            WsvHost::json_gas(
-                object_with_value_len + key_name_bytes.len(),
-                core::mem::size_of::<i64>() + 16
-            )
+            WsvHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
         );
 
         let name: Name = "wonderland".parse().expect("name");
@@ -8764,14 +8431,14 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn json_amount_getter_emits_canonical_amount_pointer() {
+    fn json_quantity_getter_accepts_only_canonical_strings() {
         let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
         let mut vm = IVM::new(1_000_000);
-        let json = Json::from_str_norito(r#"{"amount":"1.2500"}"#).expect("amount JSON");
+        let json = Json::from_str_norito(r#"{"amount":"1.25"}"#).expect("quantity JSON");
         let json_ptr = vm
             .alloc_input_tlv(&make_tlv(
                 PointerType::Json,
@@ -8788,20 +8455,21 @@ mod tests_null_decode {
         vm.set_register(10, json_ptr);
         vm.set_register(11, key_ptr);
 
-        host.syscall(syscalls::SYSCALL_JSON_GET_AMOUNT, &mut vm)
-            .expect("get Amount");
+        host.syscall(syscalls::SYSCALL_JSON_GET_QUANTITY, &mut vm)
+            .expect("get quantity");
         let (some, words) = crate::sum::read_words(
             &vm,
             vm.register(10),
-            crate::sum::SumLayoutV1::option(1).expect("Amount option layout"),
+            crate::sum::SumLayoutV1::option(1).expect("quantity option layout"),
         )
-        .expect("Amount option");
+        .expect("quantity option");
         assert!(some);
-        let tlv = vm.memory.validate_tlv(words[0]).expect("Amount TLV");
+        let tlv = vm.memory.validate_tlv(words[0]).expect("quantity TLV");
         assert_eq!(tlv.type_id, PointerType::Quantity);
-        let amount: Numeric = decode_from_bytes(tlv.payload).expect("decode Amount");
-        amount.validate_amount().expect("canonical Amount");
-        assert_eq!(amount, Numeric::new(125_u32, 2));
+        let quantity = QuantityValueV1::decode_frame(tlv.payload)
+            .expect("decode quantity frame")
+            .into_quantity();
+        assert_eq!(quantity.to_string(), "1.25");
 
         let negative = Json::from_str_norito(r#"{"amount":"-1"}"#).expect("negative JSON");
         let negative_ptr = vm
@@ -8812,13 +8480,13 @@ mod tests_null_decode {
             .expect("allocate negative JSON");
         vm.set_register(10, negative_ptr);
         vm.set_register(11, key_ptr);
-        host.syscall(syscalls::SYSCALL_JSON_GET_AMOUNT, &mut vm)
-            .expect("invalid Amount is Option::none");
+        host.syscall(syscalls::SYSCALL_JSON_GET_QUANTITY, &mut vm)
+            .expect("invalid quantity is Option::none");
         assert_eq!(
             crate::sum::read_words(
                 &vm,
                 vm.register(10),
-                crate::sum::SumLayoutV1::option(1).expect("Amount option layout"),
+                crate::sum::SumLayoutV1::option(1).expect("quantity option layout"),
             ),
             Ok((false, vec![]))
         );
@@ -8833,15 +8501,20 @@ mod tests_null_decode {
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
         let mut vm = IVM::new(1_000_000);
         let canonical = Numeric::new(125_u32, 2);
-        let canonical_payload = norito::to_bytes(&canonical).expect("encode canonical Amount");
+        let canonical_quantity =
+            Quantity::try_from_numeric(canonical.clone()).expect("canonical quantity");
+        let canonical_payload = QuantityValueV1::new(canonical_quantity)
+            .encode_frame()
+            .expect("encode canonical quantity frame");
         let canonical_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Quantity, &canonical_payload))
-            .expect("allocate canonical Amount");
+            .expect("allocate canonical quantity");
         vm.set_register(12, canonical_ptr);
-        assert_eq!(host.decode_amount_reg(&vm, 12), Ok(canonical));
+        assert_eq!(host.decode_amount_reg(&vm, 12), Ok(canonical.clone()));
 
+        let legacy_payload = norito::to_bytes(&canonical).expect("encode legacy Numeric");
         let legacy_ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &canonical_payload))
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &legacy_payload))
             .expect("allocate legacy Numeric pointer");
         vm.set_register(12, legacy_ptr);
         assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::NoritoInvalid));
@@ -8954,39 +8627,5 @@ mod tests_null_decode {
         vm.set_register(11, Memory::OUTPUT_START);
         assert!(host.prepare_syscall(syscalls::SYSCALL_TLV_EQ, &vm).is_err());
         assert!(host.syscall(syscalls::SYSCALL_TLV_EQ, &mut vm).is_err());
-    }
-
-    #[test]
-    fn wsv_host_numeric_quote_is_payload_bounded_and_type_checked() {
-        let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "wonderland",
-        );
-        let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
-        let mut vm = IVM::new(u64::MAX);
-        let left = vm
-            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &[0xA5; 256]))
-            .expect("allocate left Numeric-shaped fixture");
-        let right = vm
-            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &[0x5A; 128]))
-            .expect("allocate right Numeric-shaped fixture");
-        vm.set_register(10, left);
-        vm.set_register(11, right);
-
-        assert_eq!(
-            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm),
-            Ok(WsvHost::numeric_gas() + 256 + 128),
-            "preparation must reserve declared operand bytes without decoding them"
-        );
-
-        let wrong_type = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Blob, &[0x11; 32]))
-            .expect("allocate wrong-type Numeric fixture");
-        vm.set_register(11, wrong_type);
-        assert!(
-            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm)
-                .is_err(),
-            "preparation must reject a non-Numeric pointer type"
-        );
     }
 }

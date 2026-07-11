@@ -121,12 +121,12 @@ public final class SccpJsonParser {
       Set.of(
           "version",
           "source_network",
+          "protocol_version",
           "chain_id_hash",
           "checkpoint_height",
           "checkpoint_block_hash",
-          "validator_set_epoch",
-          "validator_set_hash",
-          "validator_set_hash_version");
+          "checkpoint_context_id",
+          "checkpoint_finality_artifact_hash");
   private static final Set<String> PROOF_REQUEST_FIELDS =
       Set.of(
           "version",
@@ -1092,28 +1092,28 @@ public final class SccpJsonParser {
         List.of(
             upperBytes(anchor, "chain_id_hash", 32),
             upperBytes(anchor, "checkpoint_block_hash", 32),
-            upperBytes(anchor, "validator_set_hash", 32));
+            upperBytes(anchor, "checkpoint_context_id", 32),
+            upperBytes(anchor, "checkpoint_finality_artifact_hash", 32));
     if (!TAIRA_CHAIN_ID_HASH.equals(anchorRoles.get(0))) {
       throw new IllegalArgumentException(label + " Taira chain id hash mismatch");
     }
+    final int protocolVersion = requiredInt(anchor, "protocol_version", 2, 2);
     final BigInteger checkpointHeight =
         requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true);
-    final BigInteger validatorSetEpoch =
-        requiredUnsignedInteger(anchor, "validator_set_epoch", MAX_U64, false);
-    final int hashVersion = requiredInt(anchor, "validator_set_hash_version", 1, 1);
     requireDistinctRawHashes(anchorRoles, label + " finality anchor");
     final ByteArrayOutputStream canonicalAnchor = new ByteArrayOutputStream();
     canonicalAnchor.write(1);
     canonicalAnchor.write(SccpNetworkV1.SORA_TAIRA.tag());
+    writeU16(canonicalAnchor, protocolVersion);
     byte[] roleBytes = hexBytes(anchorRoles.get(0));
     canonicalAnchor.write(roleBytes, 0, roleBytes.length);
     writeU64(canonicalAnchor, checkpointHeight);
     roleBytes = hexBytes(anchorRoles.get(1));
     canonicalAnchor.write(roleBytes, 0, roleBytes.length);
-    writeU64(canonicalAnchor, validatorSetEpoch);
     roleBytes = hexBytes(anchorRoles.get(2));
     canonicalAnchor.write(roleBytes, 0, roleBytes.length);
-    writeU16(canonicalAnchor, hashVersion);
+    roleBytes = hexBytes(anchorRoles.get(3));
+    canonicalAnchor.write(roleBytes, 0, roleBytes.length);
     final String anchorHash =
         upperHex(
             prefixedKeccak("sccp:sora-finality-anchor:v1", canonicalAnchor.toByteArray()));
@@ -1134,12 +1134,12 @@ public final class SccpJsonParser {
         new SccpModels.SoraFinalityAnchorV1(
             anchorVersion,
             sourceNetwork,
+            protocolVersion,
             anchorRoles.get(0),
             checkpointHeight,
             anchorRoles.get(1),
-            validatorSetEpoch,
             anchorRoles.get(2),
-            hashVersion,
+            anchorRoles.get(3),
             "0x" + anchorHash.toLowerCase(Locale.ROOT)));
   }
 
@@ -1713,8 +1713,9 @@ public final class SccpJsonParser {
 
   private static void requireDistinctRawHashes(
       final List<String> values, final String label) {
-    if (new HashSet<>(values).size() != values.size()) {
-      throw new IllegalArgumentException(label + " hash roles must be distinct");
+    if (values.stream().anyMatch(SccpJsonParser::isZeroHex)
+        || new HashSet<>(values).size() != values.size()) {
+      throw new IllegalArgumentException(label + " hash roles must be nonzero and distinct");
     }
   }
 

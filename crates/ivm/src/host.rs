@@ -23,16 +23,13 @@ use iroha_data_model::{
     isi::transfer::TransferAssetBatch,
     name::Name,
     nexus::{AxtPolicySnapshot, DataSpaceId},
-    zk::{
-        OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError,
-    },
+    zk::{OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
-use iroha_primitives::{
-    json::Json,
-    numeric::Numeric,
-};
+#[cfg(test)]
+use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::{json::Json, numeric_abi::QuantityValueV1};
 use norito::{
-    core::{Archived, Header, NoritoSerialize},
+    core::{Archived, Header, NoritoDeserialize, NoritoSerialize},
     decode_from_bytes,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -135,6 +132,17 @@ pub const LABEL_UNSHIELD: &str = "zk_verify_unshield/v2";
 pub const LABEL_VOTE_BALLOT: &str = "zk_verify_ballot/v2";
 pub const LABEL_VOTE_TALLY: &str = "zk_verify_tally/v2";
 pub const LABEL_BATCH: &str = "zk_verify_batch/v2";
+
+/// Per-host counters used to prove the ZK reserve/decode/backend/allocation ordering.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZkExecutionCounters {
+    /// Canonical envelope or batch decode attempts made after gas reservation.
+    pub canonical_decodes: u64,
+    /// Backend verifier invocations made after exact-cost preflight.
+    pub backend_invocations: u64,
+    /// Guest-visible batch response allocations made after verification.
+    pub response_allocations: u64,
+}
 
 const PUBLIC_INPUT_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
 const PUBLIC_INPUT_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
@@ -531,8 +539,9 @@ pub fn quote_zk_batch_at(
 ///
 /// Returns [`ERR_DECODE`] for invalid headers, flags, schema, checksum, or payloads.
 pub fn decode_canonical_zk_envelope(payload: &[u8]) -> Result<OpenVerifyEnvelope, u64> {
-    let view = norito::core::from_bytes_view(payload).map_err(|_| ERR_DECODE)?;
-    view.decode::<OpenVerifyEnvelope>().map_err(|_| ERR_DECODE)
+    let archived =
+        norito::core::from_bytes::<OpenVerifyEnvelope>(payload).map_err(|_| ERR_DECODE)?;
+    OpenVerifyEnvelope::try_deserialize(archived).map_err(|_| ERR_DECODE)
 }
 
 /// Decode the sole ABI-v1 public ZK batch schema with a bounded item count.
@@ -546,18 +555,19 @@ pub fn decode_canonical_zk_batch(
     max_items: usize,
 ) -> Result<Vec<OpenVerifyEnvelope>, u64> {
     type Batch = Vec<OpenVerifyEnvelope>;
-    let view = norito::core::from_bytes_view(payload).map_err(|_| ERR_DECODE)?;
-    if view.schema() != <Batch as norito::core::NoritoDeserialize<'static>>::schema_hash() {
-        return Err(ERR_DECODE);
-    }
-    let (count, _) = norito::core::read_seq_len_slice(view.as_bytes()).map_err(|_| ERR_DECODE)?;
+    let archived = norito::core::from_bytes::<Batch>(payload).map_err(|_| ERR_DECODE)?;
+    let archive_offset = (archived as *const Archived<Batch> as usize)
+        .checked_sub(payload.as_ptr() as usize)
+        .ok_or(ERR_DECODE)?;
+    let archive_payload = payload.get(archive_offset..).ok_or(ERR_DECODE)?;
+    let (count, _) = norito::core::read_seq_len_slice(archive_payload).map_err(|_| ERR_DECODE)?;
     if count == 0 {
         return Err(ERR_DECODE);
     }
     if count > max_items {
         return Err(ERR_BATCH);
     }
-    let batch: Batch = view.decode().map_err(|_| ERR_DECODE)?;
+    let batch = Batch::try_deserialize(archived).map_err(|_| ERR_DECODE)?;
     if batch.len() != count {
         return Err(ERR_DECODE);
     }
@@ -628,8 +638,8 @@ pub enum HostSyscallGasFormula {
     ByteLinear,
     /// Cryptographic verification with the canonical verification base.
     VerifyByteLinear,
-    /// ZK verification charged per proof and encoded byte with hard V1 caps.
-    ZkVerify,
+    /// V1 ZK verification charged per proof, public input, and encoded byte.
+    ZkVerifyV1,
     /// Schema codec with the canonical schema base.
     SchemaByteLinear,
     /// Allocation extent divided into canonical ABI words.
@@ -663,8 +673,8 @@ pub enum HostSyscallGasParameters {
     HostByte,
     /// Verification base and byte rate.
     HostVerify,
-    /// ZK per-proof/byte rates and batch/payload caps.
-    ZkVerify,
+    /// V1 ZK rates, public-input unit, batch-output layout, and hard caps.
+    ZkVerifyV1,
     /// Schema codec base and byte rate.
     HostSchema,
     /// Allocation base and word size.
@@ -745,7 +755,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY
             | syscalls::SYSCALL_ZK_VERIFY_BATCH
     ) {
-        return Some(HostSyscallGasFormula::ZkVerify);
+        return Some(HostSyscallGasFormula::ZkVerifyV1);
     }
     if matches!(
         number,
@@ -963,7 +973,7 @@ pub fn host_syscall_metering_spec(
     let parameters = match formula {
         HostSyscallGasFormula::NumericStaged => HostSyscallGasParameters::Numeric,
         HostSyscallGasFormula::VerifyByteLinear => HostSyscallGasParameters::HostVerify,
-        HostSyscallGasFormula::ZkVerify => HostSyscallGasParameters::ZkVerify,
+        HostSyscallGasFormula::ZkVerifyV1 => HostSyscallGasParameters::ZkVerifyV1,
         HostSyscallGasFormula::SchemaByteLinear => HostSyscallGasParameters::HostSchema,
         HostSyscallGasFormula::AllocationExtent => HostSyscallGasParameters::Allocation,
         HostSyscallGasFormula::GrowHeapPages => HostSyscallGasParameters::GrowHeap,
@@ -990,7 +1000,7 @@ pub fn host_syscall_metering_spec(
     let minimum_gas = match parameters {
         HostSyscallGasParameters::Numeric => crate::numeric_gas::NUMERIC_ENTRY_GAS,
         HostSyscallGasParameters::HostVerify => gas::HOST_VERIFY_GAS_BASE,
-        HostSyscallGasParameters::ZkVerify => gas::HOST_ZK_VERIFY_GAS_PER_PROOF,
+        HostSyscallGasParameters::ZkVerifyV1 => gas::HOST_ZK_VERIFY_GAS_PER_PROOF,
         HostSyscallGasParameters::HostSchema => gas::HOST_SCHEMA_GAS_BASE,
         HostSyscallGasParameters::Allocation => gas::ALLOCATION_GAS_BASE,
         HostSyscallGasParameters::GrowHeap => gas::GROW_HEAP_GAS_BASE,
@@ -1637,6 +1647,7 @@ pub struct DefaultHost {
     nullifiers: HashSet<u64>,
     zk_cfg: ZkHalo2Config,
     zk_gas_schedule: gas::ZkGasScheduleV1,
+    zk_execution_counters: ZkExecutionCounters,
     chain_id: Option<Vec<u8>>,
     halo2_external_vks: std::collections::HashMap<String, Vec<u8>>,
     axt_state: Option<axt::HostAxtState>,
@@ -1660,6 +1671,7 @@ impl DefaultHost {
             nullifiers: HashSet::new(),
             zk_cfg: ZkHalo2Config::default(),
             zk_gas_schedule: gas::ZkGasScheduleV1::default(),
+            zk_execution_counters: ZkExecutionCounters::default(),
             chain_id: None,
             halo2_external_vks: std::collections::HashMap::new(),
             axt_state: None,
@@ -1684,6 +1696,7 @@ impl DefaultHost {
             nullifiers: HashSet::new(),
             zk_cfg: ZkHalo2Config::default(),
             zk_gas_schedule: gas::ZkGasScheduleV1::default(),
+            zk_execution_counters: ZkExecutionCounters::default(),
             chain_id: None,
             halo2_external_vks: std::collections::HashMap::new(),
             axt_state: None,
@@ -1752,6 +1765,11 @@ impl DefaultHost {
         self
     }
 
+    /// Replace Halo2 verification limits without discarding other host state.
+    pub fn set_zk_halo2_config(&mut self, cfg: ZkHalo2Config) {
+        self.zk_cfg = cfg;
+    }
+
     /// Configure the immutable ZK syscall gas snapshot for this host.
     #[must_use]
     pub const fn with_zk_gas_schedule(mut self, schedule: gas::ZkGasScheduleV1) -> Self {
@@ -1768,6 +1786,17 @@ impl DefaultHost {
     #[must_use]
     pub const fn zk_gas_schedule(&self) -> gas::ZkGasScheduleV1 {
         self.zk_gas_schedule
+    }
+
+    /// Return the current ZK execution-order counters.
+    #[must_use]
+    pub const fn zk_execution_counters(&self) -> ZkExecutionCounters {
+        self.zk_execution_counters
+    }
+
+    /// Reset the ZK execution-order counters.
+    pub fn reset_zk_execution_counters(&mut self) {
+        self.zk_execution_counters = ZkExecutionCounters::default();
     }
 
     /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
@@ -1845,189 +1874,23 @@ impl DefaultHost {
         self.current_block_height = block_height;
     }
 
-    fn expected_zk_verify_label(number: u32) -> Option<&'static str> {
-        match number {
-            syscalls::SYSCALL_ZK_VERIFY_TRANSFER => Some(LABEL_TRANSFER),
-            syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => Some(LABEL_UNSHIELD),
-            syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => Some(LABEL_VOTE_BALLOT),
-            syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => Some(LABEL_VOTE_TALLY),
-            syscalls::SYSCALL_ZK_VERIFY_BATCH => Some(LABEL_BATCH),
-            _ => None,
-        }
-    }
-
-    fn zk_curve_allowed(&self, curve: iroha_zkp_halo2::ZkCurveId) -> bool {
-        match self.zk_cfg.curve {
-            ZkCurve::Pallas | ZkCurve::Pasta => matches!(
-                curve,
-                iroha_zkp_halo2::ZkCurveId::Pallas | iroha_zkp_halo2::ZkCurveId::Pasta
-            ),
-            ZkCurve::Goldilocks => curve == iroha_zkp_halo2::ZkCurveId::Goldilocks,
-            ZkCurve::Bn254 => curve == iroha_zkp_halo2::ZkCurveId::Bn254,
-        }
-    }
-
-    fn map_zk_open_error(error: &iroha_zkp_halo2::Error) -> u64 {
-        match error {
-            iroha_zkp_halo2::Error::CurveMismatch { .. } => ERR_CURVE,
-            iroha_zkp_halo2::Error::EnvelopeLimitExceeded { limit: "max_k", .. } => ERR_K,
-            iroha_zkp_halo2::Error::EnvelopeLimitExceeded {
-                limit: "transcript_label_len",
-                ..
-            } => ERR_TRANSCRIPT_LABEL,
-            iroha_zkp_halo2::Error::UnsupportedBackend { .. } => ERR_BACKEND,
-            iroha_zkp_halo2::Error::VerificationFailed => ERR_VERIFY,
-            _ => ERR_DECODE,
-        }
-    }
-
-    fn verify_zk_open_envelope(&self, number: u32, payload: &[u8]) -> Result<bool, u64> {
-        use iroha_zkp_halo2::{
-            OpenVerifyEnvelope, OpenVerifyLimits, Transcript,
-            backend::{bn254, pallas},
-            norito_helpers::{self as nh, DecodedEnvelope},
-        };
-
-        if payload.len() > self.zk_cfg.max_envelope_bytes {
-            return Err(ERR_ENVELOPE_SIZE);
-        }
+    fn validate_zk_open_envelope(&self, envelope: &OpenVerifyEnvelope) -> Result<(), u64> {
+        envelope
+            .validate_with_bounds(OpenVerifyEnvelopeBounds {
+                max_proof_bytes: self.zk_cfg.max_proof_bytes,
+                ..OpenVerifyEnvelopeBounds::default()
+            })
+            .map_err(map_open_verify_validation_error)?;
         if !self.zk_cfg.enabled {
             return Err(ERR_DISABLED);
         }
         if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
             return Err(ERR_BACKEND);
         }
-
-        let env: OpenVerifyEnvelope = decode_from_bytes(payload).map_err(|_| ERR_DECODE)?;
-        if env.transcript_label.len() > self.zk_cfg.max_transcript_label_len {
-            return Err(ERR_TRANSCRIPT_LABEL);
-        }
-        if self.zk_cfg.enforce_transcript_label_ascii && !env.transcript_label.is_ascii() {
-            return Err(ERR_TRANSCRIPT_LABEL);
-        }
-        let expected_label = Self::expected_zk_verify_label(number).ok_or(ERR_DECODE)?;
-        if env.transcript_label != expected_label {
-            return Err(ERR_TRANSCRIPT_LABEL);
-        }
-
-        let proof_bytes = norito::to_bytes(&env.proof).map_err(|_| ERR_DECODE)?;
-        if proof_bytes.len() > self.zk_cfg.max_proof_bytes {
-            return Err(ERR_PROOF_LEN);
-        }
-
-        let curve = iroha_zkp_halo2::ZkCurveId::from_u16(env.params.curve_id);
-        if env.params.curve_id != env.public.curve_id || !self.zk_curve_allowed(curve) {
-            return Err(ERR_CURVE);
-        }
-
-        let decoded = nh::decode_envelope_with_limits(
-            &env,
-            OpenVerifyLimits {
-                max_k: Some(self.zk_cfg.max_k),
-                max_transcript_label_len: Some(self.zk_cfg.max_transcript_label_len),
-            },
-        )
-        .map_err(|error| Self::map_zk_open_error(&error))?;
-
-        let mut transcript = Transcript::new(&env.transcript_label);
-        let metadata = env.transcript_metadata();
-        let result = match decoded {
-            DecodedEnvelope::Pallas {
-                params,
-                proof,
-                z,
-                t,
-                p_g,
-            } => pallas::Polynomial::verify_open_with_metadata(
-                params.as_ref(),
-                &mut transcript,
-                z,
-                p_g,
-                t,
-                proof.as_ref(),
-                metadata,
-            ),
-            DecodedEnvelope::Bn254 {
-                params,
-                proof,
-                z,
-                t,
-                p_g,
-            } => bn254::Polynomial::verify_open_with_metadata(
-                params.as_ref(),
-                &mut transcript,
-                z,
-                p_g,
-                t,
-                proof.as_ref(),
-                metadata,
-            ),
-            #[cfg(feature = "goldilocks_backend")]
-            DecodedEnvelope::Goldilocks {
-                params,
-                proof,
-                z,
-                t,
-                p_g,
-            } => iroha_zkp_halo2::backend::goldilocks::Polynomial::verify_open_with_metadata(
-                params.as_ref(),
-                &mut transcript,
-                z,
-                p_g,
-                t,
-                proof.as_ref(),
-                metadata,
-            ),
-            #[cfg(not(feature = "goldilocks_backend"))]
-            DecodedEnvelope::Goldilocks => {
-                return Err(ERR_BACKEND);
-            }
-        };
-
-        match result {
-            Ok(()) => Ok(true),
-            Err(iroha_zkp_halo2::Error::VerificationFailed) => Ok(false),
-            Err(error) => Err(Self::map_zk_open_error(&error)),
-        }
-    }
-
-    fn verify_zk_open_batch(
-        &self,
-        envs: Vec<iroha_zkp_halo2::OpenVerifyEnvelope>,
-    ) -> Result<(Vec<u8>, Option<u64>), u64> {
-        if !self.zk_cfg.enabled {
-            return Err(ERR_DISABLED);
-        }
-        if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
-            return Err(ERR_BACKEND);
-        }
-        if envs.is_empty() {
-            return Err(ERR_DECODE);
-        }
-        if envs.len() > gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS
-            || u32::try_from(envs.len()).unwrap_or(u32::MAX) > self.zk_cfg.verifier_max_batch
-        {
-            return Err(ERR_BATCH);
-        }
-
-        let mut statuses = Vec::with_capacity(envs.len());
-        let mut first_error = None;
-        for env in envs {
-            let env_payload = norito::to_bytes(&env).map_err(|_| ERR_DECODE)?;
-            match self.verify_zk_open_envelope(syscalls::SYSCALL_ZK_VERIFY_BATCH, &env_payload) {
-                Ok(true) => statuses.push(1),
-                Ok(false) => {
-                    first_error.get_or_insert(ERR_VERIFY);
-                    statuses.push(0);
-                }
-                Err(status) => {
-                    first_error.get_or_insert(status);
-                    statuses.push(0);
-                }
-            }
-        }
-
-        Ok((statuses, first_error))
+        // The standalone host deliberately has no chain verifier-key registry.
+        // Production verification is provided only by CoreHost after binding
+        // the canonical envelope to an active registered key.
+        Err(ERR_BACKEND)
     }
 
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
@@ -2134,11 +1997,9 @@ impl DefaultHost {
 
     fn expect_amount(vm: &IVM, reg: usize) -> Result<(), VMError> {
         let tlv = Self::expect_tlv(vm, reg, PointerType::Quantity)?;
-        let amount = decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
-        if norito::to_bytes(&amount).map_err(|_| VMError::DecodeError)? != tlv.payload {
-            return Err(VMError::DecodeError);
-        }
-        amount.validate_amount().map_err(|_| VMError::DecodeError)
+        QuantityValueV1::decode_frame(tlv.payload)
+            .map(drop)
+            .map_err(|_| VMError::DecodeError)
     }
 
     fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
@@ -2825,32 +2686,10 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                let payload_len = tlv_len(10)?;
-                let max_payload = self
-                    .zk_cfg
-                    .max_envelope_bytes
-                    .min(gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES);
-                if payload_len > max_payload {
-                    return Err(VMError::NoritoInvalid);
-                }
-                gas::zk_verify_gas(payload_len)
+                quote_zk_single_at(vm, vm.register(10), self.zk_gas_schedule)?.1
             }
             crate::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                type Batch = Vec<iroha_zkp_halo2::OpenVerifyEnvelope>;
-                let max_items = usize::try_from(self.zk_cfg.verifier_max_batch)
-                    .unwrap_or(usize::MAX)
-                    .min(gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS);
-                let (payload_len, count) = quote_norito_sequence_count_at(
-                    vm,
-                    vm.register(10),
-                    <Batch as norito::core::NoritoDeserialize<'static>>::schema_hash(),
-                    gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES,
-                    max_items,
-                )?;
-                if count == 0 {
-                    return Err(VMError::NoritoInvalid);
-                }
-                gas::zk_verify_batch_gas(count, payload_len)
+                quote_zk_batch_at(vm, vm.register(10), self.zk_gas_schedule)?.gas
             }
             crate::syscalls::SYSCALL_ADD_SIGNATORY
             | crate::syscalls::SYSCALL_REMOVE_SIGNATORY
@@ -4362,38 +4201,44 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                // The standalone IVM host supports direct Halo2 opening verification for
-                // single-envelope syscalls so tests can exercise the real gating surface
-                // without a full node host.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                let max_payload = self
-                    .zk_cfg
-                    .max_envelope_bytes
-                    .min(gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES);
-                if tlv.payload.len() > max_payload {
+                let payload_len = tlv.payload.len();
+                if u64::try_from(payload_len).unwrap_or(u64::MAX)
+                    > self.zk_gas_schedule.max_payload_bytes
+                {
                     return Err(VMError::NoritoInvalid);
                 }
-                let gas = gas::zk_verify_gas(tlv.payload.len());
-                preflight_reserved_syscall_gas(vm, gas)?;
-                match self.verify_zk_open_envelope(number, tlv.payload) {
-                    Ok(true) => {
-                        vm.set_register(10, 1);
-                        vm.set_register(11, 0);
-                    }
-                    Ok(false) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_VERIFY);
-                    }
+                let conservative = self.zk_gas_schedule.conservative_single_gas(payload_len);
+                preflight_reserved_syscall_gas(vm, conservative)?;
+                if payload_len > self.zk_cfg.max_envelope_bytes {
+                    vm.set_register(10, 0);
+                    vm.set_register(11, ERR_ENVELOPE_SIZE);
+                    return Ok(conservative);
+                }
+                self.zk_execution_counters.canonical_decodes = self
+                    .zk_execution_counters
+                    .canonical_decodes
+                    .saturating_add(1);
+                let envelope = match decode_canonical_zk_envelope(tlv.payload) {
+                    Ok(envelope) => envelope,
                     Err(status) => {
                         vm.set_register(10, 0);
                         vm.set_register(11, status);
+                        return Ok(conservative);
                     }
-                }
-                Ok(gas)
+                };
+                let actual = self
+                    .zk_gas_schedule
+                    .actual_single_gas(payload_len, envelope.public_inputs.len());
+                preflight_reserved_syscall_gas(vm, actual)?;
+                let status = self.validate_zk_open_envelope(&envelope).err();
+                vm.set_register(10, u64::from(status.is_none()));
+                vm.set_register(11, status.unwrap_or(0));
+                Ok(actual)
             }
             crate::syscalls::SYSCALL_ZK_ROOTS_GET | crate::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
                 // Expect a NoritoBytes TLV pointer in r10 (request). DefaultHost has
@@ -4451,90 +4296,88 @@ impl IVMHost for DefaultHost {
                 }
             }
             crate::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                type Batch = Vec<iroha_zkp_halo2::OpenVerifyEnvelope>;
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                if tlv.payload.len() > gas::HOST_ZK_VERIFY_MAX_PAYLOAD_BYTES {
+                if u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX)
+                    > self.zk_gas_schedule.max_payload_bytes
+                {
                     return Err(VMError::NoritoInvalid);
                 }
-                let fallback_gas = gas::zk_verify_gas(tlv.payload.len());
-                preflight_reserved_syscall_gas(vm, fallback_gas)?;
-                if !self.zk_cfg.enabled {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_DISABLED);
-                    return Ok(fallback_gas);
-                }
-                if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_BACKEND);
-                    return Ok(fallback_gas);
-                }
-                let view = match norito::core::from_bytes_view(tlv.payload) {
-                    Ok(view)
-                        if view.schema()
-                            == <Batch as norito::core::NoritoDeserialize<'static>>::schema_hash(
-                            ) =>
-                    {
-                        view
-                    }
-                    _ => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_DECODE);
-                        return Ok(fallback_gas);
-                    }
-                };
-                let count = match norito::core::read_seq_len_slice(view.as_bytes()) {
-                    Ok((count, _)) if count != 0 => count,
-                    _ => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_DECODE);
-                        return Ok(fallback_gas);
-                    }
-                };
+                let quote = quote_zk_batch_at(vm, ptr, self.zk_gas_schedule)?;
+                preflight_reserved_syscall_gas(vm, quote.gas)?;
                 let max_items = usize::try_from(self.zk_cfg.verifier_max_batch)
                     .unwrap_or(usize::MAX)
-                    .min(gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS);
-                if count > max_items {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_BATCH);
-                    return Ok(fallback_gas);
-                }
-                let gas = gas::zk_verify_batch_gas(count, tlv.payload.len());
-                preflight_reserved_syscall_gas(vm, gas)?;
-                let envs: Batch = match view.decode() {
-                    Ok(envs) => envs,
-                    Err(_) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, ERR_DECODE);
-                        return Ok(gas);
-                    }
-                };
-                match self.verify_zk_open_batch(envs) {
-                    Ok((statuses, first_error)) => {
-                        let body =
-                            norito::to_bytes(&statuses).map_err(|_| VMError::NoritoInvalid)?;
-                        let ptr = Self::alloc_norito_bytes_tlv(vm, &body)?;
-                        vm.set_register(10, ptr);
-                        vm.set_register(11, first_error.unwrap_or(0));
-                        if let Some((idx, _)) = statuses
-                            .iter()
-                            .enumerate()
-                            .find(|(_, status)| **status == 0)
-                        {
-                            vm.set_register(12, idx as u64);
-                        } else {
-                            vm.set_register(12, u64::MAX);
-                        }
-                    }
+                    .min(
+                        usize::try_from(self.zk_gas_schedule.max_batch_proofs)
+                            .unwrap_or(usize::MAX),
+                    );
+                self.zk_execution_counters.canonical_decodes = self
+                    .zk_execution_counters
+                    .canonical_decodes
+                    .saturating_add(1);
+                let envelopes = match decode_canonical_zk_batch(tlv.payload, max_items) {
+                    Ok(envelopes) => envelopes,
                     Err(status) => {
                         vm.set_register(10, 0);
                         vm.set_register(11, status);
+                        vm.set_register(12, u64::MAX);
+                        return Ok(quote.gas);
+                    }
+                };
+                let public_input_count = envelopes.iter().fold(0_u64, |total, envelope| {
+                    total.saturating_add(
+                        self.zk_gas_schedule
+                            .public_input_count(envelope.public_inputs.len()),
+                    )
+                });
+                let actual = self.zk_gas_schedule.actual_batch_gas(
+                    envelopes.len(),
+                    tlv.payload.len(),
+                    public_input_count,
+                );
+                preflight_reserved_syscall_gas(vm, actual)?;
+
+                let mut first_error = None;
+                let mut first_error_index = u64::MAX;
+                for (index, envelope) in envelopes.iter().enumerate() {
+                    if let Err(status) = self.validate_zk_open_envelope(envelope)
+                        && first_error.is_none()
+                    {
+                        first_error = Some(status);
+                        first_error_index = u64::try_from(index).unwrap_or(u64::MAX);
                     }
                 }
-                Ok(gas)
+                // ABI V1 status bytes are boolean (`1 = verified`, `0 = not
+                // verified`). DefaultHost has no verifier backend, so every
+                // canonical item fails closed and the first failure is index 0.
+                let statuses = vec![0_u8; envelopes.len()];
+                let body = norito::to_bytes(&statuses)
+                    .map_err(|_| VMError::metered(actual, VMError::NoritoInvalid))?;
+                let encoded_output_bytes = TLV_ENVELOPE_OVERHEAD.saturating_add(body.len());
+                if u64::try_from(encoded_output_bytes).unwrap_or(u64::MAX)
+                    != self.zk_gas_schedule.batch_output_bytes(envelopes.len())
+                {
+                    return Err(VMError::metered(actual, VMError::NoritoInvalid));
+                }
+                self.zk_execution_counters.response_allocations = self
+                    .zk_execution_counters
+                    .response_allocations
+                    .saturating_add(1);
+                let output = Self::alloc_norito_bytes_tlv(vm, &body)?;
+                vm.set_register(10, output);
+                vm.set_register(11, first_error.unwrap_or(ERR_BACKEND));
+                vm.set_register(
+                    12,
+                    if first_error.is_some() {
+                        first_error_index
+                    } else {
+                        0
+                    },
+                );
+                Ok(actual)
             }
             syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
             syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
@@ -4596,6 +4439,7 @@ mod tests {
     use super::*;
     use crate::ProgramMetadata;
     use crate::pointer_abi::PointerType;
+    use iroha_data_model::zk::BackendTag;
 
     fn test_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
@@ -4612,37 +4456,42 @@ mod tests {
         out
     }
 
-    fn dummy_zk_batch_envelope() -> iroha_zkp_halo2::OpenVerifyEnvelope {
-        let curve = iroha_zkp_halo2::ZkCurveId::Pallas;
-        iroha_zkp_halo2::OpenVerifyEnvelope {
-            params: iroha_zkp_halo2::IpaParams {
-                version: 1,
-                curve_id: curve.as_u16(),
-                n: 8,
-                g: Vec::new(),
-                h: Vec::new(),
-                u: [0; 32],
-            },
-            public: iroha_zkp_halo2::PolyOpenPublic {
-                version: 1,
-                curve_id: curve.as_u16(),
-                n: 8,
-                z: [0; 32],
-                t: [0; 32],
-                p_g: [0; 32],
-            },
-            proof: iroha_zkp_halo2::IpaProofData {
-                version: 1,
-                l: Vec::new(),
-                r: Vec::new(),
-                a_final: [0; 32],
-                b_final: [0; 32],
-            },
-            transcript_label: LABEL_BATCH.to_owned(),
-            vk_commitment: None,
-            public_inputs_schema_hash: None,
-            domain_tag: None,
-        }
+    fn dummy_zk_batch_envelope() -> OpenVerifyEnvelope {
+        OpenVerifyEnvelope::new(
+            BackendTag::Halo2IpaPasta,
+            "test-circuit-v1",
+            [0x11; 32],
+            vec![0x22; 64],
+            vec![0x33; 96],
+        )
+    }
+
+    fn run_vm_dispatched_zk_batch(payload: &[u8]) -> (IVM, DefaultHost, u64) {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let scall = crate::encoding::wide::encode_sys(
+            crate::instruction::wide::system::SCALL,
+            u8::try_from(syscalls::SYSCALL_ZK_VERIFY_BATCH).expect("syscall fits"),
+        );
+        let mut code = Vec::new();
+        code.extend_from_slice(&scall.to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        vm.load_code(&code).expect("load ZK batch test program");
+        let pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, payload))
+            .expect("allocate ZK batch");
+        vm.set_register(10, pointer);
+        vm.set_register(11, u64::MAX);
+        vm.set_register(12, u64::MAX);
+        let mut host = DefaultHost::new();
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm)
+            .expect("quote ZK batch without decoding");
+        let instruction_gas = gas::cost_of(scall).expect("SCALL is scheduled");
+        vm.set_gas_limit(instruction_gas.saturating_add(quote));
+        vm.run_with_host(&mut host)
+            .expect("ZK status paths do not trap");
+        (vm, host, quote)
     }
 
     #[test]
@@ -4885,69 +4734,13 @@ mod tests {
     }
 
     #[test]
-    fn numeric_quote_is_payload_bounded_and_type_checked() {
-        let mut vm = IVM::new(u64::MAX);
-        let left = vm
-            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &[0xA5; 256]))
-            .expect("allocate left Numeric-shaped fixture");
-        let right = vm
-            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &[0x5A; 128]))
-            .expect("allocate right Numeric-shaped fixture");
-        vm.set_register(10, left);
-        vm.set_register(11, right);
+    fn default_host_accepts_only_the_canonical_envelope_schema() {
         let host = DefaultHost::new();
+        let envelope = dummy_zk_batch_envelope();
+        assert_eq!(host.validate_zk_open_envelope(&envelope), Err(ERR_BACKEND));
 
-        assert_eq!(
-            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm),
-            Ok(DefaultHost::numeric_gas() + 256 + 128),
-            "preparation must reserve declared operand bytes without decoding them"
-        );
-
-        let wrong_type = vm
-            .alloc_input_tlv(&test_tlv(PointerType::Blob, &[0x11; 32]))
-            .expect("allocate wrong-type Numeric fixture");
-        vm.set_register(11, wrong_type);
-        assert!(
-            host.prepare_syscall(syscalls::SYSCALL_NUMERIC_ADD, &vm)
-                .is_err(),
-            "preparation must reject a non-Numeric pointer type"
-        );
-    }
-
-    #[test]
-    fn zk_verify_label_mapping_covers_envelope_syscalls() {
-        assert_eq!(
-            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_TRANSFER),
-            Some(LABEL_TRANSFER)
-        );
-        assert_eq!(
-            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD),
-            Some(LABEL_UNSHIELD)
-        );
-        assert_eq!(
-            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT),
-            Some(LABEL_VOTE_BALLOT)
-        );
-        assert_eq!(
-            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY),
-            Some(LABEL_VOTE_TALLY)
-        );
-        assert_eq!(
-            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_BATCH),
-            Some(LABEL_BATCH)
-        );
-    }
-
-    #[test]
-    fn zk_curve_allowlist_tracks_host_curve_family() {
-        let pallas_host = DefaultHost::new();
-        assert!(pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pallas));
-        assert!(pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pasta));
-        assert!(!pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Bn254));
-
-        let bn254_host = DefaultHost::new().with_zk_curve_str("bn254");
-        assert!(bn254_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Bn254));
-        assert!(!bn254_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pallas));
+        let legacy = norito::to_bytes(&42_u64).expect("encode non-envelope archive");
+        assert_eq!(decode_canonical_zk_envelope(&legacy), Err(ERR_DECODE));
     }
 
     #[test]
@@ -5097,6 +4890,21 @@ mod tests {
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), ERR_DECODE);
 
+        let canonical = norito::to_bytes(&dummy_zk_batch_envelope())
+            .expect("encode canonical data-model envelope");
+        let canonical_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &canonical))
+            .expect("allocate canonical envelope");
+        vm.set_register(10, canonical_ptr);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm),
+            Ok(host
+                .zk_gas_schedule()
+                .actual_single_gas(canonical.len(), 64))
+        );
+        assert_eq!(vm.register(10), 0);
+        assert_eq!(vm.register(11), ERR_BACKEND);
+
         let batch_payload = b"batch-envelope";
         let batch_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, batch_payload))
@@ -5104,14 +4912,24 @@ mod tests {
         vm.set_register(10, batch_ptr);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &mut vm),
-            Ok(gas::zk_verify_gas(batch_payload.len()))
+            Ok(host
+                .zk_gas_schedule()
+                .conservative_batch_gas(1, batch_payload.len()))
         );
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), ERR_DECODE);
+        assert_eq!(
+            host.zk_execution_counters(),
+            ZkExecutionCounters {
+                canonical_decodes: 3,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
     }
 
     #[test]
-    fn zk_batch_prepare_quotes_every_declared_proof_and_rejects_oversized_counts() {
+    fn zk_batch_prepare_quotes_every_declared_proof_including_rejected_count() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let host = DefaultHost::new();
@@ -5143,8 +4961,125 @@ mod tests {
         vm.set_register(10, pointer);
         assert_eq!(
             host.prepare_syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &vm),
-            Err(VMError::NoritoInvalid)
+            Ok(gas::zk_verify_batch_gas(
+                gas::HOST_ZK_VERIFY_MAX_BATCH_PROOFS + 1,
+                oversized.len()
+            ))
         );
+    }
+
+    #[test]
+    fn vm_dispatched_zk_batch_malformed_header_paths_are_metered_before_decode() {
+        let canonical =
+            norito::to_bytes(&vec![dummy_zk_batch_envelope()]).expect("encode canonical ZK batch");
+        assert!(canonical.len() > norito::core::Header::SIZE);
+
+        let mut wrong_schema = canonical.clone();
+        wrong_schema[6] ^= 1; // schema starts after magic + major + minor
+        let mut wrong_flags = canonical.clone();
+        wrong_flags[norito::core::Header::SIZE - 1] = 0x80;
+        let mut wrong_checksum = canonical;
+        wrong_checksum[31] ^= 1; // CRC64 follows the encoded payload length
+
+        for (label, payload) in [
+            ("schema", wrong_schema),
+            ("flags", wrong_flags),
+            ("checksum", wrong_checksum),
+        ] {
+            let (vm, host, quote) = run_vm_dispatched_zk_batch(&payload);
+            assert_eq!(
+                quote,
+                host.zk_gas_schedule()
+                    .conservative_batch_gas(1, payload.len()),
+                "{label}"
+            );
+            assert_eq!(vm.register(10), 0, "{label}");
+            assert_eq!(vm.register(11), ERR_DECODE, "{label}");
+            assert_eq!(vm.register(12), u64::MAX, "{label}");
+            assert_eq!(vm.remaining_gas(), 0, "{label}");
+            assert_eq!(
+                host.zk_execution_counters(),
+                ZkExecutionCounters {
+                    canonical_decodes: 1,
+                    backend_invocations: 0,
+                    response_allocations: 0,
+                },
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn vm_dispatched_zk_batch_count_boundaries_have_stable_status_and_work() {
+        for count in [0_usize, 17] {
+            let payload = norito::to_bytes(
+                &(0..count)
+                    .map(|_| dummy_zk_batch_envelope())
+                    .collect::<Vec<_>>(),
+            )
+            .expect("encode boundary ZK batch");
+            let (vm, host, quote) = run_vm_dispatched_zk_batch(&payload);
+            let quoted_count = count.max(1);
+            assert_eq!(
+                quote,
+                host.zk_gas_schedule()
+                    .conservative_batch_gas(quoted_count, payload.len())
+            );
+            assert_eq!(vm.register(10), 0);
+            assert_eq!(
+                vm.register(11),
+                if count == 0 { ERR_DECODE } else { ERR_BATCH }
+            );
+            assert_eq!(vm.register(12), u64::MAX);
+            assert_eq!(vm.remaining_gas(), 0);
+            assert_eq!(
+                host.zk_execution_counters(),
+                ZkExecutionCounters {
+                    canonical_decodes: 1,
+                    backend_invocations: 0,
+                    response_allocations: 0,
+                }
+            );
+        }
+
+        for count in [1_usize, 16] {
+            let payload = norito::to_bytes(
+                &(0..count)
+                    .map(|_| dummy_zk_batch_envelope())
+                    .collect::<Vec<_>>(),
+            )
+            .expect("encode admitted ZK batch");
+            let (vm, host, quote) = run_vm_dispatched_zk_batch(&payload);
+            let actual = host.zk_gas_schedule().actual_batch_gas(
+                count,
+                payload.len(),
+                u64::try_from(count).expect("bounded count") * 2,
+            );
+            assert_eq!(vm.remaining_gas(), quote - actual);
+            assert_eq!(vm.register(11), ERR_BACKEND);
+            assert_eq!(vm.register(12), 0);
+            let output = vm
+                .memory
+                .validate_tlv(vm.register(10))
+                .expect("batch output");
+            assert_eq!(output.type_id, PointerType::NoritoBytes);
+            let statuses: Vec<u8> =
+                norito::decode_from_bytes(output.payload).expect("decode statuses");
+            assert_eq!(statuses, vec![0; count]);
+            assert_eq!(
+                u64::try_from(TLV_ENVELOPE_OVERHEAD + output.payload.len())
+                    .expect("bounded output"),
+                host.zk_gas_schedule().batch_output_bytes(count)
+            );
+            assert_eq!(
+                host.zk_execution_counters(),
+                ZkExecutionCounters {
+                    canonical_decodes: 1,
+                    backend_invocations: 0,
+                    response_allocations: 1,
+                }
+            );
+        }
     }
 
     #[test]
@@ -5179,6 +5114,7 @@ mod tests {
         assert_eq!(vm.register(10), pointer);
         assert_eq!(vm.register(11), 0xfeed);
         assert_eq!(vm.register(12), 0xbeef);
+        assert_eq!(host.zk_execution_counters(), ZkExecutionCounters::default());
     }
 
     #[test]
@@ -5222,6 +5158,14 @@ mod tests {
             .expect("invalid Norito checksum is a metered decode status");
         assert_eq!(vm.register(10), 0);
         assert_eq!(vm.register(11), ERR_DECODE);
+        assert_eq!(
+            host.zk_execution_counters(),
+            ZkExecutionCounters {
+                canonical_decodes: 1,
+                backend_invocations: 0,
+                response_allocations: 0,
+            }
+        );
     }
 
     #[test]
@@ -6063,15 +6007,20 @@ mod tests {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let canonical = Numeric::new(125_u32, 2);
-        let canonical_payload = norito::to_bytes(&canonical).expect("encode canonical Amount");
+        let canonical_quantity =
+            Quantity::try_from_numeric(canonical.clone()).expect("canonical quantity");
+        let canonical_payload = QuantityValueV1::new(canonical_quantity)
+            .encode_frame()
+            .expect("encode canonical quantity frame");
         let canonical_ptr = vm
             .alloc_input_tlv(&test_tlv(PointerType::Quantity, &canonical_payload))
-            .expect("allocate canonical Amount");
+            .expect("allocate canonical quantity");
         vm.set_register(13, canonical_ptr);
         assert_eq!(DefaultHost::expect_amount(&vm, 13), Ok(()));
 
+        let legacy_payload = norito::to_bytes(&canonical).expect("encode legacy Numeric");
         let legacy_ptr = vm
-            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &canonical_payload))
+            .alloc_input_tlv(&test_tlv(PointerType::NoritoBytes, &legacy_payload))
             .expect("allocate legacy Numeric pointer");
         vm.set_register(13, legacy_ptr);
         assert_eq!(

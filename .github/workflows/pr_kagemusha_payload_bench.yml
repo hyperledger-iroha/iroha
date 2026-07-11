@@ -120,6 +120,8 @@ on:
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
       - "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift"
       - "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
@@ -993,6 +995,14 @@ jobs:
         run: |
           ci/check_connect_norito_bridge_header.sh --negative-control-missing-recursive-header
           ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-signature
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-v2-signature
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-v2-artifact-signature
+          ci/check_connect_norito_bridge_header.sh --negative-control-missing-recursive-v2-export-pair
+          ci/check_connect_norito_bridge_header.sh --negative-control-missing-kagemusha-v2-protocol-export-pair
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-receiver-key-signature
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-verify-at-time-signature
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-kagemusha-v2-ack-create-signature
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-connect-norito-free-signature
           ci/check_connect_norito_bridge_header.sh --negative-control-missing-rust-export
           ci/check_connect_norito_bridge_header.sh --negative-control-umbrella-drift
       - name: Reject tracked Python bytecode
@@ -2508,6 +2518,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-retired-assertion-key-aliases
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-offline-vector-platform-aliases
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-route
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-exact-fields
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-archive-field-shape
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-retired-fields

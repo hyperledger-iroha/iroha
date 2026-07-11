@@ -40,13 +40,16 @@ private func numericFailure(_ code: KotodamaNumericV1ErrorCode, _ message: Strin
     KotodamaNumericV1Error(code: code, message: message)
 }
 
-/// Lossless signed 4,096-bit Kotodama integer represented by canonical decimal text.
+/// Lossless signed 512-bit Kotodama integer represented by canonical decimal text.
 public struct KotodamaInt: Equatable, Hashable, Sendable, CustomStringConvertible {
     public let canonicalString: String
 
     public init(_ value: String) throws {
         guard numericFullMatch(value, pattern: #"-?(?:0|[1-9][0-9]*)"#), value != "-0" else {
             throw numericFailure(.invalidText, "int must use canonical base-10 syntax")
+        }
+        guard value.utf8.count <= NumericV1Internal.maximumIntTextBytes else {
+            throw numericFailure(.mantissaOverflow, "integer text exceeds the signed 512-bit input bound")
         }
         _ = try NumericV1Internal.encodeTwos(value)
         canonicalString = value
@@ -127,6 +130,38 @@ public struct KotodamaQuantity: Equatable, Hashable, Sendable, CustomStringConve
 
 /// Canonical schema-bound frames and pointer envelopes for Kotodama V1 numerics.
 public enum KotodamaNumericV1Codec {
+    public static func encodeIntJSON(_ value: KotodamaInt) -> String {
+        value.canonicalString
+    }
+
+    public static func encodeDecimalJSON(_ value: KotodamaDecimal) -> String {
+        value.canonicalString
+    }
+
+    public static func encodeQuantityJSON(_ value: KotodamaQuantity) -> String {
+        value.canonicalString
+    }
+
+    public static func decodeIntJSON(_ value: String) throws -> KotodamaInt {
+        try KotodamaInt(value)
+    }
+
+    public static func decodeDecimalJSON(_ value: String) throws -> KotodamaDecimal {
+        let decoded = try KotodamaDecimal(value)
+        guard decoded.canonicalString == value else {
+            throw numericFailure(.invalidText, "decimal JSON must use canonical spelling")
+        }
+        return decoded
+    }
+
+    public static func decodeQuantityJSON(_ value: String) throws -> KotodamaQuantity {
+        let decoded = try KotodamaQuantity(value)
+        guard decoded.canonicalString == value else {
+            throw numericFailure(.invalidText, "quantity JSON must use canonical spelling")
+        }
+        return decoded
+    }
+
     public static func encodeIntFrame(_ value: KotodamaInt) throws -> Data {
         try NumericV1Internal.encodeFrame(.int, mantissa: value, scale: 0)
     }
@@ -211,7 +246,9 @@ private enum NumericV1Kind {
 }
 
 private enum NumericV1Internal {
-    static let maximumMantissaBytes = 512
+    static let maximumMantissaBytes = 64
+    static let maximumIntTextBytes = 155
+    static let maximumSignificantDigits = 154
     static let frameHeaderBytes = 40
     static let envelopeHeaderBytes = 7
     static let hashBytes = 32
@@ -227,10 +264,26 @@ private enum NumericV1Internal {
         let sign = match[1] ?? ""
         let integer = match[2] ?? "0"
         let fraction = match[3] ?? ""
-        guard fraction.count <= 28 else {
-            throw numericFailure(.invalidScale, "scale exceeds 28")
+        let rawDigits = Array((integer + fraction).utf8)
+        var first = 0
+        while first < rawDigits.count && rawDigits[first] == 0x30 { first += 1 }
+        if first == rawDigits.count {
+            return try normalizeScaled("0", scale: 0, quantity: quantity)
         }
-        return try normalizeScaled(sign + integer + fraction, scale: fraction.count, quantity: quantity)
+        var end = rawDigits.count
+        var scale = fraction.utf8.count
+        while scale > 0 && rawDigits[end - 1] == 0x30 {
+            end -= 1
+            scale -= 1
+        }
+        guard scale <= 28 else {
+            throw numericFailure(.invalidScale, "canonical scale exceeds 28")
+        }
+        guard end - first <= maximumSignificantDigits else {
+            throw numericFailure(.mantissaOverflow, "decimal mantissa exceeds the signed 512-bit input bound")
+        }
+        let magnitude = String(decoding: rawDigits[first..<end], as: UTF8.self)
+        return try normalizeScaled(sign + magnitude, scale: scale, quantity: quantity)
     }
 
     static func normalizeScaled(
@@ -238,8 +291,8 @@ private enum NumericV1Internal {
         scale rawScale: Int,
         quantity: Bool
     ) throws -> (mantissa: KotodamaInt, scale: UInt8) {
-        guard (0...28).contains(rawScale) else {
-            throw numericFailure(.invalidScale, "scale must be in 0...28")
+        guard rawScale >= 0 else {
+            throw numericFailure(.invalidScale, "scale cannot be negative")
         }
         let negative = rawMantissa.hasPrefix("-")
         var magnitude = negative ? String(rawMantissa.dropFirst()) : rawMantissa
@@ -253,11 +306,15 @@ private enum NumericV1Internal {
                 scale -= 1
             }
         }
-        if quantity && negative && magnitude != "0" {
-            throw numericFailure(.negativeQuantity, "quantity cannot be negative")
+        guard scale <= 28 else {
+            throw numericFailure(.invalidScale, "canonical scale exceeds 28")
         }
         let canonical = negative && magnitude != "0" ? "-" + magnitude : magnitude
-        return (try KotodamaInt(canonical), UInt8(scale))
+        let mantissa = try KotodamaInt(canonical)
+        if quantity && mantissa.canonicalString.hasPrefix("-") {
+            throw numericFailure(.negativeQuantity, "quantity cannot be negative")
+        }
+        return (mantissa, UInt8(scale))
     }
 
     static func scaledText(_ rawMantissa: String, scale: Int) -> String {
@@ -319,7 +376,7 @@ private enum NumericV1Internal {
             throw numericFailure(.lengthMismatch, "body has no mantissa length")
         }
         guard mantissaLength <= maximumMantissaBytes else {
-            throw numericFailure(.mantissaOverflow, "mantissa length exceeds 512 bytes")
+            throw numericFailure(.mantissaOverflow, "mantissa length exceeds 64 bytes")
         }
         let expected = 4 + mantissaLength + (kind.isScaled ? 1 : 0)
         guard expected == body.count else {
@@ -350,7 +407,7 @@ private enum NumericV1Internal {
         envelope.append(1)
         appendUInt32BE(UInt32(frame.count), to: &envelope)
         envelope.append(frame)
-        envelope.append(Blake2b.hash256(frame))
+        envelope.append(payloadHash(frame))
         return envelope
     }
 
@@ -361,11 +418,13 @@ private enum NumericV1Internal {
         guard let pointerType = readUInt16BE(envelope, at: 0) else {
             throw numericFailure(.truncatedEnvelope, "envelope is truncated")
         }
-        guard (0x0010...0x0013).contains(pointerType) else {
-            throw numericFailure(.unknownType, "unknown pointer type")
-        }
         guard pointerType != 0x0010 else {
-            throw numericFailure(.typeNotAllowed, "retired Amount type is forbidden")
+            throw numericFailure(.typeNotAllowed, "retired Amount pointer type is permanently reserved")
+        }
+        let knownAllowedType = (0x0001...0x000F).contains(pointerType)
+            || (0x0011...0x0013).contains(pointerType)
+        guard knownAllowedType else {
+            throw numericFailure(.unknownType, "unknown pointer type")
         }
         guard pointerType == kind.pointerType else {
             throw numericFailure(.wrongType, "pointer type does not match")
@@ -385,7 +444,7 @@ private enum NumericV1Internal {
         }
         let frame = Data(envelope[envelopeHeaderBytes..<(envelopeHeaderBytes + frameLength)])
         let suppliedHash = Data(envelope[(envelopeHeaderBytes + frameLength)...])
-        guard constantTimeEqual(Blake2b.hash256(frame), suppliedHash) else {
+        guard constantTimeEqual(payloadHash(frame), suppliedHash) else {
             throw numericFailure(.payloadHashMismatch, "payload hash failed")
         }
         return frame
@@ -400,7 +459,7 @@ private enum NumericV1Internal {
             var result = magnitude
             if result.last.map({ ($0 & 0x80) != 0 }) == true { result.append(0) }
             guard result.count <= maximumMantissaBytes else {
-                throw numericFailure(.mantissaOverflow, "mantissa is outside signed 4096-bit range")
+                throw numericFailure(.mantissaOverflow, "mantissa is outside signed 512-bit range")
             }
             return result
         }
@@ -411,7 +470,7 @@ private enum NumericV1Internal {
             if top > 0x80 || (top == 0x80 && lowerNonZero) { width += 1 }
         }
         guard width <= maximumMantissaBytes else {
-            throw numericFailure(.mantissaOverflow, "mantissa is outside signed 4096-bit range")
+            throw numericFailure(.mantissaOverflow, "mantissa is outside signed 512-bit range")
         }
         var result = magnitude + Array(repeating: 0, count: width - magnitude.count)
         for index in result.indices { result[index] = ~result[index] }
@@ -538,6 +597,12 @@ private enum NumericV1Internal {
         var difference: UInt8 = 0
         for index in left.indices { difference |= left[index] ^ right[index] }
         return difference == 0
+    }
+
+    static func payloadHash(_ frame: Data) -> Data {
+        var digest = Blake2b.hash256(frame)
+        digest[digest.count - 1] |= 1
+        return digest
     }
 }
 

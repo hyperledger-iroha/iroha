@@ -867,7 +867,7 @@ class SccpClientExactTest {
         val semanticCommitments = (((deployment(changedSemanticPolicy)["outbound_proof_policy"]
             as MutableMap<String, Any?>)["semantic_profile"] as MutableMap<String, Any?>)["commitments"]
             as MutableMap<String, Any?>)
-        semanticCommitments["circuit_commitment"] = upper(0x16, 32)
+        semanticCommitments["circuit_commitment"] = upper(0x18, 32)
         assertFailsWith<IllegalArgumentException> {
             SccpJsonParser.parseRegistry(jsonBytes(changedSemanticPolicy))
         }
@@ -876,7 +876,7 @@ class SccpClientExactTest {
         @Suppress("UNCHECKED_CAST")
         val finalityAnchor = (deployment(changedFinalityPolicy)["outbound_proof_policy"]
             as MutableMap<String, Any?>)["sora_finality_anchor"] as MutableMap<String, Any?>
-        finalityAnchor["checkpoint_block_hash"] = upper(0x16, 32)
+        finalityAnchor["checkpoint_block_hash"] = upper(0x17, 32)
         assertFailsWith<IllegalArgumentException> {
             SccpJsonParser.parseRegistry(jsonBytes(changedFinalityPolicy))
         }
@@ -968,10 +968,32 @@ class SccpClientExactTest {
         assertEquals(tairaChainIdHash(), request.soraFinalityAnchor.chainIdHash)
         assertEquals(BigInteger.valueOf(7), request.soraFinalityAnchor.checkpointHeight)
         assertEquals(upper(0x14, 32), request.soraFinalityAnchor.checkpointBlockHash)
-        assertEquals(BigInteger.valueOf(3), request.soraFinalityAnchor.validatorSetEpoch)
-        assertEquals(upper(0x15, 32), request.soraFinalityAnchor.validatorSetHash)
-        assertEquals(1, request.soraFinalityAnchor.validatorSetHashVersion)
+        assertEquals(2, request.soraFinalityAnchor.protocolVersion)
+        assertEquals(upper(0x15, 32), request.soraFinalityAnchor.checkpointContextId)
+        assertEquals(upper(0x16, 32), request.soraFinalityAnchor.checkpointFinalityArtifactHash)
+        assertEquals(
+            "0xa395cbdb1982da027a9af07b47c20576999d43deccd68c77e49cc38f418f4d4c",
+            request.soraFinalityAnchor.anchorHash,
+        )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
+
+        val invalidFinalityAnchors: List<(MutableMap<String, Any?>) -> Unit> = listOf(
+            { it["protocol_version"] = 1 },
+            { it["protocol_version"] = "2" },
+            { it["validator_set_epoch"] = 3 },
+            { it["checkpoint_context_id"] = upper(0, 32) },
+            { it["checkpoint_finality_artifact_hash"] = it["checkpoint_block_hash"] },
+            { it.remove("checkpoint_finality_artifact_hash") },
+        )
+        for (mutation in invalidFinalityAnchors) {
+            val hostile = proofRequest()
+            @Suppress("UNCHECKED_CAST")
+            val anchor = hostile["sora_finality_anchor"] as MutableMap<String, Any?>
+            mutation(anchor)
+            assertFailsWith<IllegalArgumentException> {
+                SccpJsonParser.parseProofRequest(jsonBytes(hostile))
+            }
+        }
 
         val wrongBackend = proofRequest()
         wrongBackend["backend"] = linkedMapOf("backend" to "tron_groth16_bn254_v1", "family" to null)
@@ -1249,12 +1271,12 @@ class SccpClientExactTest {
     private fun finalityAnchor(): MutableMap<String, Any?> = linkedMapOf(
         "version" to 1,
         "source_network" to network("sora-taira"),
+        "protocol_version" to 2,
         "chain_id_hash" to tairaChainIdHash(),
         "checkpoint_height" to 7,
         "checkpoint_block_hash" to upper(0x14, 32),
-        "validator_set_epoch" to 3,
-        "validator_set_hash" to upper(0x15, 32),
-        "validator_set_hash_version" to 1,
+        "checkpoint_context_id" to upper(0x15, 32),
+        "checkpoint_finality_artifact_hash" to upper(0x16, 32),
     )
 
     private fun inboundFinalityCutoff(): MutableMap<String, Any?> = linkedMapOf(
@@ -1663,12 +1685,12 @@ class SccpClientExactTest {
         val canonical = ByteArrayOutputStream().also { output ->
             output.write(1)
             output.write(1)
+            writeU16(output, 2)
             output.write(tairaChainIdHash().hexToBytes())
             writeU64(output, 7)
             output.write(upper(0x14, 32).hexToBytes())
-            writeU64(output, 3)
             output.write(upper(0x15, 32).hexToBytes())
-            writeU16(output, 1)
+            output.write(upper(0x16, 32).hexToBytes())
         }.toByteArray()
         return keccak(
             "sccp:sora-finality-anchor:v1".toByteArray(Charsets.UTF_8) + canonical,
@@ -1717,9 +1739,9 @@ class SccpClientExactTest {
 
     private companion object {
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "368647C0EA13EBF50ADDC9CFACA0923625F12EB3A5D1D11350AFD65A2C11E683"
+            "69805AACD0B9EBAA6A2A7118A0E8275FD56C4CE801888B6F6519E4B8CB4BE09B"
         const val TRON_ROUTE_CONFIG_HASH =
-            "4C162A59B6A3003ADF2DBC767A6FF5E0A74B628712A51F73D4B2AA65362969F1"
+            "1B4128C2D2FF80F61DE3CA6E9DF51B53C3025EBD6E294054E0CA631207DE934F"
         val MESSAGE_ID: String = "11".repeat(32)
     }
 }

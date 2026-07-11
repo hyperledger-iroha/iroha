@@ -13,12 +13,19 @@ export {
 } from "./instructionBuilders.js";
 
 export {
+  computeIvmArtifactHashes,
+  IVM_ARTIFACT_MAX_BYTES,
+  IVM_PROGRAM_HEADER_LENGTH,
+} from "./ivmArtifact.js";
+
+export {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
   buildBrowserTransferPayload,
   finalizeBrowserSignedTransaction,
+  validateBrowserTransferSignable,
 } from "./transactionCodec.js";
 
 export {

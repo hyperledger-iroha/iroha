@@ -39,7 +39,7 @@ Admission/host guardrails
   (including manifest-backed programs), and manifest `abi_hash` enforcement across both metadata and
   WSV manifests to keep the ABI surface deterministic end-to-end.
 
-`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for the first-release ABI surface that does not fit in the legacy byte slot. The host receives all syscall numbers as `u32`, and admission checks both encodings before execution. Structured arguments use the pointer‑ABI (Norito TLV in INPUT); scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10`.
+`SCALL` carries an 8-bit syscall number in bytecode. `SYSTEM` is the extended `SCALLX` form and carries a 24-bit syscall number for the first-release ABI surface that does not fit in the legacy byte slot. The host receives all syscall numbers as `u32`, and admission checks both encodings before execution. Structured arguments use the pointer‑ABI: canonical Norito TLVs may reside in INPUT, the allocated HEAP prefix, or at an exact loader-validated literal start. Stack, OUTPUT, unallocated HEAP, and arbitrary code offsets are not valid pointer provenance. Scalar values are passed in `r10+`. Return values are `u64` unless noted; pointer results are returned in `r10` and host-produced TLVs prefer INPUT before spilling to allocated HEAP.
 
 Query syscall (Norito)
 - `0xA1` and extended `0x010000` expect `r10=&NoritoBytes(QueryRequest)` and return `r10=&NoritoBytes(QueryResponse)`. The authority is always the calling contract; embedded authorities are ignored.
@@ -82,7 +82,7 @@ Ordering and OUTPUT
 - Host lifecycle: `begin_tx`/`finish_tx` return `Result`; hosts must surface overlay flush errors (e.g., durable state writes) instead of swallowing them, clear staged overlays on failure, and rely on checkpoints to restore pre-tx state when a VM run aborts.
 
 Legend
-- Args: registers and pointer types; `&Type` indicates a pointer to a Norito TLV in INPUT.
+- Args: registers and pointer types; `&Type` indicates a provenance-valid pointer to a canonical Norito TLV.
 - Return: `u64` or `ptr` (pointer in `r10`).
 - Gas: base component name; variable components are added for byte or item counts.
 
@@ -90,6 +90,8 @@ Gas enforcement (CoreHost)
 - Syscall quotes are reserved before host effects. The reserved amount remains visible to host
   budget checks, but nested contract bytecode can spend only the unreserved parent gas. Unused
   reserve is refunded after the host reports the actual deterministic cost.
+- `JSON_GET_JSON` reserves against the HEAP-capable pointer payload bound plus its sum handle, so
+  a valid result that spills beyond the fixed INPUT arena cannot exceed its pre-dispatch quote.
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
 - FASTPQ transfer batch scope syscalls charge the fixed gas. Gas: `G_fastpq_batch`; batch
   entries are charged separately with the transfer gas family when applied.
@@ -98,11 +100,14 @@ Gas enforcement (CoreHost)
   the parent VM; child execution gas is consumed by the child VM.
 - Native and anonymous escrow bridge syscalls charge `G_escrow + bytes`.
 - Soracloud runtime syscalls charge `G_soracloud + request bytes + response bytes`.
-- ZK verification charges `250_000` gas for every proof plus `5` gas for
-  every encoded request byte. Batch requests additionally charge the bounded
-  per-proof archive/status overhead. A request may contain at most 1 MiB of
-  encoded payload, and `ZK_VERIFY_BATCH` accepts at most 16 proofs. These
-  constants and caps are part of the hashed ABI-v1 gas schedule.
+- ZK verification uses the immutable `ZkGasScheduleV1` snapshot selected when
+  the host is constructed: `proof_base` per proof, `per_public_input` per
+  canonical 32-byte public-input unit, and `per_proof_byte` for encoded request
+  and bounded response bytes. The ABI-v1 defaults are `250_000`, `2_000`, and
+  `5`. A request may contain at most 1 MiB of encoded payload, and
+  `ZK_VERIFY_BATCH` accepts at most 16 proofs. The formula version, caps,
+  response layout, and default schedule subhash are part of the hashed gas
+  schedule; production rate selection is also bound by the ZK policy hash.
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
 - `JSON_OBJECT` helper — Gas: `G_json + bytes`.
 - `JSON_GET_*` helpers and their direct variants return compiler-owned
@@ -143,29 +148,29 @@ Kotodama intrinsics
 - ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the host-provided block time in milliseconds. `CoreHost` binds this to block time; test/default hosts use deterministic configured time and default to `0`.
 - ``block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
 
-Numeric helpers (Norito)
-- 0x69 NUMERIC_FROM_INT — Args: `r10=value:i64` (non‑negative) → `r10=&NoritoBytes(Numeric)` (scale = 0).
-- 0x6A NUMERIC_TO_INT — Args: `r10=&NoritoBytes(Numeric)` → `r10=value:i64`. Rejects negative values, fractional scales, or values outside `i64`.
-- 0x6B..0x70 NUMERIC_{ADD,SUB,MUL,DIV,REM,NEG} — Args: `r10=&NoritoBytes(lhs)`, `r11=&NoritoBytes(rhs)` (NEG uses `r10` only) → `r10=&NoritoBytes(result)`. Inputs must be unsigned with scale = 0; SUB rejects underflow and NEG rejects non‑zero values. DIV/REM reject division by zero.
-- 0x71..0x76 NUMERIC_{EQ,NE,LT,LE,GT,GE} — Args: `r10=&NoritoBytes(lhs)`, `r11=&NoritoBytes(rhs)` → `r10=0/1` with the comparison result (inputs must be unsigned scale = 0).
-- Numeric helper gas is the fixed charge. Gas: G_numeric. Numeric operands are bounded by the canonical `Numeric` representation, so the first-release ABI keeps arithmetic pricing fixed and deterministic.
-- Kotodama `u128` lowers to these helpers for deterministic unsigned, scale-zero
-  arithmetic. `Amount` is a distinct pointer-ABI type and never uses these
-  integer helpers implicitly.
-
-Exact Amount helpers
-- 0x010040..0x010042 convert explicitly between non-negative `i64`/scale-zero
-  `u128` and `&Amount`; no mixed arithmetic conversion is implicit.
-- 0x010043..0x010045 implement checked addition, subtraction, and
-  multiplication. Underflow, a mantissa wider than 512 bits, or canonical
-  scale above 28 traps deterministically.
-- 0x010046 `AMOUNT_DIV_EXACT` accepts only an exact finite decimal result with
-  canonical scale at most 28. 0x010047 `AMOUNT_DIV_ROUND` takes an explicit
-  scale and `floor`, `ceil`, or `nearest_even` mode.
-- 0x010048..0x01004D compare canonical Amounts. Gas is based on deterministic
-  numeric limb work and encoded bytes; no floating point or hardware-dependent
-  reduction is used.
-- The symbolic schedule keys are Gas: `G_amount | G_amount_add | G_amount_sub | G_amount_mul | G_amount_div | G_amount_cmp`.
+Exact numeric helpers
+- `0x010100..0x010113` implement signed checked and explicit modulo-`2^512`
+  `int` operations; `0x010120..0x01012F` implement exact `decimal` operations;
+  and `0x010140..0x01014F` implement nominal non-negative `quantity`
+  operations. The generated table below is the signature source of truth.
+- Numeric operands are schema-bound, uncompressed Norito frames in pointer
+  types `Quantity=0x0010`, `Int=0x0011`, and `Decimal=0x0012`. Pointer ID
+  `0x0013` is unassigned and rejected as unknown.
+- The domain is `-2^511..=2^511-1`; decimal and quantity scale is `0..=28`.
+  Exact division distinguishes division by zero, repeating expansion, and a
+  terminating result whose minimum scale exceeds 28. Rounded operations name
+  one of all seven signed rounding modes.
+- Numeric syscalls use quote-free staged gas:
+  `16 + input_envelope_bytes + output_envelope_bytes + 4 * logical_limb_work`.
+  The entry weight covers dispatch, staged bookkeeping, and at most four
+  bounded control-register checks. Each logical base-`2^64` work cell receives
+  four units for operand access, arithmetic/carry or quotient trial, result
+  access, and deterministic loop control; multiplication and division formulas
+  enumerate every cell they perform. `cargo bench -p ivm --bench
+  gas_calibration` pins work denominators for 1..=8 input limbs, 10-limb scale
+  alignment, and 16-limb products. Release calibration requires a 25% safety
+  margin on every supported baseline tier; failure changes the gas formula
+  version/hash rather than selecting hardware-dependent semantics.
 
 Native JSON construction
 - 0x01004E `JSON_BUILD` takes
@@ -174,12 +179,13 @@ Native JSON construction
 - Native construction uses Gas: `G_json_build`; typed getters use Gas: `G_json_get`.
 - Object keys are canonicalized by lexical key order, duplicate keys and
   malformed schemas are rejected, and nested `Option`/`List` handles are read
-  recursively. Booleans and in-range integers are JSON primitives; `Amount`
-  and `u128` values outside the JSON integer range are exact canonical decimal
-  strings; bytes are lowercase `0x` hex. No floating-point conversion occurs.
+  recursively. Booleans remain JSON primitives; `int`, `decimal`, and
+  `quantity` always render as canonical base-10 strings, while bytes are
+  lowercase `0x` hex. No floating-point conversion occurs.
 - Products, `Result`, and resource handles are not accepted as implicit JSON
-  values. Typed getters materialize active payloads only and use
-  `JSON_GET_AMOUNT` for `Option<Amount>`; `JSON_GET_NUMERIC` is retired.
+  values. Typed getters materialize active payloads only. The exact numeric
+  getters at `0x010160..0x010165` accept canonical strings only; JSON number
+  tokens and alternate spellings return `Option::none`.
 
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
@@ -208,16 +214,16 @@ Notes:
 Assets (FT)
 - 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
-- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount` → 0 — Gas: G_mint
-- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Amount` → 0 — Gas: G_burn
-- 0x24 TRANSFER_V1 — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount` → 0 — Gas: G_transfer. Batch-internal only; rejected outside an active FASTPQ batch.
+- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_mint
+- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity` → 0 — Gas: G_burn
+- 0x24 TRANSFER_V1 — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity` → 0 — Gas: G_transfer. Batch-internal only; rejected outside an active FASTPQ batch.
 
 NFTs
 - 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&AccountId(owner)` → 0 — Gas: G_nft_mint_asset
 - 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Name, r12=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
-- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Amount, r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
+- 0x2C TRANSFER_ASSET_SCOPED — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&Quantity, r14=&DataSpaceId` → 0 — Gas: G_transfer. Queues a transfer using the asset definition's balance-scope policy: global definitions use a global source balance, and dataspace-restricted definitions use `Dataspace(r14)`.
 
 Zero‑knowledge (verification/state‑read)
 - 0x60 ZK_VERIFY_TRANSFER — Args: `r10=&NoritoBytes(iroha_data_model::zk::OpenVerifyEnvelope)` → `u64=0/1` — Gas: G_verify_proof + bytes
@@ -229,9 +235,11 @@ Zero‑knowledge (verification/state‑read)
 
 ZK gating & determinism
 - `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
-- `DefaultHost` verifies standalone Halo2 IPA/Pasta envelopes for the single
-  ZK verify syscalls and `ZK_VERIFY_BATCH`, enforcing the configured backend,
-  curve, max-k, per-envelope size, proof-size, and batch-size gates.
+- `DefaultHost` has no verifier-key registry or cryptographic backend. It
+  canonical-validates `iroha_data_model::zk::OpenVerifyEnvelope`, enforces
+  configured size/batch gates, and then fails closed with `ERR_BACKEND`.
+  Batch responses contain one zero byte per item (`1 = verified`, `0 = not
+  verified`), set `r11=ERR_BACKEND`, and set `r12=0` for the first failed item.
 - `CoreHost` additionally binds each envelope to the on-chain VK registry
   before verification; batch items then run through
   `iroha_core::zk::verify_backend_with_timing_guardrails`.
@@ -363,13 +371,13 @@ AXT host flow
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
 Native asset escrow
-- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Amount`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
+- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Quantity`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
 - 0xB9 ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAssetEscrow` for the buyer authority.
 - 0xBA ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkEscrowPaymentSent` for the accepted buyer.
 - 0xBB ESCROW_RELEASE — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `ReleaseAssetEscrow` for the seller authority after payment is marked.
 - 0xBC ESCROW_CANCEL — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `CancelAssetEscrow`; cancellation is rejected once payment is marked.
 - 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenEscrowDispute` for the seller or accepted buyer.
-- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&Amount(buyer_amount)`, `r12=&Amount(seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
+- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&Quantity(buyer_amount)`, `r12=&Quantity(seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
 - 0xAA ANONYMOUS_ESCROW_OPEN_OFFER — Args: `r10=&NoritoBytes(OpenAnonymousAssetEscrow)` → 0. Gas: G_escrow + bytes. Queues the proof-carrying anonymous escrow opening ISI.
 - 0xAB ANONYMOUS_ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `AcceptAnonymousAssetEscrow`.
 - 0xAC ANONYMOUS_ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Gas: G_escrow + bytes. Queues `MarkAnonymousEscrowPaymentSent`.
@@ -401,7 +409,7 @@ Soracloud runtime host surface
   validation.
 
 ZK Helpers
-- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Amount)` — Gas: G_get_bal
+- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Quantity)` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes
 
@@ -461,6 +469,9 @@ node enforces that policy unconditionally.
 - ABI goldens (syscall list, ABI hash, pointer type IDs) are pinned to the current
   v1 surface and must be updated in the same change whenever the first-release
   surface intentionally changes.
+- Pointer provenance tests pin INPUT, allocated HEAP, and exact indexed literals as the only
+  accepted V1 object stores. Asset mutation fixtures pin canonical `QuantityValueV1` frames;
+  scalar and legacy `NoritoBytes(Numeric)` amount arguments remain invalid.
 - Any future post-release ABI break must be delivered through a new policy/version
   with updated tests and docs.
 
@@ -533,7 +544,7 @@ node enforces that policy unconditionally.
 | 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 + bytes |
 | 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
-| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | 250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes |
+| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | configured V1 proof + public-input-unit + encoded request/response byte schedule |
 | 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
 | 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | asset:gas/G_numeric@ivm.core/v2 |
 | 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | asset:gas/G_numeric@ivm.core/v2 |
@@ -751,8 +762,8 @@ Codec helpers
 - Null inputs: DECODE_INT, JSON_DECODE, NAME_DECODE, and POINTER_FROM_NORITO accept `r10=0` and return `r10=0` without error.
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
-- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: 250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes; 1 MiB encoded-payload and 16-proof hard caps
-  - `DefaultHost` returns per-item statuses (`1 = verified`, `0 = not verified`) after standalone Halo2 IPA/Pasta verification with the batch transcript label.
+- 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: configured V1 proof + public-input-unit + encoded request/response byte schedule; 1 MiB encoded-payload and 16-proof hard caps
+  - `DefaultHost` has no proof backend. After canonical validation it returns one failure status byte (`0`) per item, `r11=ERR_BACKEND`, and `r12=0`; it never reports a proof as verified.
   - `CoreHost` returns the same status-vector shape and runs the same outer-envelope binding plus full backend verification path as the single-item ZK verify syscalls.
   - Top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).
   - On vector return, `r11` carries the first observed precheck/verify error code (or `0` when all succeed).

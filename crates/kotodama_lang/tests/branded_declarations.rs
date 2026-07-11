@@ -17,19 +17,19 @@ fn parse_source(text: &str) -> kotodama_lang::syntax::ParseOutput {
 fn romanized_and_japanese_declaration_sets_are_first_class() {
     for source in [
         r#"seiyaku Branding {
-            state value: i64;
+            state int value;
             hajimari() { value = 0; }
-            kotoage fn set(next: i64) authorize("Set") { value = next; }
+            kotoage fn set(int next) authorize("Set") { value = next; }
             kaizen() {}
-            view fn read() -> i64 { return value; }
+            view fn read() -> int { return value; }
             trigger tick -> set { on time pre_commit; }
         }"#,
         r#"誓約 Branding {
-            state value: i64;
+            state int value;
             始まり() { value = 0; }
-            言挙げ fn set(next: i64) authorize("Set") { value = next; }
+            言挙げ fn set(int next) authorize("Set") { value = next; }
             改善() {}
-            view fn read() -> i64 { return value; }
+            view fn read() -> int { return value; }
             trigger tick -> set { on time pre_commit; }
         }"#,
     ] {
@@ -106,7 +106,7 @@ fn english_feature_aliases_are_rejected_by_the_lossless_frontend() {
 #[test]
 fn english_words_remain_available_as_ordinary_identifiers() {
     let source = r#"module OrdinaryWords {
-        fn combine(contract: i64, entry: i64, init: i64, upgrade: i64) -> i64 {
+        fn combine(int contract, int entry, int init, int upgrade) -> int {
             return contract + entry + init + upgrade;
         }
     }"#;
