@@ -511,6 +511,8 @@ macro_rules! build_world_block {
             contract_manifests: $state.contract_manifests.$method(),
             contract_code: $state.contract_code.$method(),
             contract_instances: $state.contract_instances.$method(),
+            contract_subject_bindings: $state.contract_subject_bindings.$method(),
+            contract_subject_addresses: $state.contract_subject_addresses.$method(),
             smart_contract_state: $state.smart_contract_state.$method(),
             soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
             soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
@@ -727,6 +729,8 @@ macro_rules! build_world_transaction {
             contract_manifests: $state.contract_manifests.transaction(),
             contract_code: $state.contract_code.transaction(),
             contract_instances: $state.contract_instances.transaction(),
+            contract_subject_bindings: $state.contract_subject_bindings.transaction(),
+            contract_subject_addresses: $state.contract_subject_addresses.transaction(),
             smart_contract_state: $state.smart_contract_state.transaction(),
             soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
             soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
@@ -2326,6 +2330,16 @@ pub struct World {
     /// Active contract instances bound to canonical contract addresses.
     pub(crate) contract_instances:
         Storage<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
+    /// Irreversible, versioned runtime subject for every contract address ever activated.
+    /// Entries remain after instance deactivation and are the authoritative non-signing deny-set.
+    pub(crate) contract_subject_bindings: Storage<
+        iroha_data_model::smart_contract::ContractAddress,
+        crate::smartcontracts::code::ContractSubjectBinding,
+    >,
+    /// Derived O(log n) reverse index for irreversible contract-subject admission checks.
+    #[norito(skip)]
+    pub(crate) contract_subject_addresses:
+        Storage<AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: Storage<Name, Vec<u8>>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
@@ -2791,6 +2805,15 @@ pub struct WorldBlock<'world> {
     /// Active contract instances.
     pub(crate) contract_instances:
         StorageBlock<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
+    /// Versioned contract subjects, retained after deactivation.
+    pub(crate) contract_subject_bindings: StorageBlock<
+        'world,
+        iroha_data_model::smart_contract::ContractAddress,
+        crate::smartcontracts::code::ContractSubjectBinding,
+    >,
+    /// Reverse index from historical contract subject to address.
+    pub(crate) contract_subject_addresses:
+        StorageBlock<'world, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageBlock<'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -3077,6 +3100,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.contract_manifests, ContractManifest);
         collect_reverts!(self.contract_code, ContractCode);
         collect_reverts!(self.contract_instances, ContractInstance);
+        collect_reverts!(self.contract_subject_bindings, ContractSubjectBinding);
         collect_reverts!(self.smart_contract_state, SmartContractState);
         collect_reverts!(self.zk_assets, ZkAsset);
         collect_reverts!(self.elections, Election);
@@ -3132,6 +3156,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.contract_manifests, ContractManifest);
         collect_payload!(self.contract_code, ContractCode);
         collect_payload!(self.contract_instances, ContractInstance);
+        collect_payload!(self.contract_subject_bindings, ContractSubjectBinding);
         collect_payload!(self.smart_contract_state, SmartContractState);
         collect_payload!(self.zk_assets, ZkAsset);
         collect_payload!(self.elections, Election);
@@ -3448,6 +3473,18 @@ pub struct WorldTransaction<'block, 'world> {
         'world,
         iroha_data_model::smart_contract::ContractAddress,
         iroha_crypto::Hash,
+    >,
+    pub(crate) contract_subject_bindings: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::smart_contract::ContractAddress,
+        crate::smartcontracts::code::ContractSubjectBinding,
+    >,
+    pub(crate) contract_subject_addresses: StorageTransaction<
+        'block,
+        'world,
+        AccountId,
+        iroha_data_model::smart_contract::ContractAddress,
     >,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageTransaction<'block, 'world, Name, Vec<u8>>,
@@ -4909,6 +4946,13 @@ pub struct WorldView<'world> {
     pub(crate) contract_code: StorageView<'world, iroha_crypto::Hash, Vec<u8>>,
     pub(crate) contract_instances:
         StorageView<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
+    pub(crate) contract_subject_bindings: StorageView<
+        'world,
+        iroha_data_model::smart_contract::ContractAddress,
+        crate::smartcontracts::code::ContractSubjectBinding,
+    >,
+    pub(crate) contract_subject_addresses:
+        StorageView<'world, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageView<'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -14853,6 +14897,8 @@ impl World {
             contract_manifests: Storage::default(),
             contract_code: Storage::default(),
             contract_instances: Storage::default(),
+            contract_subject_bindings: Storage::default(),
+            contract_subject_addresses: Storage::default(),
             smart_contract_state: Storage::default(),
             capacity_declarations: Storage::default(),
             capacity_fee_ledger: Storage::default(),
@@ -15595,6 +15641,8 @@ impl World {
             contract_manifests: self.contract_manifests.view(),
             contract_code: self.contract_code.view(),
             contract_instances: self.contract_instances.view(),
+            contract_subject_bindings: self.contract_subject_bindings.view(),
+            contract_subject_addresses: self.contract_subject_addresses.view(),
             smart_contract_state: self.smart_contract_state.view(),
             soracloud_service_revisions: self.soracloud_service_revisions.view(),
             soracloud_service_deployments: self.soracloud_service_deployments.view(),
@@ -16137,6 +16185,17 @@ pub trait WorldReadOnly {
     fn contract_instances(
         &self,
     ) -> &impl StorageReadOnly<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>;
+    /// Irreversible versioned subject identity for every historically activated address.
+    fn contract_subject_bindings(
+        &self,
+    ) -> &impl StorageReadOnly<
+        iroha_data_model::smart_contract::ContractAddress,
+        crate::smartcontracts::code::ContractSubjectBinding,
+    >;
+    /// Reverse index for historical contract subjects; rebuilt from authenticated bindings.
+    fn contract_subject_addresses(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, iroha_data_model::smart_contract::ContractAddress>;
     /// Durable smart-contract state keyed by logical path (read-only).
     fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>>;
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
@@ -17496,6 +17555,22 @@ macro_rules! impl_world_ro {
             > {
                 &self.contract_instances
             }
+            fn contract_subject_bindings(
+                &self,
+            ) -> &impl StorageReadOnly<
+                iroha_data_model::smart_contract::ContractAddress,
+                crate::smartcontracts::code::ContractSubjectBinding,
+            > {
+                &self.contract_subject_bindings
+            }
+            fn contract_subject_addresses(
+                &self,
+            ) -> &impl StorageReadOnly<
+                AccountId,
+                iroha_data_model::smart_contract::ContractAddress,
+            > {
+                &self.contract_subject_addresses
+            }
             fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>> {
                 &self.smart_contract_state
             }
@@ -18100,6 +18175,8 @@ impl<'world> WorldBlock<'world> {
             contract_manifests,
             contract_code,
             contract_instances,
+            contract_subject_bindings,
+            contract_subject_addresses,
             smart_contract_state,
             soracloud_service_revisions,
             soracloud_service_deployments,
@@ -18208,6 +18285,8 @@ impl<'world> WorldBlock<'world> {
         contract_manifests.commit();
         contract_code.commit();
         contract_instances.commit();
+        contract_subject_bindings.commit();
+        contract_subject_addresses.commit();
         smart_contract_state.commit();
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
@@ -19432,6 +19511,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             contract_manifests,
             contract_code,
             contract_instances,
+            contract_subject_bindings,
+            contract_subject_addresses,
             smart_contract_state,
             soracloud_service_revisions,
             soracloud_service_deployments,
@@ -19528,6 +19609,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         contract_manifests.apply();
         contract_code.apply();
         contract_instances.apply();
+        contract_subject_bindings.apply();
+        contract_subject_addresses.apply();
         smart_contract_state.apply();
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
@@ -21070,6 +21153,24 @@ impl State {
         result
     }
 
+    /// Return the cached DA index hydration result without replaying Kura.
+    ///
+    /// Consensus proposal assembly uses this while holding the actor lock to
+    /// fail closed if startup hydration did not produce authoritative indexes.
+    pub(crate) fn da_indexes_hydration_result_cached(
+        &self,
+    ) -> Option<Result<(), DaIndexHydrationError>> {
+        *self.da_indexes_hydrated.read()
+    }
+
+    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
+    pub(crate) fn set_da_indexes_hydration_result_for_test(
+        &self,
+        result: Option<Result<(), DaIndexHydrationError>>,
+    ) {
+        *self.da_indexes_hydrated.write() = result;
+    }
+
     /// Force a rebuild of DA indexes from the Kura block log, truncating at `target_height` when provided.
     pub(crate) fn rewind_da_indexes_to_height(
         &self,
@@ -21680,6 +21781,14 @@ impl State {
         self.da_shard_cursors.read().reset_heights().clone()
     }
 
+    /// Snapshot the already-loaded DA shard cursor index without replaying Kura.
+    ///
+    /// Proposal assembly validates candidate sidecars while holding the consensus
+    /// actor lock, so it must not invoke a hydrating accessor on this path.
+    pub(crate) fn da_shard_cursor_index_snapshot_cached(&self) -> DaShardCursorIndex {
+        self.da_shard_cursors.read().clone()
+    }
+
     /// Check already-loaded DA commitments without forcing Kura hydration.
     pub(crate) fn da_commitments_contains_record_identity_cached(
         &self,
@@ -22097,6 +22206,8 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
+        crate::smartcontracts::code::initialize_current_contract_subject_bindings(&mut world)
+            .expect("new v2 world must contain valid contract subject bindings");
         crate::sns::seed_default_namespace_policies(&mut world);
         Self::seed_reserved_universal_dataspace_name_record(&mut world);
         Self::seed_existing_domain_name_records(&mut world);
@@ -26053,7 +26164,7 @@ impl State {
                 ) {
                     return None;
                 }
-                if !self.lane_block_artifact_has_matching_application_receipt(&artifact) {
+                if !self.lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact) {
                     return None;
                 }
                 Some((
@@ -26099,7 +26210,7 @@ impl State {
             ) {
                 continue;
             }
-            if self.lane_block_artifact_has_matching_application_receipt(&artifact) {
+            if self.lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact) {
                 continue;
             }
             heights.insert((lane.id, lane.dataspace_id), lane_block_height);
@@ -26206,6 +26317,106 @@ impl State {
         sessions
     }
 
+    pub(crate) fn lane_block_artifact_is_applied_or_snapshot_anchored_cached(
+        &self,
+        artifact: &crate::kura::LaneBlockArtifact,
+    ) -> bool {
+        self.lane_block_artifact_has_matching_application_receipt(artifact)
+            || self.lane_block_artifact_has_hash_only_snapshot_anchor(artifact)
+    }
+
+    pub(crate) fn certified_lane_block_session_is_applied_or_snapshot_anchored_cached(
+        &self,
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+    ) -> bool {
+        self.certified_lane_block_proposal_has_hash_only_snapshot_anchor(&session.proposal)
+            || self
+                .kura
+                .lane_block_application_receipt_available(&session.proposal)
+    }
+
+    pub(crate) fn certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        let descriptor = &proposal.descriptor;
+        let previous_height = descriptor.previous_lane_block_height;
+        if previous_height == 0 {
+            return true;
+        }
+        let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
+            return true;
+        };
+        if self
+            .kura
+            .read_lane_block_artifact(descriptor.lane_id, previous_height)
+            .is_some_and(|artifact| {
+                artifact.ownership.dataspace_id == descriptor.dataspace_id
+                    && artifact.ownership.lane_block_height == previous_height
+                    && artifact.ownership.lane_block_descriptor_hash
+                        == Some(previous_descriptor_hash)
+                    && self.lane_block_artifact_has_hash_only_snapshot_anchor(&artifact)
+            })
+        {
+            return true;
+        }
+        self.kura
+            .lane_block_predecessor_application_receipt_available(proposal)
+    }
+
+    fn certified_lane_block_artifact_is_applied_or_snapshot_anchored_cached(
+        &self,
+        artifact: &crate::kura::CertifiedLaneBlockArtifact,
+    ) -> bool {
+        self.certified_lane_block_proposal_has_hash_only_snapshot_anchor(&artifact.proposal)
+            || self
+                .kura
+                .lane_block_application_receipt_available(&artifact.proposal)
+    }
+
+    fn certified_lane_block_proposal_has_hash_only_snapshot_anchor(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        let descriptor = &proposal.descriptor;
+        let Some(artifact) = self
+            .kura
+            .read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
+        else {
+            return false;
+        };
+        if !Self::lane_block_artifact_matches_certified_proposal(&artifact, proposal) {
+            return false;
+        }
+        self.lane_block_artifact_has_hash_only_snapshot_anchor(&artifact)
+    }
+
+    fn lane_block_artifact_matches_certified_proposal(
+        artifact: &crate::kura::LaneBlockArtifact,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        let ownership = &artifact.ownership;
+        let descriptor = &proposal.descriptor;
+        ownership.lane_id == descriptor.lane_id
+            && ownership.dataspace_id == descriptor.dataspace_id
+            && ownership.proposal_height == descriptor.proposal_height
+            && ownership.lane_block_height == descriptor.lane_block_height
+            && ownership.lane_block_view == descriptor.lane_block_view
+            && ownership.subject_hash == descriptor.subject_hash
+            && ownership.qc_mode_tag == descriptor.qc_mode_tag
+            && ownership.accepted_candidate_indices == descriptor.accepted_candidate_indices
+            && ownership.accepted_transaction_hashes == descriptor.accepted_transaction_hashes
+            && ownership.previous_lane_block_height == descriptor.previous_lane_block_height
+            && ownership.previous_lane_block_descriptor_hash
+                == descriptor.previous_lane_block_descriptor_hash
+            && ownership.lane_block_descriptor_hash == Some(descriptor.descriptor_hash)
+            && ownership.payload_ownership_hash == descriptor.payload_ownership_hash
+            && ownership.rbc_instance_hash == descriptor.rbc_instance_hash
+            && ownership.lane_block_descriptor_validator_set == descriptor.validator_set
+            && ownership.lane_block_descriptor_validator_count == descriptor.validator_count
+            && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
+    }
+
     fn lane_block_artifact_has_matching_application_receipt(
         &self,
         artifact: &crate::kura::LaneBlockArtifact,
@@ -26222,6 +26433,31 @@ impl State {
             && descriptor.dataspace_id == ownership.dataspace_id
             && descriptor.lane_block_height == ownership.lane_block_height
             && Some(descriptor.descriptor_hash) == ownership.lane_block_descriptor_hash
+    }
+
+    fn lane_block_artifact_has_hash_only_snapshot_anchor(
+        &self,
+        artifact: &crate::kura::LaneBlockArtifact,
+    ) -> bool {
+        let ownership = &artifact.ownership;
+        let proposal_height = ownership.proposal_height;
+        if proposal_height == 0
+            || proposal_height > u64::try_from(self.committed_height()).unwrap_or(u64::MAX)
+        {
+            return false;
+        }
+        let Some(proposal_height) = usize::try_from(proposal_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+        else {
+            return false;
+        };
+        let expected_hash = self
+            .kura
+            .get_block_hash(proposal_height)
+            .or_else(|| self.kura.get_durable_block_hash(proposal_height));
+        expected_hash == Some(artifact.proposal_block_hash)
+            && self.kura.is_hash_only_block_height(proposal_height)
     }
 
     /// Snapshot active catalog lanes with certified lane-local blocks that do
@@ -26256,9 +26492,9 @@ impl State {
                     ) {
                         return None;
                     }
-                    (!self
-                        .kura
-                        .lane_block_application_receipt_available(&artifact.proposal))
+                    (!self.certified_lane_block_artifact_is_applied_or_snapshot_anchored_cached(
+                        &artifact,
+                    ))
                     .then_some(lane_block_height)
                 })
             else {
@@ -26312,9 +26548,9 @@ impl State {
                 ) {
                     return None;
                 }
-                (!self
-                    .kura
-                    .lane_block_application_receipt_available(&artifact.proposal))
+                (!self.certified_lane_block_artifact_is_applied_or_snapshot_anchored_cached(
+                    &artifact,
+                ))
                 .then_some(lane_block_height)
             })
     }
@@ -41420,6 +41656,15 @@ impl StateTransaction<'_, '_> {
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
         let (res, outcome_override) = match executable {
             ExecutableRef::Instructions(instructions) => {
+                let instruction_groups = std::collections::BTreeMap::from([(
+                    authority.clone(),
+                    instructions.iter().cloned().collect(),
+                )]);
+                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                    &instruction_groups,
+                    self,
+                    None,
+                )?;
                 let step = ExecutionStep(instructions.clone());
                 self.seed_time_trigger_call_hash(id, authority, &event, &step);
                 (
@@ -41487,6 +41732,7 @@ impl StateTransaction<'_, '_> {
                         invocation,
                         bytecode.as_ref(),
                         record.contract_alias.clone(),
+                        record.contract_subject.clone(),
                     )?;
                 if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
                     vm.set_register(1, vm.memory.code_len());
@@ -41549,8 +41795,20 @@ impl StateTransaction<'_, '_> {
                         .into(),
                     );
                 }
-                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
-                let step = ExecutionStep(ConstVec::from(artifacts.queued_instructions()));
+                let artifacts = host.into_execution_artifacts(contract_runtime_context.clone())?;
+                let runtime_origin = contract_runtime_context.as_ref().map(|context| {
+                    crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                        context,
+                        bytecode.as_ref(),
+                    )
+                });
+                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                    &artifacts.queued_instructions_by_authority(),
+                    self,
+                    runtime_origin,
+                )?;
+                let queued_instructions = artifacts.queued_instructions();
+                let step = ExecutionStep(ConstVec::from(queued_instructions));
                 self.seed_time_trigger_call_hash(id, authority, &event, &step);
                 let queued = artifacts.apply_to_transaction(self, authority)?;
                 let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
@@ -41559,7 +41817,7 @@ impl StateTransaction<'_, '_> {
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
                     let trigger_args = self.trigger_args_from_event(&event);
-                    let contract_call_context = self
+                    let mut contract_call_context = self
                         .world
                         .triggers
                         .inspect_by_id(id, |action| action.metadata().clone())
@@ -41568,6 +41826,11 @@ impl StateTransaction<'_, '_> {
                         })
                         .transpose()?
                         .flatten();
+                    if let Some(context) = contract_call_context.as_mut() {
+                        crate::executor::canonicalize_contract_call_execution_context(
+                            self, context,
+                        )?;
+                    }
                     let bytecode = bytecode.clone();
                     let summary = {
                         let mut cache = self.ivm_cache.lock();
@@ -41684,8 +41947,21 @@ impl StateTransaction<'_, '_> {
                     }
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
-                    let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
-                    let step = ExecutionStep(ConstVec::from(artifacts.queued_instructions()));
+                    let artifacts =
+                        host.into_execution_artifacts(contract_runtime_context.clone())?;
+                    let runtime_origin = contract_runtime_context.as_ref().map(|context| {
+                        crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                            context,
+                            bytecode.as_ref(),
+                        )
+                    });
+                    crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                        &artifacts.queued_instructions_by_authority(),
+                        self,
+                        runtime_origin,
+                    )?;
+                    let queued_instructions = artifacts.queued_instructions();
+                    let step = ExecutionStep(ConstVec::from(queued_instructions));
                     self.seed_time_trigger_call_hash(id, authority, &event, &step);
                     let queued = artifacts.apply_to_transaction(self, authority)?;
                     let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
@@ -42335,6 +42611,9 @@ pub(crate) mod deserialize {
             let world_value = map
                 .remove("world")
                 .ok_or_else(|| json::Error::missing_field("world"))?;
+            let legacy_contract_subject_ledger_missing = world_value
+                .as_object()
+                .is_some_and(|world| !world.contains_key("contract_subject_bindings"));
             let ivm_runtime = IVM::new(0);
             let ivm_seed = IvmSeed {
                 ivm: &ivm_runtime,
@@ -42362,6 +42641,66 @@ pub(crate) mod deserialize {
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
 
             drain_unknown(&map, "state");
+
+            if legacy_contract_subject_ledger_missing {
+                let (historical_addresses, manifest_hash) = if block_hashes_vec.is_empty() {
+                    (
+                        Vec::new(),
+                        Hash::new(b"iroha:contract-subject:v2:legacy-genesis-migration"),
+                    )
+                } else {
+                    let (manifest, manifest_hash) = crate::smartcontracts::code::load_legacy_contract_subject_migration_manifest(
+                        &chain_id,
+                        &block_hashes_vec,
+                    )
+                    .map_err(|message| json::Error::InvalidField {
+                        field: "contract_subject_bindings".into(),
+                        message,
+                    })?;
+                    let historical: BTreeSet<_> = manifest
+                        .historical_contract_addresses
+                        .iter()
+                        .cloned()
+                        .collect();
+                    if let Some(missing) = world
+                        .contract_instances
+                        .view()
+                        .iter()
+                        .map(|(address, _)| address)
+                        .find(|address| !historical.contains(*address))
+                    {
+                        return Err(json::Error::InvalidField {
+                            field: "contract_subject_bindings".into(),
+                            message: format!(
+                                "active legacy contract `{missing}` is absent from exhaustive history manifest"
+                            ),
+                        });
+                    }
+                    (manifest.historical_contract_addresses, manifest_hash)
+                };
+                crate::smartcontracts::code::migrate_legacy_contract_subject_bindings(
+                    &mut world,
+                    historical_addresses,
+                    manifest_hash,
+                )
+                .map_err(|message| json::Error::InvalidField {
+                    field: "contract_subject_bindings".into(),
+                    message,
+                })?;
+            } else {
+                crate::smartcontracts::code::clear_legacy_contract_subject_markers(&mut world);
+                crate::smartcontracts::code::rebuild_contract_subject_addresses(&mut world)
+                    .map_err(|message| json::Error::InvalidField {
+                        field: "contract_subject_bindings".into(),
+                        message,
+                    })?;
+                crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
+                    |message| json::Error::InvalidField {
+                        field: "contract_subject_bindings".into(),
+                        message,
+                    },
+                )?;
+            }
 
             let public_lane_validator_blob_count = public_lane_validators.len();
             let public_lane_stake_share_blob_count = public_lane_stake_shares.len();
@@ -43313,6 +43652,8 @@ pub(crate) mod deserialize {
         let contract_manifests = take_optional_default(&mut map, "contract_manifests")?;
         let contract_code = take_optional_default(&mut map, "contract_code")?;
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
+        let contract_subject_bindings =
+            take_optional_default(&mut map, "contract_subject_bindings")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
         let soracloud_service_revisions =
             take_optional_default_lossy(&mut map, "soracloud_service_revisions")?;
@@ -43501,6 +43842,8 @@ pub(crate) mod deserialize {
             contract_manifests,
             contract_code,
             contract_instances,
+            contract_subject_bindings,
+            contract_subject_addresses: Storage::default(),
             smart_contract_state,
             soracloud_service_revisions,
             soracloud_service_deployments,

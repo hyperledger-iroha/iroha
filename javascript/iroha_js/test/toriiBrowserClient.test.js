@@ -193,11 +193,11 @@ test("ToriiBrowserClient resolves aliases with JSON body", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(String(url), "https://torii.example/v1/aliases/resolve");
     assert.equal(init.method, "POST");
-    assert.deepEqual(JSON.parse(init.body), { alias: "cbdc@pob.cbsi" });
+    assert.deepEqual(JSON.parse(init.body), { alias: "treasury@boi.is2" });
     return jsonResponse({ resolved: true, account_id: "account" });
   };
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
-  const payload = await client.resolveAlias("cbdc@pob.cbsi");
+  const payload = await client.resolveAlias("treasury@boi.is2");
   assert.deepEqual(payload, { resolved: true, account_id: "account" });
 });
 

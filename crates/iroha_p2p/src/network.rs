@@ -64,8 +64,86 @@ use crate::{
 #[cfg(feature = "quic")]
 static NEXT_QUIC_CONN_ID: OnceLock<AtomicU64> = OnceLock::new();
 
-const CONTROL_UPDATE_CHANNEL_CAP: usize = 64;
 const TCP_LISTEN_BACKLOG: i32 = 1024;
+
+type ControlUpdateSender<T> = watch::Sender<Option<Arc<T>>>;
+type ControlUpdateReceiver<T> = watch::Receiver<Option<Arc<T>>>;
+
+// Each control category gets its own single retained snapshot so unrelated
+// updates cannot overwrite one another. Store snapshots behind `Arc` so
+// receiver cloning never holds the watch read lock while copying a large
+// topology, address book, or ACL; synchronous publishers do not wait for a
+// full payload clone.
+fn control_update_channel<T>() -> (ControlUpdateSender<T>, ControlUpdateReceiver<T>) {
+    watch::channel(None)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ReconnectGeneration(u64);
+
+impl ReconnectGeneration {
+    fn advance(&mut self) {
+        self.0 = self.0.wrapping_add(1);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ConsensusCapsSnapshot {
+    caps: crate::ConsensusHandshakeCaps,
+    reconnect_generation: ReconnectGeneration,
+}
+
+impl ConsensusCapsSnapshot {
+    fn take_reconnect_request(&self, applied_generation: &mut ReconnectGeneration) -> bool {
+        if self.reconnect_generation == *applied_generation {
+            return false;
+        }
+        *applied_generation = self.reconnect_generation;
+        true
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ConsensusCapsUpdateSender {
+    sender: ControlUpdateSender<ConsensusCapsSnapshot>,
+    reconnect_generation: Arc<Mutex<ReconnectGeneration>>,
+}
+
+impl ConsensusCapsUpdateSender {
+    fn send(&self, caps: crate::ConsensusHandshakeCaps, reconnect: bool) {
+        // Serialize generation assignment with publication so a later caps-only
+        // snapshot cannot erase an unobserved reconnect request.
+        let mut generation = self
+            .reconnect_generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if reconnect {
+            generation.advance();
+        }
+        send_control_update(
+            &self.sender,
+            "consensus caps",
+            ConsensusCapsSnapshot {
+                caps,
+                reconnect_generation: *generation,
+            },
+        );
+    }
+}
+
+fn consensus_caps_update_channel() -> (
+    ConsensusCapsUpdateSender,
+    ControlUpdateReceiver<ConsensusCapsSnapshot>,
+) {
+    let (sender, receiver) = control_update_channel();
+    (
+        ConsensusCapsUpdateSender {
+            sender,
+            reconnect_generation: Arc::new(Mutex::new(ReconnectGeneration::default())),
+        },
+        receiver,
+    )
+}
 
 fn bind_reusable_tcp_listener(addrs: &[std::net::SocketAddr]) -> io::Result<TcpListener> {
     let mut last_error = None;
@@ -598,6 +676,7 @@ static POST_OVERFLOWS_LO_OTHER: AtomicU64 = AtomicU64::new(0);
 // Jittered exponential backoff for reconnect attempts.
 const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
+const SERVICE_MESSAGE_BUDGET: usize = 32;
 const INBOUND_PEER_HIGH_BUDGET: usize = 32;
 const NETWORK_HIGH_ACTOR_DRAIN_BASE: usize = 64;
 const NETWORK_HIGH_ACTOR_DRAIN_PRESSURED: usize = 512;
@@ -616,6 +695,15 @@ fn high_actor_drain_limit(queue_len_after_first_recv: usize) -> usize {
     } else {
         NETWORK_HIGH_ACTOR_DRAIN_BASE
     }
+}
+
+fn should_stop_high_actor_drain(
+    drained: usize,
+    drain_limit: usize,
+    service_pending: bool,
+    shutdown_requested: bool,
+) -> bool {
+    drained >= drain_limit || service_pending || shutdown_requested
 }
 
 #[derive(Clone, Debug, Encode, Decode)]
@@ -1986,20 +2074,20 @@ pub struct NetworkBaseHandle<T: Pload, K: Kex, E: Enc> {
     online_peers_receiver: watch::Receiver<OnlinePeers>,
     /// Receiver of online peer transport capabilities.
     online_peer_capabilities_receiver: watch::Receiver<message::OnlinePeerCapabilities>,
-    /// [`UpdateTopology`] message sender
-    update_topology_sender: mpsc::Sender<UpdateTopology>,
-    /// [`UpdatePeers`] message sender
-    update_peers_sender: mpsc::Sender<UpdatePeers>,
-    /// [`UpdatePeerCapabilities`] message sender
-    update_peer_capabilities_sender: mpsc::Sender<message::UpdatePeerCapabilities>,
-    /// Trusted peers update sender
-    update_trusted_peers_sender: mpsc::Sender<UpdateTrustedPeers>,
-    /// [`UpdateAcl`] message sender
-    update_acl_sender: mpsc::Sender<message::UpdateAcl>,
-    /// [`UpdateHandshake`] message sender
-    update_handshake_sender: mpsc::Sender<message::UpdateHandshake>,
-    /// [`UpdateConsensusCaps`] message sender
-    update_consensus_caps_sender: mpsc::Sender<message::UpdateConsensusCaps>,
+    /// Latest [`UpdateTopology`] snapshot sender.
+    update_topology_sender: ControlUpdateSender<UpdateTopology>,
+    /// Latest [`UpdatePeers`] snapshot sender.
+    update_peers_sender: ControlUpdateSender<UpdatePeers>,
+    /// Latest [`UpdatePeerCapabilities`] snapshot sender.
+    update_peer_capabilities_sender: ControlUpdateSender<message::UpdatePeerCapabilities>,
+    /// Latest trusted-peers snapshot sender.
+    update_trusted_peers_sender: ControlUpdateSender<UpdateTrustedPeers>,
+    /// Latest [`UpdateAcl`] snapshot sender.
+    update_acl_sender: ControlUpdateSender<message::UpdateAcl>,
+    /// Latest [`UpdateHandshake`] snapshot sender.
+    update_handshake_sender: ControlUpdateSender<message::UpdateHandshake>,
+    /// Latest consensus-capabilities snapshot sender.
+    update_consensus_caps_sender: ConsensusCapsUpdateSender,
     /// Service channel into the network actor (for inbound accept helpers)
     service_message_sender: mpsc::Sender<ServiceMessage<WireMessage<T>>>,
     /// Sender of high priority messages
@@ -2069,17 +2157,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     #[must_use]
     pub fn closed_for_tests() -> Self {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
-        let (update_topology_tx, update_topology_rx) = mpsc::channel::<message::UpdateTopology>(1);
-        let (update_peers_tx, update_peers_rx) = mpsc::channel::<message::UpdatePeers>(1);
-        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
-            mpsc::channel::<message::UpdatePeerCapabilities>(1);
-        let (update_trusted_tx, update_trusted_rx) =
-            mpsc::channel::<message::UpdateTrustedPeers>(1);
-        let (update_acl_tx, update_acl_rx) = mpsc::channel::<message::UpdateAcl>(1);
-        let (update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<message::UpdateHandshake>(1);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) =
-            mpsc::channel::<message::UpdateConsensusCaps>(1);
+        let (update_topology_tx, update_topology_rx) = control_update_channel();
+        let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
+        let (update_trusted_tx, update_trusted_rx) = control_update_channel();
+        let (update_acl_tx, update_acl_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (service_message_tx, _service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
@@ -2461,19 +2545,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             watch::channel(HashMap::new());
         let (subscribe_to_peers_messages_sender, subscribe_to_peers_messages_receiver) =
             mpsc::channel(p2p_subscriber_queue_cap.get());
-        let (update_topology_sender, update_topology_receiver) =
-            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_peers_sender, update_peers_receiver) =
-            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_topology_sender, update_topology_receiver) = control_update_channel();
+        let (update_peers_sender, update_peers_receiver) = control_update_channel();
         let (update_peer_capabilities_sender, update_peer_capabilities_receiver) =
-            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_trusted_peers_sender, update_trusted_peers_receiver) =
-            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_acl_sender, update_acl_receiver) = mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_handshake_sender, update_handshake_receiver) =
-            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
+            control_update_channel();
+        let (update_trusted_peers_sender, update_trusted_peers_receiver) = control_update_channel();
+        let (update_acl_sender, update_acl_receiver) = control_update_channel();
+        let (update_handshake_sender, update_handshake_receiver) = control_update_channel();
         let (update_consensus_caps_sender, update_consensus_caps_receiver) =
-            mpsc::channel(CONTROL_UPDATE_CHANNEL_CAP);
+            consensus_caps_update_channel();
         // Bounded queue capacities are supplied from node configuration so the
         // default build enforces backpressure without relying on feature flags.
         let (network_message_high_sender, network_message_high_receiver) =
@@ -2636,6 +2716,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             connect_startup_delay_until,
             chain_id,
             consensus_caps,
+            consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps,
             crypto_caps,
             peer_capabilities: HashMap::new(),
@@ -2937,64 +3018,53 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
 
     /// Send [`UpdateTopology`] message on network actor.
     pub fn update_topology(&self, topology: UpdateTopology) {
-        if let Err(err) = self.update_topology_sender.try_send(topology) {
-            log_control_update_drop("topology", err);
-        }
+        send_control_update(&self.update_topology_sender, "topology", topology);
     }
 
     /// Send [`UpdatePeers`] message on network actor.
     pub fn update_peers_addresses(&self, peers: UpdatePeers) {
-        if let Err(err) = self.update_peers_sender.try_send(peers) {
-            log_control_update_drop("peers", err);
-        }
+        send_control_update(&self.update_peers_sender, "peers", peers);
     }
 
     /// Send [`UpdatePeerCapabilities`] message on network actor.
     pub fn update_peer_capabilities(&self, capabilities: message::UpdatePeerCapabilities) {
-        if let Err(err) = self.update_peer_capabilities_sender.try_send(capabilities) {
-            log_control_update_drop("peer capability", err);
-        }
+        send_control_update(
+            &self.update_peer_capabilities_sender,
+            "peer capability",
+            capabilities,
+        );
     }
 
     /// Update trusted peer list for reputation tracking.
     pub fn update_trusted_peers(&self, trusted: UpdateTrustedPeers) {
-        if let Err(err) = self.update_trusted_peers_sender.try_send(trusted) {
-            log_control_update_drop("trusted peers", err);
-        }
+        send_control_update(&self.update_trusted_peers_sender, "trusted peers", trusted);
     }
 
     /// Update ACL configuration at runtime.
     pub fn update_acl(&self, acl: message::UpdateAcl) {
-        if let Err(err) = self.update_acl_sender.try_send(acl) {
-            log_control_update_drop("ACL", err);
-        }
+        send_control_update(&self.update_acl_sender, "ACL", acl);
     }
 
     /// Update `SoraNet` handshake configuration at runtime.
     pub fn update_soranet_handshake(&self, handshake: ActualSoranetHandshake) {
-        if let Err(err) = self
-            .update_handshake_sender
-            .try_send(message::UpdateHandshake { handshake })
-        {
-            log_control_update_drop("handshake", err);
-        }
+        send_control_update(
+            &self.update_handshake_sender,
+            "handshake",
+            message::UpdateHandshake { handshake },
+        );
     }
 
     /// Update consensus handshake capabilities at runtime and optionally reconnect peers.
+    ///
+    /// A reconnect request remains pending across newer caps-only snapshots until
+    /// the network actor observes it.
     pub fn update_consensus_caps(
         &self,
         caps: crate::ConsensusHandshakeCaps,
         drop_existing_peers: bool,
     ) {
-        if let Err(err) = self
-            .update_consensus_caps_sender
-            .try_send(message::UpdateConsensusCaps {
-                caps,
-                drop_existing_peers,
-            })
-        {
-            log_control_update_drop("consensus caps", err);
-        }
+        self.update_consensus_caps_sender
+            .send(caps, drop_existing_peers);
     }
 
     /// Receive latest update of [`OnlinePeers`]
@@ -3028,37 +3098,33 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     }
 }
 
-fn log_control_update_drop<T>(label: &'static str, err: mpsc::error::TrySendError<T>) {
-    match err {
-        mpsc::error::TrySendError::Full(_) => {
-            warn!(
-                label = label,
-                cap = CONTROL_UPDATE_CHANNEL_CAP,
-                "P2P control update queue is full; dropping update"
-            );
-        }
-        mpsc::error::TrySendError::Closed(_) => {
-            debug!(
-                label = label,
-                "Network actor is closed, dropping P2P control update"
-            );
-        }
+fn send_control_update<T>(sender: &ControlUpdateSender<T>, label: &'static str, update: T) {
+    if sender.send(Some(Arc::new(update))).is_err() {
+        debug!(
+            label = label,
+            "Network actor is closed, dropping P2P control update"
+        );
     }
 }
 
-fn drain_latest<T>(receiver: &mut mpsc::Receiver<T>, mut value: T) -> T {
-    while let Ok(next) = receiver.try_recv() {
-        value = next;
-    }
-    value
+async fn receive_control_update<T: Clone + Send + Sync>(
+    receiver: &mut ControlUpdateReceiver<T>,
+) -> Option<T> {
+    receiver.changed().await.ok()?;
+    let update = {
+        let current = receiver.borrow_and_update();
+        current.as_ref().cloned()?
+    };
+    Some(Arc::unwrap_or_clone(update))
 }
 
 #[cfg(test)]
 mod handle_update_tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, sync::atomic::AtomicUsize};
 
     use iroha_config::parameters::actual::SoranetHandshake as ActualSoranetHandshake;
     use iroha_crypto::{encryption::ChaCha20Poly1305, kex::X25519Sha256};
+    use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     use tokio::sync::{mpsc, watch};
 
@@ -3079,22 +3145,28 @@ mod handle_update_tests {
         }
     }
 
-    fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
+    struct ControlUpdateReceivers {
+        topology: ControlUpdateReceiver<message::UpdateTopology>,
+        peers: ControlUpdateReceiver<message::UpdatePeers>,
+        peer_capabilities: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
+        trusted_peers: ControlUpdateReceiver<message::UpdateTrustedPeers>,
+        acl: ControlUpdateReceiver<message::UpdateAcl>,
+        handshake: ControlUpdateReceiver<message::UpdateHandshake>,
+        consensus_caps: ControlUpdateReceiver<ConsensusCapsSnapshot>,
+    }
+
+    fn handle_with_control_update_receivers() -> (
+        NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305>,
+        ControlUpdateReceivers,
+    ) {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
-        let (update_topology_tx, update_topology_rx) =
-            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_peers_tx, update_peers_rx) =
-            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
-            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_trusted_tx, update_trusted_rx) =
-            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_acl_tx, update_acl_rx) =
-            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) =
-            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_topology_tx, update_topology_rx) = control_update_channel();
+        let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
+        let (update_trusted_tx, update_trusted_rx) = control_update_channel();
+        let (update_acl_tx, update_acl_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (service_message_tx, _service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
@@ -3105,31 +3177,62 @@ mod handle_update_tests {
         let (_online_peer_capabilities_tx, online_peer_capabilities_receiver) =
             watch::channel(HashMap::new());
 
-        drop(update_topology_rx);
-        drop(update_peers_rx);
-        drop(update_peer_capabilities_rx);
-        drop(update_trusted_rx);
-        drop(update_acl_rx);
-        drop(update_handshake_rx);
-        drop(update_consensus_caps_rx);
+        (
+            NetworkBaseHandle {
+                subscribe_to_peers_messages_sender: subscribe_tx,
+                online_peers_receiver,
+                online_peer_capabilities_receiver,
+                update_topology_sender: update_topology_tx,
+                update_peers_sender: update_peers_tx,
+                update_peer_capabilities_sender: update_peer_capabilities_tx,
+                update_trusted_peers_sender: update_trusted_tx,
+                update_acl_sender: update_acl_tx,
+                update_handshake_sender: update_handshake_tx,
+                update_consensus_caps_sender: update_consensus_caps_tx,
+                service_message_sender: service_message_tx,
+                network_message_high_sender,
+                network_message_low_sender,
+                subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
+                _key_exchange: core::marker::PhantomData,
+                _encryptor: core::marker::PhantomData,
+            },
+            ControlUpdateReceivers {
+                topology: update_topology_rx,
+                peers: update_peers_rx,
+                peer_capabilities: update_peer_capabilities_rx,
+                trusted_peers: update_trusted_rx,
+                acl: update_acl_rx,
+                handshake: update_handshake_rx,
+                consensus_caps: update_consensus_caps_rx,
+            },
+        )
+    }
 
-        NetworkBaseHandle {
-            subscribe_to_peers_messages_sender: subscribe_tx,
-            online_peers_receiver,
-            online_peer_capabilities_receiver,
-            update_topology_sender: update_topology_tx,
-            update_peers_sender: update_peers_tx,
-            update_peer_capabilities_sender: update_peer_capabilities_tx,
-            update_trusted_peers_sender: update_trusted_tx,
-            update_acl_sender: update_acl_tx,
-            update_handshake_sender: update_handshake_tx,
-            update_consensus_caps_sender: update_consensus_caps_tx,
-            service_message_sender: service_message_tx,
-            network_message_high_sender,
-            network_message_low_sender,
-            subscriber_queue_cap: core::num::NonZeroUsize::new(1).expect("nonzero"),
-            _key_exchange: core::marker::PhantomData,
-            _encryptor: core::marker::PhantomData,
+    fn closed_handle() -> NetworkBaseHandle<Dummy, X25519Sha256, ChaCha20Poly1305> {
+        let (handle, receivers) = handle_with_control_update_receivers();
+        drop(receivers);
+        handle
+    }
+
+    fn test_consensus_caps(marker: u8) -> crate::ConsensusHandshakeCaps {
+        crate::ConsensusHandshakeCaps {
+            mode_tag: format!("test-{marker}"),
+            proto_version: u32::from(marker),
+            consensus_fingerprint: [marker; 32],
+            config: crate::ConsensusConfigCaps {
+                collectors_k: u16::from(marker),
+                redundant_send_r: marker,
+                da_enabled: marker.is_multiple_of(2),
+                rbc_chunk_max_bytes: u64::from(marker),
+                rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                rbc_rs16_data_shards: u16::from(marker),
+                rbc_rs16_parity_shards: u16::from(marker),
+                rbc_session_ttl_ms: u64::from(marker),
+                rbc_store_max_sessions: u32::from(marker),
+                rbc_store_soft_sessions: u32::from(marker),
+                rbc_store_max_bytes: u64::from(marker),
+                rbc_store_soft_bytes: u64::from(marker),
+            },
         }
     }
 
@@ -3139,20 +3242,13 @@ mod handle_update_tests {
         net_channel::Receiver<NetworkMessage<Dummy>>,
     ) {
         let (subscribe_tx, _subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
-        let (update_topology_tx, update_topology_rx) =
-            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_peers_tx, update_peers_rx) =
-            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
-            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_trusted_tx, update_trusted_rx) =
-            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_acl_tx, update_acl_rx) =
-            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) =
-            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_topology_tx, update_topology_rx) = control_update_channel();
+        let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
+        let (update_trusted_tx, update_trusted_rx) = control_update_channel();
+        let (update_acl_tx, update_acl_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (service_message_tx, _service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, network_message_high_rx) =
@@ -3198,20 +3294,13 @@ mod handle_update_tests {
         mpsc::Receiver<Subscriber<Dummy>>,
     ) {
         let (subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<Dummy>>(1);
-        let (update_topology_tx, update_topology_rx) =
-            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_peers_tx, update_peers_rx) =
-            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_peer_capabilities_tx, update_peer_capabilities_rx) =
-            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_trusted_tx, update_trusted_rx) =
-            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_acl_tx, update_acl_rx) =
-            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (update_consensus_caps_tx, update_consensus_caps_rx) =
-            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (update_topology_tx, update_topology_rx) = control_update_channel();
+        let (update_peers_tx, update_peers_rx) = control_update_channel();
+        let (update_peer_capabilities_tx, update_peer_capabilities_rx) = control_update_channel();
+        let (update_trusted_tx, update_trusted_rx) = control_update_channel();
+        let (update_acl_tx, update_acl_rx) = control_update_channel();
+        let (update_handshake_tx, update_handshake_rx) = control_update_channel();
+        let (update_consensus_caps_tx, update_consensus_caps_rx) = consensus_caps_update_channel();
         let (service_message_tx, _service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<Dummy>>>(1);
         let (network_message_high_sender, _network_message_high_rx) =
@@ -3253,19 +3342,442 @@ mod handle_update_tests {
         )
     }
 
-    #[test]
-    fn drain_latest_keeps_newest_queued_value() {
-        let (tx, mut rx) = mpsc::channel(4);
-        tx.try_send(1).expect("first value fits");
-        tx.try_send(2).expect("second value fits");
-        tx.try_send(3).expect("third value fits");
+    #[tokio::test(flavor = "current_thread")]
+    async fn control_update_channel_keeps_newest_unconsumed_value() {
+        let (tx, mut rx) = control_update_channel();
+        for value in 0..=65 {
+            send_control_update(&tx, "test", value);
+        }
 
-        let first = rx.try_recv().expect("first value queued");
-        assert_eq!(drain_latest(&mut rx, first), 3);
-        assert!(matches!(
-            rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
+        assert_eq!(receive_control_update(&mut rx).await, Some(65));
+        assert!(
+            !rx.has_changed()
+                .expect("control update sender should remain open")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn control_update_receive_is_cancellation_safe_and_reusable() {
+        let (tx, mut rx) = control_update_channel();
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), receive_control_update(&mut rx),)
+                .await
+                .is_err(),
+            "an untouched control slot must remain pending"
+        );
+
+        send_control_update(&tx, "test", 1);
+        assert_eq!(receive_control_update(&mut rx).await, Some(1));
+        send_control_update(&tx, "test", 2);
+        assert_eq!(receive_control_update(&mut rx).await, Some(2));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), receive_control_update(&mut rx),)
+                .await
+                .is_err(),
+            "an applied snapshot must not be delivered twice"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn control_update_receive_preserves_final_value_across_close() {
+        let (empty_tx, mut empty_rx) = control_update_channel::<u8>();
+        drop(empty_tx);
+        assert_eq!(receive_control_update(&mut empty_rx).await, None);
+
+        let (tx, mut rx) = control_update_channel();
+        send_control_update(&tx, "test", 7_u8);
+        drop(tx);
+        assert_eq!(receive_control_update(&mut rx).await, Some(7));
+        assert_eq!(receive_control_update(&mut rx).await, None);
+    }
+
+    #[test]
+    fn control_update_channel_releases_superseded_snapshots() {
+        #[derive(Clone)]
+        struct DropProbe(Arc<AtomicUsize>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = control_update_channel();
+        for _ in 0..1_024 {
+            send_control_update(&tx, "test", DropProbe(Arc::clone(&dropped)));
+        }
+
+        assert_eq!(dropped.load(Ordering::SeqCst), 1_023);
+        drop(tx);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1_023);
+        drop(rx);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1_024);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn publisher_does_not_wait_for_receiver_payload_clone() {
+        struct CloneGate(bool);
+
+        struct SlowClone {
+            marker: u8,
+            clone_started: tokio::sync::mpsc::UnboundedSender<()>,
+            gate: Arc<(std::sync::Mutex<CloneGate>, std::sync::Condvar)>,
+        }
+
+        impl Clone for SlowClone {
+            fn clone(&self) -> Self {
+                let _ = self.clone_started.send(());
+                let (lock, ready) = &*self.gate;
+                let mut released = lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                while !released.0 {
+                    released = ready
+                        .wait(released)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+                Self {
+                    marker: self.marker,
+                    clone_started: self.clone_started.clone(),
+                    gate: Arc::clone(&self.gate),
+                }
+            }
+        }
+
+        let (clone_started_tx, mut clone_started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let gate = Arc::new((
+            std::sync::Mutex::new(CloneGate(false)),
+            std::sync::Condvar::new(),
         ));
+        let (tx, mut rx) = control_update_channel();
+        send_control_update(
+            &tx,
+            "test",
+            SlowClone {
+                marker: 1,
+                clone_started: clone_started_tx.clone(),
+                gate: Arc::clone(&gate),
+            },
+        );
+
+        let receive_task = tokio::spawn(async move {
+            let first = receive_control_update(&mut rx).await.expect("first update");
+            (first, rx)
+        });
+        clone_started_rx
+            .recv()
+            .await
+            .expect("receiver must begin cloning");
+
+        let send_tx = tx.clone();
+        let send_gate = Arc::clone(&gate);
+        let (send_done_tx, mut send_done_rx) = tokio::sync::oneshot::channel();
+        let send_task = tokio::spawn(async move {
+            send_control_update(
+                &send_tx,
+                "test",
+                SlowClone {
+                    marker: 2,
+                    clone_started: clone_started_tx,
+                    gate: send_gate,
+                },
+            );
+            let _ = send_done_tx.send(());
+        });
+        let send_completed = tokio::time::timeout(Duration::from_secs(1), &mut send_done_rx)
+            .await
+            .is_ok();
+
+        let (lock, ready) = &*gate;
+        lock.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0 = true;
+        ready.notify_all();
+
+        send_task.await.expect("sender task must not panic");
+        let (first, mut rx) = receive_task.await.expect("receiver task must not panic");
+        assert!(
+            send_completed,
+            "publishing a newer snapshot blocked on a full payload clone"
+        );
+        assert_eq!(first.marker, 1);
+        assert_eq!(
+            receive_control_update(&mut rx)
+                .await
+                .expect("second update")
+                .marker,
+            2
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_control_update_writers_publish_the_latest_completed_write() {
+        let (tx, mut rx) = control_update_channel();
+        let mut writers = Vec::new();
+        for writer in 0..8_u32 {
+            let tx = tx.clone();
+            writers.push(tokio::spawn(async move {
+                for sequence in 0..256_u32 {
+                    send_control_update(&tx, "test", (writer, sequence));
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+        for writer in writers {
+            writer.await.expect("control update writer must not panic");
+        }
+
+        let (writer, sequence) =
+            tokio::time::timeout(Duration::from_secs(1), receive_control_update(&mut rx))
+                .await
+                .expect("a concurrent write must reach the retained slot")
+                .expect("control update sender remains open");
+        assert!(writer < 8);
+        assert_eq!(
+            sequence, 255,
+            "the globally last completed writer must have published its final sequence"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn update_topology_overflow_keeps_newest_snapshot() {
+        let mut handle = closed_handle();
+        let (update_topology_tx, mut update_topology_rx) = control_update_channel();
+        handle.update_topology_sender = update_topology_tx;
+
+        for _ in 0..64 {
+            handle.update_topology(message::UpdateTopology(HashSet::new()));
+        }
+
+        let superseded_peer = PeerId::from(KeyPair::random().public_key().clone());
+        handle.update_topology(message::UpdateTopology(HashSet::from([superseded_peer])));
+
+        let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let expected = HashSet::from([newest_peer]);
+        handle.update_topology(message::UpdateTopology(expected.clone()));
+
+        let message::UpdateTopology(actual) = receive_control_update(&mut update_topology_rx)
+            .await
+            .expect("newest topology update should remain pending");
+        assert_eq!(actual, expected);
+        assert!(
+            !update_topology_rx
+                .has_changed()
+                .expect("topology sender should remain open")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn all_control_update_methods_keep_newest_category_snapshot() {
+        let (handle, mut receivers) = handle_with_control_update_receivers();
+        let newest_handle = handle.clone();
+        let stale_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let newest_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let stale_addr = socket_addr!(127.0.0.1:11_001);
+        let newest_addr = socket_addr!(127.0.0.1:11_002);
+
+        handle.update_topology(message::UpdateTopology(HashSet::from([stale_peer.clone()])));
+        handle.update_peers_addresses(message::UpdatePeers(vec![(stale_peer.clone(), stale_addr)]));
+        handle.update_peer_capabilities(message::UpdatePeerCapabilities(vec![(
+            stale_peer.clone(),
+            message::PeerTransportCapabilities {
+                scion_supported: false,
+            },
+        )]));
+        handle.update_trusted_peers(message::UpdateTrustedPeers(HashSet::from([
+            stale_peer.clone()
+        ])));
+        handle.update_acl(message::UpdateAcl {
+            allowlist_only: false,
+            allow_keys: vec![stale_peer.public_key().clone()],
+            deny_keys: Vec::new(),
+            allow_cidrs: vec!["10.0.0.0/8".to_owned()],
+            deny_cidrs: Vec::new(),
+        });
+        let mut stale_handshake = ActualSoranetHandshake::default();
+        stale_handshake.kem_id = 1;
+        handle.update_soranet_handshake(stale_handshake);
+        handle.update_consensus_caps(test_consensus_caps(1), true);
+
+        newest_handle.update_topology(message::UpdateTopology(HashSet::from(
+            [newest_peer.clone()],
+        )));
+        newest_handle.update_peers_addresses(message::UpdatePeers(vec![(
+            newest_peer.clone(),
+            newest_addr.clone(),
+        )]));
+        newest_handle.update_peer_capabilities(message::UpdatePeerCapabilities(vec![(
+            newest_peer.clone(),
+            message::PeerTransportCapabilities {
+                scion_supported: true,
+            },
+        )]));
+        newest_handle.update_trusted_peers(message::UpdateTrustedPeers(HashSet::from([
+            newest_peer.clone(),
+        ])));
+        newest_handle.update_acl(message::UpdateAcl {
+            allowlist_only: true,
+            allow_keys: vec![newest_peer.public_key().clone()],
+            deny_keys: Vec::new(),
+            allow_cidrs: vec!["192.0.2.0/24".to_owned()],
+            deny_cidrs: vec!["198.51.100.0/24".to_owned()],
+        });
+        let mut newest_handshake = ActualSoranetHandshake::default();
+        newest_handshake.kem_id = 2;
+        newest_handle.update_soranet_handshake(newest_handshake);
+        let newest_caps = test_consensus_caps(2);
+        newest_handle.update_consensus_caps(newest_caps.clone(), false);
+
+        assert!(receivers.topology.has_changed().expect("topology open"));
+        assert!(receivers.peers.has_changed().expect("peers open"));
+        assert!(
+            receivers
+                .peer_capabilities
+                .has_changed()
+                .expect("peer capabilities open")
+        );
+        assert!(
+            receivers
+                .trusted_peers
+                .has_changed()
+                .expect("trusted peers open")
+        );
+        assert!(receivers.acl.has_changed().expect("ACL open"));
+        assert!(receivers.handshake.has_changed().expect("handshake open"));
+        assert!(
+            receivers
+                .consensus_caps
+                .has_changed()
+                .expect("consensus caps open")
+        );
+
+        let message::UpdateTopology(topology) = receive_control_update(&mut receivers.topology)
+            .await
+            .expect("topology update");
+        assert_eq!(topology, HashSet::from([newest_peer.clone()]));
+
+        let message::UpdatePeers(peers) = receive_control_update(&mut receivers.peers)
+            .await
+            .expect("peer-address update");
+        assert_eq!(peers, vec![(newest_peer.clone(), newest_addr)]);
+
+        let message::UpdatePeerCapabilities(capabilities) =
+            receive_control_update(&mut receivers.peer_capabilities)
+                .await
+                .expect("peer-capability update");
+        assert_eq!(
+            capabilities,
+            vec![(
+                newest_peer.clone(),
+                message::PeerTransportCapabilities {
+                    scion_supported: true,
+                },
+            )]
+        );
+
+        let message::UpdateTrustedPeers(trusted) =
+            receive_control_update(&mut receivers.trusted_peers)
+                .await
+                .expect("trusted-peer update");
+        assert_eq!(trusted, HashSet::from([newest_peer.clone()]));
+
+        let acl = receive_control_update(&mut receivers.acl)
+            .await
+            .expect("ACL update");
+        assert!(acl.allowlist_only);
+        assert_eq!(acl.allow_keys, vec![newest_peer.public_key().clone()]);
+        assert_eq!(acl.allow_cidrs, vec!["192.0.2.0/24"]);
+        assert_eq!(acl.deny_cidrs, vec!["198.51.100.0/24"]);
+
+        let handshake = receive_control_update(&mut receivers.handshake)
+            .await
+            .expect("handshake update");
+        assert_eq!(handshake.handshake.kem_id, 2);
+
+        let consensus = receive_control_update(&mut receivers.consensus_caps)
+            .await
+            .expect("consensus-capabilities update");
+        assert_eq!(consensus.caps, newest_caps);
+        let mut applied_generation = ReconnectGeneration::default();
+        assert!(consensus.take_reconnect_request(&mut applied_generation));
+        assert!(!consensus.take_reconnect_request(&mut applied_generation));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn consensus_reconnect_request_survives_newer_caps_only_snapshot() {
+        let (sender, mut receiver) = consensus_caps_update_channel();
+        sender.send(test_consensus_caps(1), true);
+        let newest_caps = test_consensus_caps(2);
+        sender.send(newest_caps.clone(), false);
+
+        let snapshot = receive_control_update(&mut receiver)
+            .await
+            .expect("latest consensus snapshot");
+        assert_eq!(snapshot.caps, newest_caps);
+        let mut applied_generation = ReconnectGeneration::default();
+        assert!(snapshot.take_reconnect_request(&mut applied_generation));
+
+        sender.send(test_consensus_caps(3), false);
+        let caps_only = receive_control_update(&mut receiver)
+            .await
+            .expect("caps-only snapshot");
+        assert!(!caps_only.take_reconnect_request(&mut applied_generation));
+
+        sender.send(test_consensus_caps(4), true);
+        let reconnect = receive_control_update(&mut receiver)
+            .await
+            .expect("new reconnect snapshot");
+        assert!(reconnect.take_reconnect_request(&mut applied_generation));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_consensus_updates_preserve_every_reconnect_generation() {
+        const WRITERS: u8 = 8;
+        const UPDATES_PER_WRITER: u8 = 96;
+        const RECONNECT_EVERY: u8 = 3;
+
+        let (sender, mut receiver) = consensus_caps_update_channel();
+        let mut writers = Vec::new();
+        for writer in 0..WRITERS {
+            let sender = sender.clone();
+            writers.push(tokio::spawn(async move {
+                for sequence in 0..UPDATES_PER_WRITER {
+                    let reconnect = sequence % RECONNECT_EVERY == 0;
+                    sender.send(
+                        test_consensus_caps(writer.wrapping_add(sequence)),
+                        reconnect,
+                    );
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+        for writer in writers {
+            writer
+                .await
+                .expect("consensus update writer must not panic");
+        }
+
+        let snapshot = tokio::time::timeout(
+            Duration::from_secs(1),
+            receive_control_update(&mut receiver),
+        )
+        .await
+        .expect("a concurrent consensus update must reach the retained slot")
+        .expect("consensus update sender remains open");
+        let reconnects_per_writer = u64::from(UPDATES_PER_WRITER.div_ceil(RECONNECT_EVERY));
+        let expected_generation = u64::from(WRITERS) * reconnects_per_writer;
+        assert_eq!(
+            snapshot.reconnect_generation,
+            ReconnectGeneration(expected_generation),
+            "caps-only publications must not erase concurrent reconnect requests"
+        );
+
+        let mut applied_generation = ReconnectGeneration::default();
+        assert!(snapshot.take_reconnect_request(&mut applied_generation));
+        assert!(!snapshot.take_reconnect_request(&mut applied_generation));
     }
 
     #[test]
@@ -3289,6 +3801,28 @@ mod handle_update_tests {
             high_actor_drain_limit(257),
             NETWORK_HIGH_ACTOR_DRAIN_SATURATED
         );
+    }
+
+    #[test]
+    fn saturated_high_actor_drain_yields_to_service_and_shutdown() {
+        assert!(!should_stop_high_actor_drain(
+            1,
+            NETWORK_HIGH_ACTOR_DRAIN_SATURATED,
+            false,
+            false,
+        ));
+        assert!(should_stop_high_actor_drain(
+            1,
+            NETWORK_HIGH_ACTOR_DRAIN_SATURATED,
+            true,
+            false,
+        ));
+        assert!(should_stop_high_actor_drain(
+            1,
+            NETWORK_HIGH_ACTOR_DRAIN_SATURATED,
+            false,
+            true,
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3386,30 +3920,11 @@ mod handle_update_tests {
         let handle = closed_handle();
         handle.update_topology(message::UpdateTopology(HashSet::new()));
         handle.update_peers_addresses(message::UpdatePeers(Vec::new()));
+        handle.update_peer_capabilities(message::UpdatePeerCapabilities(Vec::new()));
         handle.update_trusted_peers(message::UpdateTrustedPeers::default());
         handle.update_acl(message::UpdateAcl::default());
         handle.update_soranet_handshake(ActualSoranetHandshake::default());
-
-        let caps = crate::ConsensusHandshakeCaps {
-            mode_tag: "test".to_string(),
-            proto_version: 1,
-            consensus_fingerprint: [0u8; 32],
-            config: crate::ConsensusConfigCaps {
-                collectors_k: 0,
-                redundant_send_r: 0,
-                da_enabled: false,
-                rbc_chunk_max_bytes: 0,
-                rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-                rbc_rs16_data_shards: 0,
-                rbc_rs16_parity_shards: 0,
-                rbc_session_ttl_ms: 0,
-                rbc_store_max_sessions: 0,
-                rbc_store_soft_sessions: 0,
-                rbc_store_max_bytes: 0,
-                rbc_store_soft_bytes: 0,
-            },
-        };
-        handle.update_consensus_caps(caps, false);
+        handle.update_consensus_caps(test_consensus_caps(0), false);
     }
 
     #[test]
@@ -4259,19 +4774,14 @@ mod accept_stream_tests {
         };
 
         let (_subscribe_tx, subscribe_rx) = mpsc::channel::<super::Subscriber<Dummy>>(1);
-        let (_update_topology_tx, update_topology_rx) =
-            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_peers_tx, update_peers_rx) =
-            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_acl_tx, update_acl_rx) =
-            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
+        let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
+        let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
         #[allow(unused_variables)]
-        let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<Dummy>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -4284,7 +4794,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::control_update_channel();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4335,6 +4845,7 @@ mod accept_stream_tests {
             current_peers_addresses: Vec::new(),
             chain_id: None,
             consensus_caps: None,
+            consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
@@ -4612,18 +5123,13 @@ mod accept_stream_tests {
 
         let (_subscribe_tx, subscribe_rx): (mpsc::Sender<super::Subscriber<DummyConsensus>>, _) =
             mpsc::channel(1);
-        let (_update_topology_tx, update_topology_rx) =
-            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_peers_tx, update_peers_rx) =
-            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_acl_tx, update_acl_rx) =
-            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
+        let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
+        let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
+        let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensus>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -4636,7 +5142,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::control_update_channel();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4692,6 +5198,7 @@ mod accept_stream_tests {
             connect_startup_delay_until: tokio::time::Instant::now(),
             chain_id: None,
             consensus_caps: None,
+            consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
@@ -4827,18 +5334,13 @@ mod accept_stream_tests {
             mpsc::Sender<super::Subscriber<DummyConsensusPayload>>,
             _,
         ) = mpsc::channel(1);
-        let (_update_topology_tx, update_topology_rx) =
-            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_peers_tx, update_peers_rx) =
-            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_acl_tx, update_acl_rx) =
-            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
+        let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
+        let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
+        let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusPayload>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -4851,7 +5353,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::control_update_channel();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -4904,6 +5406,7 @@ mod accept_stream_tests {
                 connect_startup_delay_until: tokio::time::Instant::now(),
                 chain_id: None,
                 consensus_caps: None,
+                consensus_reconnect_generation: ReconnectGeneration::default(),
                 confidential_caps: None,
                 crypto_caps: None,
                 peer_capabilities: HashMap::new(),
@@ -5059,18 +5562,13 @@ mod accept_stream_tests {
             mpsc::Sender<super::Subscriber<DummyConsensusChunk>>,
             _,
         ) = mpsc::channel(1);
-        let (_update_topology_tx, update_topology_rx) =
-            mpsc::channel::<super::message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_peers_tx, update_peers_rx) =
-            mpsc::channel::<super::message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::channel::<super::message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_acl_tx, update_acl_rx) =
-            mpsc::channel::<super::message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<super::message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_topology_tx, update_topology_rx) = super::control_update_channel();
+        let (_update_peers_tx, update_peers_rx) = super::control_update_channel();
+        let (_update_trusted_tx, update_trusted_peers_receiver) = super::control_update_channel();
+        let (_update_acl_tx, update_acl_rx) = super::control_update_channel();
+        let (_update_handshake_tx, update_handshake_rx) = super::control_update_channel();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::channel::<super::message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensusChunk>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -5083,7 +5581,7 @@ mod accept_stream_tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel::<super::message::OnlinePeerCapabilities>(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::channel::<super::message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
+            super::control_update_channel();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -5135,6 +5633,7 @@ mod accept_stream_tests {
             connect_startup_delay_until: tokio::time::Instant::now(),
             chain_id: None,
             consensus_caps: None,
+            consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
@@ -5883,14 +6382,14 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     online_peers_sender: watch::Sender<OnlinePeers>,
     /// Sender of online peer transport capabilities.
     online_peer_capabilities_sender: watch::Sender<message::OnlinePeerCapabilities>,
-    /// [`UpdateTopology`] message receiver
-    update_topology_receiver: mpsc::Receiver<UpdateTopology>,
-    /// [`UpdatePeers`] message receiver
-    update_peers_receiver: mpsc::Receiver<UpdatePeers>,
-    /// [`UpdatePeerCapabilities`] message receiver
-    update_peer_capabilities_receiver: mpsc::Receiver<message::UpdatePeerCapabilities>,
-    /// Trusted peers update receiver.
-    update_trusted_peers_receiver: mpsc::Receiver<UpdateTrustedPeers>,
+    /// Latest [`UpdateTopology`] snapshot receiver.
+    update_topology_receiver: ControlUpdateReceiver<UpdateTopology>,
+    /// Latest [`UpdatePeers`] snapshot receiver.
+    update_peers_receiver: ControlUpdateReceiver<UpdatePeers>,
+    /// Latest [`UpdatePeerCapabilities`] snapshot receiver.
+    update_peer_capabilities_receiver: ControlUpdateReceiver<message::UpdatePeerCapabilities>,
+    /// Latest trusted-peers snapshot receiver.
+    update_trusted_peers_receiver: ControlUpdateReceiver<UpdateTrustedPeers>,
     /// Receiver of high priority [`NetworkMessage`]
     network_message_high_receiver: net_channel::Receiver<NetworkMessage<T>>,
     /// Receiver of low priority [`NetworkMessage`]
@@ -5907,12 +6406,12 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     service_message_receiver: mpsc::Receiver<ServiceMessage<WireMessage<T>>>,
     /// Sender for service peer messages to provide clone of sender inside peer
     service_message_sender: mpsc::Sender<ServiceMessage<WireMessage<T>>>,
-    /// ACL update receiver
-    update_acl_receiver: mpsc::Receiver<message::UpdateAcl>,
-    /// Handshake update receiver
-    update_handshake_receiver: mpsc::Receiver<message::UpdateHandshake>,
-    /// Consensus handshake caps update receiver.
-    update_consensus_caps_receiver: mpsc::Receiver<message::UpdateConsensusCaps>,
+    /// Latest ACL snapshot receiver.
+    update_acl_receiver: ControlUpdateReceiver<message::UpdateAcl>,
+    /// Latest handshake snapshot receiver.
+    update_handshake_receiver: ControlUpdateReceiver<message::UpdateHandshake>,
+    /// Latest consensus-handshake-capabilities snapshot receiver.
+    update_consensus_caps_receiver: ControlUpdateReceiver<ConsensusCapsSnapshot>,
     /// Current available connection id
     current_conn_id: ConnectionId,
     /// Current topology
@@ -5929,6 +6428,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     chain_id: Option<ChainId>,
     /// Optional consensus handshake capabilities for gating connections.
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
+    /// Most recently applied reconnect request generation.
+    consensus_reconnect_generation: ReconnectGeneration,
     /// Optional confidential handshake capabilities for gating connections.
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     /// Optional crypto handshake capabilities for gating connections.
@@ -6062,6 +6563,103 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         Ok(())
     }
 
+    fn handle_service_message(&mut self, service_message: ServiceMessage<WireMessage<T>>) {
+        match service_message {
+            ServiceMessage::Terminated(terminated) => {
+                self.peer_terminated(terminated);
+            }
+            ServiceMessage::Connected(connected) => {
+                self.peer_connected(connected);
+            }
+            ServiceMessage::InboundPending(conn_id) => {
+                // Register a pending inbound connection (e.g., QUIC) so caps apply.
+                self.incoming_pending.insert(conn_id);
+            }
+            ServiceMessage::InboundAsk {
+                conn_id,
+                remote_addr,
+                reply,
+            } => {
+                // Apply the same caps and per-IP throttle as the TCP accept path.
+                let allow = if self.exceeds_caps() {
+                    let evicted = self.evict_one_any();
+                    if self.exceeds_caps() {
+                        TOTAL_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
+                        iroha_logger::warn!(addr=%remote_addr, evicted, "Dropping QUIC connection due to total connections cap");
+                        false
+                    } else {
+                        true
+                    }
+                } else if self.exceeds_incoming_cap() {
+                    let evicted = self.evict_one_incoming();
+                    if self.exceeds_incoming_cap() {
+                        INCOMING_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
+                        iroha_logger::warn!(addr=%remote_addr, evicted, "Dropping QUIC connection due to max_incoming cap");
+                        false
+                    } else {
+                        true
+                    }
+                } else if !self.allow_ip(remote_addr.ip()) {
+                    ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
+                    iroha_logger::debug!(addr=%remote_addr, "Dropping QUIC connection due to per-IP throttle");
+                    false
+                } else {
+                    true
+                };
+                if allow {
+                    self.incoming_pending.insert(conn_id);
+                }
+                let _ = reply.send(allow);
+            }
+            ServiceMessage::InboundStream {
+                conn_id,
+                read,
+                write,
+            } => {
+                // Spawn a peer task for the provided stream halves.
+                // Note: pending marker should have been inserted via InboundAsk/InboundPending.
+                let service_message_sender = self.service_message_sender.clone();
+                connected_from::<WireMessage<T>, K, E>(
+                    self.public_address.clone(),
+                    self.key_pair.clone(),
+                    Connection::from_split(conn_id, read, write),
+                    service_message_sender,
+                    self.idle_timeout,
+                    self.chain_id.clone(),
+                    self.consensus_caps.clone(),
+                    self.confidential_caps.clone(),
+                    self.crypto_caps.clone(),
+                    self.soranet_handshake.clone(),
+                    self.local_scion_supported,
+                    self.post_queue_cap,
+                    self.outbound_frame_queue_limits,
+                    self.relay_role,
+                    self.trust_gossip,
+                    self.max_frame_bytes,
+                    self.quic_datagrams_enabled,
+                    self.quic_datagram_max_payload_bytes,
+                );
+            }
+        }
+    }
+
+    fn drain_service_messages(&mut self, budget: usize) -> usize {
+        let mut drained = 0;
+        while drained < budget {
+            match self.service_message_receiver.try_recv() {
+                Ok(service_message) => {
+                    self.handle_service_message(service_message);
+                    drained = drained.saturating_add(1);
+                }
+                Err(
+                    tokio::sync::mpsc::error::TryRecvError::Empty
+                    | tokio::sync::mpsc::error::TryRecvError::Disconnected,
+                ) => break,
+            }
+        }
+        drained
+    }
+
     /// [`Self`] task.
     #[allow(clippy::too_many_lines)]
     #[log(skip(self, shutdown_signal), fields(listen_addr=%self.listen_addr, public_key=%self.key_pair.public_key()))]
@@ -6089,6 +6687,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             None
         };
         loop {
+            if shutdown_signal.is_sent() {
+                iroha_logger::debug!("Shutting down due to signal");
+                break;
+            }
+            // Peer lifecycle and admission replies must stay ahead of bulk
+            // outbound work, but the budget prevents a service producer from
+            // monopolizing the actor.
+            self.drain_service_messages(SERVICE_MESSAGE_BUDGET);
             let mut high_drained = 0usize;
             while high_drained < INBOUND_PEER_HIGH_BUDGET {
                 match self.peer_message_high_receiver.try_recv() {
@@ -6102,9 +6708,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     ) => break,
                 }
             }
+            // The bounded pre-drain above gives high-priority peer traffic a
+            // predictable budget. Keep the main selection fair so a producer
+            // that continuously refreshes one snapshot cannot starve other
+            // control categories or shutdown.
             tokio::select! {
-                // Select is biased because we want to service messages to take priority over data messages.
-                biased;
                 // Subscribe messages is expected to exhaust at some point after starting network actor
                 subscriber = self.subscribe_to_peers_messages_receiver.recv() => {
                     if let Some(subscriber) = subscriber {
@@ -6130,26 +6738,19 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     self.refresh_hostnames_ttl();
                 }
                 // Update topology is relative low rate message (at most once every block)
-                Some(update_topology) = self.update_topology_receiver.recv() => {
-                    let update_topology =
-                        drain_latest(&mut self.update_topology_receiver, update_topology);
+                Some(update_topology) = receive_control_update(&mut self.update_topology_receiver) => {
                     self.set_current_topology(update_topology);
                 }
-                Some(update_peers) = self.update_peers_receiver.recv() => {
-                    let update_peers =
-                        drain_latest(&mut self.update_peers_receiver, update_peers);
+                Some(update_peers) = receive_control_update(&mut self.update_peers_receiver) => {
                     self.set_current_peers_addresses(update_peers);
                 }
-                Some(update_capabilities) = self.update_peer_capabilities_receiver.recv() => {
-                    let update_capabilities = drain_latest(
-                        &mut self.update_peer_capabilities_receiver,
-                        update_capabilities,
-                    );
+                Some(update_capabilities) = receive_control_update(
+                    &mut self.update_peer_capabilities_receiver,
+                ) => {
                     self.set_peer_capabilities(update_capabilities);
                 }
                 // Apply ACL updates (hot reload)
-                Some(acl) = self.update_acl_receiver.recv() => {
-                    let acl = drain_latest(&mut self.update_acl_receiver, acl);
+                Some(acl) = receive_control_update(&mut self.update_acl_receiver) => {
                     self.allowlist_only = acl.allowlist_only;
                     self.allow_keys = acl.allow_keys.into_iter().collect();
                     self.deny_keys = acl.deny_keys.into_iter().collect();
@@ -6168,8 +6769,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         .collect();
                     self.current_topology = updated;
                 }
-                Some(handshake) = self.update_handshake_receiver.recv() => {
-                    let handshake = drain_latest(&mut self.update_handshake_receiver, handshake);
+                Some(handshake) = receive_control_update(&mut self.update_handshake_receiver) => {
                     if let Err(err) = self.update_soranet_handshake_config(handshake.handshake) {
                         iroha_logger::error!(
                             error = %err,
@@ -6177,16 +6777,19 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         );
                     }
                 }
-                Some(consensus_caps) = self.update_consensus_caps_receiver.recv() => {
-                    let consensus_caps =
-                        drain_latest(&mut self.update_consensus_caps_receiver, consensus_caps);
+                Some(consensus_caps) = receive_control_update(
+                    &mut self.update_consensus_caps_receiver,
+                ) => {
+                    let reconnect = consensus_caps.take_reconnect_request(
+                        &mut self.consensus_reconnect_generation,
+                    );
                     iroha_logger::info!(
                         mode_tag=?consensus_caps.caps.mode_tag,
-                        drop_existing = consensus_caps.drop_existing_peers,
+                        drop_existing = reconnect,
                         "Updating consensus handshake capabilities at runtime"
                     );
                     self.consensus_caps = Some(consensus_caps.caps);
-                    if consensus_caps.drop_existing_peers {
+                    if reconnect {
                         let peers: Vec<_> = self.peers.keys().cloned().collect();
                         for peer_id in peers {
                             self.disconnect_peer(&peer_id);
@@ -6198,9 +6801,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 _ = update_topology_interval.tick() => {
                     self.update_topology()
                 }
-                Some(trusted_update) = self.update_trusted_peers_receiver.recv() => {
-                    let UpdateTrustedPeers(trusted) =
-                        drain_latest(&mut self.update_trusted_peers_receiver, trusted_update);
+                Some(trusted_update) = receive_control_update(
+                    &mut self.update_trusted_peers_receiver,
+                ) => {
+                    let UpdateTrustedPeers(trusted) = trusted_update;
                     self.peer_reputations.set_trusted(&trusted);
                     if self.apply_trusted_observers() {
                         self.update_topology();
@@ -6210,73 +6814,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 _ = pending_connects_interval.tick() => {
                     self.process_pending_connects();
                 }
-                // Every peer produce small amount of service messages so this shouldn't starve other tasks
+                // The pre-drain above preserves service-before-data priority;
+                // this branch handles arrivals that race with selection.
                 Some(service_message) = self.service_message_receiver.recv() => {
-                    match service_message {
-                        ServiceMessage::Terminated(terminated) => {
-                            self.peer_terminated(terminated);
-                        }
-                        ServiceMessage::Connected(connected) => {
-                            self.peer_connected(connected);
-                        }
-                        ServiceMessage::InboundPending(conn_id) => {
-                            // Register a pending inbound connection (e.g., QUIC) so caps apply.
-                            self.incoming_pending.insert(conn_id);
-                        }
-                        ServiceMessage::InboundAsk { conn_id, remote_addr, reply } => {
-                            // Apply the same caps and per‑IP throttle as the TCP accept path.
-                            let allow = if self.exceeds_caps() {
-                                let evicted = self.evict_one_any();
-                                if self.exceeds_caps() {
-                                    TOTAL_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
-                                    iroha_logger::warn!(addr=%remote_addr, evicted, "Dropping QUIC connection due to total connections cap");
-                                    false
-                                } else { true }
-                            } else if self.exceeds_incoming_cap() {
-                                let evicted = self.evict_one_incoming();
-                                if self.exceeds_incoming_cap() {
-                                    INCOMING_CAP_REJECTS.fetch_add(1, Ordering::Relaxed);
-                                    iroha_logger::warn!(addr=%remote_addr, evicted, "Dropping QUIC connection due to max_incoming cap");
-                                    false
-                                } else { true }
-                            } else if !self.allow_ip(remote_addr.ip()) {
-                                ACCEPT_THROTTLED.fetch_add(1, Ordering::Relaxed);
-                                iroha_logger::debug!(addr=%remote_addr, "Dropping QUIC connection due to per‑IP throttle");
-                                false
-                            } else {
-                                true
-                            };
-                            if allow {
-                                self.incoming_pending.insert(conn_id);
-                            }
-                            let _ = reply.send(allow);
-                        }
-                        ServiceMessage::InboundStream { conn_id, read, write } => {
-                            // Spawn a peer task for the provided stream halves.
-                            // Note: pending marker should have been inserted via InboundAsk/InboundPending.
-                            let service_message_sender = self.service_message_sender.clone();
-                            connected_from::<WireMessage<T>, K, E>(
-                                self.public_address.clone(),
-                                self.key_pair.clone(),
-                                Connection::from_split(conn_id, read, write),
-                                service_message_sender,
-                                self.idle_timeout,
-                                self.chain_id.clone(),
-                                self.consensus_caps.clone(),
-                                self.confidential_caps.clone(),
-                                self.crypto_caps.clone(),
-                                self.soranet_handshake.clone(),
-                                self.local_scion_supported,
-                                self.post_queue_cap,
-                                self.outbound_frame_queue_limits,
-                                self.relay_role,
-                                self.trust_gossip,
-                                self.max_frame_bytes,
-                                self.quic_datagrams_enabled,
-                                self.quic_datagram_max_payload_bytes,
-                            );
-                        }
-                    }
+                    self.handle_service_message(service_message);
                 }
                 // High-priority network messages (consensus/control)
                 network_message = self.network_message_high_receiver.recv() => {
@@ -6294,7 +6835,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                             NetworkMessage::Broadcast(broadcast) => self.broadcast(broadcast),
                         }
                         drained = drained.saturating_add(1);
-                        if drained >= drain_limit {
+                        if should_stop_high_actor_drain(
+                            drained,
+                            drain_limit,
+                            !self.service_message_receiver.is_empty(),
+                            shutdown_signal.is_sent(),
+                        ) {
                             break;
                         }
                         network_message = match self.network_message_high_receiver.try_recv() {
@@ -6516,8 +7062,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         }
         self.current_topology = topology;
         self.apply_trusted_observers();
-        self.peer_capabilities
-            .retain(|peer_id, _| self.current_topology.contains(peer_id));
         self.update_topology()
     }
 
@@ -6588,8 +7132,6 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.address_book.insert(pid.clone(), addr.clone());
         }
         self.current_peers_addresses = peers;
-        self.peer_capabilities
-            .retain(|peer_id, _| self.current_topology.contains(peer_id));
         if let Some((hub_id, hub_addr)) = preserved_hub {
             self.address_book
                 .entry(hub_id.clone())
@@ -6621,15 +7163,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         &mut self,
         message::UpdatePeerCapabilities(capabilities): message::UpdatePeerCapabilities,
     ) {
-        for (peer_id, caps) in capabilities {
-            if peer_id.public_key() == self.key_pair.public_key() {
-                continue;
-            }
-            if !self.current_topology.contains(&peer_id) {
-                continue;
-            }
-            self.peer_capabilities.insert(peer_id, caps);
-        }
+        self.peer_capabilities = capabilities
+            .into_iter()
+            .filter(|(peer_id, _)| peer_id.public_key() != self.key_pair.public_key())
+            .collect();
     }
 
     fn update_topology(&mut self) {
@@ -8658,18 +9195,13 @@ mod tests {
         };
 
         let (_subscribe_tx, subscribe_rx) = mpsc::channel::<Subscriber<T>>(1);
-        let (_update_topology_tx, update_topology_rx) =
-            mpsc::channel::<message::UpdateTopology>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_peers_tx, update_peers_rx) =
-            mpsc::channel::<message::UpdatePeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_trusted_tx, update_trusted_peers_receiver) =
-            mpsc::channel::<message::UpdateTrustedPeers>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_acl_tx, update_acl_rx) =
-            mpsc::channel::<message::UpdateAcl>(CONTROL_UPDATE_CHANNEL_CAP);
-        let (_update_handshake_tx, update_handshake_rx) =
-            mpsc::channel::<message::UpdateHandshake>(CONTROL_UPDATE_CHANNEL_CAP);
+        let (_update_topology_tx, update_topology_rx) = control_update_channel();
+        let (_update_peers_tx, update_peers_rx) = control_update_channel();
+        let (_update_trusted_tx, update_trusted_peers_receiver) = control_update_channel();
+        let (_update_acl_tx, update_acl_rx) = control_update_channel();
+        let (_update_handshake_tx, update_handshake_rx) = control_update_channel();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
-            mpsc::channel::<message::UpdateConsensusCaps>(CONTROL_UPDATE_CHANNEL_CAP);
+            consensus_caps_update_channel();
         let (peer_message_hi_tx, peer_message_hi_rx) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -8682,7 +9214,7 @@ mod tests {
         let (online_peer_capabilities_tx, _online_peer_capabilities_rx) =
             watch::channel(HashMap::new());
         let (_update_peer_capabilities_tx, update_peer_capabilities_receiver) =
-            mpsc::channel::<message::UpdatePeerCapabilities>(CONTROL_UPDATE_CHANNEL_CAP);
+            control_update_channel();
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
@@ -8729,6 +9261,7 @@ mod tests {
             current_peers_addresses: Vec::new(),
             chain_id: None,
             consensus_caps: None,
+            consensus_reconnect_generation: ReconnectGeneration::default(),
             confidential_caps: None,
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
@@ -8815,6 +9348,111 @@ mod tests {
             _key_exchange: core::marker::PhantomData,
             _encryptor: core::marker::PhantomData,
         })
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn continuously_ready_topology_updates_do_not_starve_shutdown() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let (subscriber_guard, subscriber_receiver) = mpsc::channel(1);
+        network.subscribe_to_peers_messages_receiver = subscriber_receiver;
+        let (network_high_guard, network_high_receiver) = net_channel::channel_with_capacity(1);
+        network.network_message_high_receiver = network_high_receiver;
+        let (network_low_guard, network_low_receiver) = net_channel::channel_with_capacity(1);
+        network.network_message_low_receiver = network_low_receiver;
+        let (topology_sender, topology_receiver) = control_update_channel();
+        network.update_topology_receiver = topology_receiver;
+
+        let shutdown = ShutdownSignal::new();
+        let mut actor = tokio::spawn(network.run(shutdown.clone()));
+        let flooding = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flood_flag = Arc::clone(&flooding);
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let flood = std::thread::spawn(move || {
+            send_control_update(
+                &topology_sender,
+                "topology",
+                message::UpdateTopology(HashSet::new()),
+            );
+            let _ = started_sender.send(());
+            while flood_flag.load(Ordering::Acquire) {
+                send_control_update(
+                    &topology_sender,
+                    "topology",
+                    message::UpdateTopology(HashSet::new()),
+                );
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), started_receiver)
+            .await
+            .expect("topology flood must start")
+            .expect("topology flood task must stay alive");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !actor.is_finished(),
+            "network actor exited before shutdown was requested"
+        );
+
+        shutdown.send();
+        let stopped_while_flooding = tokio::time::timeout(Duration::from_secs(5), &mut actor).await;
+        flooding.store(false, Ordering::Release);
+        flood.join().expect("topology flood thread must not panic");
+        drop(subscriber_guard);
+        drop(network_high_guard);
+        drop(network_low_guard);
+
+        if let Ok(actor_result) = stopped_while_flooding {
+            actor_result.expect("network actor must not panic");
+        } else {
+            tokio::time::timeout(Duration::from_secs(1), actor)
+                .await
+                .expect("network actor must stop after the flood ends")
+                .expect("network actor must not panic");
+            panic!("a continuously ready topology slot starved network shutdown");
+        }
+    }
+
+    #[test]
+    fn service_messages_are_pre_drained_ahead_of_saturated_high_queue() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let (high_sender, high_receiver) =
+            net_channel::channel_with_capacity(NETWORK_HIGH_ACTOR_DRAIN_SATURATED);
+        network.network_message_high_receiver = high_receiver;
+        for _ in 0..NETWORK_HIGH_ACTOR_DRAIN_SATURATED {
+            high_sender
+                .try_send(NetworkMessage::Broadcast(Broadcast {
+                    data: DummyMsg,
+                    priority: Priority::High,
+                }))
+                .expect("high-priority saturation fixture must fit its queue");
+        }
+
+        let conn_id = 42;
+        let (reply_sender, mut reply_receiver) = tokio::sync::oneshot::channel();
+        network
+            .service_message_sender
+            .try_send(ServiceMessage::InboundAsk {
+                conn_id,
+                remote_addr: "127.0.0.1:12345".parse().expect("valid test address"),
+                reply: reply_sender,
+            })
+            .expect("service fixture must fit its queue");
+
+        assert_eq!(network.drain_service_messages(SERVICE_MESSAGE_BUDGET), 1);
+        assert!(
+            reply_receiver
+                .try_recv()
+                .expect("admission reply must be produced before bulk work")
+        );
+        assert!(network.incoming_pending.contains(&conn_id));
+        assert_eq!(
+            network.network_message_high_receiver.len(),
+            NETWORK_HIGH_ACTOR_DRAIN_SATURATED,
+            "service pre-drain must run before any saturated high-queue batch"
+        );
     }
 
     fn trust_skip_count(direction: &str, reason: &str) -> u64 {
@@ -8943,6 +9581,106 @@ mod tests {
         assert!(
             network.current_topology.contains(&trusted_id),
             "trusted observers should remain connected across topology updates"
+        );
+    }
+
+    #[test]
+    fn peer_capability_snapshot_replaces_prior_state() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let omitted_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let retained_peer = PeerId::from(KeyPair::random().public_key().clone());
+        let outside_topology = PeerId::from(KeyPair::random().public_key().clone());
+        let self_id = network.self_id.clone();
+        network.current_topology = HashSet::from([omitted_peer.clone(), retained_peer.clone()]);
+        network.peer_capabilities.insert(
+            omitted_peer.clone(),
+            message::PeerTransportCapabilities {
+                scion_supported: true,
+            },
+        );
+        network.peer_capabilities.insert(
+            retained_peer.clone(),
+            message::PeerTransportCapabilities {
+                scion_supported: false,
+            },
+        );
+
+        network.set_peer_capabilities(message::UpdatePeerCapabilities(vec![
+            (
+                retained_peer.clone(),
+                message::PeerTransportCapabilities {
+                    scion_supported: true,
+                },
+            ),
+            (
+                outside_topology.clone(),
+                message::PeerTransportCapabilities {
+                    scion_supported: true,
+                },
+            ),
+            (
+                self_id,
+                message::PeerTransportCapabilities {
+                    scion_supported: true,
+                },
+            ),
+        ]));
+
+        assert_eq!(
+            network.peer_capabilities,
+            HashMap::from([
+                (
+                    retained_peer,
+                    message::PeerTransportCapabilities {
+                        scion_supported: true,
+                    },
+                ),
+                (
+                    outside_topology.clone(),
+                    message::PeerTransportCapabilities {
+                        scion_supported: true,
+                    },
+                ),
+            ])
+        );
+        assert!(!network.peer_capabilities.contains_key(&omitted_peer));
+        assert!(network.peer_capabilities.contains_key(&outside_topology));
+
+        network.set_peer_capabilities(message::UpdatePeerCapabilities(Vec::new()));
+        assert!(network.peer_capabilities.is_empty());
+    }
+
+    #[test]
+    fn peer_capability_snapshot_is_independent_of_topology_order() {
+        let Some(mut caps_first) = bare_network() else {
+            return;
+        };
+        let Some(mut topology_first) = bare_network() else {
+            return;
+        };
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let capabilities = message::PeerTransportCapabilities {
+            scion_supported: true,
+        };
+        let caps_update = || message::UpdatePeerCapabilities(vec![(peer_id.clone(), capabilities)]);
+        let topology_update = || message::UpdateTopology(HashSet::from([peer_id.clone()]));
+
+        caps_first.set_peer_capabilities(caps_update());
+        caps_first.set_current_topology(topology_update());
+
+        topology_first.set_current_topology(topology_update());
+        topology_first.set_peer_capabilities(caps_update());
+
+        let expected = HashMap::from([(peer_id.clone(), capabilities)]);
+        assert_eq!(caps_first.peer_capabilities, expected);
+        assert_eq!(topology_first.peer_capabilities, expected);
+
+        caps_first.set_current_topology(message::UpdateTopology(HashSet::new()));
+        assert_eq!(
+            caps_first.peer_capabilities, expected,
+            "an independently ordered topology snapshot must not erase the latest capability snapshot"
         );
     }
 
@@ -11334,7 +12072,7 @@ pub mod message {
     #[derive(Clone, Debug)]
     pub struct UpdatePeers(pub Vec<(PeerId, SocketAddr)>);
 
-    /// The message that updates transport capabilities for peers.
+    /// Full latest-state snapshot of transport capabilities for peers.
     #[derive(Clone, Debug)]
     pub struct UpdatePeerCapabilities(pub Vec<(PeerId, PeerTransportCapabilities)>);
 
@@ -11364,12 +12102,12 @@ pub mod message {
         pub handshake: ActualSoranetHandshake,
     }
 
-    /// Update consensus handshake capabilities (mode tag/fingerprint/runtime caps).
+    /// Update consensus handshake capabilities and optionally reconnect peers.
     #[derive(Clone, Debug)]
     pub struct UpdateConsensusCaps {
-        /// New consensus handshake capabilities to install.
+        /// New consensus handshake capabilities to advertise and require.
         pub caps: crate::ConsensusHandshakeCaps,
-        /// When true, disconnect currently connected peers to force re-handshake under the new caps.
+        /// Whether currently connected peers should be dropped and reconnected.
         pub drop_existing_peers: bool,
     }
 

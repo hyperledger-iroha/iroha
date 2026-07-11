@@ -7,7 +7,10 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::{BlockHeader, SignedBlock};
+use iroha_data_model::{
+    block::{BlockHeader, SignedBlock},
+    transaction::TransactionEntrypoint,
+};
 use iroha_logger::prelude::*;
 
 use super::{kura::KuraRetryDecision, proposals::block_payload_bytes};
@@ -92,6 +95,14 @@ pub(super) struct PendingBlock {
     pub(super) kura_persisted: bool,
     pub(super) aborted: bool,
     pub(super) retired_same_height: bool,
+    /// This inactive block still owns transactions that could not be restored to the bounded
+    /// transaction queue. It must remain resident until a later retry transfers every payload.
+    pub(super) requeue_pending: bool,
+    /// Only entrypoints whose queue admission failed transiently. Settled entrypoints are removed
+    /// after every pass so retries cannot repeat terminal dispositions or gossip.
+    pub(super) requeue_retry_payload: Vec<TransactionEntrypoint>,
+    pub(super) requeue_retry_attempts: u32,
+    pub(super) next_requeue_retry: Option<Instant>,
     pub(super) last_quorum_reschedule: Option<Instant>,
     last_quorum_reschedule_vote_count: usize,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
@@ -125,6 +136,10 @@ impl PendingBlock {
             kura_persisted: false,
             aborted: false,
             retired_same_height: false,
+            requeue_pending: false,
+            requeue_retry_payload: Vec::new(),
+            requeue_retry_attempts: 0,
+            next_requeue_retry: None,
             last_quorum_reschedule: None,
             last_quorum_reschedule_vote_count: 0,
             last_precommit_rebroadcast: None,
@@ -200,7 +215,7 @@ impl PendingBlock {
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
-        if !replacing_same_subject {
+        if !replacing_same_subject && !self.requeue_pending {
             self.inserted_at = Instant::now();
             self.last_progress = self.inserted_at;
             self.reset_commit_stage();
@@ -216,6 +231,7 @@ impl PendingBlock {
             self.last_quorum_reschedule_vote_count = 0;
             self.aborted = false;
             self.retired_same_height = false;
+            self.reset_requeue_retry();
             self.parent_state_root = None;
             self.post_state_root = None;
             self.last_commit_evidence_replay = None;
@@ -237,7 +253,7 @@ impl PendingBlock {
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
-        if !replacing_same_subject {
+        if !replacing_same_subject && !self.requeue_pending {
             self.inserted_at = Instant::now();
             self.last_progress = self.inserted_at;
             self.reset_commit_stage();
@@ -253,6 +269,7 @@ impl PendingBlock {
             self.last_quorum_reschedule_vote_count = 0;
             self.aborted = false;
             self.retired_same_height = false;
+            self.reset_requeue_retry();
             self.parent_state_root = None;
             self.post_state_root = None;
             self.last_commit_evidence_replay = None;
@@ -270,8 +287,14 @@ impl PendingBlock {
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
+        if self.requeue_pending {
+            // A late body-repair or validation message must not revive consensus ownership by
+            // discarding the only copy of a transaction that is waiting for queue capacity.
+            return;
+        }
         self.aborted = false;
         self.retired_same_height = false;
+        self.reset_requeue_retry();
         self.inserted_at = Instant::now();
         self.last_progress = self.inserted_at;
         self.validation_status = ValidationStatus::Pending;
@@ -346,6 +369,46 @@ impl PendingBlock {
         self.kura_aborted = false;
     }
 
+    pub(super) fn reset_requeue_retry(&mut self) {
+        self.requeue_pending = false;
+        self.requeue_retry_payload.clear();
+        self.requeue_retry_attempts = 0;
+        self.next_requeue_retry = None;
+    }
+
+    /// Retain this block as the bounded owner of transactions that could not be re-admitted.
+    pub(super) fn mark_requeue_pending(
+        &mut self,
+        now: Instant,
+        base_backoff: Duration,
+        retry_payload: Vec<TransactionEntrypoint>,
+    ) {
+        debug_assert!(
+            !retry_payload.is_empty(),
+            "requeue ownership requires at least one retryable entrypoint"
+        );
+        self.mark_aborted();
+        self.requeue_retry_payload = retry_payload;
+        self.requeue_pending = true;
+        self.requeue_retry_attempts = self.requeue_retry_attempts.saturating_add(1);
+        let shift = self.requeue_retry_attempts.saturating_sub(1).min(8);
+        let multiplier = 1u32.checked_shl(shift).unwrap_or(u32::MAX).max(1);
+        let backoff = base_backoff.saturating_mul(multiplier);
+        self.next_requeue_retry = now.checked_add(backoff).or(Some(now));
+    }
+
+    pub(super) fn requeue_retry_due(&self, now: Instant) -> bool {
+        self.requeue_pending
+            && !self.requeue_retry_payload.is_empty()
+            && self
+                .next_requeue_retry
+                .is_none_or(|deadline| now >= deadline)
+    }
+
+    pub(super) fn take_requeue_retry_payload(&mut self) -> Vec<TransactionEntrypoint> {
+        core::mem::take(&mut self.requeue_retry_payload)
+    }
+
     pub(super) fn mark_kura_persisted(&mut self) {
         self.kura_persisted = true;
         self.reset_kura_retry();
@@ -402,6 +465,9 @@ impl PendingBlock {
     }
 
     pub(super) fn retire_same_height(&mut self) {
+        if !self.requeue_pending {
+            self.reset_requeue_retry();
+        }
         self.aborted = true;
         self.retired_same_height = true;
         self.inserted_at = Instant::now();
@@ -417,12 +483,13 @@ impl PendingBlock {
     }
 
     pub(super) fn reactivate_retired_same_height(&mut self) {
-        if !self.retired_same_height {
+        if !self.retired_same_height || self.requeue_pending {
             return;
         }
         let now = Instant::now();
         self.aborted = false;
         self.retired_same_height = false;
+        self.reset_requeue_retry();
         self.inserted_at = now;
         self.last_progress = now;
         self.reset_kura_retry();
@@ -439,6 +506,10 @@ impl PendingBlock {
     }
 
     pub(super) fn mark_aborted(&mut self) {
+        if !self.requeue_pending {
+            self.requeue_retry_payload.clear();
+            self.next_requeue_retry = None;
+        }
         self.aborted = true;
         self.retired_same_height = false;
         self.inserted_at = Instant::now();
@@ -480,7 +551,7 @@ impl PendingBlock {
     }
 
     pub(super) fn is_retry_aborted(&self) -> bool {
-        self.aborted && !self.retired_same_height
+        self.aborted && !self.retired_same_height && !self.requeue_pending
     }
 
     pub(super) fn is_retired_same_height(&self) -> bool {

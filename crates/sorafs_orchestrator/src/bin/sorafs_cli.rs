@@ -135,37 +135,29 @@ const MODERATION_REGISTRY_DEFAULT_LISTEN: &str = "127.0.0.1:9198";
 
 fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
-    raw
-        .parse::<u32>()
+    raw.parse::<u32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u64_arg(flag: &str, raw: &str, context: &str) -> Result<u64, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
-    raw
-        .parse::<u64>()
+    raw.parse::<u64>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
     require_canonical_unsigned_decimal(flag, raw, context)?;
-    raw
-        .parse::<u16>()
+    raw.parse::<u16>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
     require_canonical_decimal_token(flag, raw, context)?;
-    raw
-        .parse::<Decimal>()
+    raw.parse::<Decimal>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
-fn require_canonical_unsigned_decimal(
-    flag: &str,
-    raw: &str,
-    context: &str,
-) -> Result<(), String> {
+fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     let digits = raw.as_bytes();
     if digits.is_empty()
         || !digits.iter().all(u8::is_ascii_digit)

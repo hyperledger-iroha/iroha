@@ -2154,10 +2154,8 @@ impl Actor {
             } => {
                 let pending = take_pending_or_return!();
                 self.note_view_change_from_block(pending_height, pending_view);
-                let committed_tx_hashes = committed_block
-                    .as_ref()
-                    .external_transactions()
-                    .map(|tx| tx.hash());
+                let committed_tx_hashes =
+                    super::block_external_transaction_hashes(committed_block.as_ref());
                 self.queue
                     .remove_committed_hashes(committed_tx_hashes, None);
                 let committed_nexus = self.state.nexus_snapshot();
@@ -2443,12 +2441,15 @@ impl Actor {
                                 .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
                         }
                     } else {
-                        let (requeued, failures, duplicate_failures, _) =
-                            requeue_block_transactions(
-                                self.queue.as_ref(),
-                                self.state.as_ref(),
-                                pending.block.external_entrypoints_cloned(),
-                            );
+                        let mut report = requeue_block_transactions(
+                            self.queue.as_ref(),
+                            self.state.as_ref(),
+                            pending.block.external_entrypoints_cloned(),
+                        );
+                        let requeued = report.newly_queued;
+                        let failures = report.failures();
+                        let duplicate_failures = report.duplicate_dispositions();
+                        let retained_for_retry = report.requires_retry();
                         warn!(
                             height = pending_height,
                             view = pending_view,
@@ -2458,7 +2459,8 @@ impl Actor {
                             requeued,
                             failures,
                             duplicate_failures,
-                            "state advanced to a different head after persisted commit failure; dropping stale pending block"
+                            retained_for_retry,
+                            "state advanced to a different head after persisted commit failure; retiring stale consensus ownership"
                         );
                         self.clean_rbc_sessions_for_block(block_hash, pending_height);
                         self.qc_cache
@@ -2477,6 +2479,15 @@ impl Actor {
                             pending_height,
                             pending_view,
                         );
+                        if retained_for_retry {
+                            let retry_payload = report.take_retryable_entrypoints();
+                            pending.mark_requeue_pending(
+                                Instant::now(),
+                                PENDING_REQUEUE_BASE_BACKOFF,
+                                retry_payload,
+                            );
+                            self.pending.pending_blocks.insert(block_hash, pending);
+                        }
                     }
                 } else {
                     pending.mark_kura_persisted();
@@ -2668,7 +2679,17 @@ impl Actor {
                         self.qc_signer_tally
                             .retain(|(_, hash, _, _, _, _, _), _| hash != &block_hash);
                         block_hash_to_clean = Some(block_hash);
-                        emit_pipeline_events_now = true;
+                        if !outcome.retry_payload.is_empty() {
+                            pending.set_block(failed_block);
+                            pending.mark_requeue_pending(
+                                Instant::now(),
+                                PENDING_REQUEUE_BASE_BACKOFF,
+                                outcome.retry_payload,
+                            );
+                            self.pending.pending_blocks.insert(block_hash, pending);
+                        } else {
+                            emit_pipeline_events_now = true;
+                        }
                     } else if has_quorum_signers {
                         warn!(
                             height = pending_height,
@@ -5937,6 +5958,7 @@ impl Actor {
                     || self.pending_block_has_qc(*block_hash, qc.height, qc.view);
                 (pending.height == qc.height
                     && pending.view == qc.view
+                    && !pending.requeue_pending
                     && (pending.is_retired_same_height() || !pending.aborted)
                     && !pending.local_commit_vote_emitted()
                     && !pending.commit_qc_observed()
@@ -6591,9 +6613,7 @@ impl Actor {
             || conflicting_vote.height != height
             || conflicting_vote.view <= view
             || height != self.committed_height_snapshot().saturating_add(1)
-            || self
-                .locked_qc
-                .is_some_and(|locked| locked.height >= height)
+            || self.locked_qc.is_some_and(|locked| locked.height >= height)
             || !pending_extends_tip(
                 height,
                 candidate_parent_hash,
@@ -7285,7 +7305,35 @@ impl Actor {
         ) else {
             return false;
         };
-        self.handle_vote(vote.clone());
+        if completing_near_quorum {
+            let chain_id = self.common_config.chain.clone();
+            let evidence_context = super::evidence::EvidenceValidationContext {
+                topology: &topology,
+                chain_id: &chain_id,
+                mode_tag,
+                prf_seed,
+            };
+            let recorded = self.validate_and_record_vote_with_expected_chain_order_result(
+                &vote,
+                &signature_topology,
+                &evidence_context,
+                mode_tag,
+                Some(chain_order_binding),
+                Some(Ok(())),
+            );
+            if recorded {
+                self.try_form_qc_from_votes(
+                    crate::sumeragi::consensus::Phase::NewView,
+                    highest_qc.subject_block_hash,
+                    height,
+                    view,
+                    epoch,
+                    &topology,
+                );
+            }
+        } else {
+            self.handle_vote(vote.clone());
+        }
         if !self.vote_recorded_or_queued_for_validation(&vote) {
             warn!(
                 height,
@@ -8978,8 +9026,8 @@ impl Actor {
                 committed_hash = %committed_hash,
                 "dropping pending block that diverges from committed tip"
             );
-            if let Some((tx_count, requeued, failures, duplicate_failures)) = self
-                .drop_stale_pending_block_skipping_committed_txs(
+            if let Some((tx_count, requeued, failures, duplicate_failures, retained_for_retry)) =
+                self.drop_stale_pending_block_skipping_committed_txs(
                     hash,
                     height,
                     view,
@@ -8994,6 +9042,7 @@ impl Actor {
                         requeued,
                         failures,
                         duplicate_failures,
+                        retained_for_retry,
                         "requeued transactions from pending block pruned off the tip"
                     );
                 }
@@ -10228,10 +10277,6 @@ impl Actor {
         self.subsystems.da_rbc.rbc.persist_pending_refresh.clear();
         // Preserve operator-facing RBC summaries across roster resets so sessions recovered from
         // disk remain observable while the runtime-only consensus state is cleared.
-        self.subsystems.da_rbc.da.da_bundles.clear();
-        self.subsystems.da_rbc.da.da_pin_bundles.clear();
-        self.subsystems.da_rbc.da.sealed_commitments.clear();
-        self.subsystems.da_rbc.da.sealed_pin_intents.clear();
         self.new_view_rebroadcast_log.clear();
         self.proposal_rebroadcast_log.clear();
         self.payload_rebroadcast_log.clear();

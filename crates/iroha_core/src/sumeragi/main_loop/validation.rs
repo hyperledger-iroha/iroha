@@ -742,6 +742,69 @@ impl Actor {
             Err(outcome) => return outcome,
         };
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if pending.height <= local_height {
+            let pending_height = pending.height;
+            let pending_view = pending.view;
+            let committed_hash = self.state.latest_block_hash_fast();
+            let matches_committed = committed_hash.is_some_and(|committed| committed == hash);
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                local_height,
+                block = %hash,
+                committed_hash = ?committed_hash,
+                matches_committed,
+                "dropping stale pending block before validation"
+            );
+            if matches_committed {
+                self.clean_rbc_sessions_for_committed_block_if_settled(hash, pending_height);
+            } else {
+                let mut report = requeue_block_transactions(
+                    self.queue.as_ref(),
+                    self.state.as_ref(),
+                    pending.block.external_entrypoints_cloned(),
+                );
+                let failures = report.failures();
+                if failures > 0 {
+                    warn!(
+                        height = pending.height,
+                        view = pending.view,
+                        failures,
+                        block = %hash,
+                        "failed to requeue some transactions after dropping stale pending block"
+                    );
+                }
+                if report.requires_retry() {
+                    let retry_payload = report.take_retryable_entrypoints();
+                    pending.mark_requeue_pending(
+                        Instant::now(),
+                        super::PENDING_REQUEUE_BASE_BACKOFF,
+                        retry_payload,
+                    );
+                    self.pending.pending_blocks.insert(hash, pending);
+                }
+                self.clean_rbc_sessions_for_block(hash, pending_height);
+            }
+            self.clear_validation_ownership_for_block(hash);
+            self.qc_cache
+                .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &hash);
+            self.qc_signer_tally
+                .retain(|(_, cached_hash, _, _, _, _, _), _| cached_hash != &hash);
+            self.block_signer_cache.remove_block(&hash);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(pending_height, pending_view);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(pending_height, pending_view);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .prune_height_leq(local_height);
+            return ValidationGateOutcome::Deferred;
+        }
         if pending.height == local_height.saturating_add(1) {
             let expected_parent = self.state.view().latest_block_hash();
             let actual_parent = pending.block.header().prev_block_hash();
@@ -1558,14 +1621,18 @@ impl Actor {
             return;
         }
 
+        let retained_retry_owner = pending.requeue_pending;
         let should_requeue =
             pending.validation_status != ValidationStatus::Invalid && !pending.aborted;
+        let mut retry_payload = Vec::new();
         if should_requeue {
-            let (_requeued, failures, _duplicates, _) = requeue_block_transactions(
+            let mut report = requeue_block_transactions(
                 self.queue.as_ref(),
                 self.state.as_ref(),
                 pending.block.external_entrypoints_cloned(),
             );
+            let failures = report.failures();
+            retry_payload = report.take_retryable_entrypoints();
             if failures > 0 {
                 warn!(
                     height = slot.height,
@@ -1577,8 +1644,22 @@ impl Actor {
             }
         }
         pending.validation_status = ValidationStatus::Invalid;
-        pending.mark_aborted();
-        let _ = pending;
+        if !retry_payload.is_empty() {
+            pending.mark_requeue_pending(
+                Instant::now(),
+                super::PENDING_REQUEUE_BASE_BACKOFF,
+                retry_payload,
+            );
+            self.pending.pending_blocks.insert(slot.block_hash, pending);
+        } else if retained_retry_owner {
+            debug_assert!(
+                !pending.requeue_retry_payload.is_empty(),
+                "retained requeue owner must carry exact retry payload"
+            );
+            self.pending.pending_blocks.insert(slot.block_hash, pending);
+        } else {
+            pending.mark_aborted();
+        }
 
         self.subsystems.validation.inflight.remove(&slot.block_hash);
         self.subsystems
@@ -1722,12 +1803,21 @@ impl Actor {
                 )
             })
             .map(Box::new);
-        let (_requeued, failures, _duplicates, _) = requeue_block_transactions(
+        let mut report = requeue_block_transactions(
             self.queue.as_ref(),
             self.state.as_ref(),
             pending.block.external_entrypoints_cloned(),
         );
-        let _ = pending;
+        let failures = report.failures();
+        if report.requires_retry() {
+            let retry_payload = report.take_retryable_entrypoints();
+            pending.mark_requeue_pending(
+                Instant::now(),
+                super::PENDING_REQUEUE_BASE_BACKOFF,
+                retry_payload,
+            );
+            self.pending.pending_blocks.insert(hash, pending);
+        }
         if failures > 0 {
             warn!(
                 height,

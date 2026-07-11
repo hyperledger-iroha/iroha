@@ -133,7 +133,6 @@
     }
   },
   "scripts": {
-    "prepare": "npm run build:dist",
     "lint": "eslint --max-warnings=0 src scripts recipes test --ext .js,.mjs",
     "lint:test": "npm run lint && npm run build:native && npm test",
     "build:native": "node ./scripts/build-native.mjs && node ./scripts/copy-native.mjs",

@@ -420,6 +420,8 @@ static DEDUP_FETCH_PENDING_BLOCK_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::ne
 static DEDUP_FETCH_PENDING_BLOCK_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL: AtomicU64 = AtomicU64::new(0);
+static DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_POST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BG_POST_DROP_BROADCAST_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -4021,6 +4023,10 @@ pub struct DedupEvictionSnapshot {
     pub rbc_chunk_capacity_total: u64,
     /// RBC chunk dedup evictions due to TTL expiry.
     pub rbc_chunk_expired_total: u64,
+    /// Lane-block proposal/vote/QC dedup evictions due to capacity.
+    pub lane_block_artifact_capacity_total: u64,
+    /// Lane-block proposal/vote/QC dedup evictions due to TTL expiry.
+    pub lane_block_artifact_expired_total: u64,
 }
 
 /// Compact snapshot of consensus status for operator APIs.
@@ -4963,6 +4969,10 @@ fn dedup_evictions_snapshot() -> DedupEvictionSnapshot {
         rbc_deliver_expired_total: DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
         rbc_chunk_capacity_total: DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.load(Ordering::Relaxed),
         rbc_chunk_expired_total: DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.load(Ordering::Relaxed),
+        lane_block_artifact_capacity_total: DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL
+            .load(Ordering::Relaxed),
+        lane_block_artifact_expired_total: DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL
+            .load(Ordering::Relaxed),
     }
 }
 
@@ -5543,6 +5553,8 @@ pub(crate) enum DedupEvictionKind {
     RbcDeliver,
     /// RBC chunk payload cache evictions.
     RbcChunk,
+    /// Standalone lane-block proposal/vote/QC cache evictions.
+    LaneBlockArtifact,
 }
 
 /// Record dedup evictions for the given cache kind.
@@ -5641,6 +5653,15 @@ pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, e
             }
             if expired > 0 {
                 DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::LaneBlockArtifact => {
+            if capacity > 0 {
+                DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL
+                    .fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
             }
         }
     }
@@ -9077,6 +9098,8 @@ pub(crate) fn reset_dedup_evictions_for_tests() {
     DEDUP_RBC_DELIVER_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_CHUNK_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
     DEDUP_RBC_CHUNK_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_LANE_BLOCK_ARTIFACT_EVICT_CAPACITY_TOTAL.store(0, Ordering::Relaxed);
+    DEDUP_LANE_BLOCK_ARTIFACT_EVICT_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
 }
 
 /// Simple struct for phase-latencies snapshot.
@@ -12648,10 +12671,19 @@ mod tests {
         super::reset_dedup_evictions_for_tests();
         super::record_dedup_evictions(super::DedupEvictionKind::Vote, 2, 1);
         super::record_dedup_evictions(super::DedupEvictionKind::Proposal, 0, 3);
+        super::record_dedup_evictions(super::DedupEvictionKind::LaneBlockArtifact, 4, 5);
         let snapshot = super::snapshot();
         assert_eq!(snapshot.dedup_evictions.vote_capacity_total, 2);
         assert_eq!(snapshot.dedup_evictions.vote_expired_total, 1);
         assert_eq!(snapshot.dedup_evictions.proposal_expired_total, 3);
+        assert_eq!(
+            snapshot.dedup_evictions.lane_block_artifact_capacity_total,
+            4
+        );
+        assert_eq!(
+            snapshot.dedup_evictions.lane_block_artifact_expired_total,
+            5
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -3061,13 +3061,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   remain enforced for carried bytes. Local RBC plan installation now moves the
   prepared session into the live session map instead of cloning it before
   broadcast, so proposal broadcast plans stop retaining a second copy of the
-  chunk buffers. P2P runtime subscriber/control update channels are now bounded
-  and coalesce to the latest pending update, Sumeragi RBC committed-session
-  cleanup clears payload metric markers and rebroadcast cursors with the live
-  session owner, and Kagemusha Pallas open-envelope archives validate the
-  Norito frame and read the sequence-length prefix before vector decode so
-  count-only frames cannot allocate count-sized vector/offset state. If RSS
-  still climbs during the guarded repro, inspect remaining persistence caches
+  chunk buffers. P2P runtime subscriber registration is now bounded, while each
+  control-update category uses an independent Arc-backed,
+  single-retained-snapshot latest-value slot that overwrites stale pending
+  state. Consensus reconnect intent is generation-tracked across coalescing,
+  peer capabilities remain independent of topology application order, and the
+  actor combines fair control selection with bounded service-message priority
+  and explicit shutdown checks. Sumeragi RBC committed-session cleanup clears
+  payload metric markers and rebroadcast cursors with the live session owner,
+  and Kagemusha Pallas open-envelope archives validate the Norito frame and
+  read the sequence-length prefix before vector decode so count-only frames
+  cannot allocate count-sized vector/offset state. If RSS still climbs during
+  the guarded repro, inspect remaining persistence caches
   and validation/commit inflight owners with the same memory report before
   changing recovery pruning semantics.
 - Kagemusha is now the only active chain implementation for offline payments.

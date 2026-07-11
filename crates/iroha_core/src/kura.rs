@@ -137,6 +137,25 @@ fn hard_fork_snapshot_bootstrap_enabled() -> bool {
     std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV).is_some()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HashOnlySnapshotExtensionMode {
+    HardForkBootstrap,
+    VerifiedLocalSnapshot,
+}
+
+impl HashOnlySnapshotExtensionMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::HardForkBootstrap => "hard-fork snapshot bootstrap",
+            Self::VerifiedLocalSnapshot => "verified local snapshot recovery",
+        }
+    }
+
+    fn marks_hash_only_prefix(self) -> bool {
+        matches!(self, Self::HardForkBootstrap)
+    }
+}
+
 fn hard_fork_snapshot_bootstrap_legacy_block_count(block_count: usize) -> usize {
     if !hard_fork_snapshot_bootstrap_enabled() {
         return 0;
@@ -3505,6 +3524,38 @@ impl Kura {
         )
     }
 
+    /// Force a stored block height into hash-only form when constructing snapshot tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[allow(dead_code)]
+    pub(crate) fn force_hash_only_block_for_testing(
+        &self,
+        block_height: NonZeroUsize,
+    ) -> Result<()> {
+        let idx = block_height.get().saturating_sub(1);
+        let (block_hash, block_count) = {
+            let mut data = self.block_data.lock();
+            let block_count = data.len();
+            let Some((block_hash, block_body)) = data.get_mut(idx) else {
+                return Err(Error::OutOfBoundsBlockRead {
+                    start_block_height: u64::try_from(block_height.get())?,
+                    block_count,
+                });
+            };
+            *block_body = None;
+            (*block_hash, block_count)
+        };
+
+        let _write_guard = self.block_store_write_lock.lock();
+        let mut store = self.block_store.lock();
+        store.create_files_if_they_do_not_exist()?;
+        store.write_block_hash(u64::try_from(idx)?, block_hash)?;
+        store.write_block_index(u64::try_from(idx)?, EVICTED_BLOCK_START, 0)?;
+        store.publish_commit_marker(u64::try_from(block_count)?)?;
+        self.hard_fork_hash_only_block_count
+            .fetch_max(block_height.get(), Ordering::Relaxed);
+        Ok(())
+    }
+
     pub(crate) fn hash_only_unavailable_prefix_len(&self, limit: usize) -> usize {
         let hash_only_count = self.hard_fork_hash_only_block_count.load(Ordering::Relaxed);
         if hash_only_count == 0 || limit == 0 {
@@ -5361,6 +5412,7 @@ impl Kura {
         self.extend_hash_only_prefix_from_snapshot_with_legacy_count(
             snapshot_hashes,
             Some(legacy_count),
+            HashOnlySnapshotExtensionMode::HardForkBootstrap,
         )
     }
 
@@ -5373,13 +5425,34 @@ impl Kura {
         &self,
         snapshot_hashes: &[HashOf<BlockHeader>],
     ) -> Result<usize> {
-        self.extend_hash_only_prefix_from_snapshot_with_legacy_count(snapshot_hashes, None)
+        self.extend_hash_only_prefix_from_snapshot_with_legacy_count(
+            snapshot_hashes,
+            None,
+            HashOnlySnapshotExtensionMode::HardForkBootstrap,
+        )
+    }
+
+    /// Extend Kura's canonical hash chain using a verified local state snapshot.
+    ///
+    /// This is used when the signed WSV snapshot is ahead of a truncated durable block-body log.
+    /// Existing block bodies remain readable; only the missing suffix is persisted as hash-only
+    /// entries so startup can resume from the signed state without replaying unavailable bodies.
+    pub fn extend_hash_only_suffix_from_verified_snapshot(
+        &self,
+        snapshot_hashes: &[HashOf<BlockHeader>],
+    ) -> Result<usize> {
+        self.extend_hash_only_prefix_from_snapshot_with_legacy_count(
+            snapshot_hashes,
+            None,
+            HashOnlySnapshotExtensionMode::VerifiedLocalSnapshot,
+        )
     }
 
     fn extend_hash_only_prefix_from_snapshot_with_legacy_count(
         &self,
         snapshot_hashes: &[HashOf<BlockHeader>],
         configured_legacy_count: Option<usize>,
+        mode: HashOnlySnapshotExtensionMode,
     ) -> Result<usize> {
         if snapshot_hashes.is_empty() {
             return Ok(0);
@@ -5415,13 +5488,14 @@ impl Kura {
             warn!(
                 height = idx.saturating_add(1),
                 legacy_height = legacy_count,
-                "hard-fork snapshot bootstrap: replacing divergent Kura suffix with hash-only snapshot entry"
+                recovery = mode.label(),
+                "replacing divergent Kura suffix with hash-only snapshot entry"
             );
             break;
         }
 
         if target <= current && rewrite_from == current {
-            if legacy_count.is_some() {
+            if mode.marks_hash_only_prefix() {
                 let previous = self.hard_fork_hash_only_block_count.load(Ordering::Relaxed);
                 if previous != target {
                     self.hard_fork_hash_only_block_count
@@ -5429,7 +5503,8 @@ impl Kura {
                     info!(
                         previous_hash_only_block_count = previous,
                         snapshot_height = target,
-                        "hard-fork snapshot bootstrap: aligned existing Kura hash-only snapshot entries"
+                        recovery = mode.label(),
+                        "aligned existing Kura hash-only snapshot entries"
                     );
                 }
             }
@@ -5486,15 +5561,18 @@ impl Kura {
         *transaction_entrypoint_index = rebuilt_transaction_index;
         drop(transaction_entrypoint_index);
 
-        self.hard_fork_hash_only_block_count
-            .store(target, Ordering::Relaxed);
+        if mode.marks_hash_only_prefix() {
+            self.hard_fork_hash_only_block_count
+                .store(target, Ordering::Relaxed);
+        }
         self.publish_durable_budget_snapshot(target, 0);
         let added = target.saturating_sub(current);
         info!(
             previous_height = current,
             rewrite_from_height = rewrite_from.saturating_add(1),
             snapshot_height = target,
-            "hard-fork snapshot bootstrap: extended Kura with hash-only snapshot entries"
+            recovery = mode.label(),
+            "extended Kura with hash-only snapshot entries"
         );
         Ok(added)
     }
@@ -6866,6 +6944,50 @@ impl Kura {
         self.block_store.lock().fsync.mode
     }
 
+    fn lane_block_artifact_has_hash_only_snapshot_anchor(
+        &self,
+        artifact: &LaneBlockArtifact,
+    ) -> bool {
+        let Ok(proposal_height) = usize::try_from(artifact.ownership.proposal_height) else {
+            return false;
+        };
+        let Some(proposal_height) = NonZeroUsize::new(proposal_height) else {
+            return false;
+        };
+        if !self.is_hash_only_block_height(proposal_height) {
+            return false;
+        }
+        self.get_block_hash(proposal_height)
+            .or_else(|| self.get_durable_block_hash(proposal_height))
+            .is_some_and(|expected_hash| expected_hash == artifact.proposal_block_hash)
+    }
+
+    fn lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        artifact: &LaneBlockArtifact,
+    ) -> bool {
+        let descriptor = &proposal.descriptor;
+        Self::lane_block_artifact_matches_descriptor(&artifact.ownership, descriptor)
+            && self
+                .read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
+                .is_some_and(|canonical| canonical == *artifact)
+            && self.lane_block_artifact_has_hash_only_snapshot_anchor(artifact)
+    }
+
+    fn lane_block_application_receipt_has_hash_only_snapshot_anchor(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        artifact.format == LaneBlockApplicationReceiptArtifactFormat::Current
+            && artifact.application_block_height == artifact.artifact.ownership.proposal_height
+            && artifact.application_block_hash == artifact.artifact.proposal_block_hash
+            && self.lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
+                &artifact.proposal,
+                &artifact.artifact,
+            )
+    }
+
     fn lane_artifact_dir(blocks_dir: &Path) -> PathBuf {
         blocks_dir.join(LANE_ARTIFACTS_DIR_NAME)
     }
@@ -7949,6 +8071,14 @@ impl Kura {
     ) -> bool {
         match self.recover_lane_block_payload(&artifact.proposal) {
             Ok(recovered) => LaneBlockExecutionInputArtifact::new(recovered) == *artifact,
+            Err(LaneBlockPayloadAvailability::MissingProposalBlock)
+                if self.lane_block_artifact_is_canonical_hash_only_snapshot_anchor(
+                    &artifact.proposal,
+                    &artifact.artifact,
+                ) =>
+            {
+                true
+            }
             Err(availability) => {
                 iroha_logger::warn!(
                     ?availability,
@@ -8728,6 +8858,11 @@ impl Kura {
     ) -> bool {
         match self.recover_lane_block_application_receipt_artifact(&artifact.proposal) {
             Ok(expected) => expected == *artifact,
+            Err(LaneBlockPayloadAvailability::MissingProposalBlock)
+                if self.lane_block_application_receipt_has_hash_only_snapshot_anchor(artifact) =>
+            {
+                true
+            }
             Err(availability) => {
                 iroha_logger::warn!(
                     ?availability,
@@ -8944,40 +9079,28 @@ impl Kura {
         proposal: &LaneBlockProposalV1,
     ) -> Option<(LaneBlockArtifact, Arc<SignedBlock>)> {
         let descriptor = &proposal.descriptor;
-        for height in (1..=self.blocks_count()).rev() {
-            let Some(height) = NonZeroUsize::new(height) else {
-                continue;
-            };
-            let Some(block) = self.get_block(height) else {
-                continue;
-            };
-            let Some(bundle) = block.execution_context() else {
-                continue;
-            };
-            let Some(ownership) = bundle
-                .lane_payload_ownerships
-                .iter()
-                .find(|ownership| {
-                    Self::lane_block_artifact_matches_descriptor(ownership, descriptor)
-                })
-                .cloned()
-            else {
-                continue;
-            };
-            let artifact = LaneBlockArtifact::new(block.hash(), ownership);
-            if !self.persist_recovered_lane_block_artifact(&artifact) {
-                return None;
-            }
-            debug!(
-                lane_id = ?descriptor.lane_id,
-                dataspace_id = ?descriptor.dataspace_id,
-                lane_block_height = descriptor.lane_block_height,
-                "recovered missing lane-block artifact sidecar from canonical block body"
-            );
-            return Some((artifact, block));
+        let proposal_height = usize::try_from(descriptor.proposal_height)
+            .ok()
+            .and_then(NonZeroUsize::new)?;
+        let block = self.get_block(proposal_height)?;
+        let bundle = block.execution_context()?;
+        let ownership = bundle
+            .lane_payload_ownerships
+            .iter()
+            .find(|ownership| Self::lane_block_artifact_matches_descriptor(ownership, descriptor))
+            .cloned()?;
+        let artifact = LaneBlockArtifact::new(block.hash(), ownership);
+        if !self.persist_recovered_lane_block_artifact(&artifact) {
+            return None;
         }
-
-        None
+        debug!(
+            lane_id = ?descriptor.lane_id,
+            dataspace_id = ?descriptor.dataspace_id,
+            proposal_height = descriptor.proposal_height,
+            lane_block_height = descriptor.lane_block_height,
+            "recovered missing lane-block artifact sidecar from its canonical proposal block"
+        );
+        Some((artifact, block))
     }
 
     fn persist_recovered_lane_block_artifact(&self, artifact: &LaneBlockArtifact) -> bool {
@@ -17639,6 +17762,62 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_payload_availability_rejects_ownership_from_wrong_global_height() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut generator = DummyBlocks::new();
+        let canonical_proposal_block = generator.next();
+        let mut later_block = generator.next().as_ref().clone();
+        let mut ownership = sample_lane_payload_ownership_for_kura(
+            &later_block,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        ownership.proposal_height = canonical_proposal_block.header().height().get();
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("wrong-height ownership replay hashes compute");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let external_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            ownership.accepted_transaction_hashes[0],
+        );
+        later_block.set_execution_context(Some(
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                external_hash,
+                lane_id,
+                lane_entry.dataspace_id,
+            )])
+            .with_lane_payload_ownerships(vec![ownership]),
+        ));
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(canonical_proposal_block)
+            .expect("store canonical proposal-height block");
+        kura.store_block(Arc::new(later_block))
+            .expect("store later block with forged proposal-height ownership");
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "a sidecar anchored to the wrong global block must not be canonical"
+        );
+
+        assert_eq!(
+            kura.lane_block_payload_availability(&proposal),
+            LaneBlockPayloadAvailability::MissingLaneArtifact,
+            "payload recovery must inspect only the descriptor's exact global proposal height"
+        );
+    }
+
+    #[test]
     fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -17781,6 +17960,74 @@ mod tests {
             Some(receipt)
         );
         assert!(reloaded.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_sidecars_remain_valid_for_hash_only_snapshot_anchor() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut block);
+        let block_height = block.header().height().get();
+        let block_height_usize = NonZeroUsize::new(
+            usize::try_from(block_height).expect("dummy block height fits usize"),
+        )
+        .expect("dummy block height is non-zero");
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::new(block))
+            .expect("store block with lane artifact and results");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload before snapshot pruning");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        kura.persist_lane_block_application_receipt(&proposal)
+            .expect("persist lane application receipt");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input before snapshot pruning");
+        let receipt = kura
+            .read_lane_block_application_receipt(lane_id, lane_block_height)
+            .expect("lane application receipt before snapshot pruning");
+
+        kura.force_hash_only_block_for_testing(block_height_usize)
+            .expect("force block into hash-only snapshot form");
+        assert!(kura.is_hash_only_block_height(block_height_usize));
+        assert!(kura.get_block(block_height_usize).is_none());
+        assert_eq!(
+            kura.recover_lane_block_payload(&proposal)
+                .expect_err("hash-only anchor cannot recover the canonical body"),
+            LaneBlockPayloadAvailability::MissingProposalBlock
+        );
+        assert_eq!(
+            kura.read_lane_block_execution_input(lane_id, lane_block_height),
+            Some(input.clone())
+        );
+        assert!(kura.lane_block_execution_input_available(&proposal));
+        assert_eq!(
+            kura.read_lane_block_application_receipt(lane_id, lane_block_height),
+            Some(receipt)
+        );
+        assert!(kura.lane_block_application_receipt_available(&proposal));
     }
 
     #[test]
@@ -18139,7 +18386,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_execution_input_read_rejects_stale_canonical_artifact() {
+    fn lane_block_execution_input_read_repairs_stale_artifact_from_canonical_block() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -18168,6 +18415,9 @@ mod tests {
             .expect("recover executable lane payload");
         kura.persist_lane_block_execution_input(&recovered)
             .expect("persist lane execution input");
+        let expected_input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("fresh canonical lane execution input");
         assert!(
             kura.lane_block_execution_input_available(&proposal),
             "fresh execution input should be available before canonical artifact drift"
@@ -18199,12 +18449,12 @@ mod tests {
 
         assert_eq!(
             kura.read_lane_block_execution_input(lane_id, lane_block_height),
-            None,
-            "execution input must be rejected after canonical lane artifact drift"
+            Some(expected_input),
+            "canonical block recovery should repair a stale lane artifact before validating execution input"
         );
         assert!(
-            !kura.lane_block_execution_input_available(&proposal),
-            "stale recovered inputs must not be advertised to the standalone executor"
+            kura.lane_block_execution_input_available(&proposal),
+            "the repaired canonical input should remain available to the standalone executor"
         );
     }
 
@@ -18445,7 +18695,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_direct_application_input_rejects_conflicting_predecessor_receipt() {
+    fn lane_block_direct_application_input_accepts_authoritative_predecessor_receipt() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -18514,8 +18764,8 @@ mod tests {
             "conflicting predecessor receipt remains readable as forensic evidence"
         );
         assert!(
-            !kura.lane_block_application_receipt_available(&predecessor_proposal),
-            "conflicting predecessor receipt must not count as applied"
+            kura.lane_block_application_receipt_available(&predecessor_proposal),
+            "canonical block results must remain authoritative over a stale conflicting preflight"
         );
 
         kura.store_block(Arc::new(successor_block))
@@ -18533,8 +18783,8 @@ mod tests {
             .expect("persist clean successor preflight");
 
         assert!(
-            !kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
-            "conflict-tainted predecessor receipt must not unblock successor application"
+            kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
+            "the authoritative canonical predecessor receipt should unblock successor application"
         );
         assert!(
             kura.read_preflighted_lane_block_execution_input_for_application(
@@ -18542,8 +18792,8 @@ mod tests {
                 0,
                 None
             )
-            .is_none(),
-            "clean successor preflight must remain blocked by conflicting predecessor receipt"
+            .is_some(),
+            "clean successor preflight should be available after authoritative predecessor application"
         );
     }
 
@@ -19353,19 +19603,14 @@ mod tests {
             lane_entry.dataspace_id,
             lane_block_height,
         );
-        let replacement: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-                header.set_height(nonzero!(1_u64));
-                header.set_prev_block_hash(None);
-                header.set_view_change_index(header.view_change_index().saturating_add(1));
-            })
-            .into();
-        let replacement = block_with_lane_payload_ownership_for_kura(
-            replacement,
+        let mut replacement_generator = DummyBlocks::new();
+        let replacement = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut replacement_generator,
             lane_id,
             lane_entry.dataspace_id,
             lane_block_height,
         );
+        assert_ne!(aborted.hash(), replacement.hash());
 
         let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
         kura.fail_next_block_write_for_tests();
@@ -19405,19 +19650,14 @@ mod tests {
             lane_entry.dataspace_id,
             lane_block_height,
         );
-        let replacement: SignedBlock =
-            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-                header.set_height(nonzero!(1_u64));
-                header.set_prev_block_hash(None);
-                header.set_view_change_index(header.view_change_index().saturating_add(1));
-            })
-            .into();
-        let replacement = block_with_lane_payload_ownership_for_kura(
-            replacement,
+        let mut replacement_generator = DummyBlocks::new();
+        let replacement = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut replacement_generator,
             lane_id,
             lane_entry.dataspace_id,
             lane_block_height,
         );
+        assert_ne!(aborted.hash(), replacement.hash());
         let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
         let failing_dir = tempfile::tempdir().expect("tempdir");
         let log_path = failing_dir.path().join("merge.log");

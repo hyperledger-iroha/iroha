@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Made `build:dist` concurrency-safe and content-idempotent: explicit builds
+  stage and validate the complete ESM tree under an inter-process lock, then
+  replace `dist` only when its content changed. Consuming `file:` installs no
+  longer run a mutating `prepare` hook; release and packaged-layout workflows
+  continue to build the distribution explicitly.
 - Added signed Torii alias-resolution ergonomics: `resolveAlias`,
   `resolveAliasByIndex`, and `lookupAliasesByAccount` now accept
   `canonicalAuth`, and `buildCanonicalJsonRequest` builds a signed JSON request

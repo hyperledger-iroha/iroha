@@ -4672,7 +4672,7 @@ async fn handler_account_permissions(
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
     let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_list_read_for_routes(
+    let mut response = execute_torii_list_read_for_routes(
         &app,
         routes,
         route_scope,
@@ -4681,7 +4681,12 @@ async fn handler_account_permissions(
         query_string,
         Vec::new(),
     )
-    .await)
+    .await;
+    response.headers_mut().insert(
+        "x-iroha-account-permission-semantics",
+        axum::http::HeaderValue::from_static("effective-v1"),
+    );
+    Ok(response)
 }
 
 #[cfg(feature = "app_api")]

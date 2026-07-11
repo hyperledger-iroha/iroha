@@ -8,6 +8,10 @@ import { readFileSync } from "node:fs";
 import {
   AccountAddress,
   ToriiClient,
+  submitIvmProvedContractCall,
+  submitValidationFeeIvmProvedContractCall,
+  validationFeePolicyHash,
+  verifySignedValidationFeePolicy,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SOL,
@@ -2496,6 +2500,10 @@ function sampleEthExecutionHeaderRlp(
 }
 
 test("package dist entrypoint imports and emits halfwidth i105 literals", () => {
+  assert.equal(typeof submitIvmProvedContractCall, "function");
+  assert.equal(typeof submitValidationFeeIvmProvedContractCall, "function");
+  assert.equal(typeof validationFeePolicyHash, "function");
+  assert.equal(typeof verifySignedValidationFeePolicy, "function");
   const publicKey = Buffer.from(
     "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
     "hex",

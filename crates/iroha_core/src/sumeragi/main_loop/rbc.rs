@@ -2850,7 +2850,7 @@ impl Actor {
         posted
     }
 
-    pub(super) fn install_rbc_session_plan(&mut self, plan: &mut RbcSessionPlan) -> Result<()> {
+    pub(super) fn install_rbc_session_plan(&mut self, plan: &mut RbcSessionPlan) {
         let key = plan.key;
         if self.retire_exact_frontier_rbc_runtime(key, "plan_install") {
             debug!(
@@ -2859,10 +2859,10 @@ impl Actor {
                 block = %key.0,
                 "skipping RBC session installation for near-tip locally known block"
             );
-            return Ok(());
+            return;
         }
         let Some(session) = plan.session.take() else {
-            return Ok(());
+            return;
         };
         self.update_rbc_status_entry(key, &session, false);
         self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Derived);
@@ -2881,7 +2881,6 @@ impl Actor {
                 "overwriting existing RBC session entry"
             );
         }
-        Ok(())
     }
 
     pub(super) fn broadcast_rbc_session_plan(&mut self, plan: RbcSessionPlan) -> Result<()> {

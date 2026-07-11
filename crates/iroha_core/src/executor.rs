@@ -24,9 +24,9 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::NexusFeeScheduleInputs},
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
-        CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
-        RemoveKeyValueBox, SetKeyValueBox, TransferBox, error::InstructionExecutionError,
-        mint_burn::MintBox, register::RegisterBox,
+        CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
+        SetKeyValueBox, TransferBox, error::InstructionExecutionError, mint_burn::MintBox,
+        register::RegisterBox,
     },
     metadata::Metadata,
     name::Name,
@@ -38,7 +38,7 @@ use iroha_data_model::{
     },
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
-    prelude::{Account, Burn, Domain, DomainId, Grant, Register, Transfer, Trigger},
+    prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
@@ -1402,42 +1402,31 @@ pub(crate) struct ContractRuntimeExecutionContext {
     #[allow(dead_code)]
     pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
     pub(crate) contract_subject: AccountId,
+    // Retained as canonical provenance for queued/nested calls. Authorization must never branch
+    // on this value; caller metadata is canonicalized against WSV before this context is built.
+    #[allow(dead_code)]
     pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     pub(crate) entrypoint: String,
-}
-
-impl ContractRuntimeExecutionContext {
-    fn allows_benefit_runtime_asset_transfer_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "benefit"
-                && contract_alias.dataspace_segment() == "benefit"
-        }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
-    }
-
-    fn allows_bisp_spend_permission_grant_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "bisp_bisp"
-                && contract_alias.dataspace_segment() == "sbp"
-        }) && self.entrypoint == "grant_beneficiary_spend_permission"
-    }
 }
 
 #[derive(Clone, Debug)]
 /// Parsed contract dispatch metadata used to configure IVM execution.
 pub struct ContractCallExecutionContext {
-    contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    entrypoint: Option<String>,
-    entrypoint_pc: Option<u64>,
-    entrypoint_permission: Option<String>,
-    args: Json,
+    pub(crate) contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    pub(crate) contract_subject: Option<AccountId>,
+    pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    pub(crate) entrypoint: Option<String>,
+    pub(crate) entrypoint_pc: Option<u64>,
+    pub(crate) entrypoint_permission: Option<String>,
+    pub(crate) args: Json,
 }
 
 impl ContractCallExecutionContext {
     pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
         let contract_address = self.contract_address.clone()?;
+        let contract_subject = self.contract_subject.clone()?;
         Some(ContractRuntimeExecutionContext {
-            contract_subject: contract_address.subject_id(),
+            contract_subject,
             contract_address,
             contract_alias: self.contract_alias.clone(),
             entrypoint: self.entrypoint.clone()?,
@@ -1484,6 +1473,44 @@ fn resolve_public_contract_entrypoint(
     if !matches!(descriptor.kind, EntryPointKind::Public) {
         return Err(ValidationFail::NotPermitted(format!(
             "contract entrypoint `{selector}` is not public"
+        )));
+    }
+    Ok((
+        prefix_len + descriptor.entry_pc,
+        descriptor.permission.clone(),
+    ))
+}
+
+fn resolve_nested_contract_entrypoint(
+    bytecode: &[u8],
+    selector: &str,
+) -> Result<(u64, Option<String>), ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+        ValidationFail::NotPermitted(format!(
+            "invalid contract artifact for nested contract dispatch: {err}"
+        ))
+    })?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "nested contract call requires a self-describing contract artifact".to_owned(),
+        )
+    })?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+        })?;
+    if !matches!(
+        descriptor.kind,
+        EntryPointKind::Public | EntryPointKind::View
+    ) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is not callable"
         )));
     }
     Ok((
@@ -1620,6 +1647,7 @@ pub(crate) fn parse_contract_call_execution_context(
 
     Ok(Some(ContractCallExecutionContext {
         contract_address,
+        contract_subject: None,
         contract_alias,
         entrypoint,
         entrypoint_pc,
@@ -1628,10 +1656,45 @@ pub(crate) fn parse_contract_call_execution_context(
     }))
 }
 
+/// Replace caller-supplied contract identity metadata with the canonical active WSV binding.
+///
+/// A contract alias is security-sensitive runtime context and must never be trusted merely
+/// because it was signed by the transaction authority. When an address is present, reject a
+/// conflicting claimed alias and install only the alias stored for that active instance.
+pub(crate) fn canonicalize_contract_call_execution_context<R: StateReadOnly>(
+    state: &R,
+    context: &mut ContractCallExecutionContext,
+) -> Result<(), ValidationFail> {
+    let Some(contract_address) = context.contract_address.as_ref() else {
+        if context.contract_alias.is_some() {
+            return Err(ValidationFail::NotPermitted(
+                "contract_alias metadata requires contract_address metadata".to_owned(),
+            ));
+        }
+        return Ok(());
+    };
+    let record = code::fetch_bound_contract_record(state, contract_address).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract instance `{contract_address}` not found in WSV"
+        ))
+    })?;
+    if let Some(claimed_alias) = context.contract_alias.as_ref()
+        && record.contract_alias.as_ref() != Some(claimed_alias)
+    {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract_alias metadata `{claimed_alias}` does not match the active binding for `{contract_address}`"
+        )));
+    }
+    context.contract_alias = record.contract_alias;
+    context.contract_subject = Some(record.contract_subject);
+    Ok(())
+}
+
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
     contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    contract_subject: AccountId,
 ) -> Result<ContractCallExecutionContext, ValidationFail> {
     let selector = invocation.entrypoint.trim();
     if selector.is_empty() {
@@ -1648,6 +1711,34 @@ pub(crate) fn parse_contract_invocation_execution_context(
 
     Ok(ContractCallExecutionContext {
         contract_address: Some(invocation.contract_address.clone()),
+        contract_subject: Some(contract_subject),
+        contract_alias,
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(entrypoint_pc),
+        entrypoint_permission,
+        args: invocation.payload.clone().unwrap_or_default(),
+    })
+}
+
+pub(crate) fn parse_nested_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    bytecode: &[u8],
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    contract_subject: AccountId,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "nested contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+
+    let (entrypoint_pc, entrypoint_permission) =
+        resolve_nested_contract_entrypoint(bytecode, selector)?;
+
+    Ok(ContractCallExecutionContext {
+        contract_address: Some(invocation.contract_address.clone()),
+        contract_subject: Some(contract_subject),
         contract_alias,
         entrypoint: Some(selector.to_owned()),
         entrypoint_pc: Some(entrypoint_pc),
@@ -1723,10 +1814,16 @@ fn fee_bound_for_admission(
                 })?;
             (0, gas_limit)
         }
-        Executable::IvmProved(proved) => (
-            proved.overlay.len(),
-            isi_gas::meter_instructions(proved.overlay.as_ref()),
-        ),
+        Executable::IvmProved(proved) => {
+            let gas_limit = parse_gas_limit(metadata)
+                .map_err(validation_fail_to_nexus_fee_admission_error)?
+                .ok_or_else(|| {
+                    NexusFeeAdmissionError::Rejected(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    )
+                })?;
+            (proved.overlay.len(), gas_limit)
+        }
     };
 
     Ok((tx_bytes_len, instruction_count, gas_used))
@@ -1977,7 +2074,12 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             false,
         ),
         Executable::IvmProved(_) => (
-            isi_gas::meter_instructions(overlay.instruction_slice()),
+            overlay.ivm_gas_used().ok_or_else(|| {
+                ValidationFail::InternalError(
+                    "missing replayed IVM gas usage metadata for proved overlay transaction"
+                        .to_owned(),
+                )
+            })?,
             overlay.instruction_count(),
             true,
         ),
@@ -2681,6 +2783,7 @@ impl Executor {
         authority: &AccountId,
         transaction: &SignedTransaction,
         instructions: Vec<InstructionBox>,
+        ivm_proved_replay: Option<crate::pipeline::overlay::IvmProvedReplay>,
         tx_bytes_len: usize,
         settlement_source_id: [u8; iroha_crypto::Hash::LENGTH],
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
@@ -2697,9 +2800,19 @@ impl Executor {
                 "missing gas_limit in transaction metadata".to_owned(),
             ));
         }
+        if let Some(replay) = ivm_proved_replay.as_ref() {
+            crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
+                replay.completed_axt.len(),
+                state_transaction,
+            )?;
+        }
 
-        // 1) Deterministically meter the instruction batch.
-        let used = isi_gas::meter_instructions(&instructions);
+        // 1) Deterministically meter the instruction batch. Proved IVM transactions retain the
+        // verified replay gas because the plain overlay does not account for VM execution cost.
+        let used = ivm_proved_replay.as_ref().map_or_else(
+            || isi_gas::meter_instructions(&instructions),
+            |replay| replay.gas_used,
+        );
 
         // 2) Enforce optional payer-provided gas limit (caps fee exposure).
         if let Some(limit) = gas_limit_md
@@ -2721,8 +2834,33 @@ impl Executor {
         let prior_sccp_recording_proof_verified = state_transaction.sccp_recording_proof_verified;
         state_transaction.sccp_recording_proof_verified = sccp_recording_proof_verified;
         let execution_result = (|| -> Result<(), ValidationFail> {
-            for isi in instructions {
-                self.execute_instruction(state_transaction, authority, isi)?;
+            if let Some(replay) = ivm_proved_replay {
+                for queued in replay.queued {
+                    self.execute_instruction_with_contract_runtime_context(
+                        state_transaction,
+                        &queued.authority,
+                        queued.instruction,
+                        queued.contract_runtime_context.as_ref(),
+                    )?;
+                }
+                crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
+                    state_transaction,
+                    replay.completed_axt,
+                );
+                for (path, value) in replay.durable_state_overlay {
+                    if let Some(stored) = value {
+                        state_transaction
+                            .world
+                            .smart_contract_state
+                            .insert(path, stored);
+                    } else {
+                        state_transaction.world.smart_contract_state.remove(path);
+                    }
+                }
+            } else {
+                for isi in instructions {
+                    self.execute_instruction(state_transaction, authority, isi)?;
+                }
             }
             Ok(())
         })();
@@ -3174,7 +3312,7 @@ impl Executor {
 
         // Full verification for proof-carrying IVM executables must run before we move the
         // transaction payload out of `SignedTransaction`.
-        if let Executable::IvmProved(proved) = transaction.instructions() {
+        let ivm_proved_replay = if let Executable::IvmProved(proved) = transaction.instructions() {
             if gas_limit_md.is_none() {
                 return Err(ValidationFail::NotPermitted(
                     "missing gas_limit in transaction metadata".to_owned(),
@@ -3234,14 +3372,17 @@ impl Executor {
             )
             .map_err(map_overlay_error)?;
 
-            crate::pipeline::overlay::verify_ivm_proved_execution(
+            let replay = crate::pipeline::overlay::verify_ivm_proved_execution(
                 state_transaction,
                 &transaction,
                 proved,
                 &summary,
             )
             .map_err(map_overlay_error)?;
-        }
+            Some(replay)
+        } else {
+            None
+        };
 
         let tx_creation_time_ms =
             u64::try_from(transaction.creation_time().as_millis()).unwrap_or(u64::MAX);
@@ -3256,6 +3397,7 @@ impl Executor {
                     authority,
                     &transaction_for_fee,
                     instructions.into_vec(),
+                    None,
                     tx_bytes_len,
                     settlement_source_id,
                     tx_hash,
@@ -3267,17 +3409,20 @@ impl Executor {
                     skip_nexus_fee,
                     redeem_funded_nexus_fee,
                 ),
-            (Self::Initial | Self::UserProvided(_), Executable::IvmProved(proved)) => {
-                let mut instructions = proved.overlay.into_vec();
-                crate::pipeline::overlay::prune_redundant_contract_ops(
-                    state_transaction,
-                    &mut instructions,
-                );
+            (Self::Initial | Self::UserProvided(_), Executable::IvmProved(_)) => {
+                let replay = ivm_proved_replay
+                    .expect("proved execution must retain the deterministic replay verified above");
+                let instructions = replay
+                    .queued
+                    .iter()
+                    .map(|queued| queued.instruction.clone())
+                    .collect();
                 self.execute_metered_instructions(
                     state_transaction,
                     authority,
                     &transaction_for_fee,
                     instructions,
+                    Some(replay),
                     tx_bytes_len,
                     settlement_source_id,
                     tx_hash,
@@ -3321,6 +3466,7 @@ impl Executor {
                     &call,
                     record.code_bytes.as_ref(),
                     record.contract_alias.clone(),
+                    record.contract_subject.clone(),
                 )?;
                 enforce_contract_entrypoint_permission(
                     &state_transaction.world,
@@ -3424,9 +3570,10 @@ impl Executor {
                 let mut runtime = ivm_cache
                     .take_or_create_cached_runtime(bytes.as_ref(), effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                let contract_call_context =
+                let mut contract_call_context =
                     parse_contract_call_execution_context(&md, bytes.as_ref())?;
-                if let Some(context) = contract_call_context.as_ref() {
+                if let Some(context) = contract_call_context.as_mut() {
+                    canonicalize_contract_call_execution_context(state_transaction, context)?;
                     enforce_contract_entrypoint_permission(
                         &state_transaction.world,
                         authority,
@@ -3641,30 +3788,20 @@ impl Executor {
         trace!("Running instruction execution");
         let instr_id = instruction.id();
 
-        let result = if should_bypass_contract_runtime_asset_transfer_check(
-            contract_runtime_context,
-            &instruction,
-        ) || should_bypass_contract_runtime_bisp_spend_permission_grant_check(
-            contract_runtime_context,
-            &instruction,
-        ) {
-            Self::execute_instruction_directly(state_transaction, authority, instruction, profile)
-        } else {
-            match self {
-                Self::Initial => Self::execute_initial_instruction(
-                    state_transaction,
-                    authority,
-                    &instruction,
-                    profile,
-                    contract_runtime_context,
-                ),
-                Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
-                    loaded_executor,
-                    state_transaction,
-                    authority,
-                    instruction,
-                ),
-            }
+        let result = match self {
+            Self::Initial => Self::execute_initial_instruction(
+                state_transaction,
+                authority,
+                &instruction,
+                profile,
+                contract_runtime_context,
+            ),
+            Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
+                loaded_executor,
+                state_transaction,
+                authority,
+                instruction,
+            ),
         };
         if let Err(err) = &result {
             iroha_logger::error!(
@@ -3688,37 +3825,22 @@ impl Executor {
         trace!("Running borrowed instruction execution");
         let instr_id = instruction.id();
 
-        let result = if should_bypass_contract_runtime_asset_transfer_check(
-            contract_runtime_context,
-            instruction,
-        ) || should_bypass_contract_runtime_bisp_spend_permission_grant_check(
-            contract_runtime_context,
-            instruction,
-        ) {
-            Self::execute_instruction_directly_borrowed(
+        let result = match self {
+            Self::Initial => Self::execute_initial_instruction(
                 state_transaction,
                 authority,
                 instruction,
                 profile,
-            )
-        } else {
-            match self {
-                Self::Initial => Self::execute_initial_instruction(
+                contract_runtime_context,
+            ),
+            Self::UserProvided(_) => self
+                .execute_instruction_with_profile_and_contract_runtime_context(
                     state_transaction,
                     authority,
-                    instruction,
+                    instruction.clone(),
                     profile,
                     contract_runtime_context,
                 ),
-                Self::UserProvided(_) => self
-                    .execute_instruction_with_profile_and_contract_runtime_context(
-                        state_transaction,
-                        authority,
-                        instruction.clone(),
-                        profile,
-                        contract_runtime_context,
-                    ),
-            }
         };
         if let Err(err) = &result {
             iroha_logger::error!(
@@ -3729,53 +3851,6 @@ impl Executor {
             );
         }
         result
-    }
-
-    fn execute_instruction_directly(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        instruction: InstructionBox,
-        profile: InstructionExecutionProfile,
-    ) -> Result<(), ValidationFail> {
-        let instruction_id = instruction.id();
-        instruction
-            .execute(authority, state_transaction)
-            .map_err(|err| {
-                if matches!(profile, InstructionExecutionProfile::Runtime) {
-                    iroha_logger::debug!(
-                        ?err,
-                        %instruction_id,
-                        authority = %authority,
-                        "direct executor application failed"
-                    );
-                }
-                ValidationFail::InstructionFailed(err)
-            })
-    }
-
-    fn execute_instruction_directly_borrowed(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        instruction: &InstructionBox,
-        profile: InstructionExecutionProfile,
-    ) -> Result<(), ValidationFail> {
-        let instruction_id = instruction.id();
-        crate::smartcontracts::isi::execute_borrowed_instruction(
-            instruction,
-            authority,
-            state_transaction,
-        )
-        .map_err(|err| {
-            if matches!(profile, InstructionExecutionProfile::Runtime) {
-                iroha_logger::debug!(
-                    ?err,
-                    %instruction_id,
-                    authority = %authority,
-                    "borrowed direct executor application failed"
-                );
-            }
-            ValidationFail::InstructionFailed(err)
-        })
     }
 
     fn multisig_account_from(role_id: &RoleId) -> Result<Option<AccountId>, ValidationFail> {
@@ -5247,31 +5322,6 @@ fn extract_transfer_asset(
     .flatten()
 }
 
-fn extract_grant_account_permission(
-    instruction: &InstructionBox,
-) -> Option<Grant<Permission, Account>> {
-    let instr_any = instruction.as_any();
-    if let Some(grant) = instr_any.downcast_ref::<Grant<Permission, Account>>() {
-        return Some(grant.clone());
-    }
-    if let Some(grant_box) = instr_any.downcast_ref::<GrantBox>() {
-        return match grant_box {
-            GrantBox::Permission(grant) => Some(grant.clone()),
-            _ => None,
-        };
-    }
-    if !instruction_has_concrete_type::<Grant<Permission, Account>>(instruction) {
-        return None;
-    }
-    let bytes = instruction.dyn_encode();
-    std::panic::catch_unwind(|| {
-        let mut slice = &bytes[..];
-        Grant::<Permission, Account>::decode(&mut slice).ok()
-    })
-    .ok()
-    .flatten()
-}
-
 fn extract_transfer_domain(
     instruction: &InstructionBox,
 ) -> Option<Transfer<Account, DomainId, Account>> {
@@ -5534,25 +5584,6 @@ fn can_transfer_nft(
     }
     .into();
     authority_has_permission(world, authority, &required)
-}
-
-fn should_bypass_contract_runtime_asset_transfer_check(
-    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-    instruction: &InstructionBox,
-) -> bool {
-    contract_runtime_context
-        .is_some_and(ContractRuntimeExecutionContext::allows_benefit_runtime_asset_transfer_bypass)
-        && extract_transfer_asset(instruction).is_some()
-}
-
-fn should_bypass_contract_runtime_bisp_spend_permission_grant_check(
-    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-    instruction: &InstructionBox,
-) -> bool {
-    contract_runtime_context
-        .is_some_and(ContractRuntimeExecutionContext::allows_bisp_spend_permission_grant_bypass)
-        && extract_grant_account_permission(instruction)
-            .is_some_and(|grant| grant.object().name() == "BispSpend")
 }
 
 fn can_transfer_asset(
@@ -6063,6 +6094,77 @@ mod tests {
 
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
+    }
+
+    #[test]
+    fn proved_empty_overlay_accounts_verified_replay_gas() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "gas fixture".to_owned())])
+            .sign(keypair.private_key());
+        let replay_gas = 40_000;
+        let (axt_descriptor, axt_binding) = ivm::axt::AxtDescriptor::builder()
+            .dataspace(DataSpaceId::UNIVERSAL)
+            .build_with_binding()
+            .expect("AXT descriptor");
+        let mut completed_axt = ivm::axt::HostAxtState::new(axt_descriptor, axt_binding);
+        completed_axt
+            .record_proof(
+                DataSpaceId::UNIVERSAL,
+                Some(ivm::axt::ProofBlob {
+                    payload: vec![1],
+                    expiry_slot: None,
+                }),
+                None,
+            )
+            .expect("record AXT proof");
+        completed_axt
+            .validate_commit()
+            .expect("completed AXT fixture");
+        let replay = crate::pipeline::overlay::IvmProvedReplay {
+            queued: Vec::new(),
+            completed_axt: vec![completed_axt],
+            durable_state_overlay: BTreeMap::new(),
+            events_commitment: Hash::new(b"events"),
+            gas_used: replay_gas,
+            trace_hash: Hash::new(b"trace"),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let tx_hash = tx.hash();
+        super::Executor::Initial
+            .execute_metered_instructions(
+                &mut state_tx,
+                &authority,
+                &tx,
+                Vec::new(),
+                Some(replay),
+                0,
+                [0_u8; Hash::LENGTH],
+                tx_hash,
+                Some(50_000),
+                true,
+                true,
+                None,
+                None,
+                true,
+                false,
+            )
+            .expect("empty proved overlay should retain replay gas");
+        assert_eq!(state_tx.last_tx_gas_used, replay_gas);
+        state_tx.apply();
+        assert_eq!(
+            block.axt_envelopes().len(),
+            1,
+            "direct proved replay must persist completed AXT envelopes"
+        );
+        assert_eq!(block.axt_envelopes()[0].binding.as_bytes(), &axt_binding);
     }
 
     fn make_peer_id() -> crate::PeerId {
@@ -7306,8 +7408,7 @@ mod tests {
     }
 
     #[test]
-    fn contract_runtime_context_allows_benefit_spend_asset_transfers_only_for_benefit_spend_entrypoints()
-     {
+    fn contract_runtime_context_alias_does_not_bypass_asset_transfer_authorization() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
@@ -7372,14 +7473,20 @@ mod tests {
 
         let mut stx = block.transaction();
         stx.tx_call_hash = Some(Hash::prehashed([0xE6; Hash::LENGTH]));
-        executor
-            .execute_instruction_with_contract_runtime_context(
-                &mut stx,
-                &alice_id,
-                instruction,
-                Some(&context),
-            )
-            .expect("benefit spend runtime context should allow queued asset transfer");
+        let result = executor.execute_instruction_with_contract_runtime_context(
+            &mut stx,
+            &alice_id,
+            instruction,
+            Some(&context),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("source asset owner must sign the transaction")
+            ),
+            "contract alias must not bypass source-owner authorization: {result:?}"
+        );
     }
 
     #[test]
@@ -7465,8 +7572,7 @@ mod tests {
     }
 
     #[test]
-    fn contract_runtime_context_allows_bisp_spend_permission_grant_only_for_bisp_grant_entrypoint()
-    {
+    fn contract_runtime_context_alias_does_not_bypass_permission_grant_authorization() {
         let alice_id = ALICE_ID.clone();
         let beneficiary = checked_account_id();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -7485,7 +7591,12 @@ mod tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        let executor = super::Executor::Initial;
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
+            generate_denied_program("executor denies permission grants"),
+        ));
+        let executor = super::Executor::UserProvided(
+            super::LoadedExecutor::load(raw).expect("load denying executor"),
+        );
         let instruction = InstructionBox::from(Grant::account_permission(
             Permission::new("BispSpend".to_owned(), Json::new(())),
             beneficiary.clone(),
@@ -7503,58 +7614,21 @@ mod tests {
             contract_alias: Some("bisp_bisp::sbp".parse().expect("bisp alias")),
             entrypoint: "grant_beneficiary_spend_permission".to_owned(),
         };
-        assert!(
-            should_bypass_contract_runtime_bisp_spend_permission_grant_check(
-                Some(&context),
-                &instruction
-            ),
-            "BISP grant runtime context should match the narrow BispSpend grant bypass"
-        );
-
         let mut stx = block.transaction();
         stx.tx_call_hash = Some(Hash::prehashed([0xE7; Hash::LENGTH]));
-        executor
-            .execute_instruction_with_contract_runtime_context(
-                &mut stx,
-                &alice_id,
-                instruction,
-                Some(&context),
-            )
-            .expect("BISP grant runtime context should allow custom BispSpend grant");
-        assert!(
-            authority_has_named_permission(&stx.world, &beneficiary, "BispSpend")
-                .expect("permission lookup should succeed"),
-            "beneficiary should receive BispSpend"
-        );
-    }
-
-    #[test]
-    fn contract_runtime_context_does_not_bypass_other_custom_permission_grants() {
-        let alice_id = ALICE_ID.clone();
-        let beneficiary = checked_account_id();
-        let instruction = InstructionBox::from(Grant::account_permission(
-            Permission::new("OtherSpend".to_owned(), Json::new(())),
-            beneficiary,
-        ));
-        let contract_address = ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
+        let result = executor.execute_instruction_with_contract_runtime_context(
+            &mut stx,
             &alice_id,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("bisp contract address");
-        let context = ContractRuntimeExecutionContext {
-            contract_subject: contract_address.subject_id(),
-            contract_address,
-            contract_alias: Some("bisp_bisp::sbp".parse().expect("bisp alias")),
-            entrypoint: "grant_beneficiary_spend_permission".to_owned(),
-        };
+            instruction,
+            Some(&context),
+        );
         assert!(
-            !should_bypass_contract_runtime_bisp_spend_permission_grant_check(
-                Some(&context),
-                &instruction
+            matches!(
+                result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("executor denies permission grants")
             ),
-            "BISP grant runtime context must not bypass other custom permission grants"
+            "contract alias must not bypass the user-provided executor verdict: {result:?}"
         );
     }
 
@@ -8794,6 +8868,27 @@ mod tests {
         let view = fixture.state.view();
         check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
             .expect("proved IVM executable is sponsored when fee-metered");
+    }
+
+    #[test]
+    fn ivm_proved_admission_reserves_vm_gas_limit_even_with_empty_overlay() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let mut metadata = sponsored_fee_metadata(&fixture);
+        let gas_limit = 987_654;
+        insert_gas_limit(&mut metadata, gas_limit);
+        let executable =
+            Executable::IvmProved(iroha_data_model::transaction::executable::IvmProved {
+                bytecode: IvmBytecode::from_compiled(vec![0x07, 0x07, 0x07]),
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas-policy"),
+            });
+        let tx = sign_sponsored_fixture_transaction(&fixture, executable, metadata);
+
+        let (_, instruction_count, reserved_gas) =
+            fee_bound_for_admission(&tx).expect("proved IVM fee bound");
+        assert_eq!(instruction_count, 0);
+        assert_eq!(reserved_gas, gas_limit);
     }
 
     #[test]
@@ -10817,11 +10912,20 @@ mod tests {
         permission: Option<&str>,
     ) -> (Vec<u8>, u64) {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        contract_program_with_entrypoint_kind(entrypoint, permission, EntryPointKind::Public)
+    }
+
+    fn contract_program_with_entrypoint_kind(
+        entrypoint: &str,
+        permission: Option<&str>,
+        kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
+    ) -> (Vec<u8>, u64) {
         use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
 
         let descriptor = EmbeddedEntrypointDescriptor {
             name: entrypoint.to_owned(),
-            kind: EntryPointKind::Public,
+            kind,
             params: Vec::new(),
             return_type: None,
             permission: permission.map(str::to_owned),
@@ -10860,6 +10964,7 @@ mod tests {
     fn contract_permission_context(permission: &str) -> ContractCallExecutionContext {
         ContractCallExecutionContext {
             contract_address: None,
+            contract_subject: None,
             contract_alias: None,
             entrypoint: Some("admin".to_owned()),
             entrypoint_pc: Some(0),
@@ -10899,13 +11004,17 @@ mod tests {
         )
         .expect("derive contract address");
         let invocation = ContractInvocation {
-            contract_address,
+            contract_address: contract_address.clone(),
             entrypoint: "admin".to_owned(),
             payload: None,
         };
-        let invocation_context =
-            parse_contract_invocation_execution_context(&invocation, &program, None)
-                .expect("parse contract invocation");
+        let invocation_context = parse_contract_invocation_execution_context(
+            &invocation,
+            &program,
+            None,
+            contract_address.subject_id(),
+        )
+        .expect("parse contract invocation");
         assert_eq!(
             invocation_context.entrypoint_pc(),
             Some(expected_entrypoint_pc)
@@ -10914,6 +11023,49 @@ mod tests {
             invocation_context.entrypoint_permission(),
             Some("ContractAdmin")
         );
+    }
+
+    #[test]
+    fn nested_contract_dispatch_accepts_view_without_relaxing_top_level_calls() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        let (program, expected_entrypoint_pc) =
+            contract_program_with_entrypoint_kind("configuration", None, EntryPointKind::View);
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            2,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let invocation = ContractInvocation {
+            contract_address: contract_address.clone(),
+            entrypoint: "configuration".to_owned(),
+            payload: None,
+        };
+
+        let top_level_err = parse_contract_invocation_execution_context(
+            &invocation,
+            &program,
+            None,
+            contract_address.subject_id(),
+        )
+        .expect_err("top-level transaction dispatch must remain public-only");
+        assert!(matches!(
+            top_level_err,
+            ValidationFail::NotPermitted(message) if message.contains("is not public")
+        ));
+
+        let nested = parse_nested_contract_invocation_execution_context(
+            &invocation,
+            &program,
+            None,
+            contract_address.subject_id(),
+        )
+        .expect("nested dispatch should accept a declared view");
+        assert_eq!(nested.entrypoint.as_deref(), Some("configuration"));
+        assert_eq!(nested.entrypoint_pc(), Some(expected_entrypoint_pc));
+        assert_eq!(nested.entrypoint_permission(), None);
     }
 
     #[test]

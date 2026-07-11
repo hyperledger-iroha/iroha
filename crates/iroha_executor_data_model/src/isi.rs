@@ -460,6 +460,69 @@ pub mod multisig {
         pub terminal_at_ms: u64,
     }
 
+    /// Immutable transaction-bound evidence that a multisig proposal became terminal.
+    ///
+    /// This is intentionally a distinct versioned value instead of extending
+    /// [`MultisigProposalTerminalState`], whose persisted Norito schema must remain decodable for
+    /// existing ledgers.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
+    )]
+    pub struct MultisigProposalTerminalExecutionStateV1 {
+        /// Terminal proposal payload captured at execution time.
+        pub terminal: MultisigProposalTerminalState,
+        /// Exact multisig account identifier carried by the entrypoint instruction.
+        ///
+        /// Current native approval admission requires this to resolve to the existing canonical
+        /// account in `terminal.multisig_account_id`; persisting both makes that signed-to-resolved
+        /// binding independently verifiable.
+        pub entrypoint_account_id: AccountId,
+        /// Finalised block height at which the proposal became terminal.
+        pub terminal_block_height: u64,
+        /// Hash of the block entrypoint that made the proposal terminal.
+        pub terminal_entrypoint_hash: [u8; 32],
+    }
+
+    /// Whether one successful multisig approval entrypoint executed its proposal.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
+    )]
+    pub enum MultisigApprovalOutcomeStatusV1 {
+        /// The approval reached quorum and executed the concrete proposal instructions.
+        Executed,
+        /// The approval succeeded but did not execute proposal instructions.
+        NotExecuted,
+    }
+
+    /// Immutable transaction-bound classification of one successful multisig approval.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
+    )]
+    pub struct MultisigApprovalOutcomeV1 {
+        /// Exact account identifier carried by the signed approval instruction.
+        pub entrypoint_account_id: AccountId,
+        /// Canonical multisig account to which the entrypoint resolved during execution.
+        pub resolved_multisig_account_id: AccountId,
+        /// Hash carried by the signed approval instruction.
+        pub instructions_hash: HashOf<Vec<InstructionBox>>,
+        /// Whether this approval actually executed its concrete proposal instructions.
+        pub status: MultisigApprovalOutcomeStatusV1,
+        /// Finalised block height at which the approval entrypoint ran.
+        pub block_height: u64,
+        /// Hash of the block entrypoint containing the signed approval.
+        pub entrypoint_hash: [u8; 32],
+    }
+
     /// Metadata value for a multisig account specification
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
@@ -869,6 +932,66 @@ pub mod multisig {
             assert_eq!(decoded.proposal, proposal);
             assert_eq!(decoded.status, MultisigProposalTerminalStatus::Canceled);
             assert_eq!(decoded.terminal_at_ms, 1_700_000_010_000);
+        }
+
+        #[test]
+        fn multisig_terminal_execution_state_roundtrip_preserves_binding() {
+            let multisig_account = fixture_account(13);
+            let instructions = vec![sample_instruction_box()];
+            let instructions_hash = HashOf::new(&instructions);
+            let terminal = MultisigProposalTerminalState::new(
+                multisig_account.clone(),
+                instructions_hash,
+                MultisigProposalValue::new(
+                    instructions,
+                    1_700_000_000_000,
+                    1_700_000_060_000,
+                    BTreeSet::new(),
+                    None,
+                ),
+                MultisigProposalTerminalStatus::Finalized,
+                1_700_000_010_000,
+            );
+            let execution = MultisigProposalTerminalExecutionStateV1::new(
+                terminal.clone(),
+                multisig_account.clone(),
+                42,
+                [0xabu8; 32],
+            );
+
+            let bytes = norito::to_bytes(&execution).expect("encode terminal execution state");
+            let decoded =
+                norito::decode_from_bytes::<MultisigProposalTerminalExecutionStateV1>(&bytes)
+                    .expect("decode terminal execution state");
+            assert_eq!(decoded.terminal, terminal);
+            assert_eq!(decoded.entrypoint_account_id, multisig_account);
+            assert_eq!(decoded.terminal_block_height, 42);
+            assert_eq!(decoded.terminal_entrypoint_hash, [0xabu8; 32]);
+        }
+
+        #[test]
+        fn multisig_approval_outcome_roundtrip_preserves_resolution_and_binding() {
+            let entrypoint_account = fixture_account(14);
+            let resolved_account = fixture_account(15);
+            let instructions_hash = HashOf::new(&vec![sample_instruction_box()]);
+            let outcome = MultisigApprovalOutcomeV1::new(
+                entrypoint_account.clone(),
+                resolved_account.clone(),
+                instructions_hash,
+                MultisigApprovalOutcomeStatusV1::Executed,
+                43,
+                [0xcdu8; 32],
+            );
+
+            let bytes = norito::to_bytes(&outcome).expect("encode approval outcome");
+            let decoded = norito::decode_from_bytes::<MultisigApprovalOutcomeV1>(&bytes)
+                .expect("decode approval outcome");
+            assert_eq!(decoded.entrypoint_account_id, entrypoint_account);
+            assert_eq!(decoded.resolved_multisig_account_id, resolved_account);
+            assert_eq!(decoded.instructions_hash, instructions_hash);
+            assert_eq!(decoded.status, MultisigApprovalOutcomeStatusV1::Executed);
+            assert_eq!(decoded.block_height, 43);
+            assert_eq!(decoded.entrypoint_hash, [0xcdu8; 32]);
         }
     }
 }

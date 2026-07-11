@@ -208,7 +208,8 @@ Notes
   `execute trigger <name>` for by-call triggers, `data any`, and pipeline filters
   (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
 - `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
-  the runtime uses the contract-activation authority.
+  the runtime uses the immutable, non-signable subject derived from the activated contract
+  instance. It does not inherit the transaction signer that activated the contract.
 - Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
 - Runtime-injected trigger metadata keys: `contract_address`, optional
   `contract_alias`, `contract_entrypoint`, `contract_code_hash`,
@@ -306,6 +307,7 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `set_account_detail(AccountId*, Name*, Json*)`
 - `execute_instruction(Blob[NoritoBytes])`
 - `execute_query(Blob[NoritoBytes]) -> Blob`
+- `call_contract(String|Blob contract, String|Blob entrypoint, Json payload) -> bytes`: executes an active callee's public or view entrypoint in a child VM (top-level transaction calls remain public-only). Pointer-shaped manifest returns preserve their complete pointer-ABI TLV inside the returned `NoritoBytes`, exactly matching `pointer_to_norito(expected)` for `tlv_eq`; `int`/`bool` use canonical Norito scalar bytes and unit returns a null pointer. Public callers must declare `permission(...)`, and protected callee entrypoints check that permission on the immediate caller contract subject.
 - `subscription_bill()`
 - `subscription_record_usage()`
 - `nft_mint_asset(NftId*, AccountId*)`

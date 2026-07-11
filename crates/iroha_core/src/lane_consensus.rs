@@ -51,6 +51,18 @@ struct LaneBlockSlotKey {
     lane_block_view: u64,
 }
 
+/// Stable key for signer commit-vote safety.
+///
+/// Lane views are intentionally excluded: a validator must not commit-vote two
+/// different payloads for the same lane-local height, even if global proposal
+/// retries move the lane block to a later view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct LaneBlockCommitSlotKey {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+}
+
 /// Cached lane-local proposal, votes, and QCs for one proposal hash.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LaneBlockSession {
@@ -98,6 +110,21 @@ pub(crate) struct LaneBlockCommitVoteRequest {
     pub(crate) prepare_qc: LaneBlockQcV1,
 }
 
+/// Bounded periodic transport work for one unresolved lane-block session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LaneBlockRebroadcastBundle {
+    /// Stable session key used by the actor's round-robin cursor.
+    pub(crate) key: LaneBlockSessionKey,
+    /// Proposal that defines the route and validator set for every artifact.
+    pub(crate) proposal: LaneBlockProposalV1,
+    /// Whether the proposal itself still needs periodic fanout.
+    pub(crate) rebroadcast_proposal: bool,
+    /// Locally authored votes that have not yet been superseded by their phase QC.
+    pub(crate) local_votes: Vec<LaneBlockVoteV1>,
+    /// Cached certificates retained for convergence until the session drains.
+    pub(crate) qcs: Vec<LaneBlockQcV1>,
+}
+
 /// Result of inserting a lane-block artifact into a session cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LaneBlockSessionInsertOutcome {
@@ -142,14 +169,15 @@ pub(crate) enum LaneBlockSessionError {
 /// Bounded in-memory cache for standalone lane-block consensus sessions.
 ///
 /// The capacity bounds ordinary uncommitted session state. Sessions that
-/// already carry a proposal plus prepare and commit QCs are protected from
-/// eviction until the executor boundary drains them, because dropping certified
-/// lane blocks under queue backpressure can strand lane-local progress.
+/// carry commit votes or a commit QC are protected from eviction because they
+/// encode signer locks and safety evidence. Fully certified sessions remain
+/// protected until the executor boundary drains them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneBlockSessionCache {
     capacity: usize,
     sessions: BTreeMap<LaneBlockSessionKey, LaneBlockSession>,
     slot_proposals: BTreeMap<LaneBlockSlotKey, Hash>,
+    commit_vote_locks: BTreeMap<(LaneBlockCommitSlotKey, PeerId), Hash>,
     order: VecDeque<LaneBlockSessionKey>,
 }
 
@@ -161,6 +189,7 @@ impl LaneBlockSessionCache {
             capacity: capacity.max(1),
             sessions: BTreeMap::new(),
             slot_proposals: BTreeMap::new(),
+            commit_vote_locks: BTreeMap::new(),
             order: VecDeque::new(),
         }
     }
@@ -231,6 +260,7 @@ impl LaneBlockSessionCache {
         {
             return Err(LaneBlockSessionError::ConflictingVote);
         }
+        self.validate_commit_vote_lock(vote)?;
         Ok(())
     }
 
@@ -321,6 +351,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Return cached proposals that may still need committee fanout.
+    #[cfg(test)]
     pub(crate) fn proposals_without_commit_qc(&self) -> Vec<LaneBlockProposalV1> {
         self.sessions
             .values()
@@ -333,7 +364,16 @@ impl LaneBlockSessionCache {
             .collect()
     }
 
+    /// Return every cached proposal, including already certified sessions.
+    pub(crate) fn cached_proposals(&self) -> Vec<LaneBlockProposalV1> {
+        self.sessions
+            .values()
+            .filter_map(|session| session.proposal.clone())
+            .collect()
+    }
+
     /// Return this validator's cached votes and matching proposals that may still need fanout.
+    #[cfg(test)]
     pub(crate) fn local_vote_rebroadcast_artifacts_for(
         &self,
         signer: &PeerId,
@@ -364,6 +404,7 @@ impl LaneBlockSessionCache {
     }
 
     /// Return cached QCs that may still need committee fanout.
+    #[cfg(test)]
     pub(crate) fn qcs_for_incomplete_sessions(&self) -> Vec<LaneBlockQcV1> {
         self.sessions
             .values()
@@ -380,6 +421,56 @@ impl LaneBlockSessionCache {
                 }
                 qcs
             })
+            .collect()
+    }
+
+    /// Return whether an admissible unresolved session has periodic transport work.
+    pub(crate) fn has_periodic_rebroadcast_work(
+        &self,
+        signer: &PeerId,
+        admissible: impl Fn(&LaneBlockProposalV1) -> bool,
+    ) -> bool {
+        self.sessions.iter().any(|(key, session)| {
+            rebroadcast_bundle_for_session(*key, session, signer)
+                .is_some_and(|bundle| admissible(&bundle.proposal))
+        })
+    }
+
+    /// Select a stable, bounded round-robin slice of unresolved session bundles.
+    ///
+    /// The cursor is a stable session key instead of a vector index so concurrent
+    /// insertion and pruning cannot repeatedly select the first cached sibling.
+    pub(crate) fn periodic_rebroadcast_bundles_after(
+        &self,
+        signer: &PeerId,
+        cursor: Option<LaneBlockSessionKey>,
+        limit: usize,
+        admissible: impl Fn(&LaneBlockProposalV1) -> bool,
+    ) -> Vec<LaneBlockRebroadcastBundle> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let keys = if let Some(cursor) = cursor {
+            self.sessions
+                .range((
+                    std::ops::Bound::Excluded(cursor),
+                    std::ops::Bound::Unbounded,
+                ))
+                .map(|(key, _)| *key)
+                .chain(self.sessions.range(..=cursor).map(|(key, _)| *key))
+                .collect::<Vec<_>>()
+        } else {
+            self.sessions.keys().copied().collect::<Vec<_>>()
+        };
+
+        keys.into_iter()
+            .filter_map(|key| {
+                let session = self.sessions.get(&key)?;
+                let bundle = rebroadcast_bundle_for_session(key, session, signer)?;
+                admissible(&bundle.proposal).then_some(bundle)
+            })
+            .take(limit)
             .collect()
     }
 
@@ -471,6 +562,10 @@ impl LaneBlockSessionCache {
                 commit_qc,
             });
         }
+        // The returned committed bundle now owns executor replay evidence. Retire
+        // drained cache entries back under the ordinary capacity bound while the
+        // independent signer commit locks continue to enforce equivocation safety.
+        self.evict();
         committed
     }
 
@@ -495,6 +590,148 @@ impl LaneBlockSessionCache {
                 proposal_height,
             )
         });
+        self.rebuild_indices_after_session_retain();
+        before.saturating_sub(self.sessions.len())
+    }
+
+    /// Retire signer commit locks only after an external durable-finality predicate.
+    ///
+    /// Session pruning and capacity eviction intentionally never call this method:
+    /// locks must outlive transient replay state. The actor supplies an applied or
+    /// snapshot-anchored Kura boundary (or an explicit lane reset watermark).
+    pub(crate) fn prune_commit_vote_locks_for_finalized_slots(
+        &mut self,
+        finalized: impl Fn(LaneId, DataSpaceId, u64) -> bool,
+    ) -> usize {
+        let before = self.commit_vote_locks.len();
+        self.commit_vote_locks.retain(|(slot, _), _| {
+            !finalized(slot.lane_id, slot.dataspace_id, slot.lane_block_height)
+        });
+        before.saturating_sub(self.commit_vote_locks.len())
+    }
+
+    /// Atomically retire replay sessions and signer locks at a durable slot boundary.
+    pub(crate) fn prune_sessions_and_commit_vote_locks_for_finalized_slots(
+        &mut self,
+        finalized: impl Fn(LaneId, DataSpaceId, u64) -> bool,
+    ) -> usize {
+        let sessions_before = self.sessions.len();
+        self.sessions
+            .retain(|key, _| !finalized(key.lane_id, key.dataspace_id, key.lane_block_height));
+        self.rebuild_indices_after_session_retain();
+        let sessions_pruned = sessions_before.saturating_sub(self.sessions.len());
+        sessions_pruned.saturating_add(self.prune_commit_vote_locks_for_finalized_slots(finalized))
+    }
+
+    /// Snapshot unique slots currently retaining signer commit locks.
+    pub(crate) fn commit_vote_lock_slots(&self) -> BTreeSet<(LaneId, DataSpaceId, u64)> {
+        self.commit_vote_locks
+            .keys()
+            .map(|(slot, _)| (slot.lane_id, slot.dataspace_id, slot.lane_block_height))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn commit_vote_lock_len(&self) -> usize {
+        self.commit_vote_locks.len()
+    }
+
+    /// Remove prepared sibling sessions once the exact canonical lane proposal is known.
+    ///
+    /// Undrained sessions carrying commit votes or a commit QC are retained as safety evidence.
+    /// Honest nodes do not create that evidence for noncanonical siblings, while retaining it
+    /// prevents canonical discovery from concealing a conflicting commit lock or certificate.
+    pub(crate) fn prune_uncommitted_sessions_conflicting_with_canonical_proposal(
+        &mut self,
+        canonical: &LaneBlockProposalV1,
+    ) -> usize {
+        let canonical_key = LaneBlockSessionKey::from_proposal(canonical);
+        let before = self.sessions.len();
+        self.sessions.retain(|key, session| {
+            let conflicts_with_canonical_height = key.lane_id == canonical_key.lane_id
+                && key.dataspace_id == canonical_key.dataspace_id
+                && key.lane_block_height == canonical_key.lane_block_height
+                && key.proposal_hash != canonical_key.proposal_hash;
+            !conflicts_with_canonical_height || session_has_live_commit_evidence(session)
+        });
+        self.rebuild_indices_after_session_retain();
+        before.saturating_sub(self.sessions.len())
+    }
+
+    /// Remove prepare-only sessions from superseded global views.
+    ///
+    /// The compatibility lane scheduler currently binds `lane_block_view` to the
+    /// global proposal view. If lane views become independently scheduled, this
+    /// global-view pruning coupling must be removed. Exact canonical sessions and
+    /// every undrained session carrying commit evidence are protected; signer
+    /// commit locks deliberately outlive the removed replay state.
+    pub(crate) fn prune_uncommitted_sessions_below_proposal_view(
+        &mut self,
+        proposal_height: u64,
+        min_view: u64,
+        canonical_sessions: &BTreeSet<LaneBlockSessionKey>,
+    ) -> usize {
+        let before = self.sessions.len();
+        self.sessions.retain(|key, session| {
+            let stale = session_proposal_height(session) == Some(proposal_height)
+                && key.lane_block_view < min_view;
+            !stale || canonical_sessions.contains(key) || session_has_live_commit_evidence(session)
+        });
+        self.rebuild_indices_after_session_retain();
+        before.saturating_sub(self.sessions.len())
+    }
+
+    /// Bound prepare-only sibling replay state within a historical route context.
+    ///
+    /// Grouping includes global proposal height because committee/route authority
+    /// can differ between heights. Canonical sessions and undrained commit
+    /// evidence are exempt from the bound; among the remaining siblings the
+    /// newest views win, with proposal hash providing deterministic tie-breaking.
+    pub(crate) fn prune_excess_speculative_siblings(
+        &mut self,
+        retained_per_group: usize,
+        canonical_sessions: &BTreeSet<LaneBlockSessionKey>,
+    ) -> usize {
+        let retained_per_group = retained_per_group.max(1);
+        let mut groups: BTreeMap<(u64, LaneId, DataSpaceId, u64), Vec<LaneBlockSessionKey>> =
+            BTreeMap::new();
+        for (key, session) in &self.sessions {
+            if canonical_sessions.contains(key) || session_has_live_commit_evidence(session) {
+                continue;
+            }
+            let Some(proposal_height) = session_proposal_height(session) else {
+                // Valid proposals/votes/QCs all carry proposal height. Preserve an
+                // unclassifiable session rather than applying an unsafe bound.
+                continue;
+            };
+            groups
+                .entry((
+                    proposal_height,
+                    key.lane_id,
+                    key.dataspace_id,
+                    key.lane_block_height,
+                ))
+                .or_default()
+                .push(*key);
+        }
+
+        let mut remove = BTreeSet::new();
+        for siblings in groups.values_mut() {
+            siblings.sort_by_key(|key| (key.lane_block_view, key.proposal_hash));
+            let excess = siblings.len().saturating_sub(retained_per_group);
+            remove.extend(siblings.iter().take(excess).copied());
+        }
+        if remove.is_empty() {
+            return 0;
+        }
+
+        let before = self.sessions.len();
+        self.sessions.retain(|key, _| !remove.contains(key));
+        self.rebuild_indices_after_session_retain();
+        before.saturating_sub(self.sessions.len())
+    }
+
+    fn rebuild_indices_after_session_retain(&mut self) {
         let retained_slot_proposals = self
             .sessions
             .keys()
@@ -514,7 +751,6 @@ impl LaneBlockSessionCache {
             .retain(|key, proposal_hash| retained_slot_proposals.contains(&(*key, *proposal_hash)));
         let retained_keys = self.sessions.keys().copied().collect::<BTreeSet<_>>();
         self.order.retain(|key| retained_keys.contains(key));
-        before.saturating_sub(self.sessions.len())
     }
 
     /// Return lanes with committed lane-block sessions that have not yet drained to execution.
@@ -623,8 +859,9 @@ impl LaneBlockSessionCache {
     ///
     /// Durable Kura artifacts prove the proposal payload already reached a
     /// canonical block. Recovery may therefore replace a conflicting in-memory
-    /// proposal shell for the same lane slot, but only before that conflicting
-    /// proposal has accumulated any vote or QC evidence.
+    /// proposal for the same lane slot while it carries only prepare evidence.
+    /// Commit votes and commit QCs remain immutable safety evidence and must
+    /// never be hidden by recovery.
     pub(crate) fn insert_recovered_proposal_replacing_uncommitted_conflict(
         &mut self,
         proposal: LaneBlockProposalV1,
@@ -644,7 +881,7 @@ impl LaneBlockSessionCache {
                 proposal_hash: existing_hash,
             };
             if let Some(existing_session) = self.sessions.get(&existing_key)
-                && session_has_consensus_evidence(existing_session)
+                && session_has_commit_evidence(existing_session)
             {
                 return Err(LaneBlockSessionError::ConflictingProposal);
             }
@@ -667,24 +904,37 @@ impl LaneBlockSessionCache {
         let phase = vote.body.phase;
         let key = LaneBlockSessionKey::from_vote_body(&vote.body);
 
-        self.touch(key);
-        let session = self.sessions.entry(key).or_default();
-        if let Some(proposal) = &session.proposal {
-            validate_vote_matches_proposal(&vote, proposal)?;
-        }
-        let votes = votes_for_phase_mut(session, phase).ok_or(
-            LaneBlockSessionError::InvalidVote(LaneBlockVoteIngressError::InvalidBody),
-        )?;
-        if let Some(existing) = votes.get(&vote.signer) {
-            if existing == &vote {
-                return Ok(LaneBlockSessionInsertOutcome::Duplicate);
+        if let Some(session) = self.sessions.get(&key) {
+            if let Some(proposal) = &session.proposal {
+                validate_vote_matches_proposal(&vote, proposal)?;
             }
-            return Err(LaneBlockSessionError::ConflictingVote);
+            let votes = votes_for_phase(session, phase).ok_or(
+                LaneBlockSessionError::InvalidVote(LaneBlockVoteIngressError::InvalidBody),
+            )?;
+            if let Some(existing) = votes.get(&vote.signer) {
+                if existing == &vote {
+                    return Ok(LaneBlockSessionInsertOutcome::Duplicate);
+                }
+                return Err(LaneBlockSessionError::ConflictingVote);
+            }
         }
-        votes.insert(vote.signer.clone(), vote);
-        try_seal_phase_qc(session, phase);
-        refresh_commit_vote_request_ready(session);
-        refresh_committed_session_ready(session);
+        self.validate_commit_vote_lock(&vote)?;
+
+        self.touch(key);
+        self.record_commit_vote_lock(&vote);
+        {
+            let session = self.sessions.entry(key).or_default();
+            if let Some(proposal) = &session.proposal {
+                validate_vote_matches_proposal(&vote, proposal)?;
+            }
+            let votes = votes_for_phase_mut(session, phase).ok_or(
+                LaneBlockSessionError::InvalidVote(LaneBlockVoteIngressError::InvalidBody),
+            )?;
+            votes.insert(vote.signer.clone(), vote);
+            try_seal_phase_qc(session, phase);
+            refresh_commit_vote_request_ready(session);
+            refresh_committed_session_ready(session);
+        }
         self.evict();
         Ok(LaneBlockSessionInsertOutcome::Inserted)
     }
@@ -716,28 +966,102 @@ impl LaneBlockSessionCache {
     ) -> Result<LaneBlockSessionInsertOutcome, LaneBlockSessionError> {
         let key = LaneBlockSessionKey::from_vote_body(&qc.body);
 
+        if let Some(session) = self.sessions.get(&key) {
+            if let Some(proposal) = &session.proposal {
+                validate_qc_matches_proposal(&qc, proposal)?;
+            }
+            let slot = qc_for_phase(session, qc.body.phase).ok_or(
+                LaneBlockSessionError::InvalidQc(LaneBlockQcIngressError::InvalidBody),
+            )?;
+            if let Some(existing) = slot.as_ref() {
+                if existing == &qc {
+                    return Ok(LaneBlockSessionInsertOutcome::Duplicate);
+                }
+                if lane_block_qc_certifies_same_body(existing, &qc) {
+                    return Ok(LaneBlockSessionInsertOutcome::Duplicate);
+                }
+                return Err(LaneBlockSessionError::ConflictingQc);
+            }
+        }
+        self.validate_commit_qc_locks(&qc)?;
+
         self.touch(key);
-        let session = self.sessions.entry(key).or_default();
-        if let Some(proposal) = &session.proposal {
-            validate_qc_matches_proposal(&qc, proposal)?;
-        }
-        let slot = qc_for_phase_mut(session, qc.body.phase).ok_or(
-            LaneBlockSessionError::InvalidQc(LaneBlockQcIngressError::InvalidBody),
-        )?;
-        if let Some(existing) = slot.as_ref() {
-            if existing == &qc {
-                return Ok(LaneBlockSessionInsertOutcome::Duplicate);
+        self.record_commit_qc_locks(&qc);
+        {
+            let session = self.sessions.entry(key).or_default();
+            if let Some(proposal) = &session.proposal {
+                validate_qc_matches_proposal(&qc, proposal)?;
             }
-            if lane_block_qc_certifies_same_body(existing, &qc) {
-                return Ok(LaneBlockSessionInsertOutcome::Duplicate);
-            }
-            return Err(LaneBlockSessionError::ConflictingQc);
+            let slot = qc_for_phase_mut(session, qc.body.phase).ok_or(
+                LaneBlockSessionError::InvalidQc(LaneBlockQcIngressError::InvalidBody),
+            )?;
+            *slot = Some(qc);
+            refresh_commit_vote_request_ready(session);
+            refresh_committed_session_ready(session);
         }
-        *slot = Some(qc);
-        refresh_commit_vote_request_ready(session);
-        refresh_committed_session_ready(session);
         self.evict();
         Ok(LaneBlockSessionInsertOutcome::Inserted)
+    }
+
+    fn validate_commit_vote_lock(
+        &self,
+        vote: &LaneBlockVoteV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        if vote.body.phase != CertPhase::Commit {
+            return Ok(());
+        }
+        let lock_key = (
+            LaneBlockCommitSlotKey::from_vote_body(&vote.body),
+            vote.signer.clone(),
+        );
+        if let Some(existing_hash) = self.commit_vote_locks.get(&lock_key)
+            && *existing_hash != vote.body.proposal_hash
+        {
+            return Err(LaneBlockSessionError::ConflictingVote);
+        }
+        Ok(())
+    }
+
+    fn record_commit_vote_lock(&mut self, vote: &LaneBlockVoteV1) {
+        if vote.body.phase != CertPhase::Commit {
+            return;
+        }
+        self.commit_vote_locks.insert(
+            (
+                LaneBlockCommitSlotKey::from_vote_body(&vote.body),
+                vote.signer.clone(),
+            ),
+            vote.body.proposal_hash,
+        );
+    }
+
+    fn validate_commit_qc_locks(&self, qc: &LaneBlockQcV1) -> Result<(), LaneBlockSessionError> {
+        if qc.body.phase != CertPhase::Commit {
+            return Ok(());
+        }
+        for signer in qc_signers(qc) {
+            let lock_key = (
+                LaneBlockCommitSlotKey::from_vote_body(&qc.body),
+                signer.clone(),
+            );
+            if let Some(existing_hash) = self.commit_vote_locks.get(&lock_key)
+                && *existing_hash != qc.body.proposal_hash
+            {
+                return Err(LaneBlockSessionError::ConflictingVote);
+            }
+        }
+        Ok(())
+    }
+
+    fn record_commit_qc_locks(&mut self, qc: &LaneBlockQcV1) {
+        if qc.body.phase != CertPhase::Commit {
+            return;
+        }
+        let slot = LaneBlockCommitSlotKey::from_vote_body(&qc.body);
+        for signer in qc_signers(qc) {
+            self.commit_vote_locks
+                .insert((slot, signer), qc.body.proposal_hash);
+        }
     }
 
     fn touch(&mut self, key: LaneBlockSessionKey) {
@@ -756,7 +1080,7 @@ impl LaneBlockSessionCache {
     fn unprotected_session_count(&self) -> usize {
         self.sessions
             .values()
-            .filter(|session| !session_has_undrained_committed_evidence(session))
+            .filter(|session| !session_is_eviction_protected(session))
             .count()
     }
 
@@ -769,7 +1093,7 @@ impl LaneBlockSessionCache {
             let Some(session) = self.sessions.get(&oldest) else {
                 continue;
             };
-            if session_has_undrained_committed_evidence(session) {
+            if session_is_eviction_protected(session) {
                 self.order.push_back(oldest);
                 continue;
             }
@@ -852,6 +1176,16 @@ impl LaneBlockSlotKey {
     }
 }
 
+impl LaneBlockCommitSlotKey {
+    fn from_vote_body(body: &LaneBlockVoteBodyV1) -> Self {
+        Self {
+            lane_id: body.lane_id,
+            dataspace_id: body.dataspace_id,
+            lane_block_height: body.lane_block_height,
+        }
+    }
+}
+
 fn votes_for_phase_mut(
     session: &mut LaneBlockSession,
     phase: CertPhase,
@@ -885,8 +1219,35 @@ fn qc_for_phase_mut(
     }
 }
 
+fn qc_for_phase(session: &LaneBlockSession, phase: CertPhase) -> Option<&Option<LaneBlockQcV1>> {
+    match phase {
+        CertPhase::Prepare => Some(&session.prepare_qc),
+        CertPhase::Commit => Some(&session.commit_qc),
+        CertPhase::NewView => None,
+    }
+}
+
 fn proposal_vote_body(proposal: &LaneBlockProposalV1, phase: CertPhase) -> LaneBlockVoteBodyV1 {
     proposal.vote_body(phase)
+}
+
+fn qc_signers(qc: &LaneBlockQcV1) -> Vec<PeerId> {
+    let mut signers = Vec::new();
+    for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
+        if byte == 0 {
+            continue;
+        }
+        for bit in 0..8 {
+            if byte & (1_u8 << bit) == 0 {
+                continue;
+            }
+            let signer_index = byte_index * 8 + bit;
+            if let Some(signer) = qc.validator_set.get(signer_index) {
+                signers.push(signer.clone());
+            }
+        }
+    }
+    signers
 }
 
 fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
@@ -915,6 +1276,47 @@ fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
                 .map(|qc| qc.body.proposal_height)
         })
         .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.proposal_height))
+}
+
+fn rebroadcast_bundle_for_session(
+    key: LaneBlockSessionKey,
+    session: &LaneBlockSession,
+    signer: &PeerId,
+) -> Option<LaneBlockRebroadcastBundle> {
+    if session.committed_session_drained {
+        return None;
+    }
+    let proposal = session.proposal.as_ref()?;
+    let rebroadcast_proposal = session.commit_qc.is_none();
+    let mut local_votes = Vec::with_capacity(2);
+    if proposal.descriptor.validator_set.contains(signer) {
+        if session.prepare_qc.is_none()
+            && let Some(vote) = session.prepare_votes.get(signer)
+        {
+            local_votes.push(vote.clone());
+        }
+        if session.commit_qc.is_none()
+            && let Some(vote) = session.commit_votes.get(signer)
+        {
+            local_votes.push(vote.clone());
+        }
+    }
+    let mut qcs = Vec::with_capacity(2);
+    if let Some(qc) = session.prepare_qc.clone() {
+        qcs.push(qc);
+    }
+    if let Some(qc) = session.commit_qc.clone() {
+        qcs.push(qc);
+    }
+    (rebroadcast_proposal || !local_votes.is_empty() || !qcs.is_empty()).then_some(
+        LaneBlockRebroadcastBundle {
+            key,
+            proposal: proposal.clone(),
+            rebroadcast_proposal,
+            local_votes,
+            qcs,
+        },
+    )
 }
 
 fn validate_vote_matches_proposal(
@@ -982,19 +1384,16 @@ fn refresh_committed_session_ready(session: &mut LaneBlockSession) {
     }
 }
 
-fn session_has_undrained_committed_evidence(session: &LaneBlockSession) -> bool {
-    session.pending_committed_session_drain
-        && !session.committed_session_drained
-        && session.proposal.is_some()
-        && session.prepare_qc.is_some()
-        && session.commit_qc.is_some()
+fn session_has_commit_evidence(session: &LaneBlockSession) -> bool {
+    !session.commit_votes.is_empty() || session.commit_qc.is_some()
 }
 
-fn session_has_consensus_evidence(session: &LaneBlockSession) -> bool {
-    !session.prepare_votes.is_empty()
-        || !session.commit_votes.is_empty()
-        || session.prepare_qc.is_some()
-        || session.commit_qc.is_some()
+fn session_has_live_commit_evidence(session: &LaneBlockSession) -> bool {
+    session_has_commit_evidence(session) && !session.committed_session_drained
+}
+
+fn session_is_eviction_protected(session: &LaneBlockSession) -> bool {
+    session_has_live_commit_evidence(session)
 }
 
 fn lane_block_session_validator_summary(session: &LaneBlockSession) -> Option<(u32, u32)> {
@@ -1815,6 +2214,29 @@ mod tests {
         proposal
     }
 
+    fn conflicting_lane_block_proposal_next_view(
+        proposal: LaneBlockProposalV1,
+        tag: u8,
+    ) -> LaneBlockProposalV1 {
+        let mut proposal = retag_lane_block_proposal_payload(proposal, tag);
+        proposal.descriptor.lane_block_view = proposal.descriptor.lane_block_view.saturating_add(1);
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
+    fn lane_block_proposal_at_view(
+        proposal: &LaneBlockProposalV1,
+        lane_block_view: u64,
+        tag: u8,
+    ) -> LaneBlockProposalV1 {
+        let mut proposal = retag_lane_block_proposal_payload(proposal.clone(), tag);
+        proposal.descriptor.lane_block_view = lane_block_view;
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
     #[test]
     fn lane_block_proposal_ingress_accepts_canonical_artifact() {
         let keypairs = [
@@ -2307,6 +2729,113 @@ mod tests {
         assert!(
             cache.drain_committed_sessions().is_empty(),
             "committed sessions must be drained once"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_rejects_conflicting_commit_vote_after_view_change() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal_a = lane_block_proposal_at_height(&validator_set, 13);
+        let proposal_b = conflicting_lane_block_proposal_next_view(proposal_a.clone(), 0x51);
+        assert_eq!(
+            proposal_a.descriptor.lane_block_height,
+            proposal_b.descriptor.lane_block_height
+        );
+        assert_ne!(
+            proposal_a.descriptor.lane_block_view,
+            proposal_b.descriptor.lane_block_view
+        );
+        assert_ne!(proposal_a.proposal_hash, proposal_b.proposal_hash);
+
+        let signer = &keys[0];
+        let commit_a = signed_vote(&proposal_a.vote_body(CertPhase::Commit), signer);
+        let commit_b_same_signer = signed_vote(&proposal_b.vote_body(CertPhase::Commit), signer);
+        let commit_b_other_signer = signed_vote(&proposal_b.vote_body(CertPhase::Commit), &keys[1]);
+        let prepare_b_same_signer = signed_vote(&proposal_b.vote_body(CertPhase::Prepare), signer);
+        let mut cache = LaneBlockSessionCache::new(4);
+
+        assert_eq!(
+            cache.insert_proposal(proposal_a),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.insert_proposal(proposal_b.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.insert_vote(prepare_b_same_signer, Some(&commit_b_same_signer.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "prepare votes may move to a later lane view before any commit lock is taken"
+        );
+        assert_eq!(
+            cache.insert_vote(commit_a.clone(), Some(&commit_a.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.can_accept_vote(&commit_b_same_signer, Some(&commit_b_same_signer.signer)),
+            Err(LaneBlockSessionError::ConflictingVote)
+        );
+        assert_eq!(
+            cache.insert_vote(
+                commit_b_same_signer.clone(),
+                Some(&commit_b_same_signer.signer)
+            ),
+            Err(LaneBlockSessionError::ConflictingVote),
+            "a signer must not commit-vote two payloads for the same lane height"
+        );
+        assert_eq!(
+            cache.insert_vote(
+                commit_b_other_signer.clone(),
+                Some(&commit_b_other_signer.signer)
+            ),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "other validators remain free to commit the later view"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_rejects_conflicting_commit_qc_with_overlapping_signer() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal_a = lane_block_proposal_at_height(&validator_set, 13);
+        let proposal_b = conflicting_lane_block_proposal_next_view(proposal_a.clone(), 0x61);
+        let commit_body_a = proposal_a.vote_body(CertPhase::Commit);
+        let commit_votes_a = [
+            signed_vote(&commit_body_a, &keys[0]),
+            signed_vote(&commit_body_a, &keys[1]),
+        ];
+        let commit_qc_a =
+            aggregate_lane_block_votes_to_qc(commit_body_a, validator_set.clone(), &commit_votes_a)
+                .expect("first commit QC");
+        let commit_body_b = proposal_b.vote_body(CertPhase::Commit);
+        let commit_votes_b = [
+            signed_vote(&commit_body_b, &keys[1]),
+            signed_vote(&commit_body_b, &keys[2]),
+        ];
+        let commit_qc_b =
+            aggregate_lane_block_votes_to_qc(commit_body_b, validator_set, &commit_votes_b)
+                .expect("conflicting commit QC with quorum intersection");
+        let mut cache = LaneBlockSessionCache::new(4);
+
+        assert_eq!(
+            cache.insert_qc(commit_qc_a),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.insert_qc(commit_qc_b),
+            Err(LaneBlockSessionError::ConflictingVote),
+            "overlapping commit-QC signers must not certify two lane payloads at one height"
         );
     }
 
@@ -3402,7 +3931,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_session_cache_recovered_proposal_preserves_voted_conflicting_slot() {
+    fn lane_block_session_cache_recovered_proposal_replaces_prepare_voted_conflicting_slot() {
         let keys = [
             checked_bls_keypair(1),
             checked_bls_keypair(2),
@@ -3428,21 +3957,26 @@ mod tests {
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
         assert_eq!(
-            cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered),
-            Err(LaneBlockSessionError::ConflictingProposal)
+            cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
 
-        assert!(cache.get(&recovered_key).is_none());
         assert_eq!(
             cache
-                .get(&conflicting_key)
+                .get(&recovered_key)
                 .and_then(|session| session.proposal.as_ref()),
-            Some(&conflicting)
+            Some(&recovered),
+            "durable canonical recovery must replace a speculative same-slot prepare vote"
+        );
+        assert_eq!(
+            cache.get(&conflicting_key),
+            None,
+            "prepare-only sibling state must not keep canonical recovery in a retry loop"
         );
     }
 
     #[test]
-    fn lane_block_session_cache_recovered_proposal_preserves_prepared_conflicting_slot() {
+    fn lane_block_session_cache_recovered_proposal_replaces_prepare_qc_conflicting_slot() {
         let keys = [
             checked_bls_keypair(1),
             checked_bls_keypair(2),
@@ -3475,8 +4009,64 @@ mod tests {
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
         assert_eq!(
+            cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+
+        assert_eq!(
+            cache
+                .get(&recovered_key)
+                .and_then(|session| session.proposal.as_ref()),
+            Some(&recovered),
+            "a prepare QC cannot override exact durable canonical payload evidence"
+        );
+        assert_eq!(
+            cache.get(&conflicting_key),
+            None,
+            "recovered canonical insertion must remove the prepared same-slot sibling"
+        );
+        assert_eq!(
+            cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Duplicate),
+            "periodic durable recovery must converge to a duplicate instead of repeating a conflict"
+        );
+        assert_eq!(
+            cache.proposals_without_commit_qc(),
+            vec![recovered],
+            "only the exact canonical proposal may remain eligible for rebroadcast"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_recovered_proposal_preserves_commit_voted_conflicting_slot() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let recovered = lane_block_proposal(&validator_set);
+        let conflicting = retag_lane_block_proposal_payload(recovered.clone(), 0xB0);
+        let recovered_key = LaneBlockSessionKey::from_proposal(&recovered);
+        let conflicting_key = LaneBlockSessionKey::from_proposal(&conflicting);
+        let commit_body = conflicting.vote_body(CertPhase::Commit);
+        let commit_vote = signed_vote(&commit_body, &keys[0]);
+        let signer = commit_vote.signer.clone();
+        let mut cache = LaneBlockSessionCache::new(4);
+
+        assert_eq!(
+            cache.insert_proposal(conflicting.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.insert_vote(commit_vote, Some(&signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
             cache.insert_recovered_proposal_replacing_uncommitted_conflict(recovered),
-            Err(LaneBlockSessionError::ConflictingProposal)
+            Err(LaneBlockSessionError::ConflictingProposal),
+            "canonical recovery must fail closed when the sibling carries a commit vote"
         );
 
         assert!(cache.get(&recovered_key).is_none());
@@ -3717,6 +4307,456 @@ mod tests {
             cache.insert_proposal(conflicting_inactive_proposal),
             Ok(LaneBlockSessionInsertOutcome::Inserted),
             "pruning an inactive session must also release its slot claim"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_prunes_noncanonical_prepared_siblings_but_preserves_commit_evidence()
+     {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let loser = lane_block_proposal_at_height(&validator_set, 13);
+        let winner = conflicting_lane_block_proposal_next_view(loser.clone(), 0xD1);
+        let protected = conflicting_lane_block_proposal_next_view(winner.clone(), 0xE1);
+        let loser_key = LaneBlockSessionKey::from_proposal(&loser);
+        let winner_key = LaneBlockSessionKey::from_proposal(&winner);
+        let protected_key = LaneBlockSessionKey::from_proposal(&protected);
+        let mut cache = LaneBlockSessionCache::new(8);
+
+        for proposal in [&loser, &winner] {
+            assert_eq!(
+                cache.insert_proposal(proposal.clone()),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+            for signer in &keys[..2] {
+                let vote = signed_vote(&proposal.vote_body(CertPhase::Prepare), signer);
+                assert_eq!(
+                    cache.insert_vote(vote.clone(), Some(&vote.signer)),
+                    Ok(LaneBlockSessionInsertOutcome::Inserted)
+                );
+            }
+        }
+        assert!(cache.get(&loser_key).is_some_and(|session| {
+            session.prepare_qc.is_some()
+                && session.commit_votes.is_empty()
+                && session.commit_qc.is_none()
+        }));
+
+        assert_eq!(
+            cache.prune_uncommitted_sessions_conflicting_with_canonical_proposal(&winner),
+            1
+        );
+        assert!(cache.get(&loser_key).is_none());
+        assert!(cache.get(&winner_key).is_some());
+        assert!(
+            cache
+                .proposals_without_commit_qc()
+                .iter()
+                .all(|proposal| proposal.proposal_hash == winner.proposal_hash)
+        );
+        assert!(
+            cache
+                .qcs_for_incomplete_sessions()
+                .iter()
+                .all(|qc| qc.body.proposal_hash == winner.proposal_hash)
+        );
+        assert!(
+            cache
+                .local_vote_rebroadcast_artifacts_for(&peer(&keys[0]))
+                .iter()
+                .all(|(proposal, _)| proposal.proposal_hash == winner.proposal_hash)
+        );
+        assert_eq!(
+            cache.insert_proposal(loser.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "pruning must release the losing view's proposal slot"
+        );
+        assert_eq!(
+            cache.prune_uncommitted_sessions_conflicting_with_canonical_proposal(&winner),
+            1
+        );
+
+        assert_eq!(
+            cache.insert_proposal(protected.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[2]);
+        assert_eq!(
+            cache.insert_vote(commit_vote.clone(), Some(&commit_vote.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.prune_uncommitted_sessions_conflicting_with_canonical_proposal(&winner),
+            0,
+            "conflicting commit evidence must be retained for safety and diagnostics"
+        );
+        assert!(cache.get(&protected_key).is_some());
+    }
+
+    #[test]
+    fn lane_block_session_cache_bounds_speculative_siblings_by_historical_context() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let base = lane_block_proposal_at_height(&validator_set, 13);
+        let mut siblings = Vec::new();
+        let mut cache = LaneBlockSessionCache::new(256);
+        for view in 0_u64..100 {
+            let proposal = lane_block_proposal_at_view(
+                &base,
+                view,
+                u8::try_from(view).expect("fixture view fits u8"),
+            );
+            assert_eq!(
+                cache.insert_proposal(proposal.clone()),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+            siblings.push(proposal);
+        }
+
+        let commit_vote = signed_vote(&siblings[0].vote_body(CertPhase::Commit), &keys[0]);
+        assert_eq!(
+            cache.insert_vote(commit_vote.clone(), Some(&commit_vote.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        let commit_body = siblings[1].vote_body(CertPhase::Commit);
+        let commit_votes = [
+            signed_vote(&commit_body, &keys[1]),
+            signed_vote(&commit_body, &keys[2]),
+        ];
+        let commit_qc =
+            aggregate_lane_block_votes_to_qc(commit_body, validator_set.clone(), &commit_votes)
+                .expect("disjoint-signer commit QC");
+        assert_eq!(
+            cache.insert_qc(commit_qc),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+
+        let canonical_key = LaneBlockSessionKey::from_proposal(&siblings[2]);
+        let canonical = BTreeSet::from([canonical_key]);
+        let mut other_height_base = base.clone();
+        other_height_base.descriptor.proposal_height = other_height_base
+            .descriptor
+            .proposal_height
+            .saturating_add(1);
+        other_height_base.descriptor.descriptor_hash =
+            other_height_base.descriptor.computed_descriptor_hash();
+        other_height_base.proposal_hash = other_height_base.computed_proposal_hash();
+        for view in 100_u64..103 {
+            let proposal = lane_block_proposal_at_view(
+                &other_height_base,
+                view,
+                u8::try_from(view).expect("fixture view fits u8"),
+            );
+            assert_eq!(
+                cache.insert_proposal(proposal),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+        }
+
+        assert_eq!(
+            cache.prune_excess_speculative_siblings(2, &canonical),
+            96,
+            "only two ordinary siblings per proposal-height route context may remain"
+        );
+        let first_height_views = cache
+            .sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                (session_proposal_height(session) == Some(base.descriptor.proposal_height))
+                    .then_some(key.lane_block_view)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(first_height_views, BTreeSet::from([0, 1, 2, 98, 99]));
+        let second_height_views = cache
+            .sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                (session_proposal_height(session)
+                    == Some(other_height_base.descriptor.proposal_height))
+                .then_some(key.lane_block_view)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(second_height_views, BTreeSet::from([101, 102]));
+
+        assert_eq!(
+            cache.prune_uncommitted_sessions_below_proposal_view(
+                base.descriptor.proposal_height,
+                99,
+                &canonical,
+            ),
+            1
+        );
+        let first_height_views = cache
+            .sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                (session_proposal_height(session) == Some(base.descriptor.proposal_height))
+                    .then_some(key.lane_block_view)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            first_height_views,
+            BTreeSet::from([0, 1, 2, 99]),
+            "view pruning must preserve canonical and commit-evidence siblings"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_capacity_and_pruning_preserve_commit_locks() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let base = lane_block_proposal_at_height(&validator_set, 13);
+        let protected = lane_block_proposal_at_view(&base, 0, 0x40);
+        let protected_key = LaneBlockSessionKey::from_proposal(&protected);
+        let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[0]);
+        let mut cache = LaneBlockSessionCache::new(1);
+        assert_eq!(
+            cache.insert_proposal(protected.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.insert_vote(commit_vote.clone(), Some(&commit_vote.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        for view in 1_u64..32 {
+            assert_eq!(
+                cache.insert_proposal(lane_block_proposal_at_view(
+                    &base,
+                    view,
+                    u8::try_from(view).expect("fixture view fits u8"),
+                )),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+        }
+        assert!(
+            cache.get(&protected_key).is_some(),
+            "ordinary capacity eviction must never discard commit evidence"
+        );
+        assert!(
+            cache.len() <= 2,
+            "only one ordinary replay session may remain"
+        );
+
+        assert!(
+            cache.retain_sessions_for_admissible_lanes(|_, _, _, _| false) > 0,
+            "inactive-route pruning should remove replay state"
+        );
+        assert!(cache.is_empty());
+        let conflicting = lane_block_proposal_at_view(&base, 40, 0xE0);
+        let conflicting_vote = signed_vote(&conflicting.vote_body(CertPhase::Commit), &keys[0]);
+        assert_eq!(
+            cache.insert_vote(conflicting_vote, None),
+            Err(LaneBlockSessionError::ConflictingVote),
+            "the signer commit lock must outlive pruned session state"
+        );
+    }
+
+    #[test]
+    fn drained_committed_sessions_retire_under_capacity_but_keep_signer_lock() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let pops = signer_pops(&keys);
+        let mut cache = LaneBlockSessionCache::new(1);
+        let first = lane_block_proposal_at_height(&validator_set, 13);
+        let first_key = LaneBlockSessionKey::from_proposal(&first);
+
+        for lane_height in 13_u64..45 {
+            let proposal = lane_block_proposal_at_height(&validator_set, lane_height);
+            assert_eq!(
+                cache.insert_proposal(proposal.clone()),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+            for phase in [CertPhase::Prepare, CertPhase::Commit] {
+                let body = proposal.vote_body(phase);
+                let votes = [signed_vote(&body, &keys[0]), signed_vote(&body, &keys[1])];
+                let qc = aggregate_lane_block_votes_to_qc(body, validator_set.clone(), &votes)
+                    .expect("lane block QC");
+                assert_eq!(
+                    cache.insert_qc_with_pops(qc, &pops),
+                    Ok(LaneBlockSessionInsertOutcome::Inserted)
+                );
+            }
+            assert_eq!(
+                cache.drain_committed_sessions_up_to(1).len(),
+                1,
+                "each certified lane session should hand off once"
+            );
+            assert!(
+                cache.len() <= 1,
+                "drained commit evidence must return under the ordinary cache bound"
+            );
+        }
+        assert!(
+            cache.get(&first_key).is_none(),
+            "the oldest drained session should be retired under sustained progress"
+        );
+
+        let conflicting = lane_block_proposal_at_view(&first, 99, 0xF0);
+        let conflicting_vote = signed_vote(&conflicting.vote_body(CertPhase::Commit), &keys[0]);
+        assert_eq!(
+            cache.insert_vote(conflicting_vote, None),
+            Err(LaneBlockSessionError::ConflictingVote),
+            "retiring drained replay state must not retire the signer commit lock"
+        );
+        assert!(cache.commit_vote_lock_len() > 0);
+        assert!(
+            cache.prune_sessions_and_commit_vote_locks_for_finalized_slots(
+                |lane_id, dataspace_id, lane_block_height| {
+                    lane_id == first.descriptor.lane_id
+                        && dataspace_id == first.descriptor.dataspace_id
+                        && lane_block_height <= 44
+                },
+            ) > 0
+        );
+        assert!(cache.is_empty());
+        assert_eq!(
+            cache.commit_vote_lock_len(),
+            0,
+            "only an explicit durable boundary should retire historical signer locks"
+        );
+    }
+
+    #[test]
+    fn lane_reset_retirement_covers_only_slots_at_or_below_watermark() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let mut cache = LaneBlockSessionCache::new(8);
+        for lane_height in 13_u64..=15 {
+            let proposal = lane_block_proposal_at_height(&validator_set, lane_height);
+            assert_eq!(
+                cache.insert_proposal(proposal.clone()),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+            let vote = signed_vote(&proposal.vote_body(CertPhase::Commit), &keys[0]);
+            assert_eq!(
+                cache.insert_vote(vote.clone(), Some(&vote.signer)),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+        }
+        assert_eq!(cache.commit_vote_lock_slots().len(), 3);
+
+        assert_eq!(
+            cache.prune_sessions_and_commit_vote_locks_for_finalized_slots(
+                |lane_id, dataspace_id, lane_block_height| {
+                    lane_id == LaneId::new(7)
+                        && dataspace_id == DataSpaceId::new(11)
+                        && lane_block_height <= 14
+                },
+            ),
+            4,
+            "two sessions and their two signer locks should retire atomically"
+        );
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache.commit_vote_lock_slots(),
+            BTreeSet::from([(LaneId::new(7), DataSpaceId::new(11), 15)]),
+            "the higher unfinalized slot must remain protected"
+        );
+    }
+
+    #[test]
+    fn lane_block_periodic_rebroadcast_selection_is_bounded_and_round_robin() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let signer = peer(&keys[0]);
+        let mut cache = LaneBlockSessionCache::new(16);
+        for lane_height in 13_u64..18 {
+            assert_eq!(
+                cache.insert_proposal(lane_block_proposal_at_height(&validator_set, lane_height,)),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+        }
+
+        let first = cache.periodic_rebroadcast_bundles_after(&signer, None, 2, |_| true);
+        assert_eq!(first.len(), 2);
+        let second = cache.periodic_rebroadcast_bundles_after(
+            &signer,
+            first.last().map(|bundle| bundle.key),
+            2,
+            |_| true,
+        );
+        assert_eq!(second.len(), 2);
+        let third = cache.periodic_rebroadcast_bundles_after(
+            &signer,
+            second.last().map(|bundle| bundle.key),
+            2,
+            |_| true,
+        );
+        assert_eq!(third.len(), 2);
+
+        let first_five = first
+            .iter()
+            .chain(&second)
+            .chain(third.iter().take(1))
+            .map(|bundle| bundle.key)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            first_five.len(),
+            5,
+            "every cached session must be selected before the cursor wraps"
+        );
+        assert_eq!(third[1].key, first[0].key, "cursor should wrap stably");
+    }
+
+    #[test]
+    fn lane_block_periodic_rebroadcast_filters_invalid_heads_before_limit() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let signer = peer(&keys[0]);
+        let mut cache = LaneBlockSessionCache::new(16);
+        for lane_height in 13_u64..=18 {
+            assert_eq!(
+                cache.insert_proposal(lane_block_proposal_at_height(&validator_set, lane_height,)),
+                Ok(LaneBlockSessionInsertOutcome::Inserted)
+            );
+        }
+
+        let admissible =
+            |proposal: &LaneBlockProposalV1| proposal.descriptor.lane_block_height >= 17;
+        assert!(cache.has_periodic_rebroadcast_work(&signer, admissible));
+        let selected = cache.periodic_rebroadcast_bundles_after(&signer, None, 2, admissible);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|bundle| bundle.proposal.descriptor.lane_block_height)
+                .collect::<Vec<_>>(),
+            vec![17, 18],
+            "inadmissible sessions before the cursor must not consume replay quota"
         );
     }
 

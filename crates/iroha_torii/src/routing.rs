@@ -17241,8 +17241,10 @@ mod zk_roots_selector_tests {
             .expect("state should have no other refs")
             .set_pipeline(pipeline);
 
-        let metadata =
-            build_fee_sponsor_metadata_with_default_gas_asset(state.as_ref(), Some("sponsor@cbsi"));
+        let metadata = build_fee_sponsor_metadata_with_default_gas_asset(
+            state.as_ref(),
+            Some("sponsor@boi.is2"),
+        );
         let gas_asset_id = metadata
             .get("gas_asset_id")
             .cloned()
@@ -17253,7 +17255,7 @@ mod zk_roots_selector_tests {
             .and_then(|value| value.try_into_any_norito::<String>().ok());
 
         assert_eq!(gas_asset_id, Some(definition_id.to_string()));
-        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@cbsi"));
+        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@boi.is2"));
     }
 
     #[test]
@@ -17305,7 +17307,7 @@ mod zk_roots_selector_tests {
 
         let metadata = build_multisig_propose_metadata_with_default_gas_asset(
             state.as_ref(),
-            Some("sponsor@cbsi"),
+            Some("sponsor@boi.is2"),
             Some("memo"),
             validation_fee_policy_metadata.as_ref().map(
                 |(version, hash, instruction_index, transfer_entry_index)| {
@@ -23961,6 +23963,48 @@ fn normalize_validation_fee_policy_metadata(
 }
 
 #[cfg(feature = "app_api")]
+fn append_canonical_multisig_validation_fee_marker(
+    instructions: &mut Vec<iroha_data_model::isi::InstructionBox>,
+    validation_fee_policy_metadata: Option<&(u64, String, Option<u64>, Option<u64>)>,
+) -> Result<()> {
+    use iroha_data_model::validation_fee::ValidationFeeMultisigMarkerV1;
+
+    for instruction in instructions.iter() {
+        match ValidationFeeMultisigMarkerV1::parse_instruction(instruction) {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => {
+                return Err(conversion_error(
+                    "multisig propose instructions must not supply a top-level validation-fee marker; provide the validated policy fields and coordinate so Torii can inject the canonical signed marker"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+
+    let Some((policy_version, policy_hash_hex, Some(instruction_index), transfer_entry_index)) =
+        validation_fee_policy_metadata
+    else {
+        return Ok(());
+    };
+    let policy_hash: [u8; 32] = hex::decode(policy_hash_hex)
+        .map_err(|_| conversion_error("invalid normalized validation-fee policy hash".to_owned()))?
+        .try_into()
+        .map_err(|_| {
+            conversion_error("invalid normalized validation-fee policy hash".to_owned())
+        })?;
+    instructions.push(
+        ValidationFeeMultisigMarkerV1::new(
+            *policy_version,
+            policy_hash,
+            *instruction_index,
+            *transfer_entry_index,
+        )
+        .into_instruction(),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn build_fee_sponsor_metadata(fee_sponsor: Option<&str>) -> Metadata {
     let mut metadata = Metadata::default();
     if let Some(fee_sponsor) = fee_sponsor {
@@ -25892,10 +25936,59 @@ mod multisig_contract_call_tests {
         assert!(normalize_transaction_memo(Some("  ".to_owned())).is_none());
         assert!(normalize_transaction_memo(None).is_none());
 
-        let metadata = build_multisig_propose_metadata(Some("sponsor@cbsi"), Some("QR invoice 42"));
+        let metadata =
+            build_multisig_propose_metadata(Some("sponsor@boi.is2"), Some("QR invoice 42"));
         let json = metadata_to_json(&metadata);
-        assert_eq!(json["fee_sponsor"].as_str(), Some("sponsor@cbsi"));
+        assert_eq!(json["fee_sponsor"].as_str(), Some("sponsor@boi.is2"));
         assert_eq!(json["memo"].as_str(), Some("QR invoice 42"));
+    }
+
+    #[test]
+    fn multisig_scaffold_injects_canonical_fee_marker_before_proposal_hashing() {
+        use iroha_data_model::{
+            Level,
+            isi::{InstructionBox, Log},
+            validation_fee::ValidationFeeMultisigMarkerV1,
+        };
+
+        let mut instructions = vec![
+            InstructionBox::from(Log::new(Level::INFO, "principal".to_owned())),
+            InstructionBox::from(Log::new(Level::INFO, "fee".to_owned())),
+        ];
+        let unmarked_hash = HashOf::new(&instructions);
+        append_canonical_multisig_validation_fee_marker(
+            &mut instructions,
+            Some(&(1, "ab".repeat(32), Some(1), None)),
+        )
+        .expect("canonical marker injection");
+
+        let marker = ValidationFeeMultisigMarkerV1::parse_instruction(
+            instructions.last().expect("marker instruction"),
+        )
+        .expect("canonical marker parse")
+        .expect("marker present");
+        assert_eq!(marker.policy_version, 1);
+        assert_eq!(marker.policy_hash, [0xabu8; 32]);
+        assert_eq!(marker.instruction_index, 1);
+        assert_eq!(marker.transfer_entry_index, None);
+
+        let marked_hash = HashOf::new(&instructions);
+        assert_ne!(marked_hash, unmarked_hash);
+        let mut tampered = instructions.clone();
+        *tampered.last_mut().expect("marker instruction") =
+            ValidationFeeMultisigMarkerV1::new(1, [0xabu8; 32], 0, None).into_instruction();
+        assert_ne!(
+            HashOf::new(&tampered),
+            marked_hash,
+            "proposal hash must bind policy and exact fee coordinate marker"
+        );
+
+        let err = append_canonical_multisig_validation_fee_marker(
+            &mut instructions,
+            Some(&(1, "ab".repeat(32), Some(1), None)),
+        )
+        .expect_err("caller-supplied top-level marker must not be duplicated");
+        assert!(err.to_string().contains("must not supply a top-level"));
     }
 }
 
@@ -30581,7 +30674,11 @@ pub async fn handle_post_multisig_propose(
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
-    let proposal_instructions = instructions;
+    let mut proposal_instructions = instructions;
+    append_canonical_multisig_validation_fee_marker(
+        &mut proposal_instructions,
+        validation_fee_policy_metadata.as_ref(),
+    )?;
     let proposal_hash = HashOf::new(&proposal_instructions);
     let proposal_id = hex::encode(proposal_hash.as_ref());
     let instructions_hash = proposal_id.clone();
@@ -59462,6 +59559,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.dedup_evictions.proposal_expired_total,
         ),
         json_entry(
+            "lane_block_artifact_capacity_total",
+            snap.dedup_evictions.lane_block_artifact_capacity_total,
+        ),
+        json_entry(
+            "lane_block_artifact_expired_total",
+            snap.dedup_evictions.lane_block_artifact_expired_total,
+        ),
+        json_entry(
             "rbc_ready_capacity_total",
             snap.dedup_evictions.rbc_ready_capacity_total,
         ),
@@ -66292,19 +66397,21 @@ mod validation_fee_torii_ingress_tests {
         prelude::*,
         transaction::SignedTransaction,
         validation_fee::{
-            SignedValidationFeePolicyV1, VALIDATION_FEE_INITIAL_MINOR_UNITS,
-            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-            VALIDATION_FEE_SBD_SCALE, ValidationFeeChargingMode, ValidationFeeGovernanceKeyV1,
-            ValidationFeeGovernanceKeysetV1, ValidationFeePolicyRegistryEntryV1,
+            SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE,
+            VALIDATION_FEE_INITIAL_MINOR_UNITS, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
+            VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, ValidationFeeChargingMode,
+            ValidationFeeGovernanceKeyV1, ValidationFeeGovernanceKeysetV1,
+            ValidationFeeMultisigMarkerV1, ValidationFeePolicyRegistryEntryV1,
             ValidationFeePolicyRegistryV1, ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
         },
     };
+    use iroha_executor_data_model::isi::multisig::MultisigPropose;
     use iroha_primitives::{json::Json, numeric::Numeric};
 
     use super::*;
 
-    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_SBD_SCALE;
+    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
 
     fn fixture_key_pair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
@@ -66454,8 +66561,8 @@ mod validation_fee_torii_ingress_tests {
             genesis_hash,
             policy_version: 1,
             previous_policy_hash: None,
-            sbd_asset_id: fee_asset.to_string(),
-            sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            ds_asset_id: fee_asset.to_string(),
+            ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
             treasury_account_id: treasury.to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
@@ -66467,7 +66574,7 @@ mod validation_fee_torii_ingress_tests {
     }
 
     fn validation_fee_policy_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
-        policy.sbd_asset_id.parse().expect("policy SBD asset id")
+        policy.ds_asset_id.parse().expect("policy DS asset id")
     }
 
     fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
@@ -66752,6 +66859,114 @@ mod validation_fee_torii_ingress_tests {
         let exact_fee_result =
             validate_single_queued_transaction_in_block(&state, &exact_fee_queue, 4);
         assert_eq!(exact_fee_result, "ok");
+    }
+
+    #[tokio::test]
+    async fn torii_native_multisig_signed_fee_coordinate_resolves_nested_context() {
+        let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+        let chain_id = Arc::new(state.chain_id.clone());
+        let genesis_hash = commit_empty_genesis_like_block(&state);
+        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
+        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
+        let policy =
+            validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
+        install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        let (multisig, _) = account(4, "derive validation-fee multisig account");
+
+        let proposal = || {
+            MultisigPropose::new(
+                multisig.clone(),
+                vec![
+                    Transfer::asset_numeric(
+                        AssetId::new(fee_asset.clone(), multisig.clone()),
+                        Numeric::new(1, 0),
+                        recipient.clone(),
+                    )
+                    .into(),
+                    Transfer::asset_numeric(
+                        AssetId::new(fee_asset.clone(), multisig.clone()),
+                        policy.fee_amount_numeric(),
+                        treasury.clone(),
+                    )
+                    .into(),
+                    ValidationFeeMultisigMarkerV1::new(
+                        policy.policy_version,
+                        policy.policy_hash().expect("policy hash"),
+                        1,
+                        None,
+                    )
+                    .into_instruction(),
+                ],
+                None,
+            )
+        };
+        let signed = |instructions: Vec<InstructionBox>, coordinate| {
+            TransactionBuilder::new(state.chain_id.clone(), user.clone())
+                .with_instructions(instructions)
+                .with_metadata(metadata_for_policy(&policy, coordinate))
+                .sign(user_key_pair.private_key())
+        };
+
+        let exact_queue = queue();
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&exact_queue),
+            Arc::clone(&state),
+            signed(vec![proposal().into()], 1),
+        )
+        .await
+        .expect("Torii should enqueue the nested exact-fee proposal");
+        let exact_result = validate_single_queued_transaction_in_block(&state, &exact_queue, 3);
+        assert!(
+            !exact_result.contains("validation-fee admission rejected transaction"),
+            "nested exact fee must pass validation-fee admission: {exact_result}"
+        );
+
+        let wrong_queue = queue();
+        handle_transaction(
+            Arc::clone(&chain_id),
+            Arc::clone(&wrong_queue),
+            Arc::clone(&state),
+            signed(vec![proposal().into()], 0),
+        )
+        .await
+        .expect("Torii should enqueue the nested wrong-coordinate proposal");
+        let wrong_result = validate_single_queued_transaction_in_block(&state, &wrong_queue, 4);
+        assert!(
+            wrong_result.contains("metadata and signed multisig validation-fee marker disagree"),
+            "nested principal coordinate must reject: {wrong_result}"
+        );
+
+        let ambiguous_queue = queue();
+        let xor = AssetDefinitionId::new(
+            DomainId::try_new("fees", "paynet").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        handle_transaction(
+            chain_id,
+            Arc::clone(&ambiguous_queue),
+            Arc::clone(&state),
+            signed(
+                vec![
+                    proposal().into(),
+                    Transfer::asset_numeric(
+                        AssetId::new(xor, user.clone()),
+                        Numeric::new(1, 0),
+                        recipient.clone(),
+                    )
+                    .into(),
+                ],
+                1,
+            ),
+        )
+        .await
+        .expect("Torii should enqueue the ambiguous-coordinate proposal");
+        let ambiguous_result =
+            validate_single_queued_transaction_in_block(&state, &ambiguous_queue, 5);
+        assert!(
+            ambiguous_result.contains("matches multiple transfer contexts"),
+            "ambiguous nested coordinate must reject: {ambiguous_result}"
+        );
     }
 
     fn test_app_with_active_policy() -> (
@@ -72330,7 +72545,11 @@ struct AccountPermissionListItem {
     payload: norito::json::Value,
 }
 
-/// List permissions granted directly to an account with optional pagination.
+/// List all effective permissions granted to an account with optional pagination.
+///
+/// Effective permissions include both direct account grants and grants inherited from every role
+/// assigned to the account. Security inventory consumers must not treat direct grants alone as the
+/// account's authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_permissions(
@@ -72381,6 +72600,14 @@ pub async fn handle_v1_account_permissions_with_policy(
                     err.into(),
                 )));
             }
+        }
+        for role_id in world.account_roles_iter(account_id) {
+            let role = world.roles().get(role_id).ok_or_else(|| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                    "account `{account_id}` is assigned missing role `{role_id}`"
+                )))
+            })?;
+            permissions.extend(role.permissions().cloned());
         }
     }
 
@@ -74016,13 +74243,19 @@ mod account_permissions_json_tests {
     };
     use iroha_executor_data_model::permission::{
         account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
+        parameter::CanSetParameters,
     };
 
     use super::*;
 
     fn test_state_with_permissions(account_id: &AccountId) -> Arc<CoreState> {
         let account = Account::new(account_id.clone()).build(account_id);
-        let mut world = World::with([], [account], []);
+        let role_id: RoleId = "effective-permission-test".parse().expect("role id");
+        let role = Role::new(role_id.clone(), account_id.clone())
+            .add_permission(CanSetParameters)
+            .build(account_id);
+        let mut world = World::with_assets_and_roles([], [account], [], [], [], [role]);
+        world.grant_role_for_tests(account_id.clone(), role_id);
         let mut permissions = Permissions::new();
         permissions.insert(
             CanModifyAccountMetadata {
@@ -74101,6 +74334,11 @@ mod account_permissions_json_tests {
             manifest_permission["payload"]["dataspace"].as_u64(),
             Some(7)
         );
+
+        items
+            .iter()
+            .find(|item| item["name"].as_str() == Some("CanSetParameters"))
+            .expect("role-inherited permission item");
     }
 }
 

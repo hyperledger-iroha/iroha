@@ -237,8 +237,10 @@ Smart‑contract helpers (Norito)
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
   - Parses `SubscriptionUsageDelta` from trigger args, increments usage counters, and updates subscription metadata.
 - 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)` → `r10=ptr (&NoritoBytes(return))` or `0` — Gas: G_call_contract + request bytes + return bytes
-  - Executes the callee in a child VM. The parent pays only the fixed request/return overhead; child instructions and child syscalls consume the child VM budget.
+  - Executes a public or view callee entrypoint in a child VM. Top-level transaction dispatch remains restricted to public entrypoints. View execution returns its value but rolls back every host-side effect, including effects attempted through further nested calls. The parent pays only the fixed request/return overhead; child instructions and child syscalls consume the child VM budget.
   - If the callee entrypoint manifest declares `permission(...)`, the host checks the caller contract subject for the named direct or role-derived permission before launching the child VM; missing permission rejects the syscall with `PermissionDenied`.
+  - Pointer-shaped manifest returns (`Numeric`, `Json`, `Name`, account/asset/domain/NFT IDs, `Blob`/`bytes`, `DataSpaceId`, `AxtDescriptor`, and `AssetHandle`) are transported as a complete validated pointer-ABI TLV inside the outer `NoritoBytes`. These bytes are identical to `pointer_to_norito(value)` in the caller and can be compared with `TLV_EQ` or decoded with `POINTER_FROM_NORITO`.
+  - Scalar `int` and `bool` returns remain canonical Norito scalar bytes; unit returns set `r10=0`.
 
 Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
@@ -526,7 +528,7 @@ node enforces that policy unconditionally.
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | r10=unix_time_ms:u64 | asset:gas/G_sysvar@ivm.core/v2 |
-| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload) | r10=ptr (&NoritoBytes(return)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes |
+| 0xA9 | CALL_CONTRACT | r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload) | r10=ptr (&NoritoBytes(pointer TLV or scalar return)) or 0 | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes |
 | 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |

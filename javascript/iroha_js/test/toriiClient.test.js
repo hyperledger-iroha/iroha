@@ -22914,6 +22914,151 @@ test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alia
   );
 });
 
+test("IVM proved contract helpers simulate, derive, prove, and poll authoritative payloads", async () => {
+  const jobId = "ab".repeat(16);
+  const proved = {
+    bytecode: "Y29kZQ==",
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  const attachment = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes: [1, 2, 3] },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const calls = [];
+  let statusReads = 0;
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url.endsWith("/v1/contracts/call/simulate")) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          ok: true,
+          dataspace: "universal",
+          contract_address: "tairac1routerfixture",
+          code_hash_hex: "11".repeat(32),
+          abi_hash_hex: "22".repeat(32),
+          entrypoint: "route_swap",
+          normalized_payload: { amount: 7 },
+          gas_limit: 5000,
+          gas_used: 800,
+          queued_instructions: [],
+          result: null,
+          error: null,
+          vm_diagnostic: null,
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/zk/ivm/derive")) {
+      return createResponse({
+        status: 200,
+        jsonData: { proved },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/v1/zk/ivm/prove") && init.method === "POST") {
+      return createResponse({
+        status: 202,
+        jsonData: { job_id: jobId },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith(`/v1/zk/ivm/prove/${jobId}`)) {
+      statusReads += 1;
+      return createResponse({
+        status: 200,
+        jsonData:
+          statusReads === 1
+            ? {
+                job_id: jobId,
+                status: "running",
+                error: null,
+                proved: null,
+                attachment: null,
+              }
+            : {
+                job_id: jobId,
+                status: "done",
+                error: null,
+                proved,
+                attachment,
+              },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected request ${init.method} ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const simulation = await client.simulateContractCall({
+    authority: SAMPLE_ACCOUNT_ID,
+    contractAlias: "dlmm_router::dlmm.universal",
+    entrypoint: "route_swap",
+    payload: { amount: 7 },
+    gasLimit: 5000,
+  });
+  assert.equal(simulation.ok, true);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    authority: SAMPLE_ACCOUNT_ID,
+    contract_alias: "dlmm_router::dlmm.universal",
+    entrypoint: "route_swap",
+    payload: { amount: 7 },
+    gas_limit: 5000,
+  });
+
+  const proofRequest = {
+    vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+    authority: SAMPLE_ACCOUNT_ID,
+    metadata: {
+      contract_address: simulation.contract_address,
+      contract_entrypoint: simulation.entrypoint,
+      contract_payload: simulation.normalized_payload,
+      gas_limit: simulation.gas_limit,
+    },
+    bytecode: proved.bytecode,
+  };
+  const derived = await client.deriveIvmProved(proofRequest);
+  assert.deepEqual(derived, { proved });
+  const completed = await client.proveIvmAndWait(
+    { ...proofRequest, proved: derived.proved },
+    { intervalMs: 0, timeoutMs: 1000 },
+  );
+  assert.equal(statusReads, 2);
+  assert.equal(completed.status, "done");
+  assert.deepEqual(completed.proved, proved);
+  assert.deepEqual(completed.attachment, attachment);
+
+  const deriveBody = JSON.parse(calls[1].init.body);
+  const proveBody = JSON.parse(calls[2].init.body);
+  assert.deepEqual(deriveBody.metadata, proofRequest.metadata);
+  assert.deepEqual(proveBody.metadata, proofRequest.metadata);
+  assert.deepEqual(proveBody.proved, proved);
+});
+
+test("waitForIvmProveJob fails closed when a done job omits proof material", async () => {
+  const jobId = "cd".repeat(16);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          job_id: jobId,
+          status: "done",
+          error: null,
+          proved: null,
+          attachment: null,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.waitForIvmProveJob(jobId, { intervalMs: 0 }),
+    /completed without proved payload and attachment/,
+  );
+});
+
 test("getContractManifest returns normalized payload", async () => {
   const signer = `ed25519:ed0120${"11".repeat(32)}`;
   const signature = `ed25519:${"22".repeat(64)}`;

@@ -3894,6 +3894,10 @@ fn checkpointed_snapshot_catchup_prune_height(
         .then_some(latest_checkpoint_height)
 }
 
+fn hard_fork_snapshot_bootstrap_prune_height(state_height: usize, block_count: usize) -> Option<u64> {
+    (block_count > state_height).then(|| u64::try_from(state_height).ok())?
+}
+
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -4075,6 +4079,22 @@ mod snapshot_read_error_tests {
         );
         assert_eq!(
             checkpointed_snapshot_catchup_prune_height(2_594, 2_594, Some(2_594)),
+            None
+        );
+    }
+
+    #[test]
+    fn hard_fork_snapshot_bootstrap_prune_height_drops_untrusted_suffix() {
+        assert_eq!(
+            hard_fork_snapshot_bootstrap_prune_height(23_485, 23_486),
+            Some(23_485)
+        );
+        assert_eq!(
+            hard_fork_snapshot_bootstrap_prune_height(23_485, 23_485),
+            None
+        );
+        assert_eq!(
+            hard_fork_snapshot_bootstrap_prune_height(23_486, 23_485),
             None
         );
     }
@@ -4346,6 +4366,20 @@ impl Iroha {
             let snapshot_hashes = state.committed_block_hashes_snapshot();
             kura.hard_fork_extend_hash_only_from_snapshot(&snapshot_hashes)
                 .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            if let Some(prune_height) =
+                hard_fork_snapshot_bootstrap_prune_height(state.committed_height(), block_count.0)
+            {
+                iroha_logger::warn!(
+                    state_height = state.committed_height(),
+                    block_count = block_count.0,
+                    prune_height,
+                    "hard-fork snapshot bootstrap: pruning untrusted Kura suffix above loaded snapshot before replay"
+                );
+                kura.prune_to_height(prune_height)
+                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+                block_count.0 = usize::try_from(prune_height)
+                    .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            }
             if state.committed_height() > block_count.0 {
                 block_count.0 = state.committed_height();
                 iroha_logger::warn!(
