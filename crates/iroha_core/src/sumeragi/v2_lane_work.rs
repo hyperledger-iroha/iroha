@@ -2369,7 +2369,8 @@ mod tests {
         ChainId,
         account::AccountId,
         block::{
-            BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
+            BlockExecutionContextBundle, BlockHeader, BlockSignature, ExternalExecutionContext,
+            SignedBlock,
             builder::BlockBuilder,
             consensus::{NativeAmxAttestationBodyV2, NativeAmxPhase, SumeragiLanePayloadOwnership},
             consensus_v2 as wire,
@@ -3222,6 +3223,68 @@ mod tests {
         builder.build_with_signature(0, signer.private_key())
     }
 
+    fn planned_lane_candidate_block_at_view(
+        adapter: &V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        view: u64,
+    ) -> (SignedBlock, LaneBlockProposalV1) {
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+        let transaction_key = KeyPair::try_from_seed(
+            vec![u8::try_from(view).unwrap_or(u8::MAX).wrapping_add(0x40); 32],
+            Algorithm::Ed25519,
+        )
+        .expect("deterministic candidate transaction key");
+        let transaction = TransactionBuilder::new(
+            adapter.context.chain_id.clone(),
+            AccountId::new(transaction_key.public_key().clone()),
+        )
+        .sign(transaction_key.private_key());
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let leader_index =
+            usize::try_from(adapter.context.leader(view)).expect("global leader index fits usize");
+        let leader = &adapter.context.roster[leader_index].validator;
+        let plan = prepare_v2_lane_payload_plan(
+            adapter.state.as_ref(),
+            &adapter.context,
+            view,
+            leader,
+            &[RoutingDecision::new(lane_id, dataspace_id)],
+            &[Hash::from(entrypoint_hash)],
+        )
+        .expect("coherent lane candidate plan");
+        assert!(plan.unavailable_indices.is_empty());
+        assert_eq!(plan.ownerships.len(), 1);
+        assert_eq!(plan.proposals.len(), 1);
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(adapter.context.height).expect("non-zero fixture height"),
+            None,
+            None,
+            None,
+            adapter.context.height,
+            view,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                lane_id,
+                dataspace_id,
+            )])
+            .with_lane_payload_ownerships(plan.ownerships.clone()),
+        ));
+        let block = builder.build_with_signature(
+            u64::try_from(leader_index).expect("leader index fits u64"),
+            keys[leader_index].private_key(),
+        );
+        let proposal = proposal_from_ownership(&plan.ownerships[0], block.hash())
+            .expect("planned ownership reconstructs a proposal");
+        assert_eq!(proposal.proposal_hash, plan.proposals[0].proposal_hash);
+        (block, proposal)
+    }
+
     fn store_canonical_anchor(
         adapter: &V2LaneWorkAdapter,
         proposal: &LaneBlockProposalV1,
@@ -3493,12 +3556,6 @@ mod tests {
     #[test]
     fn lane_work_stays_quiescent_until_the_exact_global_prepare_lock() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-        let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::UNIVERSAL;
-        let incarnation = adapter
-            .state
-            .lane_incarnation_at_height(lane_id, adapter.context.height)
-            .expect("canonical lane incarnation is active");
         let later_view =
             u64::try_from(adapter.context.roster.len()).expect("fixture roster length fits u64");
         assert_eq!(
@@ -3506,27 +3563,13 @@ mod tests {
             adapter.context.leader(later_view)
         );
 
-        let proposal_at_view_zero = proposal_for_route_at_view(
-            &adapter,
-            &keys,
-            lane_id,
-            dataspace_id,
-            incarnation,
-            adapter.context.height,
-            1,
-            0,
-        );
+        let (block_zero, proposal_at_view_zero) =
+            planned_lane_candidate_block_at_view(&adapter, &keys, 0);
         let round_zero = wire::ConsensusRound {
             context_id: adapter.context.id(),
             height: adapter.context.height,
             view: 0,
         };
-        let block_zero = test_block(
-            adapter.context.height,
-            None,
-            Some(ownership_from_proposal(&proposal_at_view_zero)),
-            &keys[0],
-        );
         adapter
             .planned_lane_proposals
             .insert(round_zero, vec![proposal_at_view_zero.clone()]);
@@ -3541,16 +3584,8 @@ mod tests {
         );
         assert!(adapter.lane_sessions.commit_vote_lock_slots().is_empty());
 
-        let proposal_at_later_view = proposal_for_route_at_view(
-            &adapter,
-            &keys,
-            lane_id,
-            dataspace_id,
-            incarnation,
-            adapter.context.height,
-            1,
-            later_view,
-        );
+        let (later_block, proposal_at_later_view) =
+            planned_lane_candidate_block_at_view(&adapter, &keys, later_view);
         assert_ne!(
             proposal_at_view_zero.proposal_hash,
             proposal_at_later_view.proposal_hash
@@ -3560,12 +3595,6 @@ mod tests {
             height: adapter.context.height,
             view: later_view,
         };
-        let later_block = test_block(
-            adapter.context.height,
-            None,
-            Some(ownership_from_proposal(&proposal_at_later_view)),
-            &keys[0],
-        );
         adapter
             .planned_lane_proposals
             .insert(later_round, vec![proposal_at_later_view.clone()]);

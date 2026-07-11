@@ -45,6 +45,9 @@ SOLANA_TESTNET_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_WITH_AUDIT_HASH_VECTOR = (
 SOLANA_TESTNET_FULL_LIGHT_CLIENT_GATE_HASH_VECTOR = (
     "f1053b96f3e1ce85be4cd50adc20352ea817ccf2f5b6980d19ec5a8add81b71d"
 )
+SOLANA_TESTNET_SOURCE_STATE_COMPONENT_HASH_VECTOR = (
+    "deff79aa347b438c97693d361a5518a1d67291d2a61bd6f8231f6eaf35cfd641"
+)
 
 
 def load_evidence_module():
@@ -629,6 +632,14 @@ def test_solana_toml_rendering_carries_mainnet_profile_ids():
     assert "[[zk.sccp_source_adapter_engine_deployments]]" in rendered
     assert "source_domain = 3" in rendered
     assert "target_domain = 0" in rendered
+    assert rendered.count('route_id = "taira_sol_xor"') == 2
+    assert rendered.count('solana_network = "solana-mainnet-beta"') == 2
+    assert rendered.count(
+        'solana_genesis_hash = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"'
+    ) == 2
+    assert rendered.count(
+        'proof_backend = "sccp-solana-recursive-mainnet-v1"'
+    ) == 2
     assert 'source_chain = "sol"' in rendered
     assert 'source_proof_plan = "SolanaFinalizedTransactionProof"' in rendered
     assert 'finality_model = "SolanaFinalizedSlot"' in rendered
@@ -649,6 +660,9 @@ def test_solana_toml_rendering_carries_mainnet_profile_ids():
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
     assert "# full_light_client_evidence_ready = true" in rendered
     assert "sccp:sol:light-client:tower-replay-mainnet-beta:v1" in rendered
+    assert module._json_summary(args)["proof_backend"] == (
+        "sccp-solana-recursive-mainnet-v1"
+    )
 
 
 def test_solana_toml_rendering_carries_testnet_profile_ids():
@@ -671,12 +685,29 @@ def test_solana_toml_rendering_carries_testnet_profile_ids():
 
     assert module.parse_solana_network("solana-testnet") == "testnet"
     assert (
+        module.solana_template_component_hash(
+            "sccp:sol:accounts-db-verifier:accounts-lt-hash-testnet:v1",
+            "source-state-verifier",
+            solana_network="testnet",
+        ).hex()
+        == SOLANA_TESTNET_SOURCE_STATE_COMPONENT_HASH_VECTOR
+    )
+    assert (
         '# sccp_solana_source_verifier_material_hash = "0x'
         + SOLANA_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
         + '"'
         in rendered
     )
     assert 'solana_network = "solana-testnet"' in rendered
+    assert rendered.count('route_id = "taira_sol_xor"') == 2
+    assert rendered.count('target_domain = 0') == 2
+    assert rendered.count('solana_network = "solana-testnet"') == 2
+    assert rendered.count(
+        'solana_genesis_hash = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY"'
+    ) == 2
+    assert rendered.count(
+        'proof_backend = "sccp-solana-recursive-testnet-v1"'
+    ) == 2
     assert (
         'source_state_verifier_id = "sccp:sol:accounts-db-verifier:accounts-lt-hash-testnet:v1"'
         in rendered
@@ -687,6 +718,7 @@ def test_solana_toml_rendering_carries_testnet_profile_ids():
 
     summary = module._json_summary(args)
     assert summary["solana_network"] == "solana-testnet"
+    assert summary["proof_backend"] == "sccp-solana-recursive-testnet-v1"
     assert (
         summary["solana_genesis_hash"]
         == "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY"
@@ -1132,6 +1164,7 @@ def test_solana_cli_json_summary_and_toml_output(capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["source_domain"] == 3
     assert output["target_domain"] == 0
+    assert output["proof_backend"] == "sccp-solana-recursive-mainnet-v1"
     assert output["source_state_verifier_hash"] == "0x" + "77" * 32
     assert (
         output["adapter_verifier_vk_hash"]

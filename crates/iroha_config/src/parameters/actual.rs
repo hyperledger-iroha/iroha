@@ -9704,6 +9704,27 @@ impl Default for IsoReferenceData {
     }
 }
 
+/// SCCP lane activation policy selected by node configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SccpLaunchMode {
+    /// Require every supported counterparty lane to be ready together.
+    AllLanesAtOnce,
+    /// Admit only the Ethereum mainnet lane.
+    EthereumMainnetLane,
+    /// Admit only the BSC mainnet lane.
+    BscMainnetLane,
+    /// Admit only the Solana testnet lane.
+    SolanaTestnetLane,
+    /// Admit only the TON mainnet lane.
+    TonMainnetLane,
+}
+
+impl Default for SccpLaunchMode {
+    fn default() -> Self {
+        Self::EthereumMainnetLane
+    }
+}
+
 /// Zero-knowledge proof configuration namespace.
 #[derive(Debug, Clone)]
 pub struct Zk {
@@ -9737,6 +9758,8 @@ pub struct Zk {
     pub bridge_proof_max_past_age_blocks: u64,
     /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
     pub bridge_proof_max_future_drift_blocks: u64,
+    /// Explicit SCCP lane launch policy for this node deployment.
+    pub sccp_launch_mode: SccpLaunchMode,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
     /// SCCP source adapter engine deployments that can enable non-SORA source lanes.

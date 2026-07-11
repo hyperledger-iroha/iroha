@@ -42,7 +42,6 @@ use super::{
     create_dir_all_with_context, sync_dir,
 };
 
-const LEGACY_JOURNAL_VERSION: u8 = 1;
 const JOURNAL_VERSION: u8 = 3;
 const MARKER_VERSION: u8 = 1;
 const CHECKPOINT_VERSION: u8 = 2;
@@ -184,12 +183,6 @@ struct GeometryFileIdentity {
     device: u64,
     #[cfg(unix)]
     inode: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct LegacyLaneGeometryJournalV1 {
-    version: u8,
-    records: Vec<LaneGeometryIntent>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -3471,40 +3464,19 @@ impl Kura {
         file.read_to_end(&mut bytes)
             .map_err(|error| Error::IO(error, path.clone()))?;
         self.verify_open_geometry_file(&path, &file)?;
-        let journal = match decode_exact::<LaneGeometryJournal>(&bytes) {
-            Ok(journal) if journal.version == JOURNAL_VERSION => journal,
-            Ok(journal) if journal.version == LEGACY_JOURNAL_VERSION => {
-                let legacy = decode_exact::<LegacyLaneGeometryJournalV1>(&bytes)
-                    .map_err(Error::NoritoFrame)?;
-                LaneGeometryJournal {
-                    version: JOURNAL_VERSION,
-                    checkpoint: None,
-                    pending_archive_gc: Vec::new(),
-                    records: legacy.records,
-                }
-            }
-            Ok(journal) => {
-                return Err(Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!(
-                            "unsupported lane geometry journal version {}",
-                            journal.version
-                        ),
+        let journal = decode_exact::<LaneGeometryJournal>(&bytes).map_err(Error::NoritoFrame)?;
+        if journal.version != JOURNAL_VERSION {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "unsupported lane geometry journal version {}",
+                        journal.version
                     ),
-                    path,
-                ));
-            }
-            Err(current_error) => match decode_exact::<LegacyLaneGeometryJournalV1>(&bytes) {
-                Ok(legacy) if legacy.version == LEGACY_JOURNAL_VERSION => LaneGeometryJournal {
-                    version: JOURNAL_VERSION,
-                    checkpoint: None,
-                    pending_archive_gc: Vec::new(),
-                    records: legacy.records,
-                },
-                _ => return Err(Error::NoritoFrame(current_error)),
-            },
-        };
+                ),
+                path,
+            ));
+        }
         self.validate_lane_geometry_journal(&journal)?;
         Ok(journal)
     }
@@ -6162,6 +6134,29 @@ mod tests {
             .expect_err("archive symlink must fail closed");
         assert_eq!(fs::read(&outside).expect("outside retained"), b"outside");
         assert!(link.exists());
+    }
+
+    #[test]
+    fn recovery_rejects_pre_release_journal_layout() {
+        #[derive(Encode)]
+        struct PreReleaseLaneGeometryJournal {
+            version: u8,
+            records: Vec<LaneGeometryIntent>,
+        }
+
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, _) = initial_and_extended_configs();
+        let kura = open_kura(&root, &initial);
+        let pre_release = PreReleaseLaneGeometryJournal {
+            version: 1,
+            records: Vec::new(),
+        };
+        fs::write(kura.lane_geometry_journal_path(), pre_release.encode())
+            .expect("write pre-release journal");
+
+        kura.read_lane_geometry_journal()
+            .expect_err("pre-release journal layout must fail closed");
     }
 
     #[test]

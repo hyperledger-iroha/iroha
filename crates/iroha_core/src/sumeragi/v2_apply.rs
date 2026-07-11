@@ -492,6 +492,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let transaction_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
+                .expect("deterministic transaction key");
             let roster = keys
                 .iter()
                 .map(|key| wire::ValidatorPower {
@@ -523,7 +525,7 @@ mod tests {
             context.validate().expect("valid fixture context");
 
             let kura = Kura::blank_kura_for_testing();
-            let transaction_authority = AccountId::new(keys[0].public_key().clone());
+            let transaction_authority = AccountId::new(transaction_key.public_key().clone());
             let world = World::with(
                 [],
                 [Account::new(transaction_authority.clone()).build(&transaction_authority)],
@@ -559,7 +561,7 @@ mod tests {
             let leader = &keys[usize::try_from(leader_index).expect("leader index")];
             let body = if include_lane_payload {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .sign(keys[0].private_key());
+                    .sign(transaction_key.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
                 let routing_plan = queue
                     .route_plan_with_state(&accepted, state.as_ref())

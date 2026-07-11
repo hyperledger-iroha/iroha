@@ -6913,8 +6913,8 @@ fn map_local_fetch_error(err: LocalFetchError) -> napi::Error {
         LocalFetchError::UnknownChunkerHandle(handle) => {
             invalid_arg(format!("unknown chunker handle '{handle}'"))
         }
-        LocalFetchError::IntegrityVerificationDisabled(option) => invalid_arg(format!(
-            "{option} must remain enabled for first-release SoraFS fetch integrity"
+        LocalFetchError::IntegrityVerificationDisabled(field) => invalid_arg(format!(
+            "{field} must remain enabled for first-release SoraFS fetch integrity"
         )),
     }
 }
@@ -11387,20 +11387,14 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
 }
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
-fn assemble_executable_transaction(
-    chain_id: ChainId,
-    authority: AccountId,
-    executable: Executable,
+fn configure_transaction_builder(
+    mut builder: TransactionBuilder,
     metadata: Metadata,
     attachments: Option<ProofAttachmentList>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
-    secret: &[u8],
-    algorithm: Option<String>,
-) -> napi::Result<JsSignedTransaction> {
-    let mut builder = TransactionBuilder::new(chain_id, authority).with_executable(executable);
-
+) -> napi::Result<TransactionBuilder> {
     if let Some(ms) = creation_time_ms {
         let millis = u64::try_from(ms).map_err(|_| {
             napi::Error::new(
@@ -11431,6 +11425,30 @@ fn assemble_executable_transaction(
     if let Some(attachments) = attachments {
         builder = builder.with_attachments(attachments);
     }
+    Ok(builder)
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
+fn assemble_executable_transaction(
+    chain_id: ChainId,
+    authority: AccountId,
+    executable: Executable,
+    metadata: Metadata,
+    attachments: Option<ProofAttachmentList>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+    secret: &[u8],
+    algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority).with_executable(executable),
+        metadata,
+        attachments,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
 
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret).map_err(norito_to_napi)?;
@@ -14269,6 +14287,30 @@ pub struct JsSignedTransaction {
     pub hash: Buffer,
 }
 
+/// Canonical transaction payload prepared for an external signer.
+#[napi(object)]
+pub struct JsTransactionPayload {
+    /// Bare adaptive-Norito transaction payload bytes.
+    pub payload_bytes: Buffer,
+    /// Iroha transaction prehash signed by an external signer.
+    pub payload_hash: Buffer,
+}
+
+/// Input accepted by the external-signature transaction finalizer.
+#[napi(object)]
+pub struct JsExternalTransactionSignature {
+    /// Bare adaptive-Norito payload previously returned by the payload builder.
+    pub payload_bytes: Buffer,
+    /// Optional lowercase hexadecimal copy of the expected payload hash.
+    pub payload_hash_hex: Option<String>,
+    /// Raw Ed25519 signature bytes over the Iroha payload prehash.
+    pub signature: Buffer,
+    /// Raw Ed25519 public-key bytes expected to control the authority account.
+    pub public_key: Buffer,
+    /// Optional authority assertion used to detect caller-side transaction mixups.
+    pub authority: Option<String>,
+}
+
 /// Result of building an authority-free private Kaigi transaction entrypoint.
 #[napi(object)]
 pub struct JsPrivateKaigiTransactionEntrypoint {
@@ -14744,6 +14786,233 @@ fn build_private_kaigi_entrypoint_result(
         hash: Buffer::from(hash.as_ref().to_vec()),
         action_hash: Buffer::from(action_hash.as_ref().to_vec()),
     }
+}
+
+const EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES: usize = 1024 * 1024;
+const EXTERNAL_TRANSACTION_METADATA_MAX_BYTES: usize = 64 * 1024;
+const EXTERNAL_TRANSACTION_CHAIN_ID_MAX_BYTES: usize = 1024;
+
+fn validate_external_transaction_chain_id(chain_id: &str) -> napi::Result<()> {
+    if chain_id.is_empty()
+        || chain_id.len() > EXTERNAL_TRANSACTION_CHAIN_ID_MAX_BYTES
+        || chain_id.chars().any(char::is_control)
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "chain id must contain 1..=1024 non-control UTF-8 bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn require_matching_i105_discriminant(
+    expected: u16,
+    account: &str,
+    label: &str,
+) -> napi::Result<()> {
+    let actual = AccountAddress::i105_discriminant(account).map_err(account_address_err)?;
+    if actual != expected {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} uses chain discriminant {actual}, expected {expected} from authority"),
+        ));
+    }
+    Ok(())
+}
+
+/// Build the exact transparent asset-transfer payload consumed by an external signer.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_transfer_asset_payload(
+    chain_id: String,
+    authority: String,
+    source_asset_holding_id: String,
+    quantity: String,
+    destination_account_id: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayload> {
+    validate_external_transaction_chain_id(&chain_id)?;
+    if authority.trim() != authority || destination_account_id.trim() != destination_account_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "authority and destination account ids must not contain surrounding whitespace",
+        ));
+    }
+    if source_asset_holding_id.trim() != source_asset_holding_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "source asset holding id must not contain surrounding whitespace",
+        ));
+    }
+    let authority_discriminant =
+        AccountAddress::i105_discriminant(&authority).map_err(account_address_err)?;
+    require_matching_i105_discriminant(
+        authority_discriminant,
+        &destination_account_id,
+        "destination account",
+    )?;
+    let source_account_literal = source_asset_holding_id.split('#').nth(1).ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "source asset holding id must include an I105 owner account",
+        )
+    })?;
+    require_matching_i105_discriminant(
+        authority_discriminant,
+        source_account_literal,
+        "source asset owner",
+    )?;
+    if source_account_literal != authority {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transparent browser transfer requires the source asset owner to equal authority",
+        ));
+    }
+
+    let _chain_guard = ChainDiscriminantGuard::enter(authority_discriminant);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    let authority_signatory = authority.try_signatory().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "transparent browser transfer requires a single-key authority",
+        )
+    })?;
+    if authority_signatory
+        .try_algorithm()
+        .map_err(norito_to_napi)?
+        != Algorithm::Ed25519
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transparent browser transfer supports only Ed25519 authorities",
+        ));
+    }
+    let source = AssetId::parse_literal(&source_asset_holding_id).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid source asset holding id: {err}"),
+        )
+    })?;
+    if source.canonical_literal() != source_asset_holding_id {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "source asset holding id must use its exact canonical literal",
+        ));
+    }
+    let destination = parse_account_id(&destination_account_id, "destination account id")?;
+    let quantity = Numeric::from_str(&quantity).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transfer quantity: {err}"),
+        )
+    })?;
+    if quantity <= Numeric::zero() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transfer quantity must be greater than zero",
+        ));
+    }
+    if metadata_json
+        .as_ref()
+        .is_some_and(|metadata| metadata.len() > EXTERNAL_TRANSACTION_METADATA_MAX_BYTES)
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction metadata json exceeds 65536 bytes",
+        ));
+    }
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let instruction: InstructionBox = Transfer::asset_numeric(source, quantity, destination).into();
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(ChainId::from(chain_id), authority)
+            .with_instructions([instruction]),
+        metadata,
+        None,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    Ok(JsTransactionPayload {
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+        payload_bytes: Buffer::from(payload_bytes),
+    })
+}
+
+/// Finalize an externally signed Ed25519 transaction into exact versioned Norito bytes.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn finalize_signed_transaction(
+    input: JsExternalTransactionSignature,
+) -> napi::Result<JsSignedTransaction> {
+    if input.payload_bytes.is_empty()
+        || input.payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "payloadBytes must contain 1..=1048576 bytes",
+        ));
+    }
+    let builder =
+        TransactionBuilder::decode_payload(input.payload_bytes.as_ref()).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid canonical transaction payload: {err}"),
+            )
+        })?;
+    let payload_hash = builder.payload_hash_bytes();
+    if let Some(expected) = input.payload_hash_hex {
+        let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
+        let decoded = hex::decode(normalized).map_err(|_| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                "payloadHashHex must be exactly 32 hexadecimal bytes",
+            )
+        })?;
+        if decoded.len() != Hash::LENGTH || decoded.as_slice() != payload_hash {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "payloadHashHex does not match payloadBytes",
+            ));
+        }
+    }
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, input.public_key.as_ref())
+        .map_err(norito_to_napi)?;
+    let signature =
+        iroha_crypto::ed25519_parse_signature(input.signature.as_ref()).map_err(norito_to_napi)?;
+    let tx = builder.build_with_signature(signature);
+    if tx.authority().try_signatory() != Some(&public_key) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "publicKey does not control the transaction authority",
+        ));
+    }
+    if let Some(authority) = input.authority {
+        let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+        let expected = parse_account_id(&authority, "asserted authority account id")?;
+        if tx.authority() != &expected {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "asserted authority does not match payloadBytes",
+            ));
+        }
+    }
+    tx.verify_signature().map_err(norito_to_napi)?;
+    let signed_transaction =
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
+    Ok(JsSignedTransaction {
+        signed_transaction: Buffer::from(signed_transaction),
+        hash: Buffer::from(tx.hash().as_ref().to_vec()),
+    })
 }
 
 fn encode_private_kaigi_fee_proof(
@@ -15302,6 +15571,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn disabled_local_fetch_integrity_checks_are_invalid_arguments() {
+        for field in ["verify_digests", "verify_lengths"] {
+            let error =
+                map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(field));
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains(field));
+            assert!(error.reason.contains("must remain enabled"));
+        }
+    }
 
     fn assert_subslice_absent(haystack: &[u8], needle: &[u8], context: &str) {
         assert!(

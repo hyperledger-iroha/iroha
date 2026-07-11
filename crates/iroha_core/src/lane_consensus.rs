@@ -7917,7 +7917,7 @@ mod tests {
                 inactive_lane,
                 inactive_dataspace,
             ),
-            0xD0,
+            0xC0,
         );
         let inactive_key = LaneBlockSessionKey::from_proposal(&inactive_proposal);
         let conflicting_inactive_proposal =
@@ -8567,15 +8567,21 @@ mod tests {
             pending_lane,
             pending_dataspace,
         );
-        let drained_proposal = rebind_lane_block_proposal_route(
-            lane_block_proposal_at_height(&validator_set, 14),
-            drained_lane,
-            drained_dataspace,
+        let drained_proposal = retag_lane_block_proposal_payload(
+            rebind_lane_block_proposal_route(
+                lane_block_proposal_at_height(&validator_set, 14),
+                drained_lane,
+                drained_dataspace,
+            ),
+            0x80,
         );
-        let inactive_proposal = rebind_lane_block_proposal_route(
-            lane_block_proposal_at_height(&validator_set, 15),
-            inactive_lane,
-            inactive_dataspace,
+        let inactive_proposal = retag_lane_block_proposal_payload(
+            rebind_lane_block_proposal_route(
+                lane_block_proposal_at_height(&validator_set, 15),
+                inactive_lane,
+                inactive_dataspace,
+            ),
+            0xC0,
         );
         let prepare_body = drained_proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);

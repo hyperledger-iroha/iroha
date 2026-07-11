@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_SOLANA_RPC_URL = "https://api.testnet.solana.com";
+const SOLANA_TESTNET_GENESIS_HASH =
+  "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
+const SOLANA_FINALIZED_READBACK_EVIDENCE_SCHEMA =
+  "iroha-demo-sccp-solana-finalized-readback-evidence/v1";
 const DEFAULT_TAIRA_TORII_URL = "https://taira.sora.org";
 const SOLANA_TESTNET_CHAIN_ID_HEX = "0x736f6c616e612d746573746e6574";
 const ROUTE_ID = "taira_sol_xor";
@@ -41,10 +45,7 @@ const RETIRED_SOLANA_ROUTE_MANIFEST_ALIASES = Object.freeze([
   ["sccpSolanaSourceBridgeAddress", "sccp_solana_source_bridge_address"],
   ["solanaSourceBridgeAddress", "sccp_solana_source_bridge_address"],
   ["solanaVerifierProgramId", "solana_verifier_program_id"],
-  [
-    "sccp_solana_destination_verifier_program_id",
-    "solana_verifier_program_id",
-  ],
+  ["sccp_solana_destination_verifier_program_id", "solana_verifier_program_id"],
   ["sccpSolanaDestinationVerifierProgramId", "solana_verifier_program_id"],
 ]);
 const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
@@ -188,8 +189,7 @@ const isNonPublicDnsHost = (hostname) => {
     isIP(host) !== 0 ||
     labels.some(
       (label) =>
-        label === "" ||
-        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label),
+        label === "" || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label),
     )
   );
 };
@@ -314,9 +314,11 @@ const normalizeModuleUrl = (value, label) => {
     value.includes("#") ||
     value.includes("\\") ||
     !/^(?:\.\/|@?[A-Za-z0-9_-])[-A-Za-z0-9_@./]*$/u.test(value) ||
-    value.split("/").some(
-      (segment, index) => segment === "" || (segment === "." && index !== 0),
-    )
+    value
+      .split("/")
+      .some(
+        (segment, index) => segment === "" || (segment === "." && index !== 0),
+      )
   ) {
     throw new Error(
       `${label} must be package-relative, HTTPS, or loopback HTTP without query strings or fragments.`,
@@ -342,6 +344,127 @@ const normalizeExpectedExports = (value, label) => {
 };
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+
+const readStablePublicJson = (file, label) => {
+  const requestedPath = path.resolve(file);
+  const before = fs.lstatSync(requestedPath, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n) {
+    throw new Error(`${label} must be a singly-linked non-symlink file.`);
+  }
+  const handle = fs.openSync(
+    requestedPath,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const openedBefore = fs.fstatSync(handle, { bigint: true });
+    if (
+      openedBefore.dev !== before.dev ||
+      openedBefore.ino !== before.ino ||
+      openedBefore.size <= 0n ||
+      openedBefore.size > 16n * 1024n * 1024n
+    ) {
+      throw new Error(`${label} changed before it could be read safely.`);
+    }
+    const bytes = fs.readFileSync(handle);
+    const openedAfter = fs.fstatSync(handle, { bigint: true });
+    const after = fs.lstatSync(requestedPath, { bigint: true });
+    if (
+      openedAfter.dev !== openedBefore.dev ||
+      openedAfter.ino !== openedBefore.ino ||
+      openedAfter.size !== openedBefore.size ||
+      after.dev !== openedAfter.dev ||
+      after.ino !== openedAfter.ino ||
+      after.nlink !== 1n ||
+      bytes.length !== Number(openedAfter.size)
+    ) {
+      throw new Error(`${label} changed while it was read.`);
+    }
+    const text = bytes.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(bytes)) {
+      throw new Error(`${label} must be strict UTF-8 JSON.`);
+    }
+    const value = JSON.parse(text);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${label} must contain one JSON object.`);
+    }
+    return value;
+  } finally {
+    fs.closeSync(handle);
+  }
+};
+
+const validatedFinalizedReadbackRoles = (evidence) => {
+  if (
+    !evidence ||
+    evidence.schema !== SOLANA_FINALIZED_READBACK_EVIDENCE_SCHEMA ||
+    evidence.routeId !== ROUTE_ID ||
+    evidence.assetKey !== ASSET_KEY ||
+    evidence.solanaNetwork !== "testnet" ||
+    evidence.solanaGenesisHash !== SOLANA_TESTNET_GENESIS_HASH ||
+    !evidence.snapshot ||
+    typeof evidence.snapshot !== "object"
+  ) {
+    throw new Error(
+      "route-manifest requires canonical finalized Solana readback evidence.",
+    );
+  }
+  const canonicalSnapshotSha256 = `0x${sha256Hex(
+    JSON.stringify({
+      schema: SOLANA_FINALIZED_READBACK_EVIDENCE_SCHEMA,
+      routeId: evidence.routeId,
+      assetKey: evidence.assetKey,
+      solanaNetwork: evidence.solanaNetwork,
+      solanaGenesisHash: evidence.solanaGenesisHash,
+      snapshot: evidence.snapshot,
+    }),
+  )}`;
+  if (canonicalSnapshotSha256 !== evidence.canonicalSnapshotSha256) {
+    throw new Error("finalized Solana readback snapshot hash is invalid.");
+  }
+  const roles = evidence.snapshot.roles;
+  const programAddresses = [];
+  const programdataAddresses = [];
+  for (const role of [
+    "outerVerifier",
+    "nativeVerifier",
+    "destinationBridge",
+    "sourceBridge",
+  ]) {
+    if (
+      !roles?.[role] ||
+      roles[role].role !== role ||
+      typeof roles[role].program?.address !== "string" ||
+      !roles[role].program.address ||
+      roles[role].program.address.trim() !== roles[role].program.address ||
+      !/^0x[0-9a-f]{64}$/u.test(roles[role].program?.dataSha256 ?? "") ||
+      typeof roles[role].programdata?.address !== "string" ||
+      !roles[role].programdata.address ||
+      roles[role].programdata.address.trim() !==
+        roles[role].programdata.address ||
+      !/^[1-9][0-9]*$/u.test(
+        String(roles[role].loaderV3?.deploymentSlot ?? ""),
+      ) ||
+      !Number.isSafeInteger(Number(roles[role].loaderV3?.deploymentSlot)) ||
+      !/^0x[0-9a-f]{64}$/u.test(
+        roles[role].loaderV3?.executableBlake2b256 ?? "",
+      )
+    ) {
+      throw new Error(`finalized Solana readback ${role} role is invalid.`);
+    }
+    programAddresses.push(roles[role].program.address);
+    programdataAddresses.push(roles[role].programdata.address);
+  }
+  if (
+    new Set(programAddresses).size !== programAddresses.length ||
+    new Set(programdataAddresses).size !== programdataAddresses.length ||
+    programAddresses.some((address) => programdataAddresses.includes(address))
+  ) {
+    throw new Error(
+      "finalized Solana readback program roles are not distinct.",
+    );
+  }
+  return roles;
+};
 
 const canonicalPathForCollision = (file) => {
   const resolved = path.resolve(file);
@@ -448,6 +571,24 @@ const rpc = async (url, method, params = []) => {
   return payload.result;
 };
 
+const assertSolanaTestnetRpc = async (url, rpcCall = rpc) => {
+  const normalizedUrl = normalizeSolanaRpcUrl(url);
+  let genesisHash;
+  try {
+    genesisHash = await rpcCall(normalizedUrl, "getGenesisHash");
+  } catch {
+    throw new Error(
+      "Solana RPC identity check failed before testnet operation.",
+    );
+  }
+  if (genesisHash !== SOLANA_TESTNET_GENESIS_HASH) {
+    throw new Error(
+      "Solana RPC identity mismatch: the endpoint is not Solana testnet.",
+    );
+  }
+  return genesisHash;
+};
+
 const sha256Hex = (value) => createHash("sha256").update(value).digest("hex");
 
 const normalizeHex32 = (value, label) => {
@@ -501,6 +642,20 @@ const normalizeOptionalSafeInteger = (value, label) => {
   return normalizeSafeInteger(value, label);
 };
 
+const normalizeFinalizedReadbackSlot = (value, label) => {
+  if (
+    typeof value === "string" &&
+    /^[1-9][0-9]*$/u.test(value) &&
+    Number.isSafeInteger(Number(value))
+  ) {
+    return Number(value);
+  }
+  if (Number.isSafeInteger(value) && value > 0) {
+    return value;
+  }
+  throw new Error(`${label} must be an integer`);
+};
+
 const normalizeOptionalHex32 = (value, label) => {
   if (value === undefined || value === null) {
     return null;
@@ -522,7 +677,9 @@ const normalizeRequiredBooleanField = (record, key, label) => {
 const assertNoRetiredFieldAliases = (record, aliases, label) => {
   for (const [field, replacement] of aliases) {
     if (Object.prototype.hasOwnProperty.call(record, field)) {
-      throw new Error(`${label} must not use retired ${field}; use ${replacement}.`);
+      throw new Error(
+        `${label} must not use retired ${field}; use ${replacement}.`,
+      );
     }
   }
 };
@@ -541,33 +698,20 @@ const normalizeBrowserProver = (value, label) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
-  assertNoRetiredFieldAliases(
-    value,
-    RETIRED_BROWSER_PROVER_ALIASES,
-    label,
-  );
+  assertNoRetiredFieldAliases(value, RETIRED_BROWSER_PROVER_ALIASES, label);
   const moduleSpecifier = value.module_specifier;
   return {
-    module_url: normalizeModuleUrl(
-      value.module_url,
-      `${label}.module_url`,
-    ),
+    module_url: normalizeModuleUrl(value.module_url, `${label}.module_url`),
     module_specifier:
       moduleSpecifier !== undefined
         ? normalizeRequiredString(moduleSpecifier, `${label}.module_specifier`)
         : null,
-    module_hash: normalizeHex32(
-      value.module_hash,
-      `${label}.module_hash`,
-    ),
+    module_hash: normalizeHex32(value.module_hash, `${label}.module_hash`),
     manifest_hash: normalizeHex32(
       value.manifest_hash,
       `${label}.manifest_hash`,
     ),
-    expected_exports: normalizeExpectedExports(
-      value.expected_exports,
-      label,
-    ),
+    expected_exports: normalizeExpectedExports(value.expected_exports, label),
     bound_route_hash: normalizeHex32(
       value.bound_route_hash,
       `${label}.bound_route_hash`,
@@ -581,10 +725,8 @@ const normalizeBrowserProver = (value, label) => {
 
 const normalizeManifest = (template, evidence) => {
   const manifest = { ...template };
-  for (const [
-    field,
-    replacement,
-  ] of RETIRED_SOLANA_ROUTE_MANIFEST_ALIASES) {
+  const evidenceRoles = validatedFinalizedReadbackRoles(evidence);
+  for (const [field, replacement] of RETIRED_SOLANA_ROUTE_MANIFEST_ALIASES) {
     if (Object.prototype.hasOwnProperty.call(manifest, field)) {
       throw new Error(
         `Solana route-manifest template must not use retired ${field}; use ${replacement}.`,
@@ -650,8 +792,7 @@ const normalizeManifest = (template, evidence) => {
     "network_id_hex",
   );
 
-  const programId =
-    evidence.programId ?? evidence.program_id ?? evidence.program;
+  const programId = evidenceRoles.destinationBridge.program.address;
   if (
     programId &&
     !Object.prototype.hasOwnProperty.call(manifest, "taira_xor_bridge_address")
@@ -674,6 +815,29 @@ const normalizeManifest = (template, evidence) => {
     ["taira_burn_record_vk_name", "TAIRA burn-record VK name"],
   ]) {
     manifest[field] = normalizeRequiredString(manifest[field], label);
+  }
+  for (const [field, expected, label] of [
+    [
+      "taira_xor_bridge_address",
+      evidenceRoles.destinationBridge.program.address,
+      "destination bridge",
+    ],
+    [
+      "sccp_solana_source_bridge_address",
+      evidenceRoles.sourceBridge.program.address,
+      "source bridge",
+    ],
+    [
+      "solana_verifier_program_id",
+      evidenceRoles.outerVerifier.program.address,
+      "outer verifier",
+    ],
+  ]) {
+    if (manifest[field] !== expected) {
+      throw new Error(
+        `Solana route-manifest ${label} does not match finalized readback evidence.`,
+      );
+    }
   }
 
   for (const field of [
@@ -702,7 +866,9 @@ const normalizeManifest = (template, evidence) => {
     ["destination_browser_prover", "destination_browser_prover"],
     ["source_browser_prover", "source_browser_prover"],
   ]) {
-    if (manifest[field].bound_route_hash !== manifest.destination_binding_hash) {
+    if (
+      manifest[field].bound_route_hash !== manifest.destination_binding_hash
+    ) {
       throw new Error(
         `${label}.bound_route_hash must match destination_binding_hash`,
       );
@@ -719,16 +885,15 @@ const normalizeManifest = (template, evidence) => {
   manifest.source_adapter_engine_deployment = {
     ...(sourceAdapterEngineDeployment ?? {}),
     solana_programdata_address: normalizeOptionalString(
-      evidence.programDataAddress ?? evidence.programdataAddress,
+      evidenceRoles.sourceBridge.programdata.address,
       "evidence programDataAddress",
     ),
-    solana_programdata_slot: normalizeOptionalSafeInteger(
-      evidence.programDataSlot ?? evidence.programdataSlot,
+    solana_programdata_slot: normalizeFinalizedReadbackSlot(
+      evidenceRoles.sourceBridge.loaderV3.deploymentSlot,
       "evidence programDataSlot",
     ),
     solana_program_account_sha256: normalizeOptionalHex32(
-      evidence.programAccountDataSha256 ??
-        evidence.program_account_data_sha256,
+      evidenceRoles.sourceBridge.program.dataSha256,
       "evidence programAccountDataSha256",
     ),
   };
@@ -770,10 +935,11 @@ const doctor = async (args) => {
   });
   try {
     const health = await rpc(solanaRpcUrl, "getHealth");
+    const genesisHash = await assertSolanaTestnetRpc(solanaRpcUrl);
     checks.push({
       name: "solana-testnet-rpc",
       ok: health === "ok",
-      evidence: health,
+      evidence: { health, genesisHash },
     });
   } catch (error) {
     checks.push({
@@ -808,7 +974,7 @@ const doctor = async (args) => {
   );
 };
 
-const deploy = (args) => {
+const deploy = async (args) => {
   const final = normalizeOptionalBooleanOption(args, "final");
   if (
     args.broadcast !== "true" ||
@@ -832,17 +998,22 @@ const deploy = (args) => {
     deployArgs.push("--final");
   }
   deployArgs.push(requireOption(args, "program-so"));
+  await assertSolanaTestnetRpc(deployArgs[3]);
   const output = run("solana", deployArgs);
   console.log(output);
 };
 
-const evidence = (args) => {
+const evidence = async (args) => {
   const programId = requireOption(args, "program-id");
+  const solanaRpcUrl = normalizeSolanaRpcUrl(
+    args["solana-rpc-url"] ?? DEFAULT_SOLANA_RPC_URL,
+  );
+  const solanaGenesisHash = await assertSolanaTestnetRpc(solanaRpcUrl);
   const output = run("solana", [
     "program",
     "show",
     "--url",
-    normalizeSolanaRpcUrl(args["solana-rpc-url"] ?? DEFAULT_SOLANA_RPC_URL),
+    solanaRpcUrl,
     ...(args.keypair ? ["--keypair", requireOption(args, "keypair")] : []),
     "--output",
     "json",
@@ -851,6 +1022,8 @@ const evidence = (args) => {
   const parsed = JSON.parse(output);
   const evidenceDoc = {
     schema: "sccp-solana-taira-xor-program-evidence/v1",
+    solanaNetwork: "testnet",
+    solanaGenesisHash,
     programId,
     programDataAddress:
       parsed.programDataAddress ??
@@ -873,10 +1046,23 @@ const routeManifest = (args) => {
   const templatePath = requireOption(args, "template");
   const evidencePath = requireOption(args, "evidence");
   const outputPath = requireOption(args, "output");
-  assertDistinctResolvedPaths(outputPath, "--output", templatePath, "--template");
-  assertDistinctResolvedPaths(outputPath, "--output", evidencePath, "--evidence");
-  const template = readJson(templatePath);
-  const evidenceDoc = readJson(evidencePath);
+  assertDistinctResolvedPaths(
+    outputPath,
+    "--output",
+    templatePath,
+    "--template",
+  );
+  assertDistinctResolvedPaths(
+    outputPath,
+    "--output",
+    evidencePath,
+    "--evidence",
+  );
+  const template = readStablePublicJson(templatePath, "route template");
+  const evidenceDoc = readStablePublicJson(
+    evidencePath,
+    "canonical finalized Solana readback evidence",
+  );
   const manifest = normalizeManifest(template, evidenceDoc);
   writeJson(outputPath, manifest);
 };
@@ -947,8 +1133,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
 
 export {
   ASSET_KEY,
+  assertSolanaTestnetRpc,
   ROUTE_ID,
   SOLANA_TESTNET_CHAIN_ID_HEX,
+  SOLANA_TESTNET_GENESIS_HASH,
   SOL_DOMAIN,
   main,
   normalizeBrowserProver,

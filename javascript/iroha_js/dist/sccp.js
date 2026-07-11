@@ -78,6 +78,8 @@ export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1 =
   "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
 export const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1 =
   "sccp-solana-recursive-mainnet-v1";
+export const SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1 =
+  "sccp-solana-recursive-testnet-v1";
 export const SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1 =
   "sccp-solana-accounts-lt-hash-v1";
 export const SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1 =
@@ -88,8 +90,62 @@ export const SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1 =
   "sccp-solana-bank-fork-choice-v1";
 export const SCCP_SOLANA_MAINNET_GENESIS_HASH =
   "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+export const SCCP_SOLANA_TESTNET_GENESIS_HASH =
+  "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
 export const SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1 =
   "sccp:sol:accounts-db-verifier:accounts-lt-hash-mainnet-beta:v1";
+export const SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1 =
+  "sccp:sol:accounts-db-verifier:accounts-lt-hash-testnet:v1";
+export const SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1 = "solana-mainnet-beta";
+export const SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1 = "solana-testnet";
+export const SCCP_SOLANA_SOURCE_PROFILES_V1 = Object.freeze({
+  [SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1]: Object.freeze({
+    network: SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1,
+    backend: SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
+    genesisHash: SCCP_SOLANA_MAINNET_GENESIS_HASH,
+    sourceStateVerifierId:
+      SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+    sourceTrustAnchorId:
+      "sccp:sol:source-trust-anchor:solana-mainnet-beta-genesis:v1",
+    consensusVerifierId:
+      "sccp:sol:consensus-verifier:finalized-slot-bankhash-mainnet-beta:v1",
+    messageInclusionVerifierId:
+      "sccp:sol:message-inclusion-verifier:transaction-status-root-branch:v1",
+    finalityPolicyId:
+      "sccp:sol:finality-policy:finalized-slot-mainnet-beta:v1",
+    towerReplayVerifierId:
+      "sccp:sol:light-client:tower-replay-mainnet-beta:v1",
+    fullAccountsdbLatticeVerifierId:
+      "sccp:sol:light-client:full-accountsdb-lattice-mainnet-beta:v1",
+    bankForkChoiceVerifierId:
+      "sccp:sol:light-client:bank-fork-choice-mainnet-beta:v1",
+    transcriptDomain: "sccp:solana:source-profile:mainnet-beta:v1",
+    genesisPublicInputDomain: "sccp:solana:mainnet-genesis:v1",
+  }),
+  [SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1]: Object.freeze({
+    network: SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1,
+    backend: SCCP_SOLANA_TESTNET_RECURSIVE_PROOF_BACKEND_V1,
+    genesisHash: SCCP_SOLANA_TESTNET_GENESIS_HASH,
+    sourceStateVerifierId:
+      SCCP_SOLANA_TESTNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+    sourceTrustAnchorId:
+      "sccp:sol:source-trust-anchor:solana-testnet-genesis:v1",
+    consensusVerifierId:
+      "sccp:sol:consensus-verifier:finalized-slot-bankhash-testnet:v1",
+    messageInclusionVerifierId:
+      "sccp:sol:message-inclusion-verifier:transaction-status-root-branch-testnet:v1",
+    finalityPolicyId:
+      "sccp:sol:finality-policy:finalized-slot-testnet:v1",
+    towerReplayVerifierId:
+      "sccp:sol:light-client:tower-replay-testnet:v1",
+    fullAccountsdbLatticeVerifierId:
+      "sccp:sol:light-client:full-accountsdb-lattice-testnet:v1",
+    bankForkChoiceVerifierId:
+      "sccp:sol:light-client:bank-fork-choice-testnet:v1",
+    transcriptDomain: "sccp:solana:source-profile:testnet:v1",
+    genesisPublicInputDomain: "sccp:solana:testnet-genesis:v1",
+  }),
+});
 export const SCCP_SOLANA_UPGRADEABLE_LOADER_ID =
   "BPFLoaderUpgradeab1e11111111111111111111111";
 const SCCP_SOLANA_TEMPLATE_SOURCE_TRUST_ANCHOR_HASH_V1 =
@@ -102,12 +158,28 @@ export const SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1 =
   "0x6b4e4106bbb6b343ae1a4a36c9c68756d4454d2167c9b8b2ee3225e39fb0a48b";
 const SCCP_SOLANA_TEMPLATE_FINALITY_POLICY_HASH_V1 =
   "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56";
+const SCCP_SOLANA_TESTNET_TEMPLATE_SOURCE_TRUST_ANCHOR_HASH_V1 =
+  "0xe347ad172f57ea9941878da12d078fe56af7dae7ad5a820a21802e89388b6f7d";
+const SCCP_SOLANA_TESTNET_TEMPLATE_CONSENSUS_VERIFIER_HASH_V1 =
+  "0xb054bb688200cd5adc3938f17e7b34a00c19e5e2db239bb083c552592b9467af";
+const SCCP_SOLANA_TESTNET_TEMPLATE_MESSAGE_INCLUSION_VERIFIER_HASH_V1 =
+  "0xb15e66a84c1b74b1936dd57d208e906c634cc1ecbace9b51d8173fbf6170934b";
+const SCCP_SOLANA_TESTNET_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1 =
+  "0xdeff79aa347b438c97693d361a5518a1d67291d2a61bd6f8231f6eaf35cfd641";
+const SCCP_SOLANA_TESTNET_TEMPLATE_FINALITY_POLICY_HASH_V1 =
+  "0x3d678aa3504c259140b75e853ccf5bf0834a8cb3e9e0e45a3e666cff50ece364";
 export const SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1 =
   "sccp:sol:light-client:tower-replay-mainnet-beta:v1";
 export const SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1 =
   "sccp:sol:light-client:full-accountsdb-lattice-mainnet-beta:v1";
 export const SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1 =
   "sccp:sol:light-client:bank-fork-choice-mainnet-beta:v1";
+export const SCCP_SOLANA_TESTNET_TOWER_REPLAY_VERIFIER_ID_V1 =
+  "sccp:sol:light-client:tower-replay-testnet:v1";
+export const SCCP_SOLANA_TESTNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1 =
+  "sccp:sol:light-client:full-accountsdb-lattice-testnet:v1";
+export const SCCP_SOLANA_TESTNET_BANK_FORK_CHOICE_VERIFIER_ID_V1 =
+  "sccp:sol:light-client:bank-fork-choice-testnet:v1";
 export const SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH = 432_000n;
 export const SCCP_SOLANA_TOWER_LOCKOUT_CONFIRMATION_DEPTH = 32n;
 export const SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH =
@@ -497,6 +569,35 @@ const SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES_V1 = new Map([
 const SCCP_SOLANA_TEMPLATE_SOURCE_MATERIAL_HASHES_V1 = new Set(
   SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES_V1.values(),
 );
+const SCCP_SOLANA_TESTNET_TEMPLATE_COMPONENT_HASHES_V1 = new Map([
+  [
+    "sourceTrustAnchorHash",
+    SCCP_SOLANA_TESTNET_TEMPLATE_SOURCE_TRUST_ANCHOR_HASH_V1,
+  ],
+  [
+    "consensusVerifierHash",
+    SCCP_SOLANA_TESTNET_TEMPLATE_CONSENSUS_VERIFIER_HASH_V1,
+  ],
+  [
+    "messageInclusionVerifierHash",
+    SCCP_SOLANA_TESTNET_TEMPLATE_MESSAGE_INCLUSION_VERIFIER_HASH_V1,
+  ],
+  [
+    "sourceStateVerifierHash",
+    SCCP_SOLANA_TESTNET_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+  ],
+  [
+    "finalityPolicyHash",
+    SCCP_SOLANA_TESTNET_TEMPLATE_FINALITY_POLICY_HASH_V1,
+  ],
+]);
+for (const hash of SCCP_SOLANA_TESTNET_TEMPLATE_COMPONENT_HASHES_V1.values()) {
+  SCCP_SOLANA_TEMPLATE_SOURCE_MATERIAL_HASHES_V1.add(hash);
+}
+const SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES_V1 = new Set([
+  SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+  SCCP_SOLANA_TESTNET_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+]);
 const SCCP_TRON_TEMPLATE_COMPONENT_HASHES_V1 = new Map([
   [
     "sourceTrustAnchorHash",
@@ -26501,12 +26602,17 @@ const solanaBankHashHardForkDataHash = (data) =>
     prefixedBlake2b(SCCP_SOLANA_BANK_HASH_HARD_FORK_DATA_PREFIX_V1, data),
   );
 
-const solanaMainnetGenesisHashPublicInput = () =>
+const solanaGenesisHashPublicInput = (profile) =>
   bytesToHex(
     prefixedBlake2b(
-      SCCP_SOLANA_MAINNET_GENESIS_HASH_PREFIX_V1,
-      textEncoder.encode(SCCP_SOLANA_MAINNET_GENESIS_HASH),
+      profile.genesisPublicInputDomain,
+      textEncoder.encode(profile.genesisHash),
     ),
+  );
+
+const solanaMainnetGenesisHashPublicInput = () =>
+  solanaGenesisHashPublicInput(
+    SCCP_SOLANA_SOURCE_PROFILES_V1[SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1],
   );
 
 function normalizeSolanaAccountsLtHashProofRequestInput(input) {
@@ -26535,6 +26641,7 @@ function normalizeSolanaAccountsLtHashProofRequestInput(input) {
       ? defaultValue
       : selected;
   };
+  const sourceProfile = solanaSccpSourceProfile(input);
   const sourceDomainInput = requestOptionalField(
     "sourceDomain",
     "sourceDomain",
@@ -26656,14 +26763,14 @@ function normalizeSolanaAccountsLtHashProofRequestInput(input) {
   const sourceStateVerifierId = normalizeNonEmptyString(
     requestFieldOrDefault(
       "sourceStateVerifierId",
-      SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+      sourceProfile.sourceStateVerifierId,
       "sourceStateVerifierId",
       "source_state_verifier_id",
     ),
     "sourceStateVerifierId",
   );
   if (
-    sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+    sourceStateVerifierId !== sourceProfile.sourceStateVerifierId
   ) {
     throw new TypeError(
       "sourceStateVerifierId must match Solana AccountsDB verifier profile",
@@ -26678,8 +26785,9 @@ function normalizeSolanaAccountsLtHashProofRequestInput(input) {
     "sourceStateVerifierHash",
   );
   if (
-    sourceStateVerifierHash ===
-    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1
+    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES_V1.has(
+      sourceStateVerifierHash,
+    )
   ) {
     throw new TypeError(
       "sourceStateVerifierHash must not be the Solana template verifier hash",
@@ -26687,6 +26795,7 @@ function normalizeSolanaAccountsLtHashProofRequestInput(input) {
   }
   const accountsLtHashProofPublicInputsHash =
     solanaSccpAccountsLtHashProofPublicInputsHash({
+      solanaNetwork: sourceProfile.network,
       sourceDomain,
       finalizedSlot,
       parentSlot,
@@ -26735,6 +26844,9 @@ function normalizeSolanaAccountsLtHashProofRequestInput(input) {
   return {
     version: 1,
     sourceDomain,
+    solanaNetwork: sourceProfile.network,
+    solanaGenesisHash: sourceProfile.genesisHash,
+    backend: sourceProfile.backend,
     finalizedSlot,
     parentSlot,
     bankSignatureCount,
@@ -26818,9 +26930,10 @@ export function canonicalSolanaSccpAccountsLtHashVerificationContextBytes(
 
 export function solanaSccpAccountsLtHashPublicInputColumns(input) {
   const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  const sourceProfile = solanaSccpSourceProfile(normalized);
   return [
     [bytesToHex(sccpWordU32Le(normalized.sourceDomain))],
-    [solanaMainnetGenesisHashPublicInput()],
+    [solanaGenesisHashPublicInput(sourceProfile)],
     [bytesToHex(sccpWordU64Le(normalized.finalizedSlot))],
     [bytesToHex(sccpWordU64Le(normalized.parentSlot))],
     [bytesToHex(sccpWordU64Le(normalized.bankSignatureCount))],
@@ -26838,6 +26951,7 @@ export function solanaSccpAccountsLtHashPublicInputColumns(input) {
 
 export function solanaSccpAccountsLtHashOpenVerifySchemaDescriptor(input) {
   const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  const sourceProfile = solanaSccpSourceProfile(normalized);
   let descriptor = new Uint8Array();
   descriptor = writeU8(descriptor, normalized.version);
   descriptor = writeString(
@@ -26848,7 +26962,11 @@ export function solanaSccpAccountsLtHashOpenVerifySchemaDescriptor(input) {
     descriptor,
     SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1,
   );
-  descriptor = writeString(descriptor, SCCP_SOLANA_MAINNET_GENESIS_HASH);
+  if (sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1) {
+    descriptor = writeString(descriptor, sourceProfile.transcriptDomain);
+    descriptor = writeString(descriptor, sourceProfile.backend);
+  }
+  descriptor = writeString(descriptor, sourceProfile.genesisHash);
   descriptor = writeU32Le(descriptor, normalized.sourceDomain);
   descriptor = writeString(descriptor, "source_state_verifier_id");
   descriptor = writeString(descriptor, normalized.sourceStateVerifierId);
@@ -26861,9 +26979,13 @@ export function solanaSccpAccountsLtHashOpenVerifySchemaDescriptor(input) {
       32,
     ),
   );
+  const genesisInputName =
+    sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      ? "testnet_genesis_hash"
+      : "mainnet_genesis_hash";
   for (const requiredInput of [
     "source_domain",
-    "mainnet_genesis_hash",
+    genesisInputName,
     "finalized_slot",
     "parent_slot",
     "bank_signature_count",
@@ -26884,6 +27006,7 @@ export function solanaSccpAccountsLtHashOpenVerifySchemaDescriptor(input) {
 
 export function buildSolanaSccpAccountsLtHashProofRequest(input) {
   const normalized = normalizeSolanaAccountsLtHashProofRequestInput(input);
+  const sourceProfile = solanaSccpSourceProfile(normalized);
   const statementBytes =
     canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(normalized);
   const accountCommitmentBytes =
@@ -26907,6 +27030,13 @@ export function buildSolanaSccpAccountsLtHashProofRequest(input) {
       proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
       circuitId: SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
       parameterSet: SCCP_SOLANA_ACCOUNTS_LT_HASH_FASTPQ_PARAMETER_SET_V1,
+      ...(sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+        ? {
+            solanaNetwork: sourceProfile.network,
+            solanaGenesisHash: sourceProfile.genesisHash,
+            backend: sourceProfile.backend,
+          }
+        : {}),
       sourceDomain: normalized.sourceDomain,
       finalizedSlot: normalized.finalizedSlot.toString(),
       parentSlot: normalized.parentSlot.toString(),
@@ -27052,6 +27182,19 @@ const normalizeSolanaFullLightClientAuditRole = (role) => {
       throw new TypeError(
         "role must be towerReplay, fullAccountsdbLattice, or bankForkChoice",
       );
+  }
+};
+
+const solanaAuditRoleVerifierId = (role, sourceProfile) => {
+  switch (role.name) {
+    case "towerReplay":
+      return sourceProfile.towerReplayVerifierId;
+    case "fullAccountsdbLattice":
+      return sourceProfile.fullAccountsdbLatticeVerifierId;
+    case "bankForkChoice":
+      return sourceProfile.bankForkChoiceVerifierId;
+    default:
+      throw new TypeError("unsupported Solana full-light-client audit role");
   }
 };
 
@@ -27210,6 +27353,7 @@ const requireSolanaSourceStatePublicInputBindingForWrapping = (
   circuitId,
   request,
 ) => {
+  const sourceProfile = solanaSccpSourceProfile(request);
   const requireColumn = (index, expected, fieldName) => {
     const column = publicInputColumns[index];
     if (!Array.isArray(column) || column.length !== 1) {
@@ -27224,10 +27368,14 @@ const requireSolanaSourceStatePublicInputBindingForWrapping = (
     }
   };
   const sourceDomainColumn = bytesToHex(sccpWordU32Le(SCCP_DOMAIN_SOL));
-  const mainnetGenesisColumn = solanaMainnetGenesisHashPublicInput();
+  const genesisColumn = solanaGenesisHashPublicInput(sourceProfile);
+  const genesisFieldName =
+    sourceProfile.network === SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1
+      ? "mainnet_genesis_hash"
+      : "testnet_genesis_hash";
   if (circuitId === SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1) {
     requireColumn(0, sourceDomainColumn, "source_domain");
-    requireColumn(1, mainnetGenesisColumn, "mainnet_genesis_hash");
+    requireColumn(1, genesisColumn, genesisFieldName);
     requireColumn(
       2,
       bytesToHex(
@@ -27275,7 +27423,7 @@ const requireSolanaSourceStatePublicInputBindingForWrapping = (
   const roleCode = role.code;
   requireColumn(0, bytesToHex(sccpWordU8(roleCode)), "role");
   requireColumn(1, sourceDomainColumn, "source_domain");
-  requireColumn(2, mainnetGenesisColumn, "mainnet_genesis_hash");
+  requireColumn(2, genesisColumn, genesisFieldName);
   requireColumn(
     3,
     bytesToHex(sccpWordU64Le(request.finalizedSlot ?? request.finalized_slot)),
@@ -27403,8 +27551,9 @@ const normalizeSolanaSourceStateProofRequestForWrapping = (request) => {
     requestField("sourceStateVerifierId", "source_state_verifier_id"),
     "request.sourceStateVerifierId",
   );
+  const sourceProfile = solanaSccpSourceProfile(request);
   if (
-    sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+    sourceStateVerifierId !== sourceProfile.sourceStateVerifierId
   ) {
     throw new TypeError(
       "request.sourceStateVerifierId must match Solana AccountsDB verifier profile",
@@ -27415,8 +27564,9 @@ const normalizeSolanaSourceStateProofRequestForWrapping = (request) => {
     "request.sourceStateVerifierHash",
   );
   if (
-    sourceStateVerifierHash ===
-    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1
+    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES_V1.has(
+      sourceStateVerifierHash,
+    )
   ) {
     throw new TypeError(
       "request.sourceStateVerifierHash must not be the Solana template verifier hash",
@@ -27523,7 +27673,7 @@ const normalizeSolanaSourceStateProofRequestForWrapping = (request) => {
       requestField("verifierId", "verifier_id"),
       "request.verifierId",
     );
-    if (verifierId !== role.verifierId) {
+    if (verifierId !== solanaAuditRoleVerifierId(role, sourceProfile)) {
       throw new TypeError("request.verifierId must match request.role");
     }
     requestU64("finalizedSlot", "finalized_slot");
@@ -28499,6 +28649,7 @@ function solanaFullLightClientGateHashForMaterialAndDeployment(
   material,
   deployment,
 ) {
+  const sourceProfile = solanaSccpSourceProfileFromRecord(material);
   const auditRoles = [
     SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.towerReplay,
     SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLES.fullAccountsdbLattice,
@@ -28515,11 +28666,11 @@ function solanaFullLightClientGateHashForMaterialAndDeployment(
   out = writeString(out, material.sourceChain, "sourceChain");
   out = writeU8(out, material.sourceProofPlan);
   out = writeU8(out, material.finalityModel);
-  out = writeString(
-    out,
-    SCCP_SOLANA_MAINNET_GENESIS_HASH,
-    "mainnetGenesisHash",
-  );
+  if (sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1) {
+    out = writeString(out, sourceProfile.transcriptDomain, "transcriptDomain");
+    out = writeString(out, sourceProfile.backend, "backend");
+  }
+  out = writeString(out, sourceProfile.genesisHash, "solanaGenesisHash");
   out = concatBytes(
     out,
     hexToBytes(
@@ -28545,7 +28696,13 @@ function solanaFullLightClientGateHashForMaterialAndDeployment(
     hexToBytes(deployment.deploymentReceiptHash, "deploymentReceiptHash", 32),
   );
   for (const [index, role] of auditRoles.entries()) {
-    out = writeString(out, role.verifierId, "solanaAuditVerifierId");
+    const verifierId =
+      role.name === "towerReplay"
+        ? sourceProfile.towerReplayVerifierId
+        : role.name === "fullAccountsdbLattice"
+          ? sourceProfile.fullAccountsdbLatticeVerifierId
+          : sourceProfile.bankForkChoiceVerifierId;
+    out = writeString(out, verifierId, "solanaAuditVerifierId");
     out = concatBytes(
       out,
       hexToBytes(auditHashes[index], "solanaAuditVerifierHash", 32),
@@ -29117,7 +29274,17 @@ function normalizeSolanaFullLightClientAuditInput(input, role) {
   const { material, deployment, gateHash } =
     normalizeSolanaAuditMaterialAndDeployment(input);
   const witness = normalizeSolanaSccpWitness(input);
-  if (witness.sourceStateVerifierHash !== material.sourceStateVerifierHash) {
+  const sourceProfile = solanaSccpSourceProfile(witness);
+  const materialProfile = solanaSccpSourceProfileFromRecord(material);
+  if (sourceProfile.network !== materialProfile.network) {
+    throw new TypeError(
+      "solanaNetwork must match sourceVerifierMaterial profile",
+    );
+  }
+  if (
+    witness.sourceStateVerifierId !== material.sourceStateVerifierId ||
+    witness.sourceStateVerifierHash !== material.sourceStateVerifierHash
+  ) {
     throw new TypeError(
       "sourceStateVerifierHash must match sourceVerifierMaterial",
     );
@@ -29269,6 +29436,7 @@ function normalizeSolanaFullLightClientAuditInput(input, role) {
   );
   return {
     role,
+    sourceProfile,
     material,
     deployment,
     witness,
@@ -29296,11 +29464,18 @@ export function canonicalSolanaSccpFullLightClientAuditStatementBytes(
   out = writeU8(out, 1);
   out = writeU8(out, role.code);
   out = writeString(out, role.circuitId, "circuitId");
-  out = writeString(out, SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1, "backend");
+  if (value.sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1) {
+    out = writeString(
+      out,
+      value.sourceProfile.transcriptDomain,
+      "transcriptDomain",
+    );
+  }
+  out = writeString(out, value.sourceProfile.backend, "backend");
   out = writeString(
     out,
-    SCCP_SOLANA_MAINNET_GENESIS_HASH,
-    "mainnetGenesisHash",
+    value.sourceProfile.genesisHash,
+    "solanaGenesisHash",
   );
   out = writeU32Le(out, SCCP_DOMAIN_SOL);
   out = writeU64Le(out, context.epoch);
@@ -29536,7 +29711,7 @@ export function solanaSccpFullLightClientAuditPublicInputColumns(
   const columns = [
     [bytesToHex(sccpWordU8(role.code))],
     [bytesToHex(sccpWordU32Le(SCCP_DOMAIN_SOL))],
-    [solanaMainnetGenesisHashPublicInput()],
+    [solanaGenesisHashPublicInput(value.sourceProfile)],
     [bytesToHex(sccpWordU64Le(value.witness.finalizedSlot))],
     [value.finalityContextHash],
     [statementHash],
@@ -29609,7 +29784,11 @@ function canonicalSolanaFullLightClientAuditContextBytes(value, statementHash) {
     SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
     "parameterSet",
   );
-  out = writeString(out, value.role.verifierId, "verifierId");
+  out = writeString(
+    out,
+    solanaAuditRoleVerifierId(value.role, value.sourceProfile),
+    "verifierId",
+  );
   out = concatBytes(out, hexToBytes(value.verifierHash, "verifierHash", 32));
   out = concatBytes(
     out,
@@ -29654,14 +29833,30 @@ export function solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(
     SCCP_SOLANA_FULL_LIGHT_CLIENT_AUDIT_FASTPQ_PARAMETER_SET_V1,
     "parameterSet",
   );
+  if (value.sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1) {
+    descriptor = writeString(
+      descriptor,
+      value.sourceProfile.transcriptDomain,
+      "transcriptDomain",
+    );
+    descriptor = writeString(
+      descriptor,
+      value.sourceProfile.backend,
+      "backend",
+    );
+  }
   descriptor = writeString(
     descriptor,
-    SCCP_SOLANA_MAINNET_GENESIS_HASH,
-    "mainnetGenesisHash",
+    value.sourceProfile.genesisHash,
+    "solanaGenesisHash",
   );
   descriptor = writeU32Le(descriptor, SCCP_DOMAIN_SOL);
   descriptor = writeString(descriptor, "verifier_id", "schemaField");
-  descriptor = writeString(descriptor, role.verifierId, "verifierId");
+  descriptor = writeString(
+    descriptor,
+    solanaAuditRoleVerifierId(role, value.sourceProfile),
+    "verifierId",
+  );
   descriptor = writeString(descriptor, "verifier_hash", "schemaField");
   descriptor = concatBytes(
     descriptor,
@@ -29702,10 +29897,14 @@ export function solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(
     descriptor,
     hexToBytes(value.fullLightClientGateHash, "fullLightClientGateHash", 32),
   );
+  const genesisInputName =
+    value.sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      ? "testnet_genesis_hash"
+      : "mainnet_genesis_hash";
   for (const requiredInput of [
     "role",
     "source_domain",
-    "mainnet_genesis_hash",
+    genesisInputName,
     "finalized_slot",
     "finality_context_hash",
     "audit_statement_hash",
@@ -29803,8 +30002,15 @@ export function buildSolanaSccpFullLightClientAuditProofRequest(
       role: role.wireName,
       roleCode: role.code,
       sourceDomain: SCCP_DOMAIN_SOL,
+      ...(value.sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+        ? {
+            solanaNetwork: value.sourceProfile.network,
+            solanaGenesisHash: value.sourceProfile.genesisHash,
+            backend: value.sourceProfile.backend,
+          }
+        : {}),
       finalizedSlot: value.witness.finalizedSlot.toString(),
-      verifierId: role.verifierId,
+      verifierId: solanaAuditRoleVerifierId(role, value.sourceProfile),
       verifierHash: value.verifierHash,
       sourceStateVerifierId: value.material.sourceStateVerifierId,
       sourceStateVerifierHash: value.material.sourceStateVerifierHash,
@@ -32183,6 +32389,60 @@ export function solanaSccpBankForkHash(input) {
   );
 }
 
+export function solanaSccpSourceProfile(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana SCCP source profile input must be an object");
+  }
+  const selected = strictOptionalResultField(
+    input,
+    "solanaNetwork",
+    "solanaNetwork",
+    "solana_network",
+  );
+  const network =
+    selected === SCCP_OPTIONAL_FIELD_MISSING || selected == null
+      ? SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1
+      : normalizeNonEmptyString(selected, "solanaNetwork");
+  const profile = SCCP_SOLANA_SOURCE_PROFILES_V1[network];
+  if (!profile) {
+    throw new TypeError(
+      "solanaNetwork must be solana-mainnet-beta or solana-testnet",
+    );
+  }
+  return profile;
+}
+
+export function solanaSccpSourceProfileFromRecord(input = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Solana SCCP source profile record must be an object");
+  }
+  const explicitNetwork = input.solanaNetwork ?? input.solana_network;
+  if (explicitNetwork !== undefined && explicitNetwork !== null) {
+    return solanaSccpSourceProfile({ solanaNetwork: explicitNetwork });
+  }
+  const testnetProfile =
+    SCCP_SOLANA_SOURCE_PROFILES_V1[SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1];
+  const suppliedIds = [
+    input.sourceTrustAnchorId ?? input.source_trust_anchor_id,
+    input.consensusVerifierId ?? input.consensus_verifier_id,
+    input.messageInclusionVerifierId ?? input.message_inclusion_verifier_id,
+    input.sourceStateVerifierId ?? input.source_state_verifier_id,
+    input.finalityPolicyId ?? input.finality_policy_id,
+  ];
+  const testnetIds = [
+    testnetProfile.sourceTrustAnchorId,
+    testnetProfile.consensusVerifierId,
+    testnetProfile.messageInclusionVerifierId,
+    testnetProfile.sourceStateVerifierId,
+    testnetProfile.finalityPolicyId,
+  ];
+  return solanaSccpSourceProfile({
+    solanaNetwork: suppliedIds.some((id) => testnetIds.includes(id))
+      ? SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      : SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1,
+  });
+}
+
 export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError(
@@ -32202,6 +32462,7 @@ export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(input) {
   if (sourceDomain !== SCCP_DOMAIN_SOL) {
     throw new RangeError("sourceDomain must be Solana");
   }
+  const profile = solanaSccpSourceProfile(input);
   const finalizedSlot = normalizeUnsignedBigInt(
     strictResultField(
       input,
@@ -32323,12 +32584,11 @@ export function canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(input) {
   let out = new Uint8Array();
   out = writeU8(out, 1);
   out = writeU32Le(out, sourceDomain);
-  out = writeString(out, SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1, "backend");
-  out = writeString(
-    out,
-    SCCP_SOLANA_MAINNET_GENESIS_HASH,
-    "mainnetGenesisHash",
-  );
+  if (profile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1) {
+    out = writeString(out, profile.transcriptDomain, "transcriptDomain");
+  }
+  out = writeString(out, profile.backend, "backend");
+  out = writeString(out, profile.genesisHash, "solanaGenesisHash");
   out = writeU64Le(out, epoch);
   out = writeU64Le(out, finalizedSlot);
   out = writeU64Le(out, parentSlot);
@@ -40121,6 +40381,43 @@ export function normalizeSolanaSccpWitness(input) {
       ? commitment?.[commitmentKey]
       : selected;
   };
+  const sourceProfile = solanaSccpSourceProfile(input);
+  const backendInput = witnessOptionalField("backend", "backend");
+  if (
+    backendInput !== SCCP_OPTIONAL_FIELD_MISSING &&
+    backendInput != null &&
+    normalizeNonEmptyString(backendInput, "backend") !== sourceProfile.backend
+  ) {
+    throw new TypeError("backend must match solanaNetwork");
+  }
+  const genesisInput =
+    sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      ? witnessField(
+          "solanaGenesisHash",
+          "solanaGenesisHash",
+          "solana_genesis_hash",
+          "testnetGenesisHash",
+          "testnet_genesis_hash",
+        )
+      : witnessFieldOrDefault(
+          "mainnetGenesisHash",
+          SCCP_SOLANA_MAINNET_GENESIS_HASH,
+          "mainnetGenesisHash",
+          "mainnet_genesis_hash",
+          "solanaGenesisHash",
+          "solana_genesis_hash",
+        );
+  const solanaGenesisHash = normalizeNonEmptyString(
+    genesisInput,
+    "solanaGenesisHash",
+  );
+  if (solanaGenesisHash !== sourceProfile.genesisHash) {
+    throw new TypeError(
+      sourceProfile.network === SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1
+        ? "mainnetGenesisHash must match Solana mainnet-beta"
+        : "solanaGenesisHash must match solanaNetwork",
+    );
+  }
   const payload = bundle?.payload ?? input.payload ?? null;
   const targetDomain = normalizeSccpDomainId(
     witnessFieldOrCommitment(
@@ -40347,7 +40644,7 @@ export function normalizeSolanaSccpWitness(input) {
   const sourceStateVerifierId = normalizeNonEmptyString(
     witnessFieldOrDefault(
       "sourceStateVerifierId",
-      SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+      sourceProfile.sourceStateVerifierId,
       "sourceStateVerifierId",
       "source_state_verifier_id",
     ),
@@ -40364,7 +40661,7 @@ export function normalizeSolanaSccpWitness(input) {
   );
   if (
     sourceStateVerifierHash !== SCCP_ZERO_HASH_V1 &&
-    sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+    sourceStateVerifierId !== sourceProfile.sourceStateVerifierId
   ) {
     throw new TypeError(
       "sourceStateVerifierId must match Solana AccountsDB verifier profile",
@@ -40372,6 +40669,7 @@ export function normalizeSolanaSccpWitness(input) {
   }
   const accountsLtHashProofPublicInputsHash =
     solanaSccpAccountsLtHashProofPublicInputsHash({
+      solanaNetwork: sourceProfile.network,
       sourceDomain: SCCP_DOMAIN_SOL,
       finalizedSlot,
       parentSlot,
@@ -40402,19 +40700,19 @@ export function normalizeSolanaSccpWitness(input) {
       "accountsLtHashProofPublicInputsHash must match bank-state inputs",
     );
   }
+  const networkProfileFields =
+    sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      ? {
+          solanaNetwork: sourceProfile.network,
+          solanaGenesisHash,
+          backend: sourceProfile.backend,
+        }
+      : { mainnetGenesisHash: solanaGenesisHash };
   return {
     version: 1,
     sourceDomain: SCCP_DOMAIN_SOL,
     targetDomain,
-    mainnetGenesisHash: normalizeNonEmptyString(
-      witnessFieldOrDefault(
-        "mainnetGenesisHash",
-        SCCP_SOLANA_MAINNET_GENESIS_HASH,
-        "mainnetGenesisHash",
-        "mainnet_genesis_hash",
-      ),
-      "mainnetGenesisHash",
-    ),
+    ...networkProfileFields,
     finalizedSlot: finalizedSlot.toString(),
     parentSlot: parentSlot.toString(),
     bankSignatureCount: bankSignatureCount.toString(),
@@ -40458,11 +40756,21 @@ export function normalizeSolanaSccpWitness(input) {
 
 export function canonicalSolanaSccpWitnessBytes(input) {
   const witness = normalizeSolanaSccpWitness(input);
+  const sourceProfile = solanaSccpSourceProfile(witness);
   let out = new Uint8Array();
   out = writeU8(out, witness.version);
   out = writeU32Le(out, witness.sourceDomain);
   out = writeU32Le(out, witness.targetDomain);
-  out = writeString(out, witness.mainnetGenesisHash, "mainnetGenesisHash");
+  if (sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1) {
+    out = writeString(out, sourceProfile.transcriptDomain, "transcriptDomain");
+    out = writeString(out, sourceProfile.backend, "backend");
+    out = writeString(out, sourceProfile.network, "solanaNetwork");
+  }
+  out = writeString(
+    out,
+    witness.solanaGenesisHash ?? witness.mainnetGenesisHash,
+    "solanaGenesisHash",
+  );
   out = writeU64Le(out, witness.finalizedSlot);
   out = writeU64Le(out, witness.parentSlot);
   out = writeU64Le(out, witness.bankSignatureCount);
@@ -45549,7 +45857,7 @@ function normalizeBoundSccpProofContext(
   };
 }
 
-const sourceRecordProfile = (sourceDomain) => {
+const sourceRecordProfile = (sourceDomain, input = {}) => {
   const base = sourceAdapterVerifierProfile(sourceDomain);
   switch (sourceDomain) {
     case SCCP_DOMAIN_ETH:
@@ -45585,22 +45893,20 @@ const sourceRecordProfile = (sourceDomain) => {
         requiresSourceBridge: true,
         requiresSourceBridgeConfig: false,
       };
-    case SCCP_DOMAIN_SOL:
+    case SCCP_DOMAIN_SOL: {
+      const solanaProfile = solanaSccpSourceProfileFromRecord(input);
       return {
         ...base,
-        sourceTrustAnchorId:
-          "sccp:sol:source-trust-anchor:solana-mainnet-beta-genesis:v1",
-        consensusVerifierId:
-          "sccp:sol:consensus-verifier:finalized-slot-bankhash-mainnet-beta:v1",
-        messageInclusionVerifierId:
-          "sccp:sol:message-inclusion-verifier:transaction-status-root-branch:v1",
-        finalityPolicyId:
-          "sccp:sol:finality-policy:finalized-slot-mainnet-beta:v1",
-        sourceStateVerifierId: SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+        sourceTrustAnchorId: solanaProfile.sourceTrustAnchorId,
+        consensusVerifierId: solanaProfile.consensusVerifierId,
+        messageInclusionVerifierId: solanaProfile.messageInclusionVerifierId,
+        finalityPolicyId: solanaProfile.finalityPolicyId,
+        sourceStateVerifierId: solanaProfile.sourceStateVerifierId,
         sourceBridgeEmitterId: "",
         requiresSourceBridge: false,
         requiresSourceBridgeConfig: false,
       };
+    }
     case SCCP_DOMAIN_TON:
       return {
         ...base,
@@ -45739,19 +46045,21 @@ const rejectTronTemplateSourceMaterialComponents = (material) => {
 
 const rejectSolanaTemplateSourceMaterialComponents = (material) => {
   if (material.sourceDomain !== SCCP_DOMAIN_SOL) return;
-  for (const [
-    field,
-    templateHash,
-  ] of SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES_V1.entries()) {
-    if (material[field] === templateHash) {
-      if (field === "sourceStateVerifierHash") {
+  for (const templateHashes of [
+    SCCP_SOLANA_TEMPLATE_COMPONENT_HASHES_V1,
+    SCCP_SOLANA_TESTNET_TEMPLATE_COMPONENT_HASHES_V1,
+  ]) {
+    for (const [field, templateHash] of templateHashes.entries()) {
+      if (material[field] === templateHash) {
+        if (field === "sourceStateVerifierHash") {
+          throw new TypeError(
+            "sourceStateVerifierHash must not be the Solana template verifier hash",
+          );
+        }
         throw new TypeError(
-          "sourceStateVerifierHash must not be the Solana template verifier hash",
+          `${field} must not be the Solana template component hash`,
         );
       }
-      throw new TypeError(
-        `${field} must not be the Solana template component hash`,
-      );
     }
   }
 };
@@ -45910,7 +46218,44 @@ export function normalizeSccpSourceVerifierMaterial(input) {
     materialField("sourceDomain", "sourceDomain", "source_domain"),
     "sourceDomain",
   );
-  const profile = sourceRecordProfile(sourceDomain);
+  const profile = sourceRecordProfile(sourceDomain, input);
+  for (const [label, expected, names] of [
+    [
+      "sourceTrustAnchorId",
+      profile.sourceTrustAnchorId,
+      ["sourceTrustAnchorId", "source_trust_anchor_id"],
+    ],
+    [
+      "consensusVerifierId",
+      profile.consensusVerifierId,
+      ["consensusVerifierId", "consensus_verifier_id"],
+    ],
+    [
+      "messageInclusionVerifierId",
+      profile.messageInclusionVerifierId,
+      ["messageInclusionVerifierId", "message_inclusion_verifier_id"],
+    ],
+    [
+      "sourceStateVerifierId",
+      profile.sourceStateVerifierId,
+      ["sourceStateVerifierId", "source_state_verifier_id"],
+    ],
+    [
+      "finalityPolicyId",
+      profile.finalityPolicyId,
+      ["finalityPolicyId", "finality_policy_id"],
+    ],
+  ]) {
+    const supplied = materialOptionalField(label, ...names);
+    if (
+      supplied !== SCCP_OPTIONAL_FIELD_MISSING &&
+      (expected === ""
+        ? supplied !== ""
+        : normalizeNonEmptyString(supplied, label) !== expected)
+    ) {
+      throw new TypeError(`${label} must match the selected source profile`);
+    }
+  }
   const sourceStateVerifierHash = materialDomainHex32(
     Boolean(profile.sourceStateVerifierId),
     materialOptionalField(
@@ -46248,18 +46593,19 @@ function appendSccpSourceAdapterDeploymentSolanaAuditBytes(out, deployment) {
     );
   }
   requireSolanaFullLightClientAuditRoleSeparation(deployment, auditHashes);
+  const sourceProfile = solanaSccpSourceProfileFromRecord(deployment);
   let next = writeU8(out, 1);
   const verifierPairs = [
     [
-      SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+      sourceProfile.towerReplayVerifierId,
       deployment.solanaTowerReplayVerifierHash,
     ],
     [
-      SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+      sourceProfile.fullAccountsdbLatticeVerifierId,
       deployment.solanaFullAccountsdbLatticeVerifierHash,
     ],
     [
-      SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+      sourceProfile.bankForkChoiceVerifierId,
       deployment.solanaBankForkChoiceVerifierHash,
     ],
   ];
@@ -46552,17 +46898,18 @@ export function sccpSourceAdapterEngineDeploymentHash(input) {
 export function sccpSolanaFullLightClientGateHash(input) {
   const material = normalizeSccpSourceVerifierMaterial(input);
   const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
+  const sourceProfile = solanaSccpSourceProfileFromRecord(material);
   const verifierPairs = [
     [
-      SCCP_SOLANA_MAINNET_TOWER_REPLAY_VERIFIER_ID_V1,
+      sourceProfile.towerReplayVerifierId,
       deployment.solanaTowerReplayVerifierHash,
     ],
     [
-      SCCP_SOLANA_MAINNET_FULL_ACCOUNTSDB_LATTICE_VERIFIER_ID_V1,
+      sourceProfile.fullAccountsdbLatticeVerifierId,
       deployment.solanaFullAccountsdbLatticeVerifierHash,
     ],
     [
-      SCCP_SOLANA_MAINNET_BANK_FORK_CHOICE_VERIFIER_ID_V1,
+      sourceProfile.bankForkChoiceVerifierId,
       deployment.solanaBankForkChoiceVerifierHash,
     ],
   ];
@@ -46590,7 +46937,11 @@ export function sccpSolanaFullLightClientGateHash(input) {
   out = writeBytes(out, textEncoder.encode(material.sourceChain));
   out = writeU8(out, material.sourceProofPlan);
   out = writeU8(out, material.finalityModel);
-  out = writeBytes(out, textEncoder.encode(SCCP_SOLANA_MAINNET_GENESIS_HASH));
+  if (sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1) {
+    out = writeBytes(out, textEncoder.encode(sourceProfile.transcriptDomain));
+    out = writeBytes(out, textEncoder.encode(sourceProfile.backend));
+  }
+  out = writeBytes(out, textEncoder.encode(sourceProfile.genesisHash));
   out = concatBytes(
     out,
     hexToBytes(
@@ -46833,6 +47184,7 @@ export function sccpSourceAdapterDeploymentBindingFromDeployment(input) {
 
 export function buildSolanaSccpProofRequest(input) {
   const witness = normalizeSolanaSccpWitness(input);
+  const sourceProfile = solanaSccpSourceProfile(witness);
   const proofContextInput = strictOptionalResultField(
     input,
     "proofContext",
@@ -46869,12 +47221,19 @@ export function buildSolanaSccpProofRequest(input) {
   }
   const sourceAdapterDeploymentBindingHash =
     sccpSourceAdapterDeploymentBindingHash(sourceAdapterDeploymentBinding);
+  const networkProfileFields =
+    sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      ? {
+          solanaNetwork: sourceProfile.network,
+          solanaGenesisHash: sourceProfile.genesisHash,
+        }
+      : { mainnetGenesisHash: sourceProfile.genesisHash };
   return immutableSolanaProofRequest({
     version: 1,
-    backend: SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1,
+    backend: sourceProfile.backend,
     sourceDomain: SCCP_DOMAIN_SOL,
     targetDomain: witness.targetDomain,
-    mainnetGenesisHash: witness.mainnetGenesisHash,
+    ...networkProfileFields,
     witnessHash,
     proofContextHash,
     sourceAdapterDeploymentBindingHash,
@@ -47260,11 +47619,27 @@ const requireProductionSolanaProofRequest = (request) => {
   ) {
     throw new TypeError("Solana SCCP production proofs must target SORA");
   }
+  const sourceProfile = solanaSccpSourceProfile(request);
+  if (request.backend !== sourceProfile.backend) {
+    throw new TypeError("backend must match solanaNetwork");
+  }
+  const genesisFieldNames =
+    sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      ? [
+          "solanaGenesisHash",
+          "solana_genesis_hash",
+          "testnetGenesisHash",
+          "testnet_genesis_hash",
+        ]
+      : ["mainnetGenesisHash", "mainnet_genesis_hash"];
+  const genesisFieldLabel =
+    sourceProfile.network === SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1
+      ? "mainnetGenesisHash"
+      : "solanaGenesisHash";
   const requestGenesisHash = strictResultField(
     request,
-    "mainnetGenesisHash",
-    "mainnetGenesisHash",
-    "mainnet_genesis_hash",
+    genesisFieldLabel,
+    ...genesisFieldNames,
   );
   const witness =
     request.witness && typeof request.witness === "object"
@@ -47272,19 +47647,22 @@ const requireProductionSolanaProofRequest = (request) => {
       : {};
   const witnessGenesisHash = strictResultField(
     witness,
-    "witness.mainnetGenesisHash",
-    "mainnetGenesisHash",
-    "mainnet_genesis_hash",
+    `witness.${genesisFieldLabel}`,
+    ...genesisFieldNames,
   );
   if (
-    requestGenesisHash !== SCCP_SOLANA_MAINNET_GENESIS_HASH ||
-    witnessGenesisHash !== SCCP_SOLANA_MAINNET_GENESIS_HASH
+    requestGenesisHash !== sourceProfile.genesisHash ||
+    witnessGenesisHash !== sourceProfile.genesisHash ||
+    solanaSccpSourceProfile(witness).network !== sourceProfile.network
   ) {
-    throw new TypeError("mainnetGenesisHash must match Solana mainnet-beta");
+    throw new TypeError(
+      sourceProfile.network === SCCP_SOLANA_MAINNET_SOURCE_NETWORK_V1
+        ? "mainnetGenesisHash must match Solana mainnet-beta"
+        : "solanaGenesisHash must match solanaNetwork",
+    );
   }
   if (
-    request.sourceStateVerifierId !==
-    SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+    request.sourceStateVerifierId !== sourceProfile.sourceStateVerifierId
   ) {
     throw new TypeError(
       "sourceStateVerifierId must match Solana AccountsDB verifier profile",
@@ -47296,10 +47674,12 @@ const requireProductionSolanaProofRequest = (request) => {
     );
   }
   if (
-    normalizeHex32(
-      request.sourceStateVerifierHash,
-      "sourceStateVerifierHash",
-    ) === SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1
+    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES_V1.has(
+      normalizeHex32(
+        request.sourceStateVerifierHash,
+        "sourceStateVerifierHash",
+      ),
+    )
   ) {
     throw new TypeError(
       "sourceStateVerifierHash must not be the Solana template verifier hash",
@@ -47355,6 +47735,8 @@ const solanaProofRequestComparable = (request) => {
     backend: request.backend,
     sourceDomain: request.sourceDomain,
     targetDomain: request.targetDomain,
+    solanaNetwork: request.solanaNetwork,
+    solanaGenesisHash: request.solanaGenesisHash,
     mainnetGenesisHash: request.mainnetGenesisHash,
     witnessHash: request.witnessHash,
     proofContextHash: request.proofContextHash,
@@ -47449,10 +47831,9 @@ const requireSolanaProofResultForSubmission = (
       "proofResult must be a wrapped Solana SCCP proof result",
     );
   }
-  if (proofResult.backend !== SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1) {
-    throw new TypeError(
-      "proofResult.backend must be sccp-solana-recursive-mainnet-v1",
-    );
+  const sourceProfile = solanaSccpSourceProfile(proofResult);
+  if (proofResult.backend !== sourceProfile.backend) {
+    throw new TypeError("proofResult.backend must match solanaNetwork");
   }
   requireV1Version(proofResult.version, "proofResult.version", TypeError);
   const resultProofContextHash = strictResultField(
@@ -47667,7 +48048,7 @@ const requireSolanaProofResultForSubmission = (
     "source_state_verifier_id",
   );
   if (
-    sourceStateVerifierId !== SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1
+    sourceStateVerifierId !== sourceProfile.sourceStateVerifierId
   ) {
     throw new TypeError(
       "proofResult.sourceStateVerifierId must match Solana AccountsDB verifier profile",
@@ -47691,8 +48072,9 @@ const requireSolanaProofResultForSubmission = (
     "proofResult.sourceStateVerifierHash",
   );
   if (
-    normalizedSourceStateVerifierHash ===
-    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1
+    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES_V1.has(
+      normalizedSourceStateVerifierHash,
+    )
   ) {
     throw new TypeError(
       "proofResult.sourceStateVerifierHash must not be the Solana template verifier hash",
@@ -48436,9 +48818,18 @@ function normalizeSolanaProofResult(result, request) {
     envelopeHash,
     "envelopeHash",
   );
+  const sourceProfile = solanaSccpSourceProfile(request);
+  const networkProfileFields =
+    sourceProfile.network === SCCP_SOLANA_TESTNET_SOURCE_NETWORK_V1
+      ? {
+          solanaNetwork: sourceProfile.network,
+          solanaGenesisHash: sourceProfile.genesisHash,
+        }
+      : {};
   return immutableSolanaProofResult({
     version: 1,
     backend: request.backend,
+    ...networkProfileFields,
     proofBytes,
     proofBase64: bytesToBase64(proofBytes),
     publicInputs: request.publicInputs,

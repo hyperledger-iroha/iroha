@@ -1323,6 +1323,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             bridge_proof_max_past_age_blocks: defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
+            sccp_launch_mode: A::SccpLaunchMode::EthereumMainnetLane,
             sccp_source_verifier_materials: Vec::new(),
             sccp_source_adapter_engine_deployments: Vec::new(),
             sccp_destination_rollouts: Vec::new(),

@@ -17692,7 +17692,8 @@ mod tests {
         ChainId, Level,
         account::Account,
         block::{
-            BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
+            BlockExecutionContextBundle, BlockHeader, CertifiedMergeLedgerReference,
+            ExternalExecutionContext,
             consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
             consensus_v2::{
                 BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
@@ -18783,6 +18784,38 @@ mod tests {
         }
     }
 
+    fn bind_merge_entry_to_carrier(
+        block: Arc<SignedBlock>,
+        entry: &mut MergeLedgerEntry,
+    ) -> Arc<SignedBlock> {
+        let mut block = block.as_ref().clone();
+        let carrier_parent_hash = block
+            .header()
+            .prev_block_hash()
+            .expect("merge carrier fixture must not be the genesis block");
+        entry.merge_qc.carrier_height = block.header().height().get();
+        entry.merge_qc.carrier_parent_hash = carrier_parent_hash;
+        let execution_context = block
+            .execution_context()
+            .cloned()
+            .unwrap_or_else(|| BlockExecutionContextBundle::new(Vec::new()))
+            .with_merge_entry(CertifiedMergeLedgerReference::new(entry));
+        block.set_execution_context(Some(execution_context));
+        Arc::new(block)
+    }
+
+    fn next_merge_carrier(
+        generator: &mut DummyBlocks,
+        entry: &mut MergeLedgerEntry,
+    ) -> Arc<SignedBlock> {
+        let carrier = bind_merge_entry_to_carrier(generator.next(), entry);
+        *generator
+            .blocks
+            .last_mut()
+            .expect("dummy generator contains the carrier") = Arc::clone(&carrier);
+        carrier
+    }
+
     #[test]
     fn read_and_write_to_blockchain_index() {
         let dir = tempfile::tempdir().unwrap();
@@ -18866,12 +18899,14 @@ mod tests {
 
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init kura");
         let mut blocks = DummyBlocks::new();
-        let block1 = blocks.next();
-        let block2 = blocks.next();
-        let entry1 = sample_merge_entry(1);
+        let parent = blocks.next();
+        let mut entry1 = sample_merge_entry(1);
+        let block1 = next_merge_carrier(&mut blocks, &mut entry1);
+        let mut entry2 = sample_merge_entry(2);
+        let block2 = next_merge_carrier(&mut blocks, &mut entry2);
+        kura.store_block(parent).expect("store carrier parent");
         kura.store_block_with_merge_entry(block1, &entry1)
             .expect("store block+entry1");
-        let entry2 = sample_merge_entry(2);
         kura.store_block_with_merge_entry(block2, &entry2)
             .expect("store block+entry2");
         assert_eq!(kura.merge_ledger_snapshot().len(), 2);
@@ -18969,31 +19004,40 @@ mod tests {
     #[test]
     fn store_block_with_merge_entry_appends_log() {
         let kura = Kura::blank_kura_for_testing();
-        let block = DummyBlocks::new().next();
-        let entry = sample_merge_entry(7);
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
         let expected = entry.clone();
 
+        kura.store_block(parent).expect("store carrier parent");
         kura.store_block_with_merge_entry(block, &entry)
             .expect("store block with merge entry");
 
-        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.blocks_count(), 2);
         assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
     }
 
     #[test]
     fn store_block_with_merge_entry_backfills_missing_log_for_existing_block() {
         let kura = Kura::blank_kura_for_testing();
-        let block = DummyBlocks::new().next();
-        let entry = sample_merge_entry(7);
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
         let expected = entry.clone();
 
-        kura.store_block(block.clone()).expect("store block");
+        kura.store_block(parent).expect("store carrier parent");
+        kura.store_block_with_merge_entry(Arc::clone(&block), &entry)
+            .expect("store block and original merge entry");
+        kura.truncate_merge_log_to_len(0)
+            .expect("simulate missing merge log after durable carrier publication");
         kura.store_block_with_merge_entry(block.clone(), &entry)
             .expect("backfill merge entry");
         kura.store_block_with_merge_entry(block, &entry)
             .expect("idempotent retry");
 
-        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.blocks_count(), 2);
         assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
     }
 
@@ -19001,25 +19045,27 @@ mod tests {
     fn store_block_with_merge_entry_rejects_out_of_order_existing_backfill() {
         let kura = Kura::blank_kura_for_testing();
         let mut blocks = DummyBlocks::new();
-        let block1 = blocks.next();
-        let block2 = blocks.next();
-        let entry1 = sample_merge_entry(1);
-        let entry2 = sample_merge_entry(2);
+        let parent = blocks.next();
+        let mut entry1 = sample_merge_entry(1);
+        let block1 = next_merge_carrier(&mut blocks, &mut entry1);
+        let mut entry2 = sample_merge_entry(2);
+        let block2 = next_merge_carrier(&mut blocks, &mut entry2);
 
-        kura.store_block(Arc::clone(&block1))
-            .expect("store block1 without merge entry");
-        kura.store_block(Arc::clone(&block2))
-            .expect("store block2 without merge entry");
+        kura.store_block(parent).expect("store carrier parent");
+        kura.store_block_with_merge_entry(Arc::clone(&block1), &entry1)
+            .expect("store first carrier and merge entry");
+        kura.store_block_with_merge_entry(Arc::clone(&block2), &entry2)
+            .expect("store second carrier and merge entry");
+        kura.truncate_merge_log_to_len(0)
+            .expect("simulate missing merge log before out-of-order backfill");
 
         let err = kura
             .store_block_with_merge_entry(block2.clone(), &entry2)
             .expect_err("merge log backfill must be sequential");
         assert!(matches!(
             err,
-            Error::BlockHeightGap {
-                expected_next_height: 1,
-                actual_height: 2,
-            }
+            Error::NoritoFrame(norito::core::Error::Message(message))
+                if message.contains("expected 1, got 2")
         ));
         assert!(
             kura.merge_ledger_snapshot().is_empty(),
@@ -19031,44 +19077,51 @@ mod tests {
         kura.store_block_with_merge_entry(block2, &entry2)
             .expect("backfill second merge entry after first");
 
-        assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(kura.blocks_count(), 3);
         assert_eq!(kura.merge_ledger_snapshot(), vec![entry1, entry2]);
     }
 
     #[test]
     fn store_block_with_merge_entry_conflict_does_not_append_log() {
         let kura = Kura::blank_kura_for_testing();
-        let block = DummyBlocks::new().next();
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let parent_hash = parent.hash();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
         let stored_hash = block.hash();
-        let entry = sample_merge_entry(7);
         let expected = entry.clone();
 
+        kura.store_block(parent).expect("store carrier parent");
         kura.store_block_with_merge_entry(block, &entry)
             .expect("store block with merge entry");
 
         let conflicting: SignedBlock =
             ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
-                header.set_height(nonzero!(1_u64));
-                header.set_prev_block_hash(None);
+                header.set_height(nonzero!(2_u64));
+                header.set_prev_block_hash(Some(parent_hash));
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
             })
             .into();
+        let mut conflicting_entry = entry.clone();
+        let conflicting =
+            bind_merge_entry_to_carrier(Arc::new(conflicting), &mut conflicting_entry);
         let conflicting_hash = conflicting.hash();
         assert_ne!(stored_hash, conflicting_hash);
 
         let err = kura
-            .store_block_with_merge_entry(conflicting, &sample_merge_entry(8))
+            .store_block_with_merge_entry(conflicting, &conflicting_entry)
             .expect_err("same-height different hash must fail");
 
         assert!(matches!(
             err,
             Error::BlockHeightConflict {
-                height: 1,
+                height: 2,
                 expected,
                 actual,
             } if expected == stored_hash && actual == conflicting_hash
         ));
-        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.blocks_count(), 2);
         assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
     }
 
@@ -19290,16 +19343,19 @@ mod tests {
     #[test]
     fn store_block_with_merge_entry_rolls_back_on_block_write_failure() {
         let kura = Kura::blank_kura_for_testing();
-        let block = DummyBlocks::new().next();
-        let entry = sample_merge_entry(8);
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
 
+        kura.store_block(parent).expect("store carrier parent");
         kura.fail_next_block_write_for_tests();
         let err = kura
             .store_block_with_merge_entry(block, &entry)
             .expect_err("injected block write failure");
 
         assert!(matches!(err, Error::IO(_, _)));
-        assert_eq!(kura.blocks_count(), 0);
+        assert_eq!(kura.blocks_count(), 1);
         assert!(
             kura.merge_ledger_snapshot().is_empty(),
             "merge entry must be rolled back when block write fails"
@@ -19514,19 +19570,16 @@ mod tests {
         kura.store_block(block).expect("budgeted store block");
 
         let temp_dir = TempDir::new().expect("create temp dir");
-        let block = DummyBlocks::new().next();
-        let block_required = {
-            let wire = block.canonical_wire().expect("block wire");
-            let (frame, _) = wire.into_parts();
-            let frame_len = u64::try_from(frame.len()).expect("frame length");
-            frame_len
-                .saturating_add(BlockIndex::SIZE)
-                .saturating_add(SIZE_OF_BLOCK_HASH)
-        };
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
+        let parent_required = Kura::block_required_bytes(&parent).expect("parent block bytes");
+        let block_required = Kura::block_required_bytes(&block).expect("carrier block bytes");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
-            max_disk_usage_bytes: iroha_config::base::util::Bytes(block_required),
+            max_disk_usage_bytes: iroha_config::base::util::Bytes(u64::MAX),
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
@@ -19542,8 +19595,10 @@ mod tests {
         let baseline = kura.kura_disk_usage_bytes().expect("baseline usage");
         Arc::get_mut(&mut kura)
             .expect("exclusive kura handle")
-            .max_disk_usage_bytes = baseline.saturating_add(block_required);
-        let entry = sample_merge_entry(7);
+            .max_disk_usage_bytes = baseline
+            .saturating_add(parent_required)
+            .saturating_add(block_required);
+        kura.store_block(parent).expect("store carrier parent");
         let err = kura
             .store_block_with_merge_entry(block, &entry)
             .expect_err("merge entry should exceed budget");
@@ -20165,14 +20220,17 @@ mod tests {
         );
         *kura.merge_log.lock() = failing_log;
 
-        let block = DummyBlocks::new().next();
-        let entry = sample_merge_entry(11);
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
 
+        kura.store_block(parent).expect("store carrier parent");
         let err = kura
             .store_block_with_merge_entry(block, &entry)
             .expect_err("merge log append should fail");
         assert!(matches!(err, Error::IO(_, _)));
-        assert_eq!(kura.blocks_count(), 0);
+        assert_eq!(kura.blocks_count(), 1);
     }
 
     #[test]
@@ -20439,11 +20497,14 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         kura.block_notify_rx.lock().take();
 
-        let block = DummyBlocks::new().next();
-        let entry = sample_merge_entry(7);
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let block = next_merge_carrier(&mut blocks, &mut entry);
+        kura.store_block(parent).expect("store carrier parent");
         kura.store_block_with_merge_entry(block, &entry)
             .expect("store block with merge entry");
-        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.blocks_count(), 2);
         assert_eq!(kura.merge_ledger_snapshot().len(), 1);
     }
 
@@ -25939,13 +26000,16 @@ mod tests {
         let lane_entry = lane_config.entry(lane_id).expect("lane entry");
         let lane_block_height = 1;
         let mut generator = DummyBlocks::new();
+        let parent = generator.next();
         let aborted = dummy_block_with_lane_payload_ownership_from_generator(
             &mut generator,
             lane_id,
             lane_entry.dataspace_id,
             lane_block_height,
         );
-        let mut replacement_generator = DummyBlocks::new();
+        let mut replacement_generator = DummyBlocks {
+            blocks: vec![Arc::clone(&parent)],
+        };
         let replacement = dummy_block_with_lane_payload_ownership_from_generator(
             &mut replacement_generator,
             lane_id,
@@ -25954,6 +26018,7 @@ mod tests {
         );
         assert_ne!(aborted.hash(), replacement.hash());
         let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(parent).expect("store carrier parent");
         let failing_dir = tempfile::tempdir().expect("tempdir");
         let log_path = failing_dir.path().join("merge.log");
         fs::write(&log_path, []).expect("seed merge log file");
@@ -25965,13 +26030,14 @@ mod tests {
             .expect("open read-only merge log"),
         );
         *kura.merge_log.lock() = failing_log;
-        let entry = sample_merge_entry(11);
+        let mut entry = sample_merge_entry(1);
+        let aborted = bind_merge_entry_to_carrier(aborted, &mut entry);
 
         let err = kura
             .store_block_with_merge_entry(aborted, &entry)
             .expect_err("merge log append should fail");
         assert!(matches!(err, Error::IO(_, _)));
-        assert_eq!(kura.blocks_count(), 0);
+        assert_eq!(kura.blocks_count(), 1);
         assert!(
             kura.read_lane_block_artifact(lane_id, lane_block_height)
                 .is_none(),

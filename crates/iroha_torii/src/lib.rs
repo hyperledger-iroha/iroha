@@ -6376,35 +6376,282 @@ async fn handler_offline_note_readiness(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+struct OfflineKagemushaReadinessQuery {
+    asset_definition_id: String,
+}
+
+#[cfg(feature = "app_api")]
+fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn offline_kagemusha_readiness_verifier_entry(
+    world: &impl WorldReadOnly,
+    block_height: u64,
+    circuit_id: &str,
+    role: &str,
+    purpose: &str,
+) -> Result<Option<norito::json::Value>, Error> {
+    let selected = world
+        .verifying_keys_by_circuit()
+        .iter()
+        .filter(|((registered_circuit_id, _), _)| registered_circuit_id == circuit_id)
+        .filter_map(|((_, version), id)| {
+            world
+                .verifying_keys()
+                .get(id)
+                .filter(|record| record.version == *version && record.is_active_at(block_height))
+                .map(|record| (*version, id.clone(), record.clone()))
+        })
+        .max_by_key(|(version, _, _)| *version);
+    let Some((_, id, record)) = selected else {
+        return Ok(None);
+    };
+    if record.circuit_id != circuit_id {
+        return Err(offline_kagemusha_readiness_error(format!(
+            "active {role} verifier index points at circuit `{}` instead of `{circuit_id}`",
+            record.circuit_id
+        )));
+    }
+    let record_archive = norito::to_bytes(&record).map_err(|error| {
+        offline_kagemusha_readiness_error(format!(
+            "failed to encode active {role} verifier record: {error}"
+        ))
+    })?;
+    let record_sha256 = hex::encode(sha2::Sha256::digest(&record_archive));
+    Ok(Some(json_object([
+        json_entry("role", role),
+        json_entry("purpose", purpose),
+        (
+            "id",
+            json_object([
+                json_entry("backend", id.backend.clone()),
+                json_entry("name", id.name.clone()),
+            ]),
+        ),
+        json_entry("circuit_id", record.circuit_id),
+        json_entry(
+            "record_norito_base64",
+            BASE64_STANDARD.encode(record_archive),
+        ),
+        json_entry(
+            "public_inputs_schema_hash",
+            hex::encode(record.public_inputs_schema_hash),
+        ),
+        json_entry("record_sha256", record_sha256),
+        json_entry("activation_height", record.activation_height),
+        json_entry("withdraw_height", record.withdraw_height),
+        json_entry("active_at_snapshot", record.is_active_at(block_height)),
+    ])))
+}
+
+#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_v2_note_readiness(
     State(app): State<SharedAppState>,
+    crate::NoritoQuery(query): crate::NoritoQuery<OfflineKagemushaReadinessQuery>,
 ) -> Result<impl IntoResponse, Error> {
-    let offline = &app.state.settlement.offline;
-    let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_recursive_compact_artifacts =
-        offline_kagemusha_recursive_compact_available;
+    let asset_definition_id = parse_asset_definition_id(&app, &query.asset_definition_id)?;
+    let world = app.state.world_view();
+    let asset_definition = world.asset_definition(&asset_definition_id).map_err(|_| {
+        offline_kagemusha_readiness_error(format!(
+            "asset definition `{asset_definition_id}` is not registered"
+        ))
+    })?;
+    let asset_scale = asset_definition.spec().scale().ok_or_else(|| {
+        offline_kagemusha_readiness_error(format!(
+            "asset definition `{asset_definition_id}` has no authoritative numeric scale"
+        ))
+    })?;
+    if asset_scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
+        return Err(offline_kagemusha_readiness_error(format!(
+            "asset definition `{asset_definition_id}` scale {asset_scale} exceeds the Kagemusha V2 maximum"
+        )));
+    }
+    let block_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let transfer = offline_kagemusha_readiness_verifier_entry(
+        &world,
+        block_height,
+        iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2,
+    )?;
+    let unshield = offline_kagemusha_readiness_verifier_entry(
+        &world,
+        block_height,
+        iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2,
+    )?;
+    let lineage_init = offline_kagemusha_readiness_verifier_entry(
+        &world,
+        block_height,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_INIT_V2,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_INIT_V2,
+    )?;
+    let lineage_append = offline_kagemusha_readiness_verifier_entry(
+        &world,
+        block_height,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_APPEND_V2,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_APPEND_V2,
+    )?;
+    let records_ready = transfer.is_some()
+        && unshield.is_some()
+        && lineage_init.is_some()
+        && lineage_append.is_some();
+    // V1 proofs do not bind public split amounts/branch coordinates and V1
+    // redemption consumes a shared top-up anchor. Never advertise V2 merely
+    // because those older verifier records exist.
+    let proof_backend_available =
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE;
+    let witnessless_reserved_lineage_supported = false;
+    let artifacts_ready = false;
+    let supports_multi_input = false;
+    let available = app.state.settlement.offline.kagemusha_enabled
+        && records_ready
+        && proof_backend_available
+        && witnessless_reserved_lineage_supported
+        && artifacts_ready
+        && supports_multi_input;
     json_ok(json_object([
-        json_entry("offline_telemetry", true),
+        json_entry("version", 2_u64),
+        json_entry("chain_id", app.chain_id.to_string()),
+        json_entry("block_height", block_height),
+        json_entry("mode", "recursive_spend_v1"),
+        json_entry("available", available),
+        json_entry("required_bridge_abi", 17_u64),
+        json_entry("artifact_set", "kagemusha_recursive_spend_v2"),
+        ("artifact_generation", norito::json::Value::Null),
+        json_entry("artifacts_ready", artifacts_ready),
+        json_entry("supports_multi_input", supports_multi_input),
+        json_entry("v2_proof_backend_available", proof_backend_available),
         json_entry(
-            "offline_kagemusha_recursive_compact_available",
-            offline_kagemusha_recursive_compact_available,
+            "reserved_lineage_witnessless_redemption_available",
+            witnessless_reserved_lineage_supported,
         ),
+        json_entry("asset_definition_id", asset_definition_id.to_string()),
+        json_entry("asset_scale", asset_scale),
         json_entry(
-            "offline_kagemusha_recursive_compact_mode",
-            "recursive_compact_v1",
+            "max_hops",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
         ),
-        json_entry(
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            7_u64,
+        (
+            "verifiers",
+            json_object([
+                json_entry("transfer", transfer),
+                json_entry("unshield", unshield),
+                json_entry("lineage_init", lineage_init),
+                json_entry("lineage_append", lineage_append),
+            ]),
         ),
-        json_entry(
-            "offline_kagemusha_recursive_compact_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry(
-            "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_recursive_compact_artifacts,
+        (
+            "artifacts",
+            json_object([
+                (
+                    "transfer_prover",
+                    json_object([
+                        json_entry(
+                            "role",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+                        ),
+                        json_entry("delivery", "bridge_embedded"),
+                        json_entry(
+                            "purpose",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2,
+                        ),
+                        json_entry(
+                            "circuit_id",
+                            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                        ),
+                        json_entry("artifact_type", "halo2_ipa_proving_key"),
+                        json_entry("size_bytes", 0_u64),
+                        ("sha256_hex", norito::json::Value::Null),
+                        ("url", norito::json::Value::Null),
+                        json_entry("ready", false),
+                    ]),
+                ),
+                (
+                    "unshield_prover",
+                    json_object([
+                        json_entry(
+                            "role",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+                        ),
+                        json_entry("delivery", "bridge_embedded"),
+                        json_entry(
+                            "purpose",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2,
+                        ),
+                        json_entry(
+                            "circuit_id",
+                            iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                        ),
+                        json_entry("artifact_type", "halo2_ipa_proving_key"),
+                        json_entry("size_bytes", 0_u64),
+                        ("sha256_hex", norito::json::Value::Null),
+                        ("url", norito::json::Value::Null),
+                        json_entry("ready", false),
+                    ]),
+                ),
+                (
+                    "lineage_init_prover",
+                    json_object([
+                        json_entry(
+                            "role",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_INIT_V2,
+                        ),
+                        json_entry("delivery", "torii_stream"),
+                        json_entry(
+                            "purpose",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_INIT_V2,
+                        ),
+                        json_entry(
+                            "circuit_id",
+                            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+                        ),
+                        json_entry(
+                            "artifact_type",
+                            "KagemushaRecursiveSpendLineageKeyArtifactsV2",
+                        ),
+                        json_entry("size_bytes", 0_u64),
+                        ("sha256_hex", norito::json::Value::Null),
+                        ("url", norito::json::Value::Null),
+                        json_entry("ready", false),
+                    ]),
+                ),
+                (
+                    "lineage_append_prover",
+                    json_object([
+                        json_entry(
+                            "role",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_APPEND_V2,
+                        ),
+                        json_entry("delivery", "torii_stream"),
+                        json_entry(
+                            "purpose",
+                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_APPEND_V2,
+                        ),
+                        json_entry(
+                            "circuit_id",
+                            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
+                        ),
+                        json_entry(
+                            "artifact_type",
+                            "KagemushaRecursiveSpendLineageKeyArtifactsV2",
+                        ),
+                        json_entry("size_bytes", 0_u64),
+                        ("sha256_hex", norito::json::Value::Null),
+                        ("url", norito::json::Value::Null),
+                        json_entry("ready", false),
+                    ]),
+                ),
+            ]),
         ),
     ]))
 }
@@ -39783,20 +40030,8 @@ impl Torii {
                     post(handler_repo_agreements_query),
                 )
                 .route(
-                    "/v1/offline/readiness",
-                    get(handler_offline_note_readiness),
-                )
-                .route(
-                    "/v1/offline/v2/readiness",
+                    "/v1/offline/v2/kagemusha/readiness",
                     get(handler_offline_v2_note_readiness),
-                )
-                .route(
-                    "/v1/offline/v2/keys/refill",
-                    post(handler_offline_v2_note_keys_refill),
-                )
-                .route(
-                    "/v1/offline/v2/notes/issue",
-                    post(handler_offline_v2_note_notes_issue),
                 )
                 .route(
                     "/v1/offline/v2/notes/redeem",
@@ -39805,8 +40040,7 @@ impl Torii {
                 .route(
                     "/v1/offline/v2/kagemusha/topup",
                     post(handler_offline_v2_kagemusha_topup),
-                )
-                .route("/v1/offline/v2/audit", post(handler_offline_v2_note_audit));
+                );
             #[cfg(feature = "push")]
             let router = router.route(
                 "/v1/notify/devices",

@@ -41,6 +41,7 @@ from sccp_source_template_hashes import (  # noqa: E402
 
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_SOL = 3
+SCCP_SOLANA_XOR_ROUTE_ID = "taira_sol_xor"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET = "fastpq-lane-balanced"
@@ -79,6 +80,7 @@ SOLANA_SOURCE_NETWORK_PROFILES = {
     "mainnet-beta": {
         "aliases": ("mainnet-beta", "mainnet", "solana-mainnet-beta"),
         "network_id": "solana-mainnet-beta",
+        "transcript_domain": "sccp:solana:source-profile:mainnet-beta:v1",
         "record_suffix": "mainnet-beta",
         "proof_backend": "sccp-solana-recursive-mainnet-v1",
         "genesis_hash": SOLANA_MAINNET_GENESIS_HASH,
@@ -97,6 +99,7 @@ SOLANA_SOURCE_NETWORK_PROFILES = {
     "testnet": {
         "aliases": ("testnet", "solana-testnet"),
         "network_id": "solana-testnet",
+        "transcript_domain": "sccp:solana:source-profile:testnet:v1",
         "record_suffix": "testnet",
         "proof_backend": "sccp-solana-recursive-testnet-v1",
         "genesis_hash": SOLANA_TESTNET_GENESIS_HASH,
@@ -399,7 +402,7 @@ def solana_template_component_hash(
     *,
     solana_network: str = "mainnet-beta",
 ) -> bytes:
-    """Return the built-in Solana mainnet source-material template hash."""
+    """Return a built-in Solana source-profile material component hash."""
 
     profile = _solana_profile_for_network(solana_network)
     out = bytearray()
@@ -409,6 +412,9 @@ def solana_template_component_hash(
     _push_u8(out, SOURCE_PROOF_PLAN_SOLANA_FINALIZED_TRANSACTION)
     _push_u8(out, FINALITY_MODEL_SOLANA_FINALIZED_SLOT)
     _push_vec(out, SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID.encode())
+    if _solana_profile_string(profile, "network_id") == "solana-testnet":
+        _push_vec(out, _solana_profile_string(profile, "transcript_domain").encode())
+        _push_vec(out, _solana_profile_string(profile, "network_id").encode())
     _push_vec(out, _solana_profile_string(profile, "proof_backend").encode())
     _push_vec(out, _solana_profile_string(profile, "genesis_hash").encode())
     _push_u64(out, _solana_profile_u64(profile, "slots_per_epoch"))
@@ -1080,9 +1086,17 @@ def _material_lines(args: argparse.Namespace) -> Iterable[str]:
     profile = _solana_profile(args)
     yield "[[zk.sccp_source_verifier_materials]]"
     yield _toml_line("version", 1)
+    yield _toml_line("route_id", SCCP_SOLANA_XOR_ROUTE_ID)
     yield _toml_line("source_domain", args.source_domain)
+    yield _toml_line("target_domain", args.target_domain)
     yield _toml_line("source_chain", "sol")
     yield _toml_line("solana_network", _solana_profile_string(profile, "network_id"))
+    yield _toml_line(
+        "solana_genesis_hash", _solana_profile_string(profile, "genesis_hash")
+    )
+    yield _toml_line(
+        "proof_backend", _solana_profile_string(profile, "proof_backend")
+    )
     yield _toml_line("source_proof_plan", "SolanaFinalizedTransactionProof")
     yield _toml_line("finality_model", "SolanaFinalizedSlot")
     yield _toml_line("adapter_circuit_id", "sccp-source-adapter-v1")
@@ -1109,10 +1123,17 @@ def _deployment_lines(args: argparse.Namespace) -> Iterable[str]:
     profile = _solana_profile(args)
     yield "[[zk.sccp_source_adapter_engine_deployments]]"
     yield _toml_line("version", 1)
+    yield _toml_line("route_id", SCCP_SOLANA_XOR_ROUTE_ID)
     yield _toml_line("source_domain", args.source_domain)
     yield _toml_line("target_domain", args.target_domain)
     yield _toml_line("source_chain", "sol")
     yield _toml_line("solana_network", _solana_profile_string(profile, "network_id"))
+    yield _toml_line(
+        "solana_genesis_hash", _solana_profile_string(profile, "genesis_hash")
+    )
+    yield _toml_line(
+        "proof_backend", _solana_profile_string(profile, "proof_backend")
+    )
     yield _toml_line("source_proof_plan", "SolanaFinalizedTransactionProof")
     yield _toml_line("finality_model", "SolanaFinalizedSlot")
     yield _toml_line("adapter_proof_family", SCCP_PROOF_FAMILY_STARK_FRI)
@@ -1261,6 +1282,7 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         "source_chain": "sol",
         "solana_network": _solana_profile_string(profile, "network_id"),
         "solana_genesis_hash": _solana_profile_string(profile, "genesis_hash"),
+        "proof_backend": _solana_profile_string(profile, "proof_backend"),
         "source_proof_plan": "SolanaFinalizedTransactionProof",
         "finality_model": "SolanaFinalizedSlot",
         "source_trust_anchor_id": _source_trust_anchor_id(profile),

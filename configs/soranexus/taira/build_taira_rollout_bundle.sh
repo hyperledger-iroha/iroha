@@ -22,6 +22,11 @@ result can be tied to one exact git revision. It also runs the focused
 `iroha_core` SoraSwap deploy-route router regression and three-hop nested
 transfer authority canary before packaging.
 
+Production invocations must enter through
+`dpn-api-rust/ops/taira/build-validator-bundle.sh`. That wrapper installs the
+reviewed full Cargo lock, verifies its checksum and Rust toolchain, rejects a
+dirty source tree, and supplies reviewed build provenance to this script.
+
 The bundle contains:
   - `irohad` and `iroha` from `target/<profile>/`
   - `sorafs_manifest_stub` and `sorafs_tx_stdin_builder` from `target/<profile>/`

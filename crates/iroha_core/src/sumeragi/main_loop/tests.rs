@@ -172239,15 +172239,14 @@ async fn pending_block_hydration_invalidates_mismatched_root_and_clears_deferral
         seeded.total_chunks(),
         Some(payload_hash),
         Some(mismatched_root),
-        Some(
-            seeded
-                .expected_chunk_digests
-                .clone()
-                .expect("chunk digests"),
-        ),
+        None,
         epoch,
     )
     .expect("init session");
+    assert!(
+        !init_session.is_invalid(),
+        "root-only metadata must remain live until payload hydration"
+    );
 
     let key = Actor::session_key(&block_hash, height, view);
     actor

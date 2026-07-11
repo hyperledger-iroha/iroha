@@ -32,10 +32,16 @@ on:
         required: false
         type: boolean
         default: false
+      validator_lock_ref:
+        description: "DPN API branch, tag, or SHA containing the reviewed Taira validator lock"
+        required: true
+        type: string
+        default: master
 
 env:
   DEFAULTS_DIR: defaults
   WASM_TARGET_DIR: wasm/target/prebuilt
+  DPN_VALIDATOR_LOCK_SHA256: 08c939a65668814951adbd6f09ec4589a368dc41a7daac3cb3e8a096d8679986
 
 jobs:
   build_wasm_libs:
@@ -161,6 +167,20 @@ jobs:
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
 
+      - name: Install reviewed DPN validator lock
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          lock_ref='${{ inputs.validator_lock_ref }}'
+          if [[ ! "$lock_ref" =~ ^[A-Za-z0-9._/-]+$ || "$lock_ref" == *..* ]]; then
+            echo "validator_lock_ref contains unsupported characters" >&2
+            exit 1
+          fi
+          lock_url="https://raw.githubusercontent.com/soramitsu/dpn-api-rust/${lock_ref}/ops/iroha/taira-validator.Cargo.lock"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --location --retry 3 --output Cargo.lock "$lock_url"
+          printf '%s  %s\n' "$DPN_VALIDATOR_LOCK_SHA256" Cargo.lock | sha256sum -c -
+
       - name: Resolve checkout metadata
         id: checkout_meta
         shell: bash
@@ -236,6 +256,7 @@ jobs:
             "FEATURES=embedded-soracloud-runtime"
             "CARGO_BUILD_JOBS=1"
             "BINARIES=irohad kagami"
+            "VALIDATOR_LOCK_SHA256=${{ env.DPN_VALIDATOR_LOCK_SHA256 }}"
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -257,6 +278,7 @@ jobs:
             "FEATURES=embedded-soracloud-runtime"
             "CARGO_BUILD_JOBS=1"
             "BINARIES=irohad"
+            "VALIDATOR_LOCK_SHA256=${{ env.DPN_VALIDATOR_LOCK_SHA256 }}"
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -275,5 +297,6 @@ jobs:
             "FEATURES=embedded-soracloud-runtime"
             "CARGO_BUILD_JOBS=1"
             "BINARIES=irohad"
+            "VALIDATOR_LOCK_SHA256=${{ env.DPN_VALIDATOR_LOCK_SHA256 }}"
           cache-from: type=gha
           cache-to: type=gha,mode=max

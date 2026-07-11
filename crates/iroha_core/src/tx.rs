@@ -964,6 +964,8 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
     }
     any.is::<iroha_data_model::isi::offline::KagemushaTransfer>()
         || any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>()
+        || any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>()
+        || any.is::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()

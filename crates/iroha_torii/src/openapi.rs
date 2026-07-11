@@ -677,50 +677,33 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/readiness".to_owned(),
+        "/v1/offline/v2/kagemusha/readiness".to_owned(),
         Value::Object(json_get_operation(
             "Offline",
-            "Report Offline feature readiness.",
-            "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
+            "Report recursive-spend Kagemusha V2 readiness.",
+            "Returns one fail-closed, asset-scale-aware snapshot for recursive_spend_v1. Availability requires the V2 branch-safe proving backend, active transfer/unshield/Reserved-lineage verifier records, witnessless Reserved redemption, and the complete content-addressed artifact set.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![norito::json!({
+                "name": "asset_definition_id",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "string" },
+                "description": "Canonical asset definition id whose live on-chain scale and verifier readiness are reported."
+            })],
         )),
     );
-    paths.insert(
-        "/v1/offline/v2/readiness".to_owned(),
-        Value::Object(json_get_operation(
-            "Offline",
-            "Report Offline V2 feature readiness.",
-            "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    for (path, summary, description) in [
-        (
-            "/v1/offline/v2/keys/refill",
-            "Refill Offline V2 issuer keys.",
-            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
-        ),
-        (
-            "/v1/offline/v2/notes/issue",
-            "Retired Offline V2 note issue route.",
-            "Classic Offline V2 note issuance is retired and this retired route fails closed. Use /v1/offline/v2/kagemusha/topup for Kagemusha online-to-offline top-up. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
-        ),
+    for (path, summary, description, request_schema) in [
         (
             "/v1/offline/v2/kagemusha/topup",
             "Top up recursive Kagemusha offline cash.",
-            "POST a recursive Kagemusha online-to-offline top-up request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Production top-up requires topup_request_norito_base64 as canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV1 bytes with no surrounding whitespace. The authenticated account_id is charged for the archive-bound asset_definition_id, and retired Offline Note issue fields plus raw init-request top-up fields are rejected.",
+            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV2 archive in topup_request_norito_base64. The archive carries its signed payer/device authorization, exact atomic u128 amount and live asset scale. Unknown or retired Offline Note fields are rejected; no legacy issue fallback is mounted.",
+            "#/components/schemas/KagemushaTopUpRequestV2Body",
         ),
         (
             "/v1/offline/v2/notes/redeem",
-            "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
-        ),
-        (
-            "/v1/offline/v2/audit",
-            "Retired Offline V2 audit route.",
-            "Classic Offline V2 audit is retired and this retired route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Redeem recursive Kagemusha offline cash.",
+            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64. The archive carries its signed recipient/device authorization, exact atomic u128 credit amount, proof-bound optional offline change, and Reserved or verified semantic lineage data. Unknown, compact-projection, and retired Offline Note fields are rejected.",
+            "#/components/schemas/KagemushaRedeemRequestV2Body",
         ),
     ] {
         paths.insert(
@@ -729,7 +712,7 @@ fn offline_paths() -> Map {
                 "Offline",
                 summary,
                 description,
-                "#/components/schemas/OfflineIssuerBodyAuthRequest",
+                request_schema,
                 "#/components/schemas/JsonValue",
                 Vec::new(),
             )),
@@ -10060,45 +10043,35 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "OfflineIssuerBodyAuthRequest".to_owned(),
+        "KagemushaTopUpRequestV2Body".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Offline issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
-            "required": ["account_id", "timestamp_ms", "nonce"],
-            "additionalProperties": true,
+            "description": "Strict canonical Kagemusha V2 online-to-offline request envelope.",
+            "required": ["topup_request_norito_base64"],
+            "additionalProperties": false,
             "properties": {
-                "account_id": {
+                "topup_request_norito_base64": {
                     "type": "string",
-                    "description": "Canonical Iroha account id authorizing the issuer request."
-                },
-                "timestamp_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Unix timestamp in milliseconds included in the canonical signing envelope."
-                },
-                "nonce": {
-                    "type": "string",
-                    "description": "Caller-chosen replay nonce included in the canonical signing envelope."
-                },
-                "signature_base64": {
-                    "type": "string",
-                    "description": "Non-empty exact base64 single-account signature over the body-auth canonical request; leading or trailing whitespace is rejected."
-                },
-                "witness_base64": {
-                    "type": "string",
-                    "description": "Non-empty exact base64 Norito CanonicalRequestWitnessV1 for multisig accounts; leading or trailing whitespace is rejected."
+                    "minLength": 1,
+                    "description": "Canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected."
                 }
-            },
-            "oneOf": [
-                {
-                    "required": ["signature_base64"],
-                    "not": { "required": ["witness_base64"] }
-                },
-                {
-                    "required": ["witness_base64"],
-                    "not": { "required": ["signature_base64"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "KagemushaRedeemRequestV2Body".to_owned(),
+        norito::json!({
+            "type": "object",
+            "description": "Strict canonical Kagemusha V2 offline-to-online redemption envelope.",
+            "required": ["redeem_request_norito_base64"],
+            "additionalProperties": false,
+            "properties": {
+                "redeem_request_norito_base64": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected."
                 }
-            ]
+            }
         }),
     );
     schemas.insert(
@@ -13829,7 +13802,7 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/activity"));
         assert!(paths.contains_key("/v1/contracts/events"));
         assert!(paths.contains_key("/v1/contracts/events/sse"));
-        assert!(paths.contains_key("/v1/offline/readiness"));
+        assert!(paths.contains_key("/v1/offline/v2/kagemusha/readiness"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -13949,44 +13922,20 @@ mod tests {
         assert!(paths.contains_key("/v1/notify/devices"));
         assert!(!paths.contains_key("/v1/offline/keys/refill"));
         assert!(!paths.contains_key("/v1/offline/notes/issue"));
-        assert!(paths.contains_key("/v1/offline/v2/readiness"));
-        assert!(paths.contains_key("/v1/offline/v2/keys/refill"));
-        assert!(paths.contains_key("/v1/offline/v2/notes/issue"));
+        assert!(!paths.contains_key("/v1/offline/readiness"));
+        assert!(!paths.contains_key("/v1/offline/v2/readiness"));
+        assert!(!paths.contains_key("/v1/offline/v2/keys/refill"));
+        assert!(!paths.contains_key("/v1/offline/v2/notes/issue"));
+        assert!(paths.contains_key("/v1/offline/v2/kagemusha/readiness"));
         assert!(paths.contains_key("/v1/offline/v2/kagemusha/topup"));
         assert!(paths.contains_key("/v1/offline/v2/notes/redeem"));
-        assert!(paths.contains_key("/v1/offline/v2/audit"));
+        assert!(!paths.contains_key("/v1/offline/v2/audit"));
         assert!(!paths.contains_key("/v1/offline/notes/redeem"));
         assert!(!paths.contains_key("/v1/offline/audit"));
         assert!(!paths.contains_key("/v1/offline/policy"));
         assert!(!paths.contains_key("/v1/offline/revocations"));
         assert!(!paths.contains_key("/v1/offline/revocations/bundle"));
         assert!(!paths.contains_key("/v1/attestation/issue"));
-        let refill_post = paths
-            .get("/v1/offline/v2/keys/refill")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .expect("offline refill post operation");
-        let refill_description = refill_post
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("offline refill description");
-        assert!(refill_description.contains("signature_base64 or witness_base64"));
-        assert!(refill_description.contains("X-Iroha-* app-auth headers are rejected"));
-        let issue_post = paths
-            .get("/v1/offline/v2/notes/issue")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .expect("offline issue post operation");
-        let issue_description = issue_post
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("offline issue description");
-        assert!(issue_description.contains("retired"));
-        assert!(issue_description.contains("retired route fails closed"));
-        assert!(!issue_description.contains("compatibility route"));
-        assert!(issue_description.contains("/v1/offline/v2/kagemusha/topup"));
         let topup_post = paths
             .get("/v1/offline/v2/kagemusha/topup")
             .and_then(Value::as_object)
@@ -13999,22 +13948,8 @@ mod tests {
             .expect("offline Kagemusha top-up description");
         assert!(topup_description.contains("topup_request_norito_base64"));
         assert!(!topup_description.contains("topup_init_request_norito_base64"));
-        assert!(topup_description.contains("KagemushaRecursiveSpendTopUpRequestV1"));
-        assert!(topup_description.contains("authenticated account_id is charged"));
-        let audit_post = paths
-            .get("/v1/offline/v2/audit")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("post"))
-            .and_then(Value::as_object)
-            .expect("offline audit post operation");
-        let audit_description = audit_post
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("offline audit description");
-        assert!(audit_description.contains("retired"));
-        assert!(audit_description.contains("retired route fails closed"));
-        assert!(!audit_description.contains("compatibility route"));
-        assert!(audit_description.contains("Kagemusha payment flows"));
+        assert!(topup_description.contains("KagemushaRecursiveSpendTopUpRequestV2"));
+        assert!(topup_description.contains("signed payer/device authorization"));
         let redeem_post = paths
             .get("/v1/offline/v2/notes/redeem")
             .and_then(Value::as_object)
@@ -14026,12 +13961,9 @@ mod tests {
             .and_then(Value::as_str)
             .expect("offline redeem description");
         assert!(redeem_description.contains("redeem_request_norito_base64"));
-        assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV1"));
-        assert!(redeem_description.contains("compact_payment_token_norito_base64"));
-        assert!(redeem_description.contains("projection_verifier_record_norito_base64"));
-        assert!(redeem_description.contains("source_note_commitment"));
-        assert!(redeem_description.contains("ignored auxiliary fields"));
-        let refill_request_schema = refill_post
+        assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV2"));
+        assert!(redeem_description.contains("signed recipient/device authorization"));
+        let topup_request_schema = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
@@ -14042,55 +13974,43 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str)
-            .expect("offline refill request schema");
+            .expect("Kagemusha top-up request schema");
         assert_eq!(
-            refill_request_schema,
-            "#/components/schemas/OfflineIssuerBodyAuthRequest"
+            topup_request_schema,
+            "#/components/schemas/KagemushaTopUpRequestV2Body"
         );
     }
 
     #[test]
-    fn generated_spec_documents_offline_body_auth_schema() {
+    fn generated_spec_documents_strict_kagemusha_v2_body_schemas() {
         let doc = generate_spec();
-        let schema = doc
+        let schemas = doc
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .and_then(|schemas| schemas.get("OfflineIssuerBodyAuthRequest"))
-            .and_then(Value::as_object)
-            .expect("Offline body auth schema");
-        let required = schema
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("required fields");
-        for field in ["account_id", "timestamp_ms", "nonce"] {
-            assert!(required.contains(&Value::String(field.to_owned())));
-        }
-        let one_of = schema
-            .get("oneOf")
-            .and_then(Value::as_array)
-            .expect("proof oneOf");
-        assert_eq!(one_of.len(), 2);
-        let description = schema
-            .get("description")
-            .and_then(Value::as_str)
-            .expect("schema description");
-        assert!(description.contains("exactly one non-empty exact proof field"));
-        assert!(description.contains("nested fields with those names remain signed"));
-        let properties = schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("schema properties");
-        for field in ["signature_base64", "witness_base64"] {
-            let description = properties
-                .get(field)
+            .expect("component schemas");
+        for (schema_name, field) in [
+            ("KagemushaTopUpRequestV2Body", "topup_request_norito_base64"),
+            (
+                "KagemushaRedeemRequestV2Body",
+                "redeem_request_norito_base64",
+            ),
+        ] {
+            let schema = schemas
+                .get(schema_name)
                 .and_then(Value::as_object)
-                .and_then(|property| property.get("description"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            assert!(description.contains("leading or trailing whitespace is rejected"));
+                .expect("Kagemusha V2 body schema");
+            assert_eq!(
+                schema.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            assert_eq!(
+                schema.get("required").and_then(Value::as_array),
+                Some(&vec![Value::String(field.to_owned())])
+            );
         }
+        assert!(!schemas.contains_key("OfflineIssuerBodyAuthRequest"));
     }
 
     #[test]
@@ -15114,7 +15034,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/readiness",
+                expected: "/v1/offline/v2/kagemusha/readiness",
             },
             PathCase {
                 label: "system",

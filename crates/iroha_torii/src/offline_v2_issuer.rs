@@ -1,4 +1,5 @@
 use std::{
+    num::NonZeroUsize,
     str::FromStr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -11,22 +12,27 @@ use base64::{
 };
 use iroha_config::parameters::actual;
 use iroha_core::state::WorldReadOnly;
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{
         InstructionBox,
-        offline::{RedeemKagemushaRecursive, TopUpKagemushaRecursive},
+        offline::{
+            RedeemKagemushaRecursive, RedeemKagemushaRecursiveV2, TopUpKagemushaRecursive,
+            TopUpKagemushaRecursiveV2,
+        },
     },
+    name::Name,
     offline::{
-        KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendTopUpRequestV1,
-        OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
-        OfflineNoteRedeem,
+        KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendRedeemRequestV2,
+        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRecursiveSpendTopUpRequestV1,
+        KagemushaRecursiveSpendTopUpRequestV2, OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
 use iroha_primitives::numeric::Numeric;
 use norito::json::{self, Map, Value};
@@ -38,12 +44,12 @@ use crate::{AppState, Error, SharedAppState, app_auth, json_ok, routing};
 const ENDPOINT_KEYS_REFILL: &str = "v1/offline/v2/keys/refill";
 const ENDPOINT_NOTES_ISSUE: &str = "v1/offline/v2/notes/issue";
 const ENDPOINT_KAGEMUSHA_TOPUP: &str = "v1/offline/v2/kagemusha/topup";
-const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/notes/redeem";
+const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/kagemusha/redeem";
 const ENDPOINT_AUDIT: &str = "v1/offline/v2/audit";
 const PATH_KEYS_REFILL: &str = "/v1/offline/v2/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/v2/notes/issue";
 const PATH_KAGEMUSHA_TOPUP: &str = "/v1/offline/v2/kagemusha/topup";
-const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";
+const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/kagemusha/redeem";
 const OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN: usize = 65;
 const OFFLINE_V2_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA6; 64];
 const ATTESTATION_RECEIPT_FIELDS: &[&str] = &[
@@ -314,64 +320,48 @@ pub(crate) async fn handle_notes_issue(
 
 pub(crate) async fn handle_kagemusha_topup(
     app: SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
+    _method: &axum::http::Method,
+    _uri: &axum::http::Uri,
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<AxResponse, Error> {
     let issuer = require_issuer(&app)?;
-    let parsed = parse_and_authorize(
-        app.as_ref(),
-        method,
-        uri,
-        headers,
+    reject_x_iroha_auth_headers(headers)?;
+    let topup_request = parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendTopUpRequestV2>(
         body.as_ref(),
-        ENDPOINT_KAGEMUSHA_TOPUP,
+        "topup_request_norito_base64",
+        "KagemushaRecursiveSpendTopUpRequestV2",
     )?;
-    let topup_request = parse_kagemusha_recursive_topup_request(&parsed, app.chain_id.as_ref())?;
-    if topup_request.amount > issuer.max_tx_value.clone() {
+    topup_request.validate_public_binding().map_err(|source| {
+        validation_owned(
+            "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
+            format!("Kagemusha V2 top-up request is invalid: {source}"),
+        )
+    })?;
+    validate_kagemusha_v2_topup_snapshot(&app, &topup_request)?;
+    if topup_request.init_request.amount.public_numeric() > issuer.max_tx_value.clone() {
         return Err(validation(
             "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
             "Offline Kagemusha top-up amount exceeds issuer policy.",
         ));
     }
+    if let Some(finality) = find_committed_kagemusha_v2_operation(
+        &app,
+        KagemushaV2OperationKind::TopUp,
+        &topup_request.authorization,
+    )? {
+        let anchor =
+            load_finalized_kagemusha_v2_anchor(&app, topup_request.authorization.operation_id)?;
+        return kagemusha_v2_terminal_response(finality, Some(anchor));
+    }
 
-    let step = topup_request
-        .init_request
-        .record_bundle
-        .bundle
-        .steps
-        .first()
-        .ok_or_else(|| {
-            validation(
-                "OFFLINE_KAGEMUSHA_TOPUP_INVALID",
-                "Offline Kagemusha top-up init request is missing its first hop.",
-            )
-        })?;
-    let topup_anchor_nullifiers = step
-        .input_nullifiers
-        .iter()
-        .map(|nullifier| Hash::prehashed(*nullifier).to_string())
-        .collect::<Vec<_>>();
-    let output_commitments = step
-        .output_commitments
-        .iter()
-        .map(|commitment| Hash::prehashed(*commitment).to_string())
-        .collect::<Vec<_>>();
-    let root_hint = Hash::prehashed(step.root_before).to_string();
-    let amount_string = topup_request.amount.to_string();
-    let asset_definition_literal = topup_request.asset.definition().to_string();
-    let instruction = TopUpKagemushaRecursive::new(
-        topup_request.asset,
-        topup_request.amount,
-        topup_request.init_request,
-    );
+    let instruction = TopUpKagemushaRecursiveV2::new(topup_request.clone());
     let tx = issuer.sign_transaction(
         TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
             .with_instructions([InstructionBox::from(instruction)]),
-        "offline_v2_kagemusha_recursive_topup_transaction",
+        "offline_v2_kagemusha_recursive_topup_v2_transaction",
     )?;
-    let tx_hash = tx.hash().to_string();
+    let tx_hash = tx.hash();
     routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -381,55 +371,64 @@ pub(crate) async fn handle_kagemusha_topup(
         PATH_KAGEMUSHA_TOPUP,
     )
     .await?;
-
-    json_ok(json_object(vec![
-        ("operation_id", string_value(parsed.operation_id)),
-        ("chain_tx_hash", string_value(tx_hash)),
-        (
-            "asset_definition_id",
-            string_value(asset_definition_literal),
-        ),
-        ("amount", string_value(amount_string)),
-        (
-            "topup_anchor_nullifiers",
-            Value::Array(
-                topup_anchor_nullifiers
-                    .into_iter()
-                    .map(string_value)
-                    .collect(),
-            ),
-        ),
-        (
-            "output_commitments",
-            Value::Array(output_commitments.into_iter().map(string_value).collect()),
-        ),
-        ("root_hint", string_value(root_hint)),
-    ]))
+    let finality = wait_for_kagemusha_v2_finality(&app, tx_hash).await?;
+    let anchor =
+        load_finalized_kagemusha_v2_anchor(&app, topup_request.authorization.operation_id)?;
+    kagemusha_v2_terminal_response(finality, Some(anchor))
 }
 
 pub(crate) async fn handle_notes_redeem(
     app: SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
+    _method: &axum::http::Method,
+    _uri: &axum::http::Uri,
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<AxResponse, Error> {
     let issuer = require_issuer(&app)?;
-    let parsed = parse_and_authorize(
-        app.as_ref(),
-        method,
-        uri,
-        headers,
+    reject_x_iroha_auth_headers(headers)?;
+    let redeem_request = parse_strict_kagemusha_v2_archive::<KagemushaRecursiveSpendRedeemRequestV2>(
         body.as_ref(),
-        ENDPOINT_NOTES_REDEEM,
+        "redeem_request_norito_base64",
+        "KagemushaRecursiveSpendRedeemRequestV2",
     )?;
-    if has_kagemusha_redeem_payload(&parsed.value) {
-        return handle_kagemusha_recursive_notes_redeem(app, &issuer, parsed).await;
+    redeem_request.validate_public_binding().map_err(|source| {
+        validation_owned(
+            "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
+            format!("Kagemusha V2 redemption request is invalid: {source}"),
+        )
+    })?;
+    validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;
+    if redeem_request.amount.public_numeric() > issuer.max_tx_value.clone() {
+        return Err(validation(
+            "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
+            "Offline Kagemusha redeem amount exceeds issuer policy.",
+        ));
     }
-    Err(validation(
-        "OFFLINE_V2_REDEEM_RETIRED",
-        "Classic Offline Notes V2 redemption is retired; submit RedeemKagemushaRecursive payloads.",
-    ))
+    if let Some(finality) = find_committed_kagemusha_v2_operation(
+        &app,
+        KagemushaV2OperationKind::Redeem,
+        &redeem_request.authorization,
+    )? {
+        return kagemusha_v2_terminal_response(finality, None);
+    }
+    let instruction = RedeemKagemushaRecursiveV2::new(redeem_request);
+    let tx = issuer.sign_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
+            .with_instructions([InstructionBox::from(instruction)]),
+        "offline_v2_kagemusha_recursive_redeem_v2_transaction",
+    )?;
+    let tx_hash = tx.hash();
+    routing::handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        app.telemetry.clone(),
+        PATH_NOTES_REDEEM,
+    )
+    .await?;
+    let finality = wait_for_kagemusha_v2_finality(&app, tx_hash).await?;
+    kagemusha_v2_terminal_response(finality, None)
 }
 
 async fn handle_kagemusha_recursive_notes_redeem(
@@ -585,6 +584,399 @@ fn accepted_audit_receipt_ids(value: &Value) -> Result<Vec<Value>, Error> {
         }
     }
     Ok(accepted)
+}
+
+fn parse_strict_kagemusha_v2_archive<T>(
+    body: &[u8],
+    field: &'static str,
+    archive_type: &'static str,
+) -> Result<T, Error>
+where
+    T: norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
+    let value: Value = json::from_slice(body).map_err(|err| {
+        validation_owned(
+            "OFFLINE_V2_INVALID_JSON",
+            format!("Kagemusha V2 request body is not valid JSON: {err}"),
+        )
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        validation(
+            "OFFLINE_V2_INVALID_BODY",
+            "Kagemusha V2 request body must be a JSON object.",
+        )
+    })?;
+    if object.len() != 1 || !object.contains_key(field) {
+        return Err(validation_owned(
+            "OFFLINE_V2_INVALID_BODY",
+            format!("Kagemusha V2 request body must contain exactly `{{{field}}}`."),
+        ));
+    }
+    let encoded = object.get(field).and_then(Value::as_str).ok_or_else(|| {
+        validation_owned(
+            "OFFLINE_V2_INVALID_BODY",
+            format!("Kagemusha V2 `{field}` must be a non-empty string."),
+        )
+    })?;
+    if encoded.is_empty() || encoded.trim() != encoded {
+        return Err(validation_owned(
+            "OFFLINE_V2_INVALID_BODY",
+            format!("Kagemusha V2 `{field}` must be non-empty with no surrounding whitespace."),
+        ));
+    }
+    let bytes = BASE64_STANDARD.decode(encoded).map_err(|_| {
+        validation_owned(
+            "OFFLINE_V2_INVALID_ARCHIVE",
+            format!("Kagemusha V2 `{field}` is not canonical standard base64."),
+        )
+    })?;
+    if BASE64_STANDARD.encode(&bytes) != encoded {
+        return Err(validation_owned(
+            "OFFLINE_V2_INVALID_ARCHIVE",
+            format!("Kagemusha V2 `{field}` is not canonical standard base64."),
+        ));
+    }
+    let decoded: T = norito::decode_from_bytes(&bytes).map_err(|err| {
+        validation_owned(
+            "OFFLINE_V2_INVALID_ARCHIVE",
+            format!("Kagemusha V2 `{field}` is not a canonical {archive_type} archive: {err}"),
+        )
+    })?;
+    let canonical = norito::to_bytes(&decoded).map_err(|err| Error::SerializationFailure {
+        context: "offline_v2_canonical_archive",
+        source: err,
+    })?;
+    if canonical != bytes {
+        return Err(validation_owned(
+            "OFFLINE_V2_INVALID_ARCHIVE",
+            format!("Kagemusha V2 `{field}` does not round-trip to identical canonical Norito."),
+        ));
+    }
+    Ok(decoded)
+}
+
+fn kagemusha_v2_snapshot_time_ms(app: &SharedAppState) -> u64 {
+    app.state.view().latest_block().map_or(0, |block| {
+        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+    })
+}
+
+fn validate_kagemusha_v2_topup_snapshot(
+    app: &SharedAppState,
+    request: &KagemushaRecursiveSpendTopUpRequestV2,
+) -> Result<(), Error> {
+    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+        return Err(Error::AppServiceUnavailable {
+            code: "OFFLINE_KAGEMUSHA_V2_NOT_READY",
+            message: "Kagemusha V2 proving and verification APIs are not ready.".to_owned(),
+        });
+    }
+    if request.init_request.current_note.chain_id != *app.chain_id {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_WRONG_CHAIN",
+            "Kagemusha V2 top-up request targets a different chain.",
+        ));
+    }
+    let world = app.state.world_view();
+    let definition = world
+        .asset_definition(request.asset.definition())
+        .map_err(|_| {
+            validation(
+                "OFFLINE_KAGEMUSHA_ASSET_NOT_FOUND",
+                "Kagemusha V2 top-up asset definition is not registered.",
+            )
+        })?;
+    let live_scale = definition.spec().scale().ok_or_else(|| {
+        validation(
+            "OFFLINE_KAGEMUSHA_SCALE_INVALID",
+            "Kagemusha V2 requires a fixed live asset scale.",
+        )
+    })?;
+    if request.init_request.amount.scale != live_scale {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_SCALE_MISMATCH",
+            "Kagemusha V2 top-up amount scale differs from the live asset scale.",
+        ));
+    }
+    request
+        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(app))
+        .map_err(|err| {
+            validation_owned(
+                "OFFLINE_KAGEMUSHA_AUTHORIZATION_INVALID",
+                format!("Kagemusha V2 top-up authorization is not live at chain time: {err}"),
+            )
+        })
+}
+
+fn validate_kagemusha_v2_redeem_snapshot(
+    app: &SharedAppState,
+    request: &KagemushaRecursiveSpendRedeemRequestV2,
+) -> Result<(), Error> {
+    if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+        return Err(Error::AppServiceUnavailable {
+            code: "OFFLINE_KAGEMUSHA_V2_NOT_READY",
+            message: "Kagemusha V2 proving and verification APIs are not ready.".to_owned(),
+        });
+    }
+    if request.bundle.statement.chain_id != *app.chain_id {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_WRONG_CHAIN",
+            "Kagemusha V2 redemption request targets a different chain.",
+        ));
+    }
+    let world = app.state.world_view();
+    let definition = world
+        .asset_definition(&request.bundle.statement.asset)
+        .map_err(|_| {
+            validation(
+                "OFFLINE_KAGEMUSHA_ASSET_NOT_FOUND",
+                "Kagemusha V2 redemption asset definition is not registered.",
+            )
+        })?;
+    let live_scale = definition.spec().scale().ok_or_else(|| {
+        validation(
+            "OFFLINE_KAGEMUSHA_SCALE_INVALID",
+            "Kagemusha V2 requires a fixed live asset scale.",
+        )
+    })?;
+    if request.amount.scale != live_scale || request.bundle.statement.asset_scale != live_scale {
+        return Err(validation(
+            "OFFLINE_KAGEMUSHA_SCALE_MISMATCH",
+            "Kagemusha V2 redemption scale differs from the live asset scale.",
+        ));
+    }
+    request
+        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(app))
+        .map_err(|err| {
+            validation_owned(
+                "OFFLINE_KAGEMUSHA_AUTHORIZATION_INVALID",
+                format!("Kagemusha V2 redemption authorization is not live at chain time: {err}"),
+            )
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KagemushaV2OperationKind {
+    TopUp,
+    Redeem,
+}
+
+#[derive(Debug, Clone)]
+struct KagemushaV2CommittedFinality {
+    operation_id: [u8; 32],
+    transaction_hash: String,
+    finalized_block_height: u64,
+    status: &'static str,
+    server_time_ms: u64,
+}
+
+fn find_committed_kagemusha_v2_operation(
+    app: &SharedAppState,
+    requested_kind: KagemushaV2OperationKind,
+    authorization: &iroha_data_model::offline::KagemushaRequestAuthorizationV2,
+) -> Result<Option<KagemushaV2CommittedFinality>, Error> {
+    let mut height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    while height > 0 {
+        let Some(height_nz) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+            break;
+        };
+        let Some(block) = app.kura.get_block(height_nz) else {
+            height -= 1;
+            continue;
+        };
+        let block_ref = block.as_ref();
+        for (index, entrypoint, result) in block_ref.entrypoint_results() {
+            if index >= block_ref.external_entrypoint_count() || result.0.is_err() {
+                continue;
+            }
+            let tx = match entrypoint {
+                TransactionEntrypoint::External(tx) => tx,
+                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
+                TransactionEntrypoint::SealedCommitment(_)
+                | TransactionEntrypoint::PrivateKaigi(_)
+                | TransactionEntrypoint::Time(_) => continue,
+            };
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for instruction in instructions.iter() {
+                let any = instruction.as_any();
+                let candidate = if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursiveV2>()
+                {
+                    Some((
+                        KagemushaV2OperationKind::TopUp,
+                        &topup.request.authorization,
+                    ))
+                } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+                    Some((
+                        KagemushaV2OperationKind::Redeem,
+                        &redeem.request.authorization,
+                    ))
+                } else {
+                    None
+                };
+                let Some((kind, committed_auth)) = candidate else {
+                    continue;
+                };
+                if committed_auth.operation_id != authorization.operation_id {
+                    continue;
+                }
+                if kind != requested_kind
+                    || committed_auth.nonce != authorization.nonce
+                    || committed_auth.payload_digest != authorization.payload_digest
+                {
+                    return Err(validation(
+                        "OFFLINE_KAGEMUSHA_OPERATION_CONFLICT",
+                        "Kagemusha V2 operation id conflicts with a different committed request.",
+                    ));
+                }
+                return Ok(Some(KagemushaV2CommittedFinality {
+                    operation_id: authorization.operation_id,
+                    transaction_hash: tx.hash().to_string(),
+                    finalized_block_height: height,
+                    status: "Applied",
+                    server_time_ms: u64::try_from(block_ref.header().creation_time().as_millis())
+                        .unwrap_or(u64::MAX),
+                }));
+            }
+        }
+        height -= 1;
+    }
+    Ok(None)
+}
+
+async fn wait_for_kagemusha_v2_finality(
+    app: &SharedAppState,
+    transaction_hash: HashOf<SignedTransaction>,
+) -> Result<KagemushaV2CommittedFinality, Error> {
+    let started = tokio::time::Instant::now();
+    let timeout = Duration::from_secs(30);
+    loop {
+        if let Some(entry) = crate::pipeline_status_from_state(app.as_ref(), &transaction_hash) {
+            match entry.kind {
+                crate::PipelineStatusKind::Applied => {
+                    let height = entry.block_height.map_or(0, core::num::NonZeroU64::get);
+                    let server_time_ms = usize::try_from(height)
+                        .ok()
+                        .and_then(NonZeroUsize::new)
+                        .and_then(|height| app.kura.get_block(height))
+                        .map_or(0, |block| {
+                            u64::try_from(block.header().creation_time().as_millis())
+                                .unwrap_or(u64::MAX)
+                        });
+                    return Ok(KagemushaV2CommittedFinality {
+                        operation_id: [0; 32],
+                        transaction_hash: transaction_hash.to_string(),
+                        finalized_block_height: height,
+                        status: "Applied",
+                        server_time_ms,
+                    });
+                }
+                crate::PipelineStatusKind::Rejected | crate::PipelineStatusKind::Expired => {
+                    return Err(validation_owned(
+                        "OFFLINE_KAGEMUSHA_TRANSACTION_REJECTED",
+                        format!(
+                            "Kagemusha V2 transaction reached terminal status {}: {}",
+                            entry.kind.as_str(),
+                            entry.rejection.as_deref().unwrap_or("no rejection reason")
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if started.elapsed() >= timeout {
+            return Err(Error::AppServiceUnavailable {
+                code: "OFFLINE_KAGEMUSHA_FINALITY_TIMEOUT",
+                message: "Timed out waiting for Kagemusha V2 terminal finality.".to_owned(),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn kagemusha_v2_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+    format!("kagemusha_v2_topup_anchor_{}", hex::encode(operation_id))
+        .parse()
+        .map_err(|err| {
+            validation_owned(
+                "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
+                format!("Failed to derive Kagemusha V2 anchor key: {err}"),
+            )
+        })
+}
+
+fn load_finalized_kagemusha_v2_anchor(
+    app: &SharedAppState,
+    operation_id: [u8; 32],
+) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
+    let key = kagemusha_v2_anchor_state_key(operation_id)?;
+    let world = app.state.world_view();
+    let archive = world.smart_contract_state().get(&key).ok_or_else(|| {
+        validation(
+            "OFFLINE_KAGEMUSHA_ANCHOR_MISSING",
+            "Finalized Kagemusha V2 top-up anchor is missing from chain state.",
+        )
+    })?;
+    let anchor: KagemushaRecursiveSpendTopUpAnchorV2 =
+        norito::decode_from_bytes(archive).map_err(|err| {
+            validation_owned(
+                "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
+                format!("Finalized Kagemusha V2 top-up anchor is invalid: {err}"),
+            )
+        })?;
+    anchor.validate_public_binding().map_err(|err| {
+        validation_owned(
+            "OFFLINE_KAGEMUSHA_ANCHOR_INVALID",
+            format!("Finalized Kagemusha V2 top-up anchor failed validation: {err}"),
+        )
+    })?;
+    Ok(anchor)
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
+struct KagemushaV2TerminalFinalityResponse {
+    version: u16,
+    operation_id: String,
+    transaction_hash: String,
+    finalized_block_height: u64,
+    status: String,
+    server_time_ms: u64,
+    topup_anchor_norito_base64: Option<String>,
+    topup_anchor_digest_hex: Option<String>,
+}
+
+fn kagemusha_v2_terminal_response(
+    mut finality: KagemushaV2CommittedFinality,
+    anchor: Option<KagemushaRecursiveSpendTopUpAnchorV2>,
+) -> Result<AxResponse, Error> {
+    if let Some(anchor) = &anchor {
+        finality.operation_id = anchor.topup_operation_id;
+    }
+    let anchor_archive = anchor
+        .as_ref()
+        .map(norito::to_bytes)
+        .transpose()
+        .map_err(|source| Error::SerializationFailure {
+            context: "offline_v2_topup_anchor_response",
+            source,
+        })?;
+    let response = KagemushaV2TerminalFinalityResponse {
+        version: 2,
+        operation_id: hex::encode(finality.operation_id),
+        transaction_hash: finality.transaction_hash,
+        finalized_block_height: finality.finalized_block_height,
+        status: finality.status.to_owned(),
+        server_time_ms: finality.server_time_ms,
+        topup_anchor_norito_base64: anchor_archive.map(|bytes| BASE64_STANDARD.encode(bytes)),
+        topup_anchor_digest_hex: anchor.map(|anchor| hex::encode(anchor.anchor_digest)),
+    };
+    let value = json::to_value(&response).map_err(|source| Error::SerializationFailure {
+        context: "offline_v2_terminal_finality_response",
+        source,
+    })?;
+    json_ok(value)
 }
 
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> {
