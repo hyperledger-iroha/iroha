@@ -78762,8 +78762,8 @@ mod tests {
             block_height: lane_block_height,
             lane_id,
             lane_incarnation: state
-                .lane_incarnation(lane_id)
-                .expect("test lane must have an active incarnation"),
+                .lane_incarnation_at_height(lane_id, proposal_height)
+                .expect("test lane must have an incarnation at the proposal height"),
             dataspace_id,
             tx_count: 1,
             total_local_micro: 1,

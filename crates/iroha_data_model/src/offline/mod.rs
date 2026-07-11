@@ -124,11 +124,14 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: &str =
 /// The bound matches the compact-token hop cap so recursive spend-again-offline
 /// payloads stay constant-size while still preserving a hard replay/latency cap.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: u32 = 64;
-/// Whether the Reserved-lineage circuit proves accumulator transitions in-circuit.
+/// Whether the Reserved-lineage circuit proves the complete inner proof and
+/// accumulator transition in-circuit.
 ///
-/// This remains separate from the max-hop knob so future cap changes cannot
-/// accidentally bypass the append verifier-slice transition constraints.
-pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: bool = true;
+/// The current verifier-slice prototype proves only an unrelated IPA opening;
+/// it does not constrain the inner Halo2 transcript, verifying key, instances,
+/// or transition statement. Keep witnessless redemption and append disabled
+/// until a circuit-authenticated recursive verifier replaces that prototype.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: bool = false;
 /// Number of previous recursive proof opening envelopes required for one append.
 pub const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: usize = 1;
 /// Domain tag mixed into previous recursive proof opening transcripts.
