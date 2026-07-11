@@ -6358,9 +6358,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  in-memory controller keys return `MalformedPublicKey` or
 	  `InvalidPublicKey` on result-returning paths instead of reaching
 	  compatibility invariant accessors; trusted-peer PoP config parsing,
-	  trusted-roster validation, daemon NPoS validator status counting, genesis
-	  trusted-peer PoP verification, and Torii Sumeragi BLS-key operator views
-	  now also classify BLS-normal keys through checked accessors, turning
+	  trusted-roster validation, staged Sumeragi v2 genesis voter validation,
+	  genesis trusted-peer PoP verification, and Torii Sumeragi BLS-key operator
+	  views now also classify BLS-normal keys through checked accessors, turning
 	  malformed in-memory keys into config errors or non-BLS status entries
 	  instead of compatibility accessor panics; SCCP Nexus BLS commit-QC
 	  verification and fraud assessment attester preflights now also classify

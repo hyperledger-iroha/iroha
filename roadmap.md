@@ -19863,8 +19863,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  accessors, so malformed in-memory controller keys return
 	  `MalformedPublicKey` or `InvalidPublicKey` on result-returning paths
 	  instead of reaching compatibility invariant accessors. Trusted-peer PoP
-	  config parsing, trusted-roster validation, daemon NPoS validator status
-	  counting, genesis trusted-peer PoP verification, and Torii Sumeragi
+	  config parsing, trusted-roster validation, staged Sumeragi v2 genesis voter
+	  validation, genesis trusted-peer PoP verification, and Torii Sumeragi
 	  BLS-key operator views now also classify BLS-normal keys through checked
 	  accessors, turning malformed in-memory keys into config errors or
 	  non-BLS status entries instead of compatibility accessor panics.
