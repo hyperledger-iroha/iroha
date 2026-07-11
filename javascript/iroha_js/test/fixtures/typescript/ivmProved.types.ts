@@ -4,8 +4,8 @@ import type {
   ValidationFeeIvmProvedContractCallInput,
 } from "../../../index.js";
 
-declare const privateKey: Uint8Array;
-declare const validationFeePolicy: IvmValidationFeePolicyIntent;
+const privateKey = new Uint8Array(32);
+const validationFeePolicy = {} as IvmValidationFeePolicyIntent;
 
 const camel: IvmProvedContractCallInput = {
   chainId: "test-chain",

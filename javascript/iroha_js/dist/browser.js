@@ -14,6 +14,7 @@ export {
 
 export {
   computeIvmArtifactHashes,
+  IVM_ARTIFACT_MAX_BYTES,
   IVM_PROGRAM_HEADER_LENGTH,
 } from "./ivmArtifact.js";
 

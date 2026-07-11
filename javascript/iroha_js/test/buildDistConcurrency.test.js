@@ -29,7 +29,13 @@ import {
 const TEST_DIR = resolve(fileURLToPath(import.meta.url), "..");
 const ROOT = resolve(TEST_DIR, "..");
 const SCRIPT = join(ROOT, "scripts", "build-dist.mjs");
-const REQUIRED_OUTPUTS = ["address.js", "curveRegistry.js", "toriiClient.js", "kotodamaCompiler/index.js"];
+const REQUIRED_OUTPUTS = [
+  "address.js",
+  "curveRegistry.js",
+  "ivmArtifact.js",
+  "toriiClient.js",
+  "kotodamaCompiler/index.js",
+];
 
 function runBuild(root, env = {}) {
   return new Promise((resolveRun, rejectRun) => {

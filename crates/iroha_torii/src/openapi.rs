@@ -2419,13 +2419,24 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/zk/ivm/derive".to_owned(),
+        Value::Object(json_post_operation(
+            "ZK",
+            "Derive an IVM proved payload.",
+            "Execute ZK-mode IVM bytecode under bounded host output, blocking-worker concurrency, and timeout limits; plaintext gas usage is not returned.",
+            "#/components/schemas/ZkIvmDeriveRequest",
+            "#/components/schemas/ZkIvmDeriveResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/zk/ivm/prove".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Prove IVM execution (job).",
-            "Submit an IVM proved payload and return a job identifier for proof generation.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Execute and prove ZK-mode IVM bytecode asynchronously. POST returns only a job identifier; canonical proved and compact proof attachment material are available from the terminal GET state.",
+            "#/components/schemas/ZkIvmProveRequest",
+            "#/components/schemas/ZkIvmProveJobCreated",
             Vec::new(),
         )),
     );
@@ -2435,8 +2446,8 @@ fn zk_paths() -> Map {
             let get_op = json_get_operation(
                 "ZK",
                 "Fetch an IVM prove job.",
-                "Fetch the status of an IVM proof generation job.",
-                "#/components/schemas/JsonValue",
+                "Fetch one state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64.",
+                "#/components/schemas/ZkIvmProveJob",
                 vec![string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
@@ -2445,8 +2456,8 @@ fn zk_paths() -> Map {
             let delete_op = json_delete_operation(
                 "ZK",
                 "Delete an IVM prove job.",
-                "Delete an IVM proof generation job entry.",
-                "#/components/schemas/JsonValue",
+                "Cancel and delete an IVM proof generation job entry. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
+                "#/components/schemas/ZkIvmProveJobCreated",
                 vec![string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
@@ -9314,6 +9325,160 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "ZkIvmVerifyingKeyRef".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "name"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": { "type": "string", "minLength": 1 },
+                "name": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProvedPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["bytecode", "overlay", "events_commitment", "gas_policy_commitment"],
+            "additionalProperties": false,
+            "maxProperties": 4,
+            "description": "Canonical IvmProved JSON. Torii rejects an encoded proved payload above 16 MiB and bounds host output before queue/durable-state growth.",
+            "properties": {
+                "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 },
+                "overlay": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Ordered canonical InstructionBox JSON values, bounded by the live transaction instruction limit."
+                },
+                "events_commitment": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "gas_policy_commitment": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmDeriveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["vk_ref", "authority", "bytecode"],
+            "additionalProperties": false,
+            "description": "Body is limited to 8 MiB before extraction. metadata must carry gas_limit.",
+            "properties": {
+                "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
+                "authority": { "type": "string", "minLength": 1 },
+                "metadata": { "type": "object", "additionalProperties": true },
+                "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmDeriveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proved"],
+            "additionalProperties": false,
+            "properties": { "proved": { "$ref": "#/components/schemas/ZkIvmProvedPayload" } }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["vk_ref", "authority", "bytecode"],
+            "additionalProperties": false,
+            "description": "Body is limited to 8 MiB before extraction. Optional proved is equality-checked against authoritative node execution and is never echoed by POST.",
+            "properties": {
+                "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
+                "authority": { "type": "string", "minLength": 1 },
+                "metadata": { "type": "object", "additionalProperties": true },
+                "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 },
+                "proved": { "$ref": "#/components/schemas/ZkIvmProvedPayload" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobCreated".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["job_id"],
+            "additionalProperties": false,
+            "properties": { "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" } }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmCompactProof".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "bytes_b64"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": { "type": "string", "minLength": 1 },
+                "bytes_b64": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "minLength": 4,
+                    "maxLength": 11184812,
+                    "description": "Canonical standard-base64 encoding of 1 byte through 8 MiB of proof bytes. Legacy numeric proof.bytes is accepted only on attachment input and is never emitted here."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmCompactProofAttachment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "proof", "vk_ref"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": { "type": "string", "minLength": 1 },
+                "proof": { "$ref": "#/components/schemas/ZkIvmCompactProof" },
+                "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
+                "vk_commitment": { "type": "array", "minItems": 32, "maxItems": 32, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+                "envelope_hash": { "type": "array", "minItems": 32, "maxItems": 32, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+                "lane_privacy": { "$ref": "#/components/schemas/JsonValue" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobPendingOrRunning".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["job_id", "status"], "additionalProperties": false,
+            "properties": { "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "status": { "type": "string", "enum": ["pending", "running"] } }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobError".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["job_id", "status", "error"], "additionalProperties": false,
+            "properties": {
+                "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "status": { "type": "string", "enum": ["error"] },
+                "error": { "type": "string", "minLength": 1, "maxLength": 1036 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobDone".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["job_id", "status", "proved", "attachment"], "additionalProperties": false,
+            "description": "Canonical terminal response, serialized once and retained under the configurable aggregate job cache budget (128 MiB by default); total response is at most 32 MiB.",
+            "properties": {
+                "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "status": { "type": "string", "enum": ["done"] },
+                "proved": { "$ref": "#/components/schemas/ZkIvmProvedPayload" },
+                "attachment": { "$ref": "#/components/schemas/ZkIvmCompactProofAttachment" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJob".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/ZkIvmProveJobPendingOrRunning" },
+                { "$ref": "#/components/schemas/ZkIvmProveJobError" },
+                { "$ref": "#/components/schemas/ZkIvmProveJobDone" }
+            ]
+        }),
+    );
+    schemas.insert(
         "NexusLaneLifecycleIncarnationEntry".to_owned(),
         norito::json!({
             "type": "object",
@@ -16155,5 +16320,93 @@ mod tests {
         assert!(has_push, "tags should include Push");
         assert!(has_soracloud, "tags should include Soracloud");
         assert!(has_vpn, "tags should include VPN");
+    }
+
+    #[test]
+    fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
+        let doc = generate_spec();
+        let paths = doc.get("paths").and_then(Value::as_object).expect("paths");
+        assert!(paths.contains_key("/v1/zk/ivm/derive"));
+        let prove_post = paths
+            .get("/v1/zk/ivm/prove")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("prove post");
+        let request_ref = prove_post
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(request_ref, Some("#/components/schemas/ZkIvmProveRequest"));
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas");
+        let job = schemas
+            .get("ZkIvmProveJob")
+            .and_then(Value::as_object)
+            .expect("job schema");
+        assert_eq!(
+            job.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(3)
+        );
+        let done = schemas
+            .get("ZkIvmProveJobDone")
+            .and_then(Value::as_object)
+            .expect("done schema");
+        assert_eq!(done.get("additionalProperties"), Some(&Value::Bool(false)));
+        let required = done
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("done required");
+        assert_eq!(
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec!["job_id", "status", "proved", "attachment"]
+        );
+        let proof_properties = schemas
+            .get("ZkIvmCompactProof")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("compact proof properties");
+        assert!(proof_properties.contains_key("bytes_b64"));
+        assert!(!proof_properties.contains_key("bytes"));
+        assert_eq!(
+            proof_properties
+                .get("bytes_b64")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxLength"))
+                .and_then(Value::as_u64),
+            Some(11_184_812)
+        );
+        for state in [
+            "ZkIvmProveJobPendingOrRunning",
+            "ZkIvmProveJobError",
+            "ZkIvmProveJobDone",
+        ] {
+            let pattern = schemas
+                .get(state)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("job_id"))
+                .and_then(Value::as_object)
+                .and_then(|job_id| job_id.get("pattern"))
+                .and_then(Value::as_str);
+            assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{state}");
+        }
     }
 }

@@ -76,6 +76,7 @@ function validatePackPaths(metadata) {
   }
   for (const required of [
     "package.json",
+    "ivm-artifact.d.ts",
     "src/index.js",
     "dist/index.js",
     "dist/ivmArtifact.js",

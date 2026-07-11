@@ -418,6 +418,48 @@ const APPROVAL_FIELDS = new Set([
   "signing_public_key",
   "session",
 ]);
+const BROWSER_CONNECT_APPROVAL_FIELDS = new Set([
+  "accountId",
+  "walletPublicKey",
+  "signature",
+]);
+
+function projectBrowserConnectApproval(value) {
+  // Browser Connect verifies the approval proof; the facade keeps only the
+  // account identity and never treats the X25519 wallet key as a signing key.
+  const approval = snapshotDataFields(
+    value,
+    BROWSER_CONNECT_APPROVAL_FIELDS,
+    "browser Connect approval",
+    "invalid_wallet_approval",
+  );
+  for (const [field, byteLength] of [
+    ["walletPublicKey", 32],
+    ["signature", 64],
+  ]) {
+    let bytes;
+    try {
+      bytes = toBuffer(
+        approval[field],
+        `browser Connect approval.${field}`,
+        { maxBytes: byteLength },
+      );
+    } catch (error) {
+      throw new NexusAppError(
+        "invalid_wallet_approval",
+        `browser Connect approval.${field} must be exactly ${byteLength} bytes`,
+        error,
+      );
+    }
+    if (bytes.length !== byteLength) {
+      throw new NexusAppError(
+        "invalid_wallet_approval",
+        `browser Connect approval.${field} must be exactly ${byteLength} bytes`,
+      );
+    }
+  }
+  return Object.freeze({ accountId: approval.accountId });
+}
 
 function requireNonEmptyString(value, context) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -946,7 +988,7 @@ function normalizeStatusScope(value) {
   return scope;
 }
 
-function normalizeTransactionStatusOptions(options = {}, { rejectAborted = false } = {}) {
+function normalizeTransactionStatusOptions(options = {}) {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("transaction status options must be an object");
   }
@@ -987,9 +1029,6 @@ function normalizeTransactionStatusOptions(options = {}, { rejectAborted = false
   ) {
     throw new TypeError("transaction status signal must be an AbortSignal");
   }
-  if (rejectAborted && signal?.aborted) {
-    throw signal.reason ?? new Error("operation aborted");
-  }
   const successStatuses = normalizeStatusSet(
     options.successStatuses,
     DEFAULT_SUCCESS_STATUSES,
@@ -1015,6 +1054,19 @@ function normalizeTransactionStatusOptions(options = {}, { rejectAborted = false
     onStatus: options.onStatus ?? null,
     signal,
   });
+}
+
+function throwIfStatusWaitAborted(statusOptions, shouldWait) {
+  if (!shouldWait || !statusOptions.signal?.aborted) return;
+  const cause =
+    statusOptions.signal.reason === undefined
+      ? new Error("operation aborted")
+      : statusOptions.signal.reason;
+  throw new NexusAppError(
+    "status_wait_failed",
+    "transaction status wait was aborted before submission",
+    cause,
+  );
 }
 
 function responseHeader(response, name) {
@@ -1318,11 +1370,11 @@ class BrowserToriiPipelineClient {
 }
 
 export class NexusAppError extends Error {
-  constructor(code, message, cause = null) {
+  constructor(code, message, cause) {
     super(message);
     this.name = "NexusAppError";
     this.code = code;
-    if (cause) {
+    if (arguments.length >= 3) {
       this.cause = cause;
     }
   }
@@ -1427,7 +1479,9 @@ export class NexusAppClient {
           allowInsecure: this.config.allowInsecure,
         });
       normalized.appSession = appSession;
-      approved = await appSession.waitForApproval();
+      approved = projectBrowserConnectApproval(
+        await appSession.waitForApproval(),
+      );
     }
     approved = snapshotDataFields(
       approved,
@@ -1693,9 +1747,7 @@ export class NexusAppClient {
     const shouldWait = options.wait !== false;
     let statusOptions;
     try {
-      statusOptions = normalizeTransactionStatusOptions(options, {
-        rejectAborted: shouldWait,
-      });
+      statusOptions = normalizeTransactionStatusOptions(options);
     } catch (error) {
       throw new NexusAppError(
         "status_wait_failed",
@@ -1703,6 +1755,7 @@ export class NexusAppClient {
         error,
       );
     }
+    throwIfStatusWaitAborted(statusOptions, shouldWait);
     signable = snapshotDataFields(
       signable,
       SIGNABLE_FIELDS,
@@ -1783,15 +1836,19 @@ export class NexusAppClient {
       );
     }
     const toriiClient = options.toriiClient ?? this.toriiClient;
-    if (!toriiClient || typeof toriiClient.submitTransaction !== "function") {
+    const submitTransaction = toriiClient?.submitTransaction;
+    if (typeof submitTransaction !== "function") {
       throw new NexusAppError(
         "torii_client_unavailable",
         "Torii client is required to submit the signed transaction",
       );
     }
+    throwIfStatusWaitAborted(statusOptions, shouldWait);
     let submission;
     try {
-      submission = await toriiClient.submitTransaction(finalized.signedTransaction);
+      submission = await Reflect.apply(submitTransaction, toriiClient, [
+        finalized.signedTransaction,
+      ]);
     } catch (error) {
       throw new NexusAppError(
         "submit_failed",

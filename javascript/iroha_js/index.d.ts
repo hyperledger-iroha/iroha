@@ -10616,6 +10616,7 @@ export function blake2b256(
 ): Uint8Array;
 
 export const IVM_PROGRAM_HEADER_LENGTH: 17;
+export const IVM_ARTIFACT_MAX_BYTES: 4194304;
 
 /** Compute ledger/Core body identity and full-artifact SHA-256 identity. */
 export function computeIvmArtifactHashes(
@@ -16963,6 +16964,18 @@ export interface IvmProvedPayload {
   gas_policy_commitment: string;
 }
 
+export interface IvmCompactProofAttachment {
+  backend: string;
+  proof: {
+    backend: string;
+    bytes_b64: string;
+  };
+  vk_ref: IvmVerifyingKeyRef;
+  vk_commitment?: JsonValue;
+  envelope_hash?: JsonValue;
+  lane_privacy?: JsonValue;
+}
+
 export interface ZkIvmExecutionRequest {
   vkRef?: IvmVerifyingKeyRef;
   vk_ref?: IvmVerifyingKeyRef;
@@ -16985,7 +16998,7 @@ export interface ZkIvmProveJobResponse {
   status: "pending" | "running" | "done" | "error";
   error: string | null;
   proved: IvmProvedPayload | null;
-  attachment: { [key: string]: JsonValue } | null;
+  attachment: IvmCompactProofAttachment | null;
 }
 
 export interface ZkIvmProveWaitOptions {
@@ -19348,6 +19361,7 @@ export declare class ToriiClient {
   ): Promise<unknown | null>;
   submitTransaction(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: { signal?: AbortSignal },
   ): Promise<unknown>;
   submitTransactionBatch(
     payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
@@ -20005,6 +20019,7 @@ export declare class ToriiClient {
   ): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(
     codeHashHex: string,
+    options?: { signal?: AbortSignal },
   ): Promise<ContractCodeBytesRecord | null>;
   getGovernanceContract(
     contractAddress: string,

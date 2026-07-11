@@ -67,7 +67,10 @@ import {
 } from "../src/instructionBuilders.js";
 import { AccountAddress } from "../src/address.js";
 import { ToriiClient } from "../src/toriiClient.js";
-import { computeIvmArtifactHashes } from "../src/ivmArtifact.js";
+import {
+  computeIvmArtifactHashes,
+  IVM_ARTIFACT_MAX_BYTES,
+} from "../src/ivmArtifact.js";
 import { makeNativeTest } from "./helpers/native.js";
 import {
   VALIDATION_FEE_POLICY_HASH_HEX,
@@ -1570,9 +1573,12 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
     simulationCodeHash = ZK_IVM_CODE_HASH_HEX,
     simulationOverrides = {},
     fetchedBytecode = ZK_IVM_BYTECODE_BASE64,
+    fetchedCodeResponse,
     derivedProved = validProved,
     attachment = validAttachment,
     options = {},
+    onCodeFetch = () => {},
+    onProof = () => {},
     expected,
   }) {
     const calls = {
@@ -1607,9 +1613,12 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         ...simulationOverrides,
       };
     };
-    client.getContractCodeBytes = async () => {
+    client.getContractCodeBytes = async (codeHash, fetchOptions) => {
       calls.fetchCode += 1;
-      return { code_b64: fetchedBytecode };
+      onCodeFetch(codeHash, fetchOptions);
+      return fetchedCodeResponse === undefined
+        ? { code_b64: fetchedBytecode }
+        : fetchedCodeResponse;
     };
     client.deriveIvmProved = async () => {
       calls.derive += 1;
@@ -1617,6 +1626,7 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
     };
     client.proveIvmAndWait = async () => {
       calls.prove += 1;
+      onProof();
       return {
         job_id: "ab".repeat(16),
         status: "done",
@@ -1900,6 +1910,67 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
     });
     assert.equal(nonCanonical.fetchCode, 1);
     assert.equal(nonCanonical.derive, 0);
+
+    const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
+    for (const fetchedBytecode of [
+      "A".repeat(maxBase64Length + 1),
+      Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1).toString("base64"),
+    ]) {
+      const oversized = await rejectsBeforeSigning({
+        input: {
+          expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+          expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+        },
+        fetchedBytecode,
+        expected: /exceeds the 4194304-byte artifact limit/,
+      });
+      assert.equal(oversized.simulate, 1);
+      assert.equal(oversized.fetchCode, 1);
+      assert.equal(oversized.derive, 0);
+      assert.equal(oversized.prove, 0);
+      assert.equal(oversized.sign, 0);
+      assert.equal(oversized.submit, 0);
+    }
+  });
+
+  await t.test("forwards the validated AbortSignal to the code-byte fetch", async () => {
+    const controller = new AbortController();
+    let captured;
+    const calls = await rejectsBeforeSigning({
+      input: {
+        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+        expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+      },
+      options: { signal: controller.signal },
+      fetchedBytecode: `${ZK_IVM_BYTECODE_BASE64}\n`,
+      onCodeFetch(codeHash, fetchOptions) {
+        captured = { codeHash, fetchOptions };
+      },
+      expected: /canonical standard base64/,
+    });
+    assert.equal(calls.fetchCode, 1);
+    assert.equal(captured.codeHash, ZK_IVM_CODE_HASH_HEX);
+    assert.equal(captured.fetchOptions.signal, controller.signal);
+  });
+
+  await t.test("rejects ambiguous code-byte response shapes before derive", async () => {
+    const calls = await rejectsBeforeSigning({
+      input: {
+        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+        expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+      },
+      fetchedCodeResponse: {
+        code_b64: ZK_IVM_BYTECODE_BASE64,
+        attacker_bytecode: headerSubstitutedBytecode,
+      },
+      expected: /must contain exactly the code_b64 field/,
+    });
+    assert.equal(calls.simulate, 1);
+    assert.equal(calls.fetchCode, 1);
+    assert.equal(calls.derive, 0);
+    assert.equal(calls.prove, 0);
+    assert.equal(calls.sign, 0);
+    assert.equal(calls.submit, 0);
   });
 
   await t.test("rejects derive bytecode substitution before proving", async () => {
@@ -1952,6 +2023,47 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
     });
     assert.equal(vkRef.prove, 1);
   });
+
+  await t.test("honors abort after proof before signing or submission", async () => {
+    const controller = new AbortController();
+    const calls = await rejectsBeforeSigning({
+      input: {
+        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+        expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+      },
+      options: { signal: controller.signal },
+      onProof() {
+        controller.abort(new Error("abort before final transaction submission"));
+      },
+      expected: /abort before final transaction submission/,
+    });
+    assert.equal(calls.prove, 1);
+    assert.equal(calls.sign, 0);
+    assert.equal(calls.submit, 0);
+  });
+
+  await t.test("honors intrinsic abort state despite hostile signal shadows", async () => {
+    const controller = new AbortController();
+    const calls = await rejectsBeforeSigning({
+      input: {
+        expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+        expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+      },
+      options: { signal: controller.signal },
+      onProof() {
+        controller.abort(new Error("intrinsic abort must prevent signing"));
+        Object.defineProperties(controller.signal, {
+          aborted: { value: false },
+          reason: { value: undefined },
+          throwIfAborted: { value() {} },
+        });
+      },
+      expected: /intrinsic abort must prevent signing/,
+    });
+    assert.equal(calls.prove, 1);
+    assert.equal(calls.sign, 0);
+    assert.equal(calls.submit, 0);
+  });
 });
 
 test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and signs the fee", async () => {
@@ -1993,6 +2105,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
   policyFixture.policyRegistry.active_policy_hash = "00".repeat(32);
   policyFixture.governanceKeyset.public_keys_hex[0] = "00".repeat(32);
   const captures = {};
+  const submissionController = new AbortController();
   client.simulateContractCall = async (request) => {
     captures.simulationRequest = request;
     // Verification happens before the first await. Mutating every policy field
@@ -2036,8 +2149,9 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
       attachment,
     };
   };
-  client.submitTransaction = async (payload) => {
+  client.submitTransaction = async (payload, options) => {
     captures.submitted = Buffer.from(payload);
+    captures.submitOptions = options;
     return { accepted: true };
   };
 
@@ -2094,14 +2208,22 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
         },
         requiredOverlayTransfer,
       },
-      { proofIntervalMs: 0, proofTimeoutMs: 1000 },
+      {
+        proofIntervalMs: 0,
+        proofTimeoutMs: 1000,
+        signal: submissionController.signal,
+      },
     );
   } finally {
     globalThis.__IROHA_NATIVE_BINDING__ = previous;
   }
 
   assert.equal(captures.codeHash, ZK_IVM_CODE_HASH_HEX);
-  assert.deepEqual(captures.proveRequest.proved, proved);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(captures.proveRequest, "proved"),
+    false,
+  );
+  assert.equal(captures.proveRequest.bytecode, proved.bytecode);
   assert.deepEqual(captures.deriveRequest.metadata, {
     request_id: "swap-7",
     contract_address: "tairac1routerfixture",
@@ -2117,6 +2239,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
   assert.deepEqual(captures.signed.attachment, attachment);
   assert.deepEqual(captures.signed.metadata, captures.deriveRequest.metadata);
   assert.deepEqual(captures.submitted, Buffer.from([0x03, 0x04]));
+  assert.equal(captures.submitOptions.signal, submissionController.signal);
   assert.equal(result.hash, "bb".repeat(32));
   assert.deepEqual(result.requiredOverlayTransfer, expectedTransfer);
   assert.deepEqual(result.validationFeePolicy, {
@@ -2127,6 +2250,87 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
     feeTransferEntryIndex: null,
     feeQuantity: "0.10",
   });
+});
+
+test("submitIvmProvedContractCall keeps a 4 MiB proof request below Torii's default cap", async () => {
+  const artifact = Buffer.alloc(IVM_ARTIFACT_MAX_BYTES);
+  Buffer.from(ZK_IVM_BYTECODE_BASE64, "base64")
+    .subarray(0, 17)
+    .copy(artifact, 0);
+  const hashes = computeIvmArtifactHashes(artifact);
+  const bytecode = artifact.toString("base64");
+  const proved = {
+    bytecode,
+    overlay: [],
+    events_commitment: "01".repeat(32),
+    gas_policy_commitment: "02".repeat(32),
+  };
+  let proofRequest;
+  let signCalls = 0;
+  let submitCalls = 0;
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      throw new Error("focused stubs must replace network access");
+    },
+  });
+  client.simulateContractCall = async () => ({
+    ok: true,
+    dataspace: "universal",
+    contract_address: "tairac1routerfixture",
+    code_hash_hex: hashes.codeHashHex,
+    abi_hash_hex: "22".repeat(32),
+    entrypoint: "route_swap",
+    normalized_payload: null,
+    gas_limit: 5000,
+    gas_used: 1,
+    queued_instructions: [],
+    result: null,
+    error: null,
+    vm_diagnostic: null,
+  });
+  client.getContractCodeBytes = async () => ({ code_b64: bytecode });
+  client.deriveIvmProved = async () => ({ proved });
+  client.proveIvmAndWait = async (request) => {
+    proofRequest = request;
+    throw new Error("stop after capturing the proof request");
+  };
+  client.submitTransaction = async () => {
+    submitCalls += 1;
+    throw new Error("must not submit");
+  };
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    buildIvmProvedTransaction() {
+      signCalls += 1;
+      throw new Error("must not sign");
+    },
+  };
+  try {
+    await assert.rejects(
+      () =>
+        submitIvmProvedContractCall(client, {
+          chainId: "boi-testnet",
+          authority: AUTHORITY_ID_INPUT,
+          privateKey: PRIVATE_KEY,
+          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+          expectedCodeHashHex: hashes.codeHashHex,
+          expectedArtifactSha256Hex: hashes.artifactSha256Hex,
+          contractAlias: "dlmm_router::dlmm.universal",
+          gasLimit: 5000,
+        }),
+      /stop after capturing the proof request/,
+    );
+  } finally {
+    globalThis.__IROHA_NATIVE_BINDING__ = previous;
+  }
+  assert.equal(Object.hasOwn(proofRequest, "proved"), false);
+  assert.equal(proofRequest.bytecode, bytecode);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(proofRequest), "utf8") <= 8 * 1024 * 1024,
+    "max artifact proof request must fit Torii's default 8 MiB body cap",
+  );
+  assert.equal(signCalls, 0);
+  assert.equal(submitCalls, 0);
 });
 
 async function submitBase64ValidationFeeOverlayFixture({
@@ -2322,6 +2526,315 @@ test("submitIvmProvedContractCall rejects a missing required transfer before pro
   );
   assert.equal(proveCalled, false);
   assert.equal(submitCalled, false);
+});
+
+test("streamed __proto__ overlay cannot satisfy validation fee or reach signing", async () => {
+  const policyFixture = validationFeePolicyFixture();
+  const inheritedFee = buildTransferAssetInstruction({
+    sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
+    quantity: "0.10",
+    destinationAccountId: policyFixture.policy.treasury_account_id,
+  });
+  const maliciousInstruction = { Log: { message: "no fee transfer" } };
+  Object.defineProperty(maliciousInstruction, "__proto__", {
+    value: inheritedFee,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+  const proved = {
+    bytecode: ZK_IVM_BYTECODE_BASE64,
+    overlay: [maliciousInstruction],
+    events_commitment: Buffer.alloc(32, 0x41).toString("hex"),
+    gas_policy_commitment: Buffer.alloc(32, 0x42).toString("hex"),
+  };
+  let deriveFetches = 0;
+  let proveCalls = 0;
+  let signCalls = 0;
+  let submitCalls = 0;
+  const client = new ToriiClient("https://localhost:8080", {
+    validationFeeVerificationContext: policyFixture.verificationContext,
+    fetchImpl: async (url) => {
+      assert.ok(url.endsWith("/v1/zk/ivm/derive"));
+      deriveFetches += 1;
+      return new Response(JSON.stringify({ proved }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  client.simulateContractCall = async () => ({
+    ok: true,
+    dataspace: "universal",
+    contract_address: "tairac1routerfixture",
+    code_hash_hex: ZK_IVM_CODE_HASH_HEX,
+    abi_hash_hex: "22".repeat(32),
+    entrypoint: "route_swap",
+    normalized_payload: null,
+    gas_limit: 5000,
+    gas_used: 1,
+    queued_instructions: [],
+    result: null,
+    error: null,
+    vm_diagnostic: null,
+  });
+  client.getContractCodeBytes = async () => ({
+    code_b64: ZK_IVM_BYTECODE_BASE64,
+  });
+  client.proveIvmAndWait = async () => {
+    proveCalls += 1;
+    throw new Error("proof must not start");
+  };
+  client.submitTransaction = async () => {
+    submitCalls += 1;
+    throw new Error("submit must not run");
+  };
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    buildIvmProvedTransaction() {
+      signCalls += 1;
+      throw new Error("signer must not run");
+    },
+  };
+  try {
+    await assert.rejects(
+      () =>
+        submitIvmProvedContractCall(client, {
+          chainId: "boi-testnet",
+          authority: AUTHORITY_ID_INPUT,
+          privateKey: PRIVATE_KEY,
+          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+          expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+          expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+          contractAlias: "dlmm_router::dlmm.universal",
+          gasLimit: 5000,
+          validationFeePolicy: {
+            signedPolicy: policyFixture.signedPolicy,
+            qualifyingTransferCount: 1,
+            feeInstructionIndex: 0,
+          },
+        }),
+      /validation-fee submission fails closed on other instruction families/,
+    );
+  } finally {
+    globalThis.__IROHA_NATIVE_BINDING__ = previous;
+  }
+  assert.equal(deriveFetches, 1);
+  assert.equal(proveCalls, 0);
+  assert.equal(signCalls, 0);
+  assert.equal(submitCalls, 0);
+});
+
+async function assertAmbiguousValidationFeeInstructionStopsSubmission(
+  maliciousInstruction,
+  {
+    feeTransferEntryIndex = null,
+    expected = /validation-fee submission fails closed on other instruction families/,
+  } = {},
+) {
+  const policyFixture = validationFeePolicyFixture();
+  const proved = {
+    bytecode: ZK_IVM_BYTECODE_BASE64,
+    overlay: [maliciousInstruction],
+    events_commitment: Buffer.alloc(32, 0x51).toString("hex"),
+    gas_policy_commitment: Buffer.alloc(32, 0x52).toString("hex"),
+  };
+  const attachment = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes: [1] },
+    vk_ref: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+  };
+  const calls = { derive: 0, prove: 0, sign: 0, submit: 0 };
+  const client = new ToriiClient("https://localhost:8080", {
+    validationFeeVerificationContext: policyFixture.verificationContext,
+    fetchImpl: async (url) => {
+      assert.ok(url.endsWith("/v1/zk/ivm/derive"));
+      calls.derive += 1;
+      return new Response(JSON.stringify({ proved }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  client.simulateContractCall = async () => ({
+    ok: true,
+    dataspace: "universal",
+    contract_address: "tairac1routerfixture",
+    code_hash_hex: ZK_IVM_CODE_HASH_HEX,
+    abi_hash_hex: "22".repeat(32),
+    entrypoint: "route_swap",
+    normalized_payload: null,
+    gas_limit: 5000,
+    gas_used: 1,
+    queued_instructions: [],
+    result: null,
+    error: null,
+    vm_diagnostic: null,
+  });
+  client.getContractCodeBytes = async () => ({
+    code_b64: ZK_IVM_BYTECODE_BASE64,
+  });
+  client.proveIvmAndWait = async () => {
+    calls.prove += 1;
+    return {
+      job_id: "ab".repeat(16),
+      status: "done",
+      proved,
+      attachment,
+    };
+  };
+  client.submitTransaction = async () => {
+    calls.submit += 1;
+    return { accepted: true };
+  };
+
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    buildIvmProvedTransaction() {
+      calls.sign += 1;
+      return {
+        signed_transaction: Buffer.from([1]),
+        hash: Buffer.alloc(32, 1),
+      };
+    },
+  };
+  try {
+    await assert.rejects(
+      () =>
+        submitValidationFeeIvmProvedContractCall(client, {
+          chainId: "boi-testnet",
+          authority: AUTHORITY_ID_INPUT,
+          privateKey: PRIVATE_KEY,
+          vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
+          expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
+          expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
+          contractAlias: "dlmm_router::dlmm.universal",
+          gasLimit: 5000,
+          validationFeePolicy: {
+            signedPolicy: policyFixture.signedPolicy,
+            qualifyingTransferCount: 1,
+            feeInstructionIndex: 0,
+            ...(feeTransferEntryIndex === null
+              ? {}
+              : { feeTransferEntryIndex }),
+          },
+        }),
+      expected,
+    );
+  } finally {
+    globalThis.__IROHA_NATIVE_BINDING__ = previous;
+  }
+  assert.deepEqual(calls, { derive: 1, prove: 0, sign: 0, submit: 0 });
+}
+
+test("validation fee rejects Transfer plus a second top-level variant before side effects", async () => {
+  const policyFixture = validationFeePolicyFixture();
+  const source = `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`;
+  const fee = buildTransferAssetInstruction({
+    sourceAssetHoldingId: source,
+    quantity: "0.10",
+    destinationAccountId: policyFixture.policy.treasury_account_id,
+  });
+  for (const extraVariant of [
+    buildMintAssetInstruction({ assetHoldingId: source, quantity: "1.00" }),
+    { Log: { message: "smuggled alongside fee" } },
+  ]) {
+    await assertAmbiguousValidationFeeInstructionStopsSubmission({
+      ...fee,
+      ...extraVariant,
+    });
+  }
+});
+
+test("validation fee rejects Asset plus Nft or extra Asset fields before side effects", async () => {
+  const policyFixture = validationFeePolicyFixture();
+  const source = `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`;
+  const fee = buildTransferAssetInstruction({
+    sourceAssetHoldingId: source,
+    quantity: "0.10",
+    destinationAccountId: policyFixture.policy.treasury_account_id,
+  });
+  await assertAmbiguousValidationFeeInstructionStopsSubmission({
+    Transfer: {
+      Asset: { ...fee.Transfer.Asset },
+      Nft: {
+        source: AUTHORITY_ID_INPUT,
+        object: "nft$universal",
+        destination: policyFixture.policy.treasury_account_id,
+      },
+    },
+  });
+  await assertAmbiguousValidationFeeInstructionStopsSubmission({
+    Transfer: {
+      Asset: { ...fee.Transfer.Asset, attacker_controlled: true },
+    },
+  });
+});
+
+test("validation fee rejects ambiguous transfer batches before side effects", async () => {
+  const policyFixture = validationFeePolicyFixture();
+  const entry = {
+    from: AUTHORITY_ID_INPUT,
+    to: policyFixture.policy.treasury_account_id,
+    asset_definition: policyFixture.policy.ds_asset_id,
+    amount: "0.10",
+  };
+  await assertAmbiguousValidationFeeInstructionStopsSubmission(
+    {
+      TransferAssetBatch: {
+        entries: [entry],
+        attacker_controlled: true,
+      },
+    },
+    {
+      feeTransferEntryIndex: 0,
+      expected: /TransferAssetBatch must contain exactly entries/,
+    },
+  );
+  await assertAmbiguousValidationFeeInstructionStopsSubmission(
+    {
+      TransferAssetBatch: {
+        entries: [{ ...entry, attacker_controlled: true }],
+      },
+    },
+    {
+      feeTransferEntryIndex: 0,
+      expected: /entries\[0\] must contain exactly from, to, asset_definition, and amount/,
+    },
+  );
+});
+
+test("validation fee rejects ambiguous recursive multisig proposals before side effects", async () => {
+  const policyFixture = validationFeePolicyFixture();
+  const fee = buildTransferAssetInstruction({
+    sourceAssetHoldingId: `${policyFixture.policy.ds_asset_id}#${AUTHORITY_ID_INPUT}`,
+    quantity: "0.10",
+    destinationAccountId: policyFixture.policy.treasury_account_id,
+  });
+  await assertAmbiguousValidationFeeInstructionStopsSubmission(
+    {
+      Custom: {
+        payload: {
+          Propose: {
+            account: AUTHORITY_ID_INPUT,
+            instructions: [fee],
+          },
+          Execute: { proposal_id: "attacker" },
+        },
+      },
+    },
+    { expected: /Custom\.payload must contain exactly Propose/ },
+  );
+  await assertAmbiguousValidationFeeInstructionStopsSubmission(
+    {
+      MultisigPropose: {
+        account: AUTHORITY_ID_INPUT,
+        instructions: [fee],
+        attacker_controlled: true,
+      },
+    },
+    { expected: /MultisigPropose must contain exactly account and instructions/ },
+  );
 });
 
 test("submitIvmProvedContractCall preserves generic non-policy overlay assertions", async () => {

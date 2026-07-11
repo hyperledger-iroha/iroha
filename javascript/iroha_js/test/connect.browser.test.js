@@ -600,6 +600,10 @@ test("createConnectAppSession handles approval and sign success", async () => {
   const relayToken = "relay-token";
   const walletPrivateKey = new Uint8Array(32).fill(0x55);
   const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
+  const approvalSignature = ed25519.sign(
+    approvalPreimage(preview, walletPublicKey, account.accountId, relayToken),
+    account.privateKey,
+  );
   const keys = deriveKeys(preview, walletPrivateKey);
   const session = createConnectAppSession({
     baseUrl: "https://taira.sora.org",
@@ -625,6 +629,8 @@ test("createConnectAppSession handles approval and sign success", async () => {
 
   const approval = await session.waitForApproval();
   assert.equal(approval.accountId, account.accountId);
+  assert.deepEqual(Buffer.from(approval.walletPublicKey), Buffer.from(walletPublicKey));
+  assert.deepEqual(Buffer.from(approval.signature), Buffer.from(approvalSignature));
 
   const signPromise = session.signTransaction(Buffer.from([0xaa, 0xbb, 0xcc]));
   await Promise.resolve();

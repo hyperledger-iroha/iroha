@@ -484,6 +484,40 @@ test("browser Nexus counts duplicate raw statuses before any fetch", async () =>
   }
 });
 
+test("browser Nexus closes an effectively unbounded duplicate status iterator", async () => {
+  let yielded = 0;
+  let cleanedUp = 0;
+  let fetchCalls = 0;
+  function* duplicateStatuses() {
+    try {
+      for (let index = 0; index < 1_000; index += 1) {
+        yielded += 1;
+        yield "Committed";
+      }
+      throw new Error("duplicate status iterator was over-consumed");
+    } finally {
+      cleanedUp += 1;
+    }
+  }
+  const client = new NexusAppClient({
+    toriiBaseUrl: "https://torii.example",
+    async fetchImpl() {
+      fetchCalls += 1;
+      return mockResponse(200, JSON.stringify({ status: "Committed" }));
+    },
+  });
+
+  await assert.rejects(
+    client.toriiClient.waitForTransactionStatus(HASH_HEX, {
+      successStatuses: duplicateStatuses(),
+    }),
+    /must not contain more than 32 statuses/u,
+  );
+  assert.equal(yielded, 33);
+  assert.equal(cleanedUp, 1);
+  assert.equal(fetchCalls, 0);
+});
+
 test("browser Nexus Torii status polling propagates an already-aborted signal", async () => {
   const controller = new AbortController();
   controller.abort(new Error("cancelled-by-wallet"));

@@ -4,6 +4,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Fixed the built-in browser Connect approval handoff: browser Connect verifies
+  the `{accountId, walletPublicKey, signature}` proof, while the Nexus facade
+  projects the account and derives its Ed25519 controller instead of treating
+  the X25519 `walletPublicKey` as a transaction key. Submissions using
+  `{wait: true, signal}` now check cancellation before finalization and again
+  immediately before Torii submission.
 - Made `build:dist` concurrency-safe and content-idempotent: explicit builds
   stage and validate the complete ESM tree under an inter-process lock, then
   replace `dist` only when its content changed, with stale-lock recovery,
@@ -17,7 +23,13 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   Torii simulation, fetched bytes, derived/proved bytecode, gas, entrypoint,
   payload, and proof/verifying-key backends are bound before signing. The new
   browser-safe `computeIvmArtifactHashes` helper and `./ivm-artifact` subpath
-  compute both identities. Validation-fee policy verification now uses strict
+  compute both identities and ship standalone strict-DOM declarations without
+  ambient Node types. Artifacts are capped at 4 MiB before allocation and
+  SharedArrayBuffer-backed inputs are rejected, while genuine cross-realm
+  ArrayBuffers remain supported. Code-byte, simulation, derivation, and proof
+  responses now enforce declared and streamed endpoint-specific byte caps
+  before fatal UTF-8 decoding and strict JSON parsing. Validation-fee policy
+  verification now uses strict
   uncofactored Ed25519 verification, rejects duplicate governance keyset ids,
   bounds adversarial inputs before allocation, and fails closed on unaudited
   overlay instruction families. IVM proof polling validates options before job

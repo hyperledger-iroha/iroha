@@ -37,7 +37,7 @@
     "./ivm-artifact": {
       "browser": "./dist/ivmArtifact.js",
       "import": "./dist/ivmArtifact.js",
-      "types": "./index.d.ts"
+      "types": "./ivm-artifact.d.ts"
     },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
@@ -109,7 +109,7 @@
         "./index.d.ts"
       ],
       "ivm-artifact": [
-        "./index.d.ts"
+        "./ivm-artifact.d.ts"
       ],
       "instruction-builders": [
         "./index.d.ts"
@@ -192,6 +192,7 @@
     "README.md",
     "index.d.ts",
     "canonical-request.d.ts",
+    "ivm-artifact.d.ts",
     "transaction-codec.d.ts",
     "connect.browser.d.ts",
     "nexus-app.d.ts",

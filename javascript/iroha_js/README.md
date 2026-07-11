@@ -320,6 +320,18 @@ defaults to a 30-second budget, and credentials/query/fragment components are
 rejected in the configured Torii base URL. Requests omit ambient credentials
 and referrers and reject redirects.
 
+The built-in Connect path keeps session proof keys separate from transaction
+signing keys. Browser Connect verifies the approval proof and returns its
+`accountId`, 32-byte X25519 `walletPublicKey`, and 64-byte `signature`.
+`walletPublicKey` authenticates the Connect session proof; it is not the
+Ed25519 transaction key. `NexusAppClient.awaitApproval()` validates that proof
+envelope, projects only `accountId` into the Nexus approval state, and derives
+the Ed25519 controller key from the canonical I105 account. For
+`finalizeAndSubmit(..., { wait: true, signal })`, an already-aborted signal is
+rejected before finalization, and the signal is checked again after
+finalization but before Torii submission. This cancellation behavior is scoped
+to status-waiting submissions; `wait: false` does not apply the wait signal.
+
 When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
 aliases must be exact lowercase 64-character hex and must match the returned
 payload bytes. Finalization must return canonical version-1, single-signature
@@ -2600,7 +2612,14 @@ Both helpers require exactly one of `expectedCodeHashHex` or
 the same Torii simulation or code endpoint defeats substitution protection.
 Use `computeIvmArtifactHashes(trustedArtifactBytes)` (also available from the
 browser-safe `@iroha/iroha-js/ivm-artifact` export) to compute both values from
-independently obtained bytes.
+independently obtained bytes. That subpath ships standalone DOM declarations
+and does not require ambient Node types. Complete artifacts are capped at 4 MiB
+(`IVM_ARTIFACT_MAX_BYTES`) before copying or hashing. ArrayBuffer inputs from
+other JavaScript realms are supported, but SharedArrayBuffer-backed inputs are
+rejected so concurrently mutable bytes cannot cross the identity boundary.
+Torii code-byte, simulation, derivation, and proof-job JSON responses are read
+through endpoint-specific byte caps before UTF-8 decoding or JSON parsing;
+missing or dishonest `Content-Length` headers cannot bypass the streamed limit.
 
 The optional legacy `requiredOverlayTransfer` assertion may be supplied too,
 but it must equal the policy-derived transfer and cannot redirect or change the

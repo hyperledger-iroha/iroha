@@ -25,7 +25,13 @@ const ROOT = process.env.IROHA_JS_BUILD_DIST_ROOT
   : PROJECT_ROOT;
 const LOCK_TIMEOUT_MS = 60_000;
 const STALE_LOCK_MS = 5 * 60_000;
-const REQUIRED_OUTPUTS = ["address.js", "curveRegistry.js", "toriiClient.js", "kotodamaCompiler/index.js"];
+const REQUIRED_OUTPUTS = [
+  "address.js",
+  "curveRegistry.js",
+  "ivmArtifact.js",
+  "toriiClient.js",
+  "kotodamaCompiler/index.js",
+];
 const STAGING_PREFIX = ".dist-stage-";
 const BACKUP_PREFIX = ".dist-backup-";
 const FAILED_PREFIX = ".dist-failed-";

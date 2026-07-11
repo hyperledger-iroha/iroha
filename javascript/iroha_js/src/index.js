@@ -21,6 +21,7 @@ export {
 export { normalizeIdentifierInput } from "./normalizers.js";
 export {
   computeIvmArtifactHashes,
+  IVM_ARTIFACT_MAX_BYTES,
   IVM_PROGRAM_HEADER_LENGTH,
 } from "./ivmArtifact.js";
 export {

@@ -717,8 +717,11 @@ fn minimal_config_snapshot() {
                 zk_prover_allowed_circuits: [],
                 zk_ivm_prove_max_inflight: 1,
                 zk_ivm_prove_max_queue: 16,
+                zk_ivm_tooling_timeout_ms: 60000,
                 zk_ivm_prove_job_ttl_secs: 1800,
                 zk_ivm_prove_job_max_entries: 1024,
+                zk_ivm_prove_job_max_retained_bytes:
+                    defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
                 connect: Connect {
                     enabled: true,
                     ws_max_sessions: 10000,
@@ -1174,6 +1177,7 @@ fn minimal_config_snapshot() {
                     max_body_bytes: Bytes(
                         8388608,
                     ),
+                    body_max_inflight: 8,
                     egress_bytes_per_sec: Some(
                         8388608,
                     ),

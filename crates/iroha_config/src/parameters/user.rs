@@ -20179,6 +20179,9 @@ pub struct Torii {
     /// Maximum proof request payload size (bytes).
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
     pub proof_max_body_bytes: Bytes<u64>,
+    /// Maximum proof request bodies buffered concurrently before handler admission.
+    #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
+    pub proof_body_max_inflight: NonZeroUsize,
     /// Optional proof egress steady-state budget (bytes/sec). None disables.
     pub proof_egress_bytes_per_sec: Option<u64>,
     /// Optional proof egress burst budget (bytes). None disables.
@@ -20364,6 +20367,12 @@ pub struct Torii {
         default = "defaults::torii::ZK_IVM_PROVE_MAX_QUEUE"
     )]
     pub zk_ivm_prove_max_queue: usize,
+    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
+    #[config(
+        env = "TORII_ZK_IVM_TOOLING_TIMEOUT_MS",
+        default = "defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS"
+    )]
+    pub zk_ivm_tooling_timeout_ms: u64,
     /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
     #[config(
         env = "TORII_ZK_IVM_PROVE_JOB_TTL_SECS",
@@ -20378,6 +20387,12 @@ pub struct Torii {
         default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES"
     )]
     pub zk_ivm_prove_job_max_entries: usize,
+    /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
+    #[config(
+        env = "TORII_ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES",
+        default = "defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES"
+    )]
+    pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
     /// Push notification configuration (feature-gated in runtime).
     #[config(nested)]
     pub push: ToriiPush,
@@ -20929,6 +20944,7 @@ impl Torii {
                     .or(super::defaults::torii::PROOF_BURST)
                     .and_then(std::num::NonZeroU32::new),
                 max_body_bytes: self.proof_max_body_bytes,
+                body_max_inflight: self.proof_body_max_inflight,
                 egress_bytes_per_sec: self
                     .proof_egress_bytes_per_sec
                     .or(super::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC)
@@ -21011,8 +21027,10 @@ impl Torii {
             zk_prover_allowed_circuits: self.zk_prover_allowed_circuits,
             zk_ivm_prove_max_inflight: self.zk_ivm_prove_max_inflight,
             zk_ivm_prove_max_queue: self.zk_ivm_prove_max_queue,
+            zk_ivm_tooling_timeout_ms: self.zk_ivm_tooling_timeout_ms,
             zk_ivm_prove_job_ttl_secs: self.zk_ivm_prove_job_ttl_secs,
             zk_ivm_prove_job_max_entries: self.zk_ivm_prove_job_max_entries,
+            zk_ivm_prove_job_max_retained_bytes: self.zk_ivm_prove_job_max_retained_bytes,
             connect: self.connect.parse(),
             iso_bridge: self.iso_bridge.parse(),
             rbc_sampling,

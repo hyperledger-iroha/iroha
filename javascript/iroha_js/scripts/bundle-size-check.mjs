@@ -49,6 +49,16 @@ export const BUNDLE_TARGETS = Object.freeze([
     forbidNodeInputs: true,
   }),
   Object.freeze({
+    label: "ivmArtifact.js (browser)",
+    entryPoint: join(ROOT, "dist", "ivmArtifact.js"),
+    platform: "browser",
+    target: "es2020",
+    // This leaf helper must remain suitable for strict-DOM browser consumers.
+    limitKb: 12,
+    forbidNodeInputs: true,
+    forbidGlobalBuffer: true,
+  }),
+  Object.freeze({
     label: "browser.js (public aggregate)",
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
@@ -125,6 +135,12 @@ async function checkBundle(esbuild, target, log) {
       );
     }
   }
+  if (
+    target.forbidGlobalBuffer === true &&
+    /(?:globalThis|window|global)\.Buffer\s*=/u.test(output.text ?? "")
+  ) {
+    throw new Error(`${target.label} installs a forbidden global Buffer shim`);
+  }
 }
 
 function exportTarget(pkg, subpath, condition) {
@@ -163,6 +179,7 @@ export async function runBundleSizeCheck({
   await checkDistExport(pkg, "./transaction-codec", "browser");
   await checkDistExport(pkg, "./nexus-app", "browser");
   await checkDistExport(pkg, "./canonical-request", "browser");
+  await checkDistExport(pkg, "./ivm-artifact", "browser");
   await checkDistExport(pkg, "./browser", "browser");
 }
 
