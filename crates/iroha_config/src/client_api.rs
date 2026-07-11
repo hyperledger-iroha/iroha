@@ -3682,7 +3682,7 @@ mod test {
               },
               "consensus": {
                 "mode": "permissioned",
-                "mode_flip_enabled": true
+                "mode_flip_enabled": false
               },
               "confidential_gas": {
                 "proof_base": 777777,
