@@ -13,6 +13,11 @@ export {
 } from "./instructionBuilders.js";
 
 export {
+  computeIvmArtifactHashes,
+  IVM_PROGRAM_HEADER_LENGTH,
+} from "./ivmArtifact.js";
+
+export {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
   browserTransactionCodec,

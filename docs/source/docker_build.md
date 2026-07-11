@@ -73,15 +73,16 @@ The repository-root `Dockerfile` builds the runtime image used for published
 Local Taira image build example:
 
 ```bash
-scripts/build_release_image.sh --profile iroha3 --config taira
+cd /path/to/dpn-api-rust
+IROHA_DIR=/path/to/iroha ops/taira/build-validator-image.sh
 ```
 
-The Taira helper now defaults to `CARGO_BUILD_JOBS=1` and `BINARIES=irohad`
-so validator-image builds do not depend on unrelated `iroha_cli` health. When
-`--use-target-prebuilt` is set, the helper now stages a tiny temporary Docker
-context instead of sending the whole repository into `docker build`, which
-keeps the prebuilt path practical on local hosts. For a direct Docker build,
-pass the Taira-specific args explicitly:
+Taira image builds must enter through the DPN release wrapper so the ignored
+Iroha lockfile and a dirty developer checkout cannot silently become release
+inputs. The wrapper reconstructs and verifies the policy-pinned source tree,
+installs the reviewed full Cargo lock, and passes both digests to Docker. The
+equivalent low-level inputs are shown below for reference, not as a release
+procedure:
 
 ```bash
 docker build \
@@ -89,6 +90,8 @@ docker build \
   --build-arg FEATURES=embedded-soracloud-runtime \
   --build-arg CARGO_BUILD_JOBS=1 \
   --build-arg BINARIES=irohad \
+  --build-arg VALIDATOR_LOCK_SHA256=<reviewed-lock-sha256> \
+  --build-arg VALIDATOR_SOURCE_TREE_SHA256=<attested-source-tree-sha256> \
   -t hyperledger/iroha:taira-local .
 ```
 

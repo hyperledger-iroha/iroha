@@ -42,8 +42,8 @@ pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    118, 252, 99, 127, 236, 50, 12, 126, 173, 34, 166, 94, 105, 54, 88, 251, 177, 24, 122, 59, 1,
-    82, 144, 13, 100, 100, 76, 132, 30, 119, 202, 127,
+    212, 70, 210, 25, 235, 128, 26, 231, 82, 205, 1, 104, 224, 244, 123, 58, 207, 83, 186, 77, 92,
+    150, 95, 210, 152, 63, 79, 147, 244, 218, 110, 167,
 ];
 
 /// Block height in the v2 protocol.

@@ -7,10 +7,10 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
         let recipient = try note(seed: 0x20, amount: "210")
         let change = try note(seed: 0x30, amount: "415")
         let split = try KagemushaRecursiveSpendSplitIntentV2(
-            chainID: input.chainID,
-            assetDefinitionID: input.assetDefinitionID,
+            chainID: testChainID,
+            assetDefinitionID: try testAssetDefinitionID(),
             inputNote: input,
-            parentBranchPath: try branchPath(),
+            parentBranchPath: try testParentBranchPath(),
             assetScale: 2,
             transferAmount: KagemushaScaledAmount(atomicUnits: "210", scale: 2),
             recipientOutput: recipient,
@@ -28,10 +28,10 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
         let recipient = try note(seed: 0x20, amount: "210")
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendSplitIntentV2(
-                chainID: input.chainID,
-                assetDefinitionID: input.assetDefinitionID,
+                chainID: testChainID,
+                assetDefinitionID: try testAssetDefinitionID(),
                 inputNote: input,
-                parentBranchPath: try branchPath(),
+                parentBranchPath: try testParentBranchPath(),
                 assetScale: 2,
                 transferAmount: KagemushaScaledAmount(atomicUnits: "210", scale: 2),
                 recipientOutput: recipient,
@@ -47,10 +47,10 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
         let wrongChange = try note(seed: 0x30, amount: "414")
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendSplitIntentV2(
-                chainID: input.chainID,
-                assetDefinitionID: input.assetDefinitionID,
+                chainID: testChainID,
+                assetDefinitionID: try testAssetDefinitionID(),
                 inputNote: input,
-                parentBranchPath: try branchPath(),
+                parentBranchPath: try testParentBranchPath(),
                 assetScale: 2,
                 transferAmount: KagemushaScaledAmount(atomicUnits: "210", scale: 2),
                 recipientOutput: recipient,
@@ -67,10 +67,10 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendSplitIntentV2(
-                chainID: input.chainID,
-                assetDefinitionID: input.assetDefinitionID,
+                chainID: testChainID,
+                assetDefinitionID: try testAssetDefinitionID(),
                 inputNote: input,
-                parentBranchPath: try branchPath(),
+                parentBranchPath: try testParentBranchPath(),
                 assetScale: 9,
                 transferAmount: KagemushaScaledAmount(atomicUnits: "210", scale: 2),
                 recipientOutput: recipient,
@@ -135,20 +135,26 @@ final class KagemushaRecursiveSpendV2Tests: XCTestCase {
         seed: UInt8,
         amount: String
     ) throws -> KagemushaSpendableNoteDescriptorV2 {
-        var assetBytes = Data(repeating: 0, count: 16)
-        assetBytes[6] = 0x40
-        assetBytes[8] = 0x80
-        let assetDefinitionID = try XCTUnwrap(AssetDefinitionAddress.encode(uuidBytes: assetBytes))
-        return try KagemushaSpendableNoteDescriptorV2(
-            chainID: "test-chain",
-            assetDefinitionID: assetDefinitionID,
+        try KagemushaSpendableNoteDescriptorV2(
+            chainID: testChainID,
+            assetDefinitionID: testAssetDefinitionID(),
             noteCommitment: Data(repeating: seed, count: 32),
             spendNullifier: Data(repeating: seed &+ 1, count: 32),
             amount: KagemushaScaledAmount(atomicUnits: amount, scale: 2)
         )
     }
 
-    private func branchPath() throws -> KagemushaRecursiveSpendBranchPathV2 {
+    private var testChainID: String { "kagemusha-v2-test-chain" }
+
+    private func testAssetDefinitionID() throws -> String {
+        let uuidBytes = Data([
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x46, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        ])
+        return try XCTUnwrap(AssetDefinitionAddress.encode(uuidBytes: uuidBytes))
+    }
+
+    private func testParentBranchPath() throws -> KagemushaRecursiveSpendBranchPathV2 {
         try .root(Data(repeating: 0x44, count: 32))
     }
 }

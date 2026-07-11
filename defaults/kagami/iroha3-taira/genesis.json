@@ -2,9 +2,9 @@
   "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "iroha3-taira",
   "chain_discriminant": 369,
-  "consensus_fingerprint": "0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8",
+  "consensus_fingerprint": "0x8942a47e7f584e232968f30e1f4065051a9ed531d41f39421b45d68b951a64d2",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"4098404A6DF5C3CB8A4343EE32BBE5CE1B8DAAF6662C2905465A920A6E815859"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"388D0CF4F8EDD439871E967D0C0E9237C7F97C40BA1C4C3BDD1339E388D07CF1"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -280,7 +280,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "13"
             }
           }
@@ -288,7 +288,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "44"
             }
           }
@@ -296,7 +296,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed32000601000000000000d1ebb7a9c61afa19005a00000000000000000000004e0000000000000046000000000000006564303132303133324533323039433445433843384534464345374433354632434546363235333441353541433139373838414134454642393941353938364535324631324690000000000000000100000000000000670100000000000000250100000000000000e201000000000000006f0100000000000000170100000000000000d201000000000000004c0100000000000000900100000000000000a90100000000000000170100000000000000ad01000000000000007f010000000000000013010000000000000035010000000000000044010000000000000072040000000000000000000000",
+              "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
               "object": "250000000"
             }
           }

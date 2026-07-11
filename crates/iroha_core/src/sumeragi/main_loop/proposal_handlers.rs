@@ -4070,7 +4070,24 @@ impl Actor {
             }
         }
         if inserted_pending_block {
-            self.enforce_pending_block_cap(block_hash, "block_created");
+            if !self.enforce_pending_block_cap(block_hash, "block_created") {
+                let targets = sender.iter().cloned().collect::<Vec<_>>();
+                let _ = self.request_missing_block(
+                    block_hash,
+                    height,
+                    view,
+                    super::MissingBlockPriority::Consensus,
+                    &targets,
+                );
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    source_peer = ?sender,
+                    "deferred BlockCreated body because retained requeue owners fill the pending-body cap"
+                );
+                return Ok(());
+            }
         }
         if da_enabled
             && exact_frontier_block_created

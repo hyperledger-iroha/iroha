@@ -2246,7 +2246,6 @@ pub(crate) fn prepare_v2_lane_payload_plan(
 
 fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> {
     let nexus = state.nexus_snapshot();
-    let reset_heights = state.da_shard_canonical_reset_heights_snapshot_cached();
     let mut tips = state
         .lane_block_artifact_tips_snapshot_cached()
         .into_iter()
@@ -2271,20 +2270,19 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
             .lane_relay_snapshot()
             .into_iter()
             .filter(|relay| {
+                let relay_proposal_height = relay.block_header.height().get();
                 relay.is_merge_admissible()
                     && relay.lane_block_descriptor_hash.is_some()
-                    && (!nexus.enabled
-                        || crate::state::nexus_active_lane_dataspace_at_height(
-                            relay.lane_id,
-                            &nexus,
-                            proposal_height,
-                        ) == Some(relay.dataspace_id))
-                    && (!nexus.enabled
-                        || state.lane_incarnation_at_height(relay.lane_id, proposal_height)
-                            == Some(relay.lane_incarnation))
-                    && reset_heights
-                        .get(&relay.lane_id)
-                        .is_none_or(|reset_height| relay.block_height > *reset_height)
+                    && state.da_lane_visible_after_reset(relay_proposal_height, relay.lane_id)
+                    && crate::state::consensus_lane_dataspace_at_height(
+                        relay.lane_id,
+                        &nexus,
+                        proposal_height,
+                    ) == Some(relay.dataspace_id)
+                    && state.lane_incarnation_at_height(relay.lane_id, relay_proposal_height)
+                        == Some(relay.lane_incarnation)
+                    && state.lane_incarnation_at_height(relay.lane_id, proposal_height)
+                        == Some(relay.lane_incarnation)
             })
             .map(|relay| LaneBlockTip {
                 lane_id: relay.lane_id,
@@ -5336,7 +5334,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_lane_block_tips_floor_recreated_lanes_by_reset_watermark() {
+    fn latest_lane_block_tips_ignore_retired_incarnations_and_preserve_current_tips() {
         let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22), (3, 33)]);
         let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
         let domains = plan_lane_consensus_domains(
@@ -5355,28 +5353,49 @@ mod tests {
             lane_tip_with_descriptor(2, 99, 5, 0x92),
             lane_tip_with_descriptor(3, 33, 12, 0x93),
         ];
+        let lane_1_incarnation = Hash::new(b"lane-1-current-incarnation");
+        let lane_2_incarnation = Hash::new(b"lane-2-current-incarnation");
+        let lane_3_incarnation = known_tips[2].lane_incarnation;
+        let lane_incarnations = BTreeMap::from([
+            (LaneId::new(1), lane_1_incarnation),
+            (LaneId::new(2), lane_2_incarnation),
+            (LaneId::new(3), lane_3_incarnation),
+        ]);
         let reset_heights = BTreeMap::from([
             (LaneId::new(1), 9),
             (LaneId::new(2), 6),
             (LaneId::new(3), 8),
         ]);
 
-        let tips = plan_latest_lane_block_tips_with_reset_heights(
+        let tips = plan_latest_lane_block_tips_with_incarnations(
             &domains,
             &known_tips,
             3,
             &reset_heights,
+            &lane_incarnations,
         )
-        .expect("reset-aware latest lane block tips");
+        .expect("incarnation-aware latest lane block tips");
 
         assert_eq!(
             tips,
             vec![
-                lane_tip(1, 11, 9),
-                lane_tip(2, 22, 6),
+                LaneBlockTip {
+                    lane_id: LaneId::new(1),
+                    dataspace_id: DataSpaceId::new(11),
+                    lane_incarnation: lane_1_incarnation,
+                    latest_lane_block_height: 0,
+                    latest_lane_block_descriptor_hash: None,
+                },
+                LaneBlockTip {
+                    lane_id: LaneId::new(2),
+                    dataspace_id: DataSpaceId::new(22),
+                    lane_incarnation: lane_2_incarnation,
+                    latest_lane_block_height: 0,
+                    latest_lane_block_descriptor_hash: None,
+                },
                 lane_tip_with_descriptor(3, 33, 12, 0x93),
             ],
-            "reset watermarks floor stale same-dataspace tips, ignore stale old-incarnation mismatches, and preserve newer tips"
+            "retired-incarnation tips must be ignored, while an exact current-incarnation tip remains authoritative"
         );
 
         let slots = plan_next_lane_block_slots(&domains, &tips, 7)
@@ -5387,16 +5406,16 @@ mod tests {
                 .map(|slot| (slot.lane_id, slot.lane_block_height))
                 .collect::<Vec<_>>(),
             vec![
-                (LaneId::new(1), 10),
-                (LaneId::new(2), 7),
+                (LaneId::new(1), 1),
+                (LaneId::new(2), 1),
                 (LaneId::new(3), 13),
             ],
-            "recreated lanes must resume after the reset watermark"
+            "recreated incarnations begin their own lane-local sequence at height one"
         );
     }
 
     #[test]
-    fn latest_lane_block_tips_use_reset_watermark_for_missing_recreated_lane_tip() {
+    fn latest_lane_block_tips_start_missing_recreated_incarnation_at_zero() {
         let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
         let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
         let domains = plan_lane_consensus_domains(
@@ -5410,15 +5429,41 @@ mod tests {
         )
         .expect("lane consensus domains");
         let reset_heights = BTreeMap::from([(LaneId::new(1), 9)]);
+        let lane_1_incarnation = Hash::new(b"missing-lane-1-current-incarnation");
+        let lane_2_incarnation = Hash::new(b"missing-lane-2-current-incarnation");
+        let lane_incarnations = BTreeMap::from([
+            (LaneId::new(1), lane_1_incarnation),
+            (LaneId::new(2), lane_2_incarnation),
+        ]);
 
-        let tips =
-            plan_latest_lane_block_tips_with_reset_heights(&domains, &[], 41, &reset_heights)
-                .expect("reset-aware latest lane block tips");
+        let tips = plan_latest_lane_block_tips_with_incarnations(
+            &domains,
+            &[],
+            41,
+            &reset_heights,
+            &lane_incarnations,
+        )
+        .expect("incarnation-aware latest lane block tips");
 
         assert_eq!(
             tips,
-            vec![lane_tip(1, 11, 9), lane_tip(2, 22, 0)],
-            "missing tips for reset lanes resume from the reset watermark, while never-seen non-reset lanes start at zero"
+            vec![
+                LaneBlockTip {
+                    lane_id: LaneId::new(1),
+                    dataspace_id: DataSpaceId::new(11),
+                    lane_incarnation: lane_1_incarnation,
+                    latest_lane_block_height: 0,
+                    latest_lane_block_descriptor_hash: None,
+                },
+                LaneBlockTip {
+                    lane_id: LaneId::new(2),
+                    dataspace_id: DataSpaceId::new(22),
+                    lane_incarnation: lane_2_incarnation,
+                    latest_lane_block_height: 0,
+                    latest_lane_block_descriptor_hash: None,
+                },
+            ],
+            "a missing tip starts the current incarnation at zero regardless of retired reset coordinates"
         );
     }
 

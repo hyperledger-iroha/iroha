@@ -13,7 +13,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     ChainId, Encode as _,
     account::AccountId,
-    block::{SignedBlock, consensus_v2 as wire},
+    block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
 };
 use iroha_primitives::time::TimeSource;
@@ -22,14 +22,14 @@ use thiserror::Error;
 use super::{
     network_topology::Topology,
     stake_snapshot::strict_v2_voting_roster,
-    v2_body_store::V2BodyStore,
+    v2_body_store::{BodyValidationError, V2BodyStore},
     v2_effects::{ApplyTask, DurableApplyCompletion},
 };
 use crate::{
     EventsSender,
-    block::ValidBlock,
+    block::{BlockValidationError, ValidBlock},
     kura::{CommitManifest, Kura},
-    queue::Queue,
+    queue::{Queue, RoutingDecision},
     state::{StakeSnapshot, State},
 };
 
@@ -45,6 +45,89 @@ pub(crate) struct V2ApplyService {
 }
 
 impl V2ApplyService {
+    fn classify_candidate_validation_error(
+        merge_reference: Option<&CertifiedMergeLedgerReference>,
+        error: &BlockValidationError,
+    ) -> V2ApplyError {
+        if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = error {
+            return match merge_reference {
+                Some(reference) if reference.entry_hash == *entry_hash => {
+                    V2ApplyError::MissingCertifiedMergeSidecar {
+                        reference: reference.clone(),
+                    }
+                }
+                _ => V2ApplyError::Validation(
+                    "validator reported a missing certified merge sidecar that is not bound to the candidate execution context"
+                        .to_owned(),
+                ),
+            };
+        }
+        V2ApplyError::Validation(error.to_string())
+    }
+
+    fn validate_lane_payload_plan(
+        &self,
+        context: &wire::HeightContext,
+        body: &SignedBlock,
+    ) -> Result<(), V2ApplyError> {
+        let external_count = body.external_entrypoint_count();
+        let Some(bundle) = body.execution_context() else {
+            return if external_count == 0 {
+                Ok(())
+            } else {
+                Err(V2ApplyError::Validation(
+                    "Sumeragi v2 candidate has external entrypoints without execution context"
+                        .to_owned(),
+                ))
+            };
+        };
+        if super::v2_lane_work::canonical_v2_lane_payload_matches_kura(
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            context,
+            body,
+        ) {
+            return Ok(());
+        }
+        let routes = bundle
+            .external
+            .iter()
+            .map(|entry| RoutingDecision::new(entry.lane_id, entry.dataspace_id))
+            .collect::<Vec<_>>();
+        let hashes = bundle
+            .external
+            .iter()
+            .map(|entry| Hash::from(entry.entrypoint_hash))
+            .collect::<Vec<_>>();
+        let view = body.header().view_change_index();
+        let leader = context
+            .roster
+            .get(usize::try_from(context.leader(view)).map_err(|_| {
+                V2ApplyError::Validation("Sumeragi v2 leader index overflows usize".to_owned())
+            })?)
+            .ok_or_else(|| {
+                V2ApplyError::Validation("Sumeragi v2 leader index is out of range".to_owned())
+            })?;
+        let expected = super::main_loop::lane_scheduler::prepare_v2_lane_payload_plan(
+            self.state.as_ref(),
+            context,
+            view,
+            &leader.validator,
+            &routes,
+            &hashes,
+        )
+        .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        if !expected.unavailable_indices.is_empty()
+            || expected.ownerships != bundle.lane_payload_ownerships
+        {
+            return Err(V2ApplyError::Validation(
+                "Sumeragi v2 lane ownerships differ from deterministic committed-state planning"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Construct the serialized state/Kura application adapter.
     pub(crate) fn new(
         state: Arc<State>,
@@ -110,11 +193,23 @@ impl V2ApplyService {
                     decision_height: height.get(),
                 });
             }
-            self.validate_and_apply(context, body, durable_hash.is_none())?;
         } else if durable_hash.is_none() {
             // WSV cannot be ahead of its canonical block log. Continuing here
             // would manufacture a sidecar for state that Kura cannot identify.
             return Err(V2ApplyError::StateAheadOfKura);
+        }
+
+        // The durable CommitQC and exact validated body now identify the only
+        // carrier that can ever apply at this height. Keep its immutable
+        // compact reference (including an earlier lock origin view) and
+        // release every losing pending sidecar before validation can defer on
+        // a missing exact entry. A failure after this point remains safe: the
+        // decided reference survives, while no losing carrier can become
+        // canonical.
+        self.retain_decided_merge_sidecar(context, &body)?;
+
+        if state_height < height.get() {
+            self.validate_and_apply(context, body, durable_hash.is_none())?;
         }
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
@@ -135,6 +230,19 @@ impl V2ApplyService {
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
     }
 
+    fn retain_decided_merge_sidecar(
+        &self,
+        context: &wire::HeightContext,
+        body: &SignedBlock,
+    ) -> Result<(), V2ApplyError> {
+        let reference = body
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref());
+        self.kura
+            .retain_pending_certified_merge_entry_for_locked_carrier(context.height, reference)?;
+        Ok(())
+    }
+
     /// Run the exact production proposal validator without applying its state
     /// overlay.
     ///
@@ -147,6 +255,10 @@ impl V2ApplyService {
         context: &wire::HeightContext,
         body: &SignedBlock,
     ) -> Result<(), V2ApplyError> {
+        self.validate_lane_payload_plan(context, body)?;
+        let merge_reference = body
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut voting_block = None;
         let result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
@@ -161,8 +273,9 @@ impl V2ApplyService {
             &mut voting_block,
         )
         .unpack(|_| {});
-        let (_valid, state_block) =
-            result.map_err(|(_, error)| V2ApplyError::Validation(error.to_string()))?;
+        let (_valid, state_block) = result.map_err(|(_, error)| {
+            Self::classify_candidate_validation_error(merge_reference, error.as_ref())
+        })?;
         drop(state_block);
         Ok(())
     }
@@ -173,6 +286,10 @@ impl V2ApplyService {
         body: iroha_data_model::block::SignedBlock,
         store_block: bool,
     ) -> Result<(), V2ApplyError> {
+        self.validate_lane_payload_plan(context, &body)?;
+        let merge_reference = body
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.clone());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut voting_block = None;
         let mut pipeline_events = Vec::new();
@@ -189,7 +306,9 @@ impl V2ApplyService {
                 &mut voting_block,
             )
             .unpack(|event| pipeline_events.push(event))
-            .map_err(|(_, error)| V2ApplyError::Validation(error.to_string()))?;
+            .map_err(|(_, error)| {
+                Self::classify_candidate_validation_error(merge_reference.as_ref(), error.as_ref())
+            })?;
         let committed_block = valid_block
             .commit_with_certificate()
             .unpack(|event| pipeline_events.push(event))
@@ -353,6 +472,13 @@ pub(crate) enum V2ApplyError {
     /// Deterministic validation rejected the exact durable body.
     #[error("Sumeragi v2 application validation failed: {0}")]
     Validation(String),
+    /// The candidate is otherwise valid but its exact certified merge sidecar
+    /// has not reached durable local storage yet.
+    #[error("certified merge sidecar `{}` is not available locally yet", reference.entry_hash)]
+    MissingCertifiedMergeSidecar {
+        /// Compact, certificate-bound reference used for bounded recovery.
+        reference: CertifiedMergeLedgerReference,
+    },
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
@@ -367,29 +493,52 @@ pub(crate) enum V2ApplyError {
     MissingFinalizedEpochRoster,
 }
 
+impl BodyValidationError for V2ApplyError {
+    fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
+        match self {
+            Self::MissingCertifiedMergeSidecar { reference } => Some(reference),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
+        borrow::Cow,
         num::{NonZeroU64, NonZeroUsize},
         sync::Arc,
     };
 
     use iroha_config::parameters::actual::Queue as QueueConfig;
-    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_data_model::{
-        block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
+        Registrable,
+        account::Account,
+        block::{
+            BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
+            consensus_v2 as wire,
+        },
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        isi::Log,
+        merge::{MergeLedgerEntry, MergeQuorumCertificate},
         peer::PeerId,
+        transaction::TransactionBuilder,
     };
+    use iroha_logger::Level;
     use iroha_sumeragi_core::{EventTag, Generation};
 
     use super::*;
     use crate::{
+        block::BlockBuilder,
         query::store::LiveQueryStore,
+        queue::execution_context_for_routing_plan,
         state::World,
         sumeragi::{
             v2_body_store::{BlockSignaturePolicy, V2BodyStore},
             v2_effects::ApplyTask,
         },
+        tx::AcceptedTransaction,
     };
 
     struct ApplyFixture {
@@ -405,6 +554,10 @@ mod tests {
 
     impl ApplyFixture {
         fn new() -> Self {
+            Self::new_with_lane_payload(false)
+        }
+
+        fn new_with_lane_payload(include_lane_payload: bool) -> Self {
             let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
             let mut keys = (1_u8..=4)
                 .map(|seed| {
@@ -413,6 +566,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let transaction_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
+                .expect("deterministic transaction key");
             let roster = keys
                 .iter()
                 .map(|key| wire::ValidatorPower {
@@ -443,6 +598,34 @@ mod tests {
             };
             context.validate().expect("valid fixture context");
 
+            let kura = Kura::blank_kura_for_testing();
+            let transaction_authority = AccountId::new(transaction_key.public_key().clone());
+            let world = World::with(
+                [],
+                [Account::new(transaction_authority.clone()).build(&transaction_authority)],
+                [],
+            );
+            let state = Arc::new(State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            ));
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
+            let queue = Arc::new(Queue::from_config(
+                QueueConfig::default(),
+                events_sender.clone(),
+            ));
+            let service = V2ApplyService::new(
+                Arc::clone(&state),
+                Arc::clone(&queue),
+                Arc::clone(&kura),
+                chain_id.clone(),
+                Duration::from_secs(1),
+                transaction_authority.clone(),
+                events_sender,
+            );
+
             let round = wire::ConsensusRound {
                 context_id: context.id(),
                 height: context.height,
@@ -450,21 +633,61 @@ mod tests {
             };
             let leader_index = context.leader(0);
             let leader = &keys[usize::try_from(leader_index).expect("leader index")];
-            let header = BlockHeader::new(
-                NonZeroU64::new(context.height).expect("non-zero height"),
-                None,
-                None,
-                None,
-                1_000,
-                0,
+            let proof_policy_bundle = crate::da::active_proof_policy_bundle_at_height(
+                &state.nexus_snapshot(),
+                context.height,
             );
-            let signature = SignatureOf::try_from_hash(leader.private_key(), header.hash())
-                .expect("sign fixture block");
-            let body = SignedBlock::presigned(
-                BlockSignature::new(u64::from(leader_index), signature),
-                header,
-                Vec::new(),
-            );
+            let body = if include_lane_payload {
+                let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
+                    .with_instructions([Log::new(
+                        Level::INFO,
+                        "v2 lane apply recovery fixture".to_owned(),
+                    )])
+                    .sign(transaction_key.private_key());
+                let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
+                let routing_plan = queue
+                    .route_plan_with_state(&accepted, state.as_ref())
+                    .expect("resolve canonical fixture route");
+                let route = routing_plan.coordinator_route();
+                let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
+                let lane_plan =
+                    super::super::main_loop::lane_scheduler::prepare_v2_lane_payload_plan(
+                        state.as_ref(),
+                        &context,
+                        0,
+                        &context.roster[usize::try_from(leader_index).expect("leader index")]
+                            .validator,
+                        std::slice::from_ref(&route),
+                        std::slice::from_ref(&entrypoint_hash),
+                    )
+                    .expect("derive canonical fixture lane plan");
+                assert!(lane_plan.unavailable_indices.is_empty());
+                assert_eq!(lane_plan.ownerships.len(), 1);
+                let execution_context =
+                    BlockExecutionContextBundle::new(vec![execution_context_for_routing_plan(
+                        transaction.hash_as_entrypoint(),
+                        &routing_plan,
+                    )])
+                    .with_lane_payload_ownerships(lane_plan.ownerships);
+                let block =
+                    BlockBuilder::new_with_time_source(vec![accepted], TimeSource::new_system())
+                        .chain(0, None)
+                        .with_da_proof_policies(Some(proof_policy_bundle.clone()))
+                        .with_execution_context(Some(execution_context))
+                        .try_sign_with_index(leader.private_key(), u64::from(leader_index))
+                        .expect("sign fixture lane body")
+                        .unpack(|_| {});
+                SignedBlock::from(block)
+            } else {
+                let block =
+                    BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+                        .chain(0, None)
+                        .with_da_proof_policies(Some(proof_policy_bundle))
+                        .try_sign_with_index(leader.private_key(), u64::from(leader_index))
+                        .expect("sign fixture block")
+                        .unpack(|_| {});
+                SignedBlock::from(block)
+            };
             let canonical_wire = body.encode_wire().expect("canonical block wire");
             let subject = wire::BlockSubject {
                 parent_block_hash: None,
@@ -487,27 +710,6 @@ mod tests {
                 aggregate_signature: vec![0xA7; 48],
             };
 
-            let kura = Kura::blank_kura_for_testing();
-            let state = Arc::new(State::new_with_chain_for_testing(
-                World::new(),
-                Arc::clone(&kura),
-                LiveQueryStore::start_test(),
-                chain_id.clone(),
-            ));
-            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
-            let queue = Arc::new(Queue::from_config(
-                QueueConfig::default(),
-                events_sender.clone(),
-            ));
-            let service = V2ApplyService::new(
-                Arc::clone(&state),
-                queue,
-                Arc::clone(&kura),
-                chain_id,
-                Duration::from_secs(1),
-                AccountId::new(keys[0].public_key().clone()),
-                events_sender,
-            );
             let body_root = tempfile::tempdir().expect("body-store directory");
             let mut body_store = V2BodyStore::open_with_policy(
                 body_root.path(),
@@ -611,6 +813,110 @@ mod tests {
         }
     }
 
+    fn pending_merge_entry(
+        context: &wire::HeightContext,
+        view: wire::View,
+        label: &[u8],
+    ) -> MergeLedgerEntry {
+        let validator_set = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let mut bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+        for index in 0..validator_set.len() {
+            bitmap[index / 8] |= 1 << (index % 8);
+        }
+        MergeLedgerEntry {
+            epoch_id: context.epoch,
+            lane_catalog_hash: Hash::new(b"v2 apply decided-sidecar catalog"),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new(b"v2 apply decided-sidecar incarnations"),
+            activation_root: Hash::new(b"v2 apply decided-sidecar activations"),
+            lane_snapshots: Vec::new(),
+            execution_batch: None,
+            global_state_root: Hash::new(label),
+            merge_qc: MergeQuorumCertificate::new(
+                context.height,
+                context.epoch,
+                view,
+                HashOf::from_untyped_unchecked(Hash::new(b"v2 apply decided-sidecar parent")),
+                Hash::new(b"v2 apply decided-sidecar chain"),
+                VALIDATOR_SET_HASH_VERSION_V1,
+                HashOf::new(&validator_set),
+                validator_set,
+                bitmap,
+                Vec::new(),
+                vec![0x5A; 96],
+                Hash::new(label),
+            ),
+        }
+    }
+
+    fn body_with_merge_reference(reference: CertifiedMergeLedgerReference) -> SignedBlock {
+        let key = KeyPair::try_from_seed(vec![0xC9; 32], Algorithm::BlsNormal)
+            .expect("derive decided-body signer");
+        let execution_context =
+            BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(reference);
+        let block = BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+            .chain(0, None)
+            .with_execution_context(Some(execution_context))
+            .try_sign_with_index(key.private_key(), 0)
+            .expect("sign decided body")
+            .unpack(|_| {});
+        SignedBlock::from(block)
+    }
+
+    #[test]
+    fn durable_decision_retains_exact_earlier_view_sidecar_and_prunes_losers() {
+        let fixture = ApplyFixture::new();
+        let exact = pending_merge_entry(&fixture.context, 1, b"exact earlier-view sidecar");
+        let losing = pending_merge_entry(&fixture.context, 2, b"losing later-view sidecar");
+        let exact_hash = fixture
+            .kura
+            .persist_pending_certified_merge_entry(&exact)
+            .expect("persist exact decided sidecar");
+        let losing_hash = fixture
+            .kura
+            .persist_pending_certified_merge_entry(&losing)
+            .expect("persist losing sidecar");
+        assert_ne!(exact_hash, losing_hash);
+
+        let body = body_with_merge_reference(CertifiedMergeLedgerReference::new(&exact));
+        fixture
+            .service
+            .retain_decided_merge_sidecar(&fixture.context, &body)
+            .expect("bind exact sidecar from durable decided body");
+        assert_eq!(
+            fixture
+                .kura
+                .merge_entry_by_hash(exact_hash)
+                .expect("read exact sidecar after decision binding"),
+            Some(exact),
+            "the exact earlier-view reference remains protected until finalization"
+        );
+        assert!(
+            fixture
+                .kura
+                .merge_entry_by_hash(losing_hash)
+                .expect("read losing sidecar after decision binding")
+                .is_none(),
+            "a durable decision must release every non-referenced sidecar at its height"
+        );
+
+        fixture
+            .kura
+            .prune_finalized_pending_certified_merge_entries(fixture.context.height)
+            .expect("finalized height retires the exact protected sidecar");
+        assert!(
+            fixture
+                .kura
+                .merge_entry_by_hash(exact_hash)
+                .expect("read exact sidecar after finalization")
+                .is_none()
+        );
+    }
+
     #[test]
     fn block_write_failure_never_advances_wsv_and_retry_is_exact() {
         let fixture = ApplyFixture::new();
@@ -643,6 +949,37 @@ mod tests {
         fixture
             .execute(&mut store)
             .expect("resume WSV application from exact durable body");
+        fixture.assert_complete();
+    }
+
+    #[test]
+    fn restart_recovers_kura_lane_body_written_before_wsv_commit() {
+        let fixture = ApplyFixture::new_with_lane_payload(true);
+        let ownerships = fixture
+            .body
+            .execution_context()
+            .expect("lane body execution context")
+            .lane_payload_ownerships
+            .clone();
+        assert_eq!(ownerships.len(), 1, "fixture must carry lane ownership");
+        fixture
+            .kura
+            .store_block(fixture.body.clone())
+            .expect("model durable Kura lane body before crash");
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(fixture.kura.durable_blocks_count(), 1);
+        assert!(
+            fixture
+                .kura
+                .read_lane_block_artifact(ownerships[0].lane_id, ownerships[0].lane_block_height,)
+                .is_some(),
+            "Kura crash image must include the exact lane sidecar"
+        );
+
+        let mut store = fixture.reopen_body_store();
+        fixture
+            .execute(&mut store)
+            .expect("resume exact lane-body WSV application after Kura-first crash");
         fixture.assert_complete();
     }
 

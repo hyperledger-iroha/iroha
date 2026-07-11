@@ -30,13 +30,14 @@ use iroha_data_model::{
     },
     name::Name,
     offline::{
-        KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendTopUpAnchorV2,
-        KagemushaRequestAuthorizationV2, OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAndroidAppAttestationPolicy,
-        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
-        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
-        OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
-        OfflineNoteRecursiveProof, offline_note_recursive_public_inputs_schema_hash,
+        KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE, KagemushaRecursiveSpendBranchPathV2,
+        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
+        OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA, OFFLINE_REJECTION_REASON_PREFIX,
+        OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
+        OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
+        OfflineIosAppAttestationPolicy, OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim,
+        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
+        offline_note_recursive_public_inputs_schema_hash,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::error::FindError,
@@ -407,6 +408,24 @@ pub mod isi {
     const OFFLINE_ATTESTATION_ANDROID_KEY_OID: &str = "1.3.6.1.4.1.11129.2.1.17";
     const OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION: &str = "production";
     const OFFLINE_ATTESTATION_IOS_ENV_DEVELOPMENT: &str = "development";
+
+    fn ensure_kagemusha_v2_chain_backend_available(
+        error_label: &str,
+        operation: &str,
+    ) -> Result<(), Error> {
+        if KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+            return Ok(());
+        }
+
+        // This gate is deliberately fail-closed. It may be removed only in the same
+        // release that ships both the branch-independent V2 proof backend and its
+        // chain executor, so a capability flag can never expose partial execution.
+        Err(labeled_invariant(
+            error_label,
+            format!("Kagemusha V2 recursive {operation} proof backend is unavailable"),
+        )
+        .into())
+    }
     const OFFLINE_ATTESTATION_IOS_AAGUID_PRODUCTION: &[u8; 16] = b"appattest\0\0\0\0\0\0\0";
     const OFFLINE_ATTESTATION_IOS_AAGUID_DEVELOPMENT: &[u8; 16] = b"appattestdevelop";
     const OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_TRUSTED_ENVIRONMENT: i64 = 1;
@@ -5964,6 +5983,7 @@ pub mod isi {
                 )
                 .into());
             }
+            ensure_kagemusha_v2_chain_backend_available("invalid_recursive_topup", "top-up")?;
             let request = self.request;
             request
                 .validate_public_binding()
@@ -6071,18 +6091,35 @@ pub mod isi {
         }
     }
 
+    // Keep the public instruction fail-closed until the V2 proof backend and chain
+    // executor are enabled together; the capability invariant above prevents a
+    // partially deployed backend from mutating ledger state.
     impl Execute for RedeemKagemushaRecursiveV2 {
         fn execute(
             self,
             _authority: &AccountId,
-            _state_transaction: &mut StateTransaction<'_, '_>,
+            state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let detail = match self.request.ensure_proof_backend_available() {
-                Err(err) => err.to_string(),
-                Ok(()) => "Kagemusha V2 redemption execution is unavailable until the chain proof backend is enabled"
-                    .to_owned(),
-            };
-            Err(labeled_invariant("proof_backend_unavailable", detail).into())
+            if !state_transaction.settlement.offline.kagemusha_enabled {
+                return Err(labeled_invariant(
+                    "kagemusha_disabled",
+                    "Kagemusha V2 recursive redemption is disabled by configuration",
+                )
+                .into());
+            }
+
+            // V2 redemption is part of the public instruction contract, but the
+            // branch-independent proof backend is deliberately unavailable. Keep
+            // dispatch fail-closed before authorization markers, nullifiers,
+            // commitments, balances, or any other ledger state can be mutated.
+            self.request
+                .ensure_proof_backend_available()
+                .map_err(|err| labeled_invariant("proof_backend_unavailable", err.to_string()))?;
+            Err(labeled_invariant(
+                "invalid_recursive_redeem",
+                "Kagemusha V2 proof backend unexpectedly reported availability without a chain executor",
+            )
+            .into())
         }
     }
 
@@ -6322,11 +6359,13 @@ pub mod isi {
             domain::{Domain, DomainId},
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2, KagemushaFoldStep,
-                KagemushaRecursiveAggregationProof, KagemushaRecursiveSpendBranchPathV2,
+                KagemushaRecursiveAggregationProof, KagemushaRecursiveSpendArtifactReferenceV2,
+                KagemushaRecursiveSpendArtifactRoleV2, KagemushaRecursiveSpendBranchPathV2,
                 KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendBundleV2,
-                KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendLineageWitnessV1,
-                KagemushaRecursiveSpendProofV2, KagemushaRecursiveSpendPublicStatementV2,
-                KagemushaRecursiveSpendRedeemRequestV2, KagemushaRecursiveSpendRedemptionIntentV2,
+                KagemushaRecursiveSpendInitRequestV2, KagemushaRecursiveSpendLineageModeV2,
+                KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendProofV2,
+                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
+                KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRecursiveSpendTopUpRequestV2,
                 KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
                 KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
                 KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
@@ -6403,6 +6442,13 @@ pub mod isi {
                 KeyPair::try_from_seed(vec![0; 32], Algorithm::Ed25519).is_err(),
                 "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
             );
+        }
+
+        #[test]
+        fn kagemusha_v2_redeem_implements_execute() {
+            fn assert_execute<T: Execute>() {}
+
+            assert_execute::<RedeemKagemushaRecursiveV2>();
         }
 
         #[test]
@@ -10077,6 +10123,155 @@ pub mod isi {
                 block_height: None,
             };
             TopUpKagemushaRecursive::new(asset, amount, init_request)
+        }
+
+        fn unavailable_v2_topup_instruction(asset: AssetId, payer: &AccountId) -> InstructionBox {
+            let v1 = recursive_topup_instruction_for_authorization_test(
+                asset.clone(),
+                Numeric::new(1, 0),
+            );
+            let chain_id = v1.init_request.record_bundle.bundle.chain_id.clone();
+            let amount = KagemushaScaledAmountV2 {
+                atomic_units: 1,
+                scale: 0,
+            };
+            let operation_id = fixed_bytes(b"unavailable-kagemusha-v2-topup-operation");
+            let current_note = KagemushaSpendableNoteDescriptorV2 {
+                chain_id,
+                asset: asset.definition().clone(),
+                note_commitment: v1.init_request.current_note.note_commitment,
+                spend_nullifier: v1.init_request.current_note.spend_nullifier,
+                amount,
+            };
+            let init_request = KagemushaRecursiveSpendInitRequestV2 {
+                init_request: v1.init_request,
+                amount,
+                current_note,
+                lineage_artifact: KagemushaRecursiveSpendArtifactReferenceV2 {
+                    role: KagemushaRecursiveSpendArtifactRoleV2::LineageInitProver,
+                    generation: "unavailable-backend-test".to_owned(),
+                    circuit_id: "unavailable-backend-test".to_owned(),
+                    artifact_type: "unavailable-backend-test".to_owned(),
+                    size_bytes: 1,
+                    sha256: fixed_bytes(b"unavailable-kagemusha-v2-artifact"),
+                },
+                operation_id,
+            };
+            let authorization = KagemushaRequestAuthorizationV2 {
+                authority: payer.clone(),
+                device_id: "unavailable-backend-test".to_owned(),
+                operation_id,
+                issued_at_ms: 0,
+                expires_at_ms: u64::MAX,
+                nonce: fixed_bytes(b"unavailable-kagemusha-v2-nonce"),
+                payload_digest: fixed_bytes(b"unavailable-kagemusha-v2-payload"),
+                app_attest_evidence_sha256: None,
+                app_attest_evidence: None,
+                signature: sample_signature(0xE2),
+            };
+            TopUpKagemushaRecursiveV2::new(KagemushaRecursiveSpendTopUpRequestV2 {
+                asset,
+                init_request,
+                authorization,
+            })
+            .into()
+        }
+
+        #[test]
+        fn unavailable_kagemusha_v2_topup_dispatch_is_state_inert() {
+            let (mut state, asset_id, payer, _definition_id) =
+                distinct_escrow_test_state(Numeric::new(100, 0), 0x79);
+            state.settlement.offline.kagemusha_enabled = true;
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let assets_before = transaction
+                .world
+                .assets()
+                .iter()
+                .map(|(id, value)| (id.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let zk_before = transaction
+                .world
+                .zk_assets
+                .iter()
+                .map(|(id, value)| {
+                    (
+                        id.clone(),
+                        norito::to_bytes(value).expect("encode pre-dispatch ZK asset state"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let replay_before = transaction
+                .world
+                .offline_note_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<Vec<_>>();
+            let contract_state_before = transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            let events_before = transaction.world.internal_event_buf.len();
+
+            let err = unavailable_v2_topup_instruction(asset_id, &payer)
+                .execute(&payer, &mut transaction)
+                .expect_err("disabled Kagemusha V2 backend must reject native dispatch");
+
+            assert_offline_rejection(
+                err,
+                "invalid_recursive_topup",
+                "proof backend is unavailable",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .assets()
+                    .iter()
+                    .map(|(id, value)| (id.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                assets_before,
+                "unavailable V2 top-up must not debit payer or credit escrow",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .zk_assets
+                    .iter()
+                    .map(|(id, value)| {
+                        (
+                            id.clone(),
+                            norito::to_bytes(value).expect("encode post-dispatch ZK asset state"),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                zk_before,
+                "unavailable V2 top-up must not change ZK roots or note material",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .iter()
+                    .map(|(key, ())| *key)
+                    .collect::<Vec<_>>(),
+                replay_before,
+                "unavailable V2 top-up must not consume replay markers",
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .smart_contract_state
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                contract_state_before,
+                "unavailable V2 top-up must not persist an anchor",
+            );
+            assert_eq!(transaction.world.internal_event_buf.len(), events_before);
         }
 
         #[test]

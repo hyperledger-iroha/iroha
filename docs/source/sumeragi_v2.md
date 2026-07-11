@@ -12,12 +12,13 @@ change consensus state or authorize a signature.
 
 ## Frozen height context
 
-Every message is bound to a `HeightContextId`. The hashed context contains:
+Every global consensus message is bound to a `HeightContextId`. The hashed context contains:
 
 - chain and protocol identifiers;
 - height, epoch, and the previous height's CommitQC;
 - the ordered voting roster and every validator's voting power;
-- the complete Nexus/AMX consensus context and DA layout;
+- the complete Nexus/AMX consensus context and DA layout, including the canonical active-lane
+  lifecycle map of `(lane_id, incarnation, activation_height)` tuples sorted by lane id;
 - the epoch leader seed and quorum policy.
 
 The context for height `h` is derived only from the finalized state at `h - 1`. A reconfiguration
@@ -34,8 +35,9 @@ view-zero leader is also cryptographically verified before reducer admission.
 
 Genesis carries this projection as `sumeragi_v2.nexus_amx_context_hash`. The canonical projection
 binds the validated lane and dataspace catalogs, routing, staking, fees, AXT, lane fusion and
-autoscaling, DA policy, deterministic AMX budgets, and the ordered active public-lane validator
-records. Local paths, worker counts, caches, and telemetry are deliberately excluded. An unsigned
+autoscaling, DA policy, deterministic AMX budgets, the ordered active public-lane validator
+records, and each active lane's incarnation plus activation height. Local paths, worker counts,
+caches, and telemetry are deliberately excluded. An unsigned
 deployment template whose final roster is not known carries the config-only projection. `kagami
 genesis sign` stages the complete genesis transaction, including validator activation, then
 replaces the projection and consensus fingerprint with the exact staged values before it emits a
@@ -156,9 +158,65 @@ sync remain transport mechanisms. Chunk signatures bind epoch, height, view, con
 subject, payload root, encoding, chunk index, and total chunk count, preventing replay or mixed
 reconstruction.
 
-Lane-local RBC commitments and lane Prepare/Commit certificates are separate block-validity inputs
-and are unchanged. Missing lane or AMX work is fetched or requeued; it cannot prevent an honest
-leader from proposing an empty heartbeat block.
+Lane-local work is released only after the reducer installs a PrepareQC lock for one exact global
+body. Validators reconstruct the lane proposals from that durable body and then form lane
+Prepare/Commit certificates asynchronously; a losing or merely advertised global proposal cannot
+advance a lane. Global application therefore does not wait for the lane CommitQC. Before the next
+lane-local height becomes eligible, Kura must durably hold the exact lane certificate and either an
+application receipt bound to the canonical global block and its transaction results while those
+results are retained, or the exact hash-only snapshot anchor after compaction. Restart repairs the
+narrow full-body certificate-before-receipt crash boundary from those canonical artifacts.
+
+The inverse crash boundary is also authenticated explicitly. If Kura contains the exact global
+lane body and ownership sidecars but WSV commit did not finish, restart does not rerun mutable lane
+planning. Recovery verifies the canonical block hash, exact ownership sidecars, active route and
+incarnation, QC tag, committee, expected global leader, replay material, and applied-or-snapshot
+predecessor, then still runs the normal complete block validator. Any drift fails closed. Missing
+lane or AMX work is fetched or requeued, and an honest leader can still propose an empty heartbeat
+when no transaction work is ready.
+
+Merge-committee certificates are likewise not applied out of band. A complete certificate is
+stored as a hash-addressed Kura sidecar bound to one global height, parent, and view. The matching
+V2 proposal carries a compact certified reference, binds the certified execution batch to the
+carrier application header and ledger time, and defers ordinary queue work at or after that time
+or duplicating a certified batch entrypoint. Block validation resolves and revalidates the exact
+sidecar, and Kura commits the carrier block and merge-log record in the same global order, with
+rollback and restart reconciliation coupled to block persistence. Old-view sidecars and signatures
+cannot be rebound to a later-view proposal; an earlier-view global block that already reaches a
+CommitQC remains decisive only with its exact earlier-view carrier.
+
+If that exact sidecar is absent during deterministic body validation or later decided application,
+the exact work identifier is retained rather than converted into a permanent rejection. The node
+requests fixed-boundary, hash-addressed chunks only from the merge QC's authenticated signer set,
+validates the canonical full entry against the compact reference and current global order, persists
+it in Kura, and retries the same durable work. Before allocating a fetch, compact-QC preflight
+requires the exact frozen roster, chain digest, hard count/byte caps, dual quorum, canonical signer
+PoPs, and a valid aggregate signature. Inbound sessions are keyed by both entry hash and the full
+reference digest, so attacker-first conflicting length or execution metadata cannot poison an
+honest decided body with the same claimed hash. Ordinary validation traffic leaves global and
+per-holder session/byte headroom for the uniquely decided Apply dependency, and idle requests resume
+strictly after a fairness cursor. A full outbound queue is detected before cryptographic preflight;
+successful authentication is cached by the canonical QC identity for this height, while every
+unsigned reference variant still reruns cheap shape and carrier checks. Returning an unsent request
+to the idle set restores its holder cursor and timeout attempt count because no network attempt
+occurred. Sidecar traffic otherwise has reserved, fairly drained capacity; active bounded responses
+do not expire merely because a protocol-sized transfer spans many ticks. Capacity pressure,
+transient Kura publication failure, and holder outages remain retryable. Registration failures
+reject only their exact body/work tuple, while hash-wide rejection requires a fully decoded
+reference-matching entry.
+
+On a certified view transition, deferred work not protected by the exact round and subject of the
+TC's selected high PrepareQC is released from the executor and transport. Kura cleanup is cached by
+certified carrier-state transition rather than rescanning its bounded store on every actor loop.
+With neither a lock nor a durable decision, Kura retains only entries eligible for the new exact
+carrier round; the initial directive installs that retention before ingress opens. With a lock or
+durable decision, cleanup waits for the durable body and retains only its exact compact reference,
+including an immutable earlier origin view. A durable decision also stops new merge-candidate
+production. Locked-body insertion validates the complete next lane-session cache before deleting
+losing durable sidecars, and already-quorate merge candidates retry Kura publication on the normal
+retransmission cadence. Finalized height rollover removes all remaining losing sidecars. This keeps
+the in-memory and durable caps live without deleting an entry that a delayed decisive CommitQC can
+still require.
 
 ## Safety WAL
 

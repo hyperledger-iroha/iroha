@@ -32,7 +32,7 @@ use iroha_data_model::{
         OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
-    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+    transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
@@ -881,6 +881,7 @@ async fn wait_for_kagemusha_v2_finality(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
 fn kagemusha_v2_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
     format!("kagemusha_v2_topup_anchor_{}", hex::encode(operation_id))
         .parse()

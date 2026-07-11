@@ -674,7 +674,8 @@ static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> =
 
 /// Lockfree queue for transactions
 ///
-/// Multiple producers, single consumer
+/// Multiple producers, single consumer. Sumeragi must serialize transaction popping and guard
+/// returns through one consumer path; producers may continue admitting transactions concurrently.
 pub struct Queue {
     events_sender: EventsSender,
     /// Resolves lane/dataspace assignments for queued transactions.
@@ -1131,6 +1132,75 @@ pub struct TransactionGuard {
     released: bool,
     #[cfg(feature = "telemetry")]
     telemetry: Option<crate::telemetry::StateTelemetry>,
+}
+
+/// Outcome of atomically returning popped transaction guards to the scheduling queue.
+///
+/// Returning a guard never re-admits its transaction: the original queue reservation and
+/// metadata remain live while the guard is in flight. The counters below make every terminal or
+/// idempotent disposition explicit so callers never have to infer ownership from a failed push.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TransactionGuardReturnReport {
+    /// Guards whose hashes were appended to the scheduling queue.
+    pub(crate) returned: usize,
+    /// Guards whose hashes were already present in the scheduling queue.
+    pub(crate) already_queued: usize,
+    /// Guards whose transactions became canonical while they were in flight.
+    pub(crate) committed: usize,
+    /// Guards whose transactions expired while they were in flight.
+    pub(crate) expired: usize,
+    /// Guards that had already been settled by an earlier idempotent call.
+    pub(crate) already_released: usize,
+}
+
+/// Invariant failure while returning popped transaction guards.
+///
+/// These failures are detected before any guard is released or any returned hash is appended, so
+/// the caller retains the whole batch as the authoritative owner. The caller must retain those
+/// guards for retry or quarantine; panicking or otherwise dropping them removes their queue
+/// entries through the guard's removal-on-drop behavior.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub(crate) enum TransactionGuardReturnError {
+    /// A guard was created by a different queue instance.
+    #[error("transaction guard belongs to a different queue")]
+    ForeignQueue,
+    /// The batch contains two live guards for one transaction hash.
+    #[error("transaction guard return batch contains duplicate hash(es): {hashes:?}")]
+    DuplicateGuards { hashes: Vec<SignedTxHash> },
+    /// A live, non-terminal guard no longer has a tracked transaction entry.
+    #[error("transaction guard return is missing tracked transaction(s): {hashes:?}")]
+    MissingTrackedTransactions { hashes: Vec<SignedTxHash> },
+    /// A transaction can be returned but its original enqueue timestamp is missing.
+    #[error("transaction guard return is missing enqueue timestamp(s): {hashes:?}")]
+    MissingEnqueueTimestamps { hashes: Vec<SignedTxHash> },
+    /// The hash index cannot hold all live returns despite the queue reservations.
+    #[error(
+        "transaction guard return exceeds hash-index capacity: queued={queued}, returning={returning}, capacity={capacity}"
+    )]
+    HashIndexCapacity {
+        queued: usize,
+        returning: usize,
+        capacity: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransactionGuardReturnPlan {
+    Return {
+        enqueued_at_ms: u64,
+    },
+    AlreadyQueued {
+        enqueued_at_ms: u64,
+    },
+    Committed {
+        tracked: bool,
+        stale_hash_queued: bool,
+    },
+    Expired {
+        tracked: bool,
+        stale_hash_queued: bool,
+    },
+    AlreadyReleased,
 }
 
 impl Deref for TransactionGuard {
@@ -5085,14 +5155,9 @@ impl Queue {
             "transaction enqueued from consensus requeue"
         );
         self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
-        if let Err(err_hash) = self.tx_gossip.push(hash) {
-            warn!(
-                lane_id = %lane_id,
-                dataspace_id = %dataspace_id,
-                tx = %err_hash,
-                "Gossiper is lagging behind, not able to queue tx for gossiping"
-            );
-        }
+        // Consensus requeue batches publish newly restored and already-resident hashes together
+        // after the full ownership-transfer pass. Keeping gossip out of this primitive prevents
+        // a successfully restored hash from being enqueued twice.
         let _ = self.events_sender.send(
             TransactionEvent {
                 hash,
@@ -5203,6 +5268,9 @@ impl Queue {
     }
 
     /// Pop single transaction from the queue. Removes all transactions that fail the `tx_check`.
+    ///
+    /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
+    /// and [`Self::return_transaction_guards`] call for this queue.
     fn pop_from_queue(
         self: &Arc<Self>,
         state_view: &StateView,
@@ -5385,6 +5453,8 @@ impl Queue {
     /// Pop single transaction from the queue using narrow [`State`] accessors.
     ///
     /// Removes all transactions that are already committed or expired.
+    /// This is part of Sumeragi's single-consumer path and must be serialized with every other pop
+    /// and [`Self::return_transaction_guards`] call for this queue.
     fn pop_from_queue_with_state(
         self: &Arc<Self>,
         state: &State,
@@ -5768,7 +5838,8 @@ impl Queue {
 
     /// Gets transactions till they fill whole block or till the end of queue.
     ///
-    /// BEWARE: Shouldn't be called in parallel with itself.
+    /// This test helper participates in Sumeragi's single-consumer contract and must not run in
+    /// parallel with another pop or transaction-guard return.
     #[cfg(test)]
     fn collect_transactions_for_block(
         self: &Arc<Self>,
@@ -5782,7 +5853,8 @@ impl Queue {
 
     /// Put transactions into provided vector until they fill the whole block or there are no more transactions in the queue.
     ///
-    /// BEWARE: Shouldn't be called in parallel with itself.
+    /// Sumeragi's single consumer must serialize this operation with every other transaction pop
+    /// and transaction-guard return for this queue.
     pub fn get_transactions_for_block(
         self: &Arc<Self>,
         state_view: &StateView,
@@ -5797,7 +5869,8 @@ impl Queue {
     /// Put transactions into provided vector until they fill the whole block or there are no
     /// more transactions in the queue, using narrow [`State`] accessors.
     ///
-    /// BEWARE: Shouldn't be called in parallel with itself.
+    /// Sumeragi's single consumer must serialize this operation with every other transaction pop
+    /// and transaction-guard return for this queue.
     pub fn get_transactions_for_block_with_state(
         self: &Arc<Self>,
         state: &State,
@@ -5860,29 +5933,35 @@ impl Queue {
         }
     }
 
-    /// Apply lane-level TEU limits to the provided transaction guards, returning any transactions
-    /// that need to be re-queued because their lane would exceed the configured capacity.
+    /// Apply lane-level TEU limits to the provided transaction guards, returning guards whose
+    /// transactions must be deferred because their lane would exceed the configured capacity.
+    ///
+    /// Deferred guards retain the queue's original reservations and metadata. Callers may inspect
+    /// their accepted transactions and routing plans, then hand them to the queue's atomic
+    /// guard-return path.
     pub fn enforce_lane_teu_limits(
         &self,
         guards: &mut Vec<TransactionGuard>,
-    ) -> Vec<AcceptedTransaction<'static>> {
+    ) -> Vec<TransactionGuard> {
         let mut consumed_teu = BTreeMap::new();
         self.enforce_lane_teu_limits_with_consumption(guards, &mut consumed_teu)
     }
 
-    /// Apply lane-level TEU limits and return deferred transactions together with full routing
-    /// plans so callers can requeue without recomputing routing or dropping participant legs.
+    /// Apply lane-level TEU limits and return deferred guards with their full routing plans intact.
+    ///
+    /// The guards remain authoritative owners of the queue entries; this method never clones a
+    /// transaction and drops its guard.
     pub fn enforce_lane_teu_limits_with_consumption_and_routing_plans(
         &self,
         guards: &mut Vec<TransactionGuard>,
         consumed_teu: &mut BTreeMap<LaneId, u64>,
-    ) -> Vec<(AcceptedTransaction<'static>, RoutingPlan)> {
+    ) -> Vec<TransactionGuard> {
         if guards.is_empty() {
             return Vec::new();
         }
 
         let mut retained: Vec<TransactionGuard> = Vec::with_capacity(guards.len());
-        let mut deferred: Vec<(AcceptedTransaction<'static>, RoutingPlan)> = Vec::new();
+        let mut deferred: Vec<TransactionGuard> = Vec::new();
 
         let mut drained = std::mem::take(guards);
         drained.sort_by(|left, right| {
@@ -5919,8 +5998,7 @@ impl Queue {
             }
             if new_total > limits.teu_capacity {
                 guard.record_lane_teu_deferral(lane_id, "cap_exceeded", teu);
-                deferred.push((guard.clone_accepted(), guard.routing_plan()));
-                // guard drops here, removing the transaction from the queue.
+                deferred.push(guard);
                 continue;
             }
             *used = new_total;
@@ -5932,17 +6010,14 @@ impl Queue {
     }
 
     /// Apply lane-level TEU limits to the provided transaction guards, taking into account any
-    /// previously consumed TEU recorded in `consumed_teu`. Returns transactions that must be
+    /// previously consumed TEU recorded in `consumed_teu`. Returns guards that must be
     /// deferred because serving them would exceed the configured lane capacity.
     pub fn enforce_lane_teu_limits_with_consumption(
         &self,
         guards: &mut Vec<TransactionGuard>,
         consumed_teu: &mut BTreeMap<LaneId, u64>,
-    ) -> Vec<AcceptedTransaction<'static>> {
+    ) -> Vec<TransactionGuard> {
         self.enforce_lane_teu_limits_with_consumption_and_routing_plans(guards, consumed_teu)
-            .into_iter()
-            .map(|(tx, _routing_plan)| tx)
-            .collect()
     }
 
     fn duration_to_millis(duration: Duration) -> u64 {
@@ -6513,6 +6588,7 @@ impl Queue {
     }
 
     /// Release a group of popped transaction guards under a single queue lock.
+    #[cfg(test)]
     pub(crate) fn release_transaction_guards(&self, guards: &mut Vec<TransactionGuard>) {
         if guards.is_empty() {
             return;
@@ -6542,6 +6618,331 @@ impl Queue {
         }
         self.publish_backpressure_state(self.active_len(), telemetry.as_ref());
         guards.clear();
+    }
+
+    /// Atomically return popped transaction guards to the tail of the scheduling queue.
+    ///
+    /// A guard keeps the transaction's original count, byte, per-user, expiry, routing, journal,
+    /// and TEU reservations alive. Returning therefore restores only the scheduling hash and its
+    /// age-index membership; it never performs queue admission again. The whole live batch is
+    /// preflighted under [`Self::push_remove_lock`] before any guard is released.
+    ///
+    /// Guards are appended in their original pop order. Transactions that became committed or
+    /// expired while in flight are settled explicitly, and a hash already present in the scheduler
+    /// is treated as an idempotent success.
+    ///
+    /// This method shares Sumeragi's single-consumer contract with the pop path: one Sumeragi
+    /// consumer must serialize all pops and guard returns for a queue. Concurrent producers remain
+    /// supported through the queue mutation lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invariant error without releasing any guard or appending any returned hash when
+    /// the batch belongs to another queue, contains duplicates, has lost non-terminal queue state,
+    /// or cannot fit the queue hash index despite its retained reservations. On error, the caller
+    /// must keep the guards alive for retry or quarantine; unwinding or dropping the vector would
+    /// invoke their removal-on-drop behavior.
+    pub(crate) fn return_transaction_guards(
+        &self,
+        guards: &mut Vec<TransactionGuard>,
+        state: &State,
+    ) -> std::result::Result<TransactionGuardReturnReport, TransactionGuardReturnError> {
+        if guards.is_empty() {
+            return Ok(TransactionGuardReturnReport::default());
+        }
+        if guards
+            .iter()
+            .any(|guard| !std::ptr::eq(guard.queue.as_ref(), self))
+        {
+            return Err(TransactionGuardReturnError::ForeignQueue);
+        }
+
+        guards.sort_by_key(|guard| guard.queue_position);
+        let mut seen = BTreeSet::new();
+        let mut duplicates = BTreeSet::new();
+        for guard in guards.iter().filter(|guard| !guard.released) {
+            let hash = guard.tx.hash();
+            if !seen.insert(hash) {
+                duplicates.insert(hash);
+            }
+        }
+        if !duplicates.is_empty() {
+            return Err(TransactionGuardReturnError::DuplicateGuards {
+                hashes: duplicates.into_iter().collect(),
+            });
+        }
+
+        // Read terminal state before taking the queue mutation lock to avoid a State -> Queue /
+        // Queue -> State lock inversion. A commit racing after this snapshot is serialized by
+        // `remove_committed_hashes`: if removal wins, the missing-entry preflight releases the
+        // queue lock and refreshes terminal state; otherwise removal consumes the restored hash.
+        let committed = guards
+            .iter()
+            .filter(|guard| !guard.released)
+            .filter_map(|guard| {
+                let hash = guard.tx.hash();
+                state.has_committed_transaction(hash).then_some(hash)
+            })
+            .collect::<BTreeSet<_>>();
+        let expired = guards
+            .iter()
+            .filter(|guard| !guard.released)
+            .filter_map(|guard| {
+                let hash = guard.tx.hash();
+                self.is_expired(guard.tx.as_accepted()).then_some(hash)
+            })
+            .collect::<BTreeSet<_>>();
+        let live_guard_count = guards.iter().filter(|guard| !guard.released).count();
+
+        #[cfg(feature = "telemetry")]
+        let telemetry = guards
+            .iter()
+            .find_map(|guard| guard.telemetry.as_ref())
+            .cloned();
+        #[cfg(not(feature = "telemetry"))]
+        let telemetry: Option<StateTelemetry> = None;
+
+        let mut report = TransactionGuardReturnReport::default();
+        let mut expired_events = Vec::new();
+        let journal_flush;
+        {
+            let _mutation_guard = self.push_remove_lock.lock();
+
+            // Stale hash entries are the only legitimate reason the bounded hash index could look
+            // fuller than the still-reserved transaction set. Compact before classifying queue
+            // membership whenever the conservative batch bound would exceed capacity.
+            if self.tx_hashes.len().saturating_add(live_guard_count) > self.tx_hashes.capacity() {
+                let _ = self.compact_hash_queue_locked();
+            }
+
+            let mut plans = Vec::with_capacity(guards.len());
+            let mut missing_tracked = BTreeSet::new();
+            let mut missing_timestamps = BTreeSet::new();
+            let mut return_count = 0usize;
+            for guard in guards.iter() {
+                if guard.released {
+                    plans.push(TransactionGuardReturnPlan::AlreadyReleased);
+                    continue;
+                }
+                let hash = guard.tx.hash();
+                let tracked = self.txs.contains_key(&hash);
+                let queued_at_ms = self
+                    .queued_tx_enqueued_at_ms
+                    .get(&hash)
+                    .map(|entry| *entry.value());
+                let stale_hash_queued = queued_at_ms.is_some();
+                if committed.contains(&hash) {
+                    plans.push(TransactionGuardReturnPlan::Committed {
+                        tracked,
+                        stale_hash_queued,
+                    });
+                    continue;
+                }
+                if expired.contains(&hash) {
+                    plans.push(TransactionGuardReturnPlan::Expired {
+                        tracked,
+                        stale_hash_queued,
+                    });
+                    continue;
+                }
+                if !tracked {
+                    missing_tracked.insert(hash);
+                    plans.push(TransactionGuardReturnPlan::AlreadyReleased);
+                    continue;
+                }
+                if let Some(enqueued_at_ms) = queued_at_ms {
+                    plans.push(TransactionGuardReturnPlan::AlreadyQueued { enqueued_at_ms });
+                    continue;
+                }
+                let Some(enqueued_at_ms) = self
+                    .tx_enqueued_at_ms
+                    .get(&hash)
+                    .map(|entry| *entry.value())
+                else {
+                    missing_timestamps.insert(hash);
+                    plans.push(TransactionGuardReturnPlan::AlreadyReleased);
+                    continue;
+                };
+                return_count = return_count.saturating_add(1);
+                plans.push(TransactionGuardReturnPlan::Return { enqueued_at_ms });
+            }
+
+            if !missing_tracked.is_empty() {
+                // A transaction may become committed after the terminal snapshot and then be
+                // removed before this lock is acquired. Refresh only after releasing the queue
+                // lock; recursive progress is bounded because every retry requires all missing
+                // hashes to have reached a monotonic terminal state.
+                let missing_hashes = missing_tracked.into_iter().collect::<Vec<_>>();
+                drop(_mutation_guard);
+                let all_now_terminal = missing_hashes.iter().all(|missing_hash| {
+                    state.has_committed_transaction(*missing_hash)
+                        || guards.iter().any(|guard| {
+                            guard.tx.hash() == *missing_hash
+                                && self.is_expired(guard.tx.as_accepted())
+                        })
+                });
+                if all_now_terminal {
+                    return self.return_transaction_guards(guards, state);
+                }
+                return Err(TransactionGuardReturnError::MissingTrackedTransactions {
+                    hashes: missing_hashes,
+                });
+            }
+            if !missing_timestamps.is_empty() {
+                return Err(TransactionGuardReturnError::MissingEnqueueTimestamps {
+                    hashes: missing_timestamps.into_iter().collect(),
+                });
+            }
+            let queued = self.tx_hashes.len();
+            let capacity = self.tx_hashes.capacity();
+            if queued.saturating_add(return_count) > capacity {
+                return Err(TransactionGuardReturnError::HashIndexCapacity {
+                    queued,
+                    returning: return_count,
+                    capacity,
+                });
+            }
+
+            let mut journal_removals = Vec::new();
+            for (guard, plan) in guards.iter().zip(plans.iter().copied()) {
+                let hash = guard.tx.hash();
+                match plan {
+                    TransactionGuardReturnPlan::Committed {
+                        tracked,
+                        stale_hash_queued,
+                    } => {
+                        if tracked {
+                            #[cfg(feature = "telemetry")]
+                            let guard_telemetry = guard.telemetry.as_ref();
+                            #[cfg(not(feature = "telemetry"))]
+                            let guard_telemetry: Option<
+                                &StateTelemetry,
+                            > = None;
+                            self.remove_transaction_locked(
+                                &guard.tx,
+                                &guard.routing_plan,
+                                guard_telemetry,
+                            );
+                        }
+                        let _ = routing_ledger::take(&hash);
+                        let _ = routing_ledger::take_plan(&hash);
+                        journal_removals.push((hash, guard.routing_plan.digest()));
+                        if stale_hash_queued {
+                            self.removed_hashes.insert(hash, ());
+                        } else {
+                            self.removed_hashes.remove(&hash);
+                        }
+                        report.committed = report.committed.saturating_add(1);
+                    }
+                    TransactionGuardReturnPlan::Expired {
+                        tracked,
+                        stale_hash_queued,
+                    } => {
+                        if tracked {
+                            #[cfg(feature = "telemetry")]
+                            let guard_telemetry = guard.telemetry.as_ref();
+                            #[cfg(not(feature = "telemetry"))]
+                            let guard_telemetry: Option<
+                                &StateTelemetry,
+                            > = None;
+                            self.remove_transaction_locked(
+                                &guard.tx,
+                                &guard.routing_plan,
+                                guard_telemetry,
+                            );
+                        }
+                        let _ = routing_ledger::take(&hash);
+                        let _ = routing_ledger::take_plan(&hash);
+                        journal_removals.push((hash, guard.routing_plan.digest()));
+                        if stale_hash_queued {
+                            self.removed_hashes.insert(hash, ());
+                        } else {
+                            self.removed_hashes.remove(&hash);
+                        }
+                        expired_events.push((hash, guard.routing));
+                        report.expired = report.expired.saturating_add(1);
+                    }
+                    TransactionGuardReturnPlan::AlreadyQueued { .. } => {
+                        self.removed_hashes.remove(&hash);
+                        report.already_queued = report.already_queued.saturating_add(1);
+                    }
+                    TransactionGuardReturnPlan::Return { .. }
+                    | TransactionGuardReturnPlan::AlreadyReleased => {}
+                }
+            }
+
+            {
+                let mut age_ring = self.queued_age_ring.lock();
+                let normalized_age_hashes = guards
+                    .iter()
+                    .zip(plans.iter().copied())
+                    .filter_map(|(guard, plan)| {
+                        (!matches!(plan, TransactionGuardReturnPlan::AlreadyReleased))
+                            .then_some(guard.tx.hash())
+                    })
+                    .collect::<BTreeSet<_>>();
+                // `pop_queued_hash` removes membership eagerly but leaves the FIFO age entry for
+                // lazy pruning. Reusing the original enqueue timestamp would make that old entry
+                // valid again, so canonicalize every restored hash before recording it exactly
+                // once. Without this step, repeated proposal/view retries grow the age ring
+                // without bound while all duplicate entries remain live.
+                age_ring.retain(|(hash, _)| !normalized_age_hashes.contains(hash));
+                for (guard, plan) in guards.iter().zip(plans.iter().copied()) {
+                    let hash = guard.tx.hash();
+                    match plan {
+                        TransactionGuardReturnPlan::Return { enqueued_at_ms } => {
+                            self.tx_hashes
+                                .push(hash)
+                                .expect("preflighted transaction guard return must fit hash index");
+                            self.record_queued_age_locked(&mut age_ring, hash, enqueued_at_ms);
+                            self.removed_hashes.remove(&hash);
+                            report.returned = report.returned.saturating_add(1);
+                        }
+                        TransactionGuardReturnPlan::AlreadyQueued { enqueued_at_ms } => {
+                            self.record_queued_age_locked(&mut age_ring, hash, enqueued_at_ms);
+                        }
+                        TransactionGuardReturnPlan::Committed { .. }
+                        | TransactionGuardReturnPlan::Expired { .. }
+                        | TransactionGuardReturnPlan::AlreadyReleased => {}
+                    }
+                }
+                // Scheduling is FIFO by the hash queue; the age ring is an independent pressure
+                // index and must remain chronological when an old transaction returns to the tail.
+                age_ring
+                    .make_contiguous()
+                    .sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
+            }
+
+            journal_flush = self.record_plan_journal_removes_deferred(journal_removals);
+            for (guard, plan) in guards.iter_mut().zip(plans) {
+                if matches!(plan, TransactionGuardReturnPlan::AlreadyReleased) {
+                    report.already_released = report.already_released.saturating_add(1);
+                    continue;
+                }
+                self.release_inflight_guard();
+                guard.released = true;
+            }
+        }
+
+        self.flush_plan_journal_deferred(journal_flush);
+        for (hash, routing) in expired_events {
+            let _ = self.events_sender.send(
+                TransactionEvent {
+                    hash,
+                    block_height: None,
+                    lane_id: routing.lane_id,
+                    dataspace_id: routing.dataspace_id,
+                    status: TransactionStatus::Expired,
+                }
+                .into(),
+            );
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry.as_ref());
+        if report.returned > 0 {
+            self.wake_sumeragi();
+        }
+        guards.clear();
+        Ok(report)
     }
 
     /// Remove committed transactions from the queue by hash, preserving routing metadata.
@@ -7531,6 +7932,23 @@ pub mod tests {
             visibility: LaneVisibility::Public,
             ..LaneConfig::default()
         };
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![LaneConfig::default(), future_elastic.clone()],
+        )
+        .expect("future-created autoscale lane catalog");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        state
+            .set_nexus(nexus)
+            .expect("install the two-lane geometry before corrupting autoscale metadata");
+
         future_elastic
             .metadata
             .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
@@ -7540,11 +7958,6 @@ pub mod tests {
         );
         {
             let nexus = state.nexus.get_mut();
-            nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = nonzero!(1_u32);
             nexus.autoscale.max_lanes = nonzero!(8_u32);
@@ -7949,6 +8362,10 @@ pub mod tests {
         let retired_lane = LaneId::new(1);
         let stale_teu_capacity = 321;
         let mut state = state_with_future_created_autoscale_lane(7, 0);
+        assert!(
+            state.lane_incarnation(retired_lane).is_some(),
+            "repair fixture must keep exact incarnation coverage for every catalog lane"
+        );
         {
             let nexus = state.nexus.get_mut();
             let mut lanes = nexus.lane_catalog.lanes().to_vec();
@@ -11352,15 +11769,10 @@ pub mod tests {
         queue.push(second, state.view()).expect("push second");
         queue.push(third, state.view()).expect("push third");
 
-        let mut expired = Vec::new();
-        let first_inflight = queue
-            .pop_from_queue(&state.view(), &mut expired)
-            .expect("first transaction becomes in-flight");
-        let second_inflight = queue
-            .pop_from_queue(&state.view(), &mut expired)
-            .expect("second transaction becomes in-flight");
-        assert_eq!(first_inflight.hash(), first_hash);
-        assert_eq!(second_inflight.hash(), second_hash);
+        // Observe the intermediate stale-ring state before the ordinary pop path publishes
+        // backpressure and lazily prunes these entries while measuring queue age.
+        assert_eq!(queue.pop_queued_hash(), Some(first_hash));
+        assert_eq!(queue.pop_queued_hash(), Some(second_hash));
 
         let one = NonZeroUsize::new(1).expect("non-zero bound");
         assert!(
@@ -11378,8 +11790,6 @@ pub mod tests {
         let snapshot = queue.bounded_pending_snapshot(&state.view(), one);
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].hash(), third_hash);
-
-        drop((first_inflight, second_inflight));
     }
 
     #[test]
@@ -11464,6 +11874,788 @@ pub mod tests {
         assert!(!queue.txs.contains_key(&second_hash));
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn returned_transaction_guards_preserve_order_accounting_and_durable_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_guard_return_journal.norito");
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(8_usize);
+        cfg.capacity_per_user = nonzero!(8_usize);
+        let mut queue = Queue::test(cfg, &time_source);
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(16);
+        queue.events_sender = event_sender;
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install queue plan journal");
+        let queue = Arc::new(queue);
+
+        let transactions = (0..4)
+            .map(|_| accepted_tx_by_someone(&time_source))
+            .collect::<Vec<_>>();
+        let hashes = transactions
+            .iter()
+            .map(|tx| tx.as_ref().hash())
+            .collect::<Vec<_>>();
+        for tx in transactions {
+            queue.push(tx, state.view()).expect("push transaction");
+        }
+        while event_receiver.try_recv().is_ok() {}
+
+        let retained_bytes_before = queue.retained_bytes();
+        let per_user_before = queue
+            .txs_per_user
+            .iter()
+            .map(|entry| (entry.key().clone(), *entry.value()))
+            .collect::<BTreeMap<_, _>>();
+        let routing_before = hashes
+            .iter()
+            .map(|hash| {
+                (
+                    *hash,
+                    queue
+                        .routing_plans
+                        .get(hash)
+                        .map(|entry| entry.value().clone())
+                        .expect("routing plan"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let enqueue_times_before = hashes
+            .iter()
+            .map(|hash| {
+                (
+                    *hash,
+                    queue
+                        .tx_enqueued_at_ms
+                        .get(hash)
+                        .map(|entry| *entry.value())
+                        .expect("enqueue timestamp"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let expiry_before = hashes
+            .iter()
+            .filter(|hash| queue.expiry_ring_members.contains_key(hash))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let gossip_len_before = queue.tx_gossip.len();
+        let journal_before = std::fs::read(&journal_path).expect("read journal before return");
+        #[cfg(feature = "telemetry")]
+        let teu_before = queue
+            .tx_teu
+            .iter()
+            .map(|entry| {
+                (
+                    *entry.key(),
+                    (
+                        entry.value().lane_id,
+                        entry.value().dataspace_id,
+                        entry.value().teu,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let state_view = state.view();
+        let mut expired = Vec::new();
+        let mut guards = (0..3)
+            .map(|_| {
+                queue
+                    .pop_from_queue(&state_view, &mut expired)
+                    .expect("popped guard")
+            })
+            .collect::<Vec<_>>();
+        assert!(expired.is_empty());
+        assert_eq!(queue.queued_len(), 1);
+        guards.swap(0, 2);
+
+        let report = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect("return guards");
+        assert_eq!(
+            report,
+            TransactionGuardReturnReport {
+                returned: 3,
+                ..TransactionGuardReturnReport::default()
+            }
+        );
+        assert!(guards.is_empty());
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
+        assert_eq!(queue.active_len(), 4);
+        assert_eq!(queue.queued_len(), 4);
+        assert_eq!(queue.retained_bytes(), retained_bytes_before);
+        assert_eq!(
+            queue
+                .txs_per_user
+                .iter()
+                .map(|entry| (entry.key().clone(), *entry.value()))
+                .collect::<BTreeMap<_, _>>(),
+            per_user_before
+        );
+        assert_eq!(
+            hashes
+                .iter()
+                .map(|hash| {
+                    (
+                        *hash,
+                        queue
+                            .routing_plans
+                            .get(hash)
+                            .map(|entry| entry.value().clone())
+                            .expect("routing plan after return"),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+            routing_before
+        );
+        assert_eq!(
+            hashes
+                .iter()
+                .map(|hash| {
+                    (
+                        *hash,
+                        queue
+                            .tx_enqueued_at_ms
+                            .get(hash)
+                            .map(|entry| *entry.value())
+                            .expect("enqueue timestamp after return"),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+            enqueue_times_before
+        );
+        assert_eq!(
+            hashes
+                .iter()
+                .filter(|hash| queue.expiry_ring_members.contains_key(hash))
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            expiry_before
+        );
+        assert_eq!(queue.tx_gossip.len(), gossip_len_before);
+        assert!(
+            matches!(
+                event_receiver.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "guard return must not emit a duplicate Queued event"
+        );
+        assert_eq!(
+            std::fs::read(&journal_path).expect("read journal after return"),
+            journal_before,
+            "guard return must not rewrite the durable routing-plan journal"
+        );
+        #[cfg(feature = "telemetry")]
+        assert_eq!(
+            queue
+                .tx_teu
+                .iter()
+                .map(|entry| {
+                    (
+                        *entry.key(),
+                        (
+                            entry.value().lane_id,
+                            entry.value().dataspace_id,
+                            entry.value().teu,
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
+            teu_before
+        );
+
+        let mut replayed = Vec::new();
+        for _ in 0..4 {
+            let guard = queue
+                .pop_from_queue(&state_view, &mut expired)
+                .expect("returned queue entry");
+            replayed.push(guard.tx.hash());
+            guards.push(guard);
+        }
+        assert_eq!(
+            replayed,
+            vec![hashes[3], hashes[0], hashes[1], hashes[2]],
+            "existing work stays ahead and the returned batch follows original pop order"
+        );
+        queue.release_transaction_guards(&mut guards);
+    }
+
+    #[test]
+    fn repeated_guard_returns_keep_one_age_entry_and_original_age() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push transaction");
+        let original_enqueued_at_ms = queue
+            .tx_enqueued_at_ms
+            .get(&hash)
+            .map(|entry| *entry.value())
+            .expect("original enqueue timestamp");
+        time_handle.advance(Duration::from_millis(37));
+
+        for _ in 0..128 {
+            let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
+            assert_eq!(guards.len(), 1);
+            assert_eq!(
+                queue
+                    .return_transaction_guards(&mut guards, &state)
+                    .expect("return guard")
+                    .returned,
+                1
+            );
+            assert_eq!(queue.queued_len(), 1);
+            assert_eq!(queue.queued_tx_enqueued_at_ms.len(), 1);
+            assert_eq!(
+                queue.queued_age_ring.lock().len(),
+                1,
+                "pop/return retries must not accumulate duplicate live age entries"
+            );
+        }
+
+        assert_eq!(
+            queue
+                .queued_tx_enqueued_at_ms
+                .get(&hash)
+                .map(|entry| *entry.value()),
+            Some(original_enqueued_at_ms)
+        );
+        assert_eq!(
+            queue.oldest_queued_tx_age_ms(),
+            37,
+            "return retries must preserve the original queue residence age"
+        );
+        assert_eq!(
+            queue
+                .queued_age_ring
+                .lock()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![(hash, original_enqueued_at_ms)]
+        );
+    }
+
+    #[test]
+    fn guard_return_keeps_capacity_reserved_against_concurrent_admission() {
+        let state = Arc::new(State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(2_usize);
+        cfg.capacity_per_user = nonzero!(2_usize);
+        let queue = Arc::new(Queue::test(cfg, &time_source));
+        let originals = [
+            accepted_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
+        ];
+        let original_hashes = originals
+            .iter()
+            .map(|tx| tx.as_ref().hash())
+            .collect::<BTreeSet<_>>();
+        for tx in originals {
+            queue.push(tx, state.view()).expect("fill queue");
+        }
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2_usize));
+        assert_eq!(guards.len(), 2);
+        assert_eq!(queue.active_len(), 2, "guards retain count reservations");
+
+        let contender_count = 8usize;
+        let barrier = Arc::new(std::sync::Barrier::new(contender_count + 1));
+        let contenders = (0..contender_count)
+            .map(|_| {
+                let queue = Arc::clone(&queue);
+                let state = Arc::clone(&state);
+                let barrier = Arc::clone(&barrier);
+                let tx = accepted_tx_by_someone(&time_source);
+                thread::spawn(move || {
+                    barrier.wait();
+                    queue.push(tx, state.view())
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let report = queue
+            .return_transaction_guards(&mut guards, state.as_ref())
+            .expect("atomically return reserved guards");
+        assert_eq!(report.returned, 2);
+        for contender in contenders {
+            let failure = contender
+                .join()
+                .expect("contender thread")
+                .expect_err("in-flight reservations must prevent capacity stealing");
+            assert!(matches!(failure.err, Error::Full));
+        }
+        assert_eq!(queue.active_len(), 2);
+        assert_eq!(queue.queued_len(), 2);
+        assert_eq!(
+            queue
+                .txs
+                .iter()
+                .map(|entry| *entry.key())
+                .collect::<BTreeSet<_>>(),
+            original_hashes
+        );
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn guard_return_committed_disposition_clears_accounting_and_durable_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("committed_guard_return_journal.norito");
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install queue plan journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let authority = tx.as_ref().authority().clone();
+        queue.push(tx, state.view()).expect("push committed tx");
+        let retained_bytes_before = queue.retained_bytes();
+        assert!(retained_bytes_before > 0);
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 1);
+        assert!(queue.routing_decisions.contains_key(&hash));
+        assert!(queue.routing_plans.contains_key(&hash));
+        assert!(routing_ledger::get(&hash).is_some());
+        assert!(routing_ledger::get_plan(&hash).is_some());
+        assert!(queue.expiry_ring_members.contains_key(&hash));
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed journal")
+                .live_record_count()
+                .expect("count live journal records"),
+            1
+        );
+        #[cfg(feature = "telemetry")]
+        let terminal_teu = queue
+            .tx_teu
+            .get(&hash)
+            .map(|entry| *entry.value())
+            .expect("committed transaction TEU metadata");
+
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
+        assert_eq!(guards.len(), 1);
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 1);
+        assert_eq!(queue.retained_bytes(), retained_bytes_before);
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 1);
+        assert!(queue.expiry_ring_members.contains_key(&hash));
+
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
+            transactions.commit().expect("commit transaction index");
+        }
+        let report = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect("settle committed guard");
+        assert_eq!(
+            report,
+            TransactionGuardReturnReport {
+                committed: 1,
+                ..TransactionGuardReturnReport::default()
+            }
+        );
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
+        assert!(!queue.queued_tx_enqueued_at_ms.contains_key(&hash));
+        assert!(
+            queue
+                .queued_age_ring
+                .lock()
+                .iter()
+                .all(|(queued_hash, _)| *queued_hash != hash),
+            "committed guard return must remove its lazy age entry"
+        );
+        assert_eq!(queue.retained_bytes(), 0);
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 0);
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(!queue.routing_decisions.contains_key(&hash));
+        assert!(!queue.routing_plans.contains_key(&hash));
+        assert!(routing_ledger::get(&hash).is_none());
+        assert!(routing_ledger::get_plan(&hash).is_none());
+        assert!(!queue.expiry_ring_members.contains_key(&hash));
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed journal")
+                .live_record_count()
+                .expect("count tombstoned journal records"),
+            0,
+            "committed guard return must tombstone its durable routing plan"
+        );
+        #[cfg(feature = "telemetry")]
+        {
+            assert!(!queue.tx_teu.contains_key(&hash));
+            assert_eq!(
+                queue
+                    .lane_teu_pending
+                    .get(&terminal_teu.lane_id)
+                    .map(|pending| (pending.teu, pending.tx_count))
+                    .unwrap_or_default(),
+                (0, 0)
+            );
+            assert_eq!(
+                queue
+                    .dataspace_teu_pending
+                    .get(&(terminal_teu.lane_id, terminal_teu.dataspace_id))
+                    .map(|pending| (pending.teu, pending.tx_count))
+                    .unwrap_or_default(),
+                (0, 0)
+            );
+        }
+    }
+
+    #[test]
+    fn guard_return_is_idempotent_across_committed_and_already_queued_races() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let committed_tx = accepted_tx_by_someone(&time_source);
+        let committed_hash = committed_tx.as_ref().hash();
+        let already_queued_tx = accepted_tx_by_someone(&time_source);
+        let already_queued_hash = already_queued_tx.as_ref().hash();
+        queue
+            .push(committed_tx, state.view())
+            .expect("push committed-race tx");
+        queue
+            .push(already_queued_tx, state.view())
+            .expect("push already-queued tx");
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2_usize));
+        assert_eq!(guards.len(), 2);
+
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(committed_hash, nonzero!(1_usize));
+            transactions.commit().expect("commit transaction index");
+        }
+        assert_eq!(
+            queue.remove_committed_hashes(std::iter::once(committed_hash), None),
+            1
+        );
+        let already_queued_at = queue
+            .tx_enqueued_at_ms
+            .get(&already_queued_hash)
+            .map(|entry| *entry.value())
+            .expect("already-queued timestamp");
+        assert!(queue.push_queued_hash(already_queued_hash, already_queued_at));
+
+        let report = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect("settle committed and already-queued guards");
+        assert_eq!(report.committed, 1);
+        assert_eq!(report.already_queued, 1);
+        assert_eq!(report.returned, 0);
+        assert!(!queue.txs.contains_key(&committed_hash));
+        assert!(queue.txs.contains_key(&already_queued_hash));
+        assert_eq!(queue.queued_len(), 1);
+        assert_eq!(queue.queued_tx_enqueued_at_ms.len(), 1);
+        assert_eq!(
+            queue
+                .queued_age_ring
+                .lock()
+                .iter()
+                .filter(|(hash, _)| *hash == already_queued_hash)
+                .count(),
+            1,
+            "idempotent already-queued return must canonicalize duplicate age entries"
+        );
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
+        let mut expired = Vec::new();
+        let only = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("single idempotently queued guard");
+        assert_eq!(only.tx.hash(), already_queued_hash);
+        drop(only);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue
+            .push(tx, state.view())
+            .expect("push return-before-commit tx");
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
+        assert_eq!(
+            queue
+                .return_transaction_guards(&mut guards, &state)
+                .expect("return before commit")
+                .returned,
+            1
+        );
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(hash, nonzero!(2_usize));
+            transactions.commit().expect("commit returned transaction");
+        }
+        assert_eq!(
+            queue.remove_committed_hashes(std::iter::once(hash), None),
+            1
+        );
+        assert!(!queue.txs.contains_key(&hash));
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn guard_return_expires_inflight_transaction_with_explicit_event() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("expired_guard_return_journal.norito");
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut cfg = config_factory();
+        cfg.transaction_time_to_live = Duration::from_millis(10);
+        let mut queue = Queue::test(cfg, &time_source);
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install queue plan journal");
+        let queue = Arc::new(queue);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let authority = tx.as_ref().authority().clone();
+        queue.push(tx, state.view()).expect("push expiring tx");
+        let retained_bytes_before = queue.retained_bytes();
+        assert!(retained_bytes_before > 0);
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 1);
+        assert!(queue.routing_decisions.contains_key(&hash));
+        assert!(queue.routing_plans.contains_key(&hash));
+        assert!(routing_ledger::get(&hash).is_some());
+        assert!(routing_ledger::get_plan(&hash).is_some());
+        assert!(queue.expiry_ring_members.contains_key(&hash));
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed journal")
+                .live_record_count()
+                .expect("count live journal records"),
+            1
+        );
+        #[cfg(feature = "telemetry")]
+        let terminal_teu = queue
+            .tx_teu
+            .get(&hash)
+            .map(|entry| *entry.value())
+            .expect("expiring transaction TEU metadata");
+        while event_receiver.try_recv().is_ok() {}
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 1);
+        assert_eq!(queue.retained_bytes(), retained_bytes_before);
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 1);
+        assert!(queue.expiry_ring_members.contains_key(&hash));
+        time_handle.advance(Duration::from_millis(11));
+
+        let report = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect("settle expired guard");
+        assert_eq!(report.expired, 1);
+        assert_eq!(report.returned, 0);
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
+        assert!(!queue.queued_tx_enqueued_at_ms.contains_key(&hash));
+        assert!(
+            queue
+                .queued_age_ring
+                .lock()
+                .iter()
+                .all(|(queued_hash, _)| *queued_hash != hash),
+            "expired guard return must remove its lazy age entry"
+        );
+        assert_eq!(queue.retained_bytes(), 0);
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 0);
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(!queue.routing_decisions.contains_key(&hash));
+        assert!(!queue.routing_plans.contains_key(&hash));
+        assert!(routing_ledger::get(&hash).is_none());
+        assert!(routing_ledger::get_plan(&hash).is_none());
+        assert!(!queue.expiry_ring_members.contains_key(&hash));
+        assert_eq!(
+            queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed journal")
+                .live_record_count()
+                .expect("count tombstoned journal records"),
+            0,
+            "expired guard return must tombstone its durable routing plan"
+        );
+        #[cfg(feature = "telemetry")]
+        {
+            assert!(!queue.tx_teu.contains_key(&hash));
+            assert_eq!(
+                queue
+                    .lane_teu_pending
+                    .get(&terminal_teu.lane_id)
+                    .map(|pending| (pending.teu, pending.tx_count))
+                    .unwrap_or_default(),
+                (0, 0)
+            );
+            assert_eq!(
+                queue
+                    .dataspace_teu_pending
+                    .get(&(terminal_teu.lane_id, terminal_teu.dataspace_id))
+                    .map(|pending| (pending.teu, pending.tx_count))
+                    .unwrap_or_default(),
+                (0, 0)
+            );
+        }
+        let event = event_receiver.try_recv().expect("expired event");
+        let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+            panic!("expected transaction event");
+        };
+        assert_eq!(event.hash, hash);
+        assert!(matches!(event.status, TransactionStatus::Expired));
+        assert!(matches!(
+            event_receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn guard_return_capacity_invariant_is_batch_atomic() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(2_usize);
+        cfg.capacity_per_user = nonzero!(2_usize);
+        let queue = Arc::new(Queue::test(cfg, &time_source));
+        for _ in 0..2 {
+            queue
+                .push(accepted_tx_by_someone(&time_source), state.view())
+                .expect("fill queue");
+        }
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2_usize));
+        let guarded_hashes = guards
+            .iter()
+            .map(|guard| guard.tx.hash())
+            .collect::<BTreeSet<_>>();
+
+        // Corrupt the private index with a tracked foreign entry to exercise the fail-closed
+        // capacity preflight. No returned guard may be partially released or appended.
+        let foreign = accepted_tx_by_someone(&time_source);
+        let foreign_hash = foreign.as_ref().hash();
+        queue.txs.insert(
+            foreign_hash,
+            Arc::new(CheckedTransaction::new_unchecked(foreign)),
+        );
+        queue.tx_enqueued_at_ms.insert(foreign_hash, 0);
+        assert!(queue.push_queued_hash(foreign_hash, 0));
+
+        let err = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect_err("corrupt live hash index must fail closed");
+        assert!(matches!(
+            err,
+            TransactionGuardReturnError::HashIndexCapacity {
+                queued: 1,
+                returning: 2,
+                capacity: 2
+            }
+        ));
+        assert_eq!(guards.len(), 2);
+        assert!(guards.iter().all(|guard| !guard.released));
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            guarded_hashes
+                .iter()
+                .filter(|hash| queue.queued_tx_enqueued_at_ms.contains_key(hash))
+                .count(),
+            0,
+            "capacity failure must not append a partial returned batch"
+        );
+
+        assert_eq!(queue.pop_queued_hash(), Some(foreign_hash));
+        queue.txs.remove(&foreign_hash);
+        queue.tx_enqueued_at_ms.remove(&foreign_hash);
+        let report = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect("return after repairing index");
+        assert_eq!(report.returned, 2);
+        assert_eq!(queue.queued_len(), 2);
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn guard_return_missing_transaction_is_explicit_and_does_not_release_batch() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push tx");
+        let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(1_usize));
+        let hash = guards[0].tx.hash();
+        let (_, tracked) = queue.txs.remove(&hash).expect("remove tracked entry");
+
+        let err = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect_err("unowned missing transaction must fail explicitly");
+        assert_eq!(
+            err,
+            TransactionGuardReturnError::MissingTrackedTransactions { hashes: vec![hash] }
+        );
+        assert_eq!(guards.len(), 1);
+        assert!(!guards[0].released);
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 1);
+        assert_eq!(queue.queued_len(), 0);
+
+        queue.txs.insert(hash, tracked);
+        let report = queue
+            .return_transaction_guards(&mut guards, &state)
+            .expect("return after restoring invariant");
+        assert_eq!(report.returned, 1);
+        assert_eq!(queue.inflight_guards.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -14761,6 +15953,7 @@ pub mod tests {
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
         nexus.fees.base_fee = Numeric::zero();
@@ -14876,7 +16069,7 @@ pub mod tests {
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
         };
 
-        let deferred = queue.enforce_lane_teu_limits(&mut guards);
+        let mut deferred = queue.enforce_lane_teu_limits(&mut guards);
         assert_eq!(
             guards.len(),
             1,
@@ -14897,10 +16090,9 @@ pub mod tests {
 
         drop(guards);
         *queue.nexus_limits.write() = QueueLimits::from_nexus(&state.nexus_snapshot());
-        let deferred_tx = deferred.into_iter().next().expect("deferred tx present");
         queue
-            .push(deferred_tx, state.view())
-            .expect("re-queueing deferred transaction should succeed once capacity resets");
+            .return_transaction_guards(&mut deferred, state.as_ref())
+            .expect("returning deferred guard should succeed once capacity resets");
 
         let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
         assert_eq!(
@@ -14912,7 +16104,7 @@ pub mod tests {
     }
 
     #[test]
-    fn enforce_lane_teu_limits_with_routing_plans_returns_requeue_hint() {
+    fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world_with_test_domains(), kura, query_handle);
@@ -14990,7 +16182,7 @@ pub mod tests {
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
 
         let mut consumed = BTreeMap::new();
-        let deferred = queue
+        let mut deferred = queue
             .enforce_lane_teu_limits_with_consumption_and_routing_plans(&mut guards, &mut consumed);
         assert_eq!(guards.len(), 1, "one transaction should remain");
         assert_eq!(deferred.len(), 1, "one transaction should defer");
@@ -15000,7 +16192,8 @@ pub mod tests {
             "first transaction should remain executable"
         );
 
-        let (deferred_tx, deferred_plan) = deferred.into_iter().next().expect("deferred tx");
+        let deferred_tx = deferred[0].clone_accepted();
+        let deferred_plan = deferred[0].routing_plan();
         let deferred_routing = deferred_plan.coordinator_route();
         assert_eq!(deferred_tx.as_ref().hash(), second_hash);
         assert_eq!(deferred_routing.lane_id, test_lane);
@@ -15008,8 +16201,8 @@ pub mod tests {
 
         drop(guards);
         queue
-            .push_requeued_with_routing_plan(deferred_tx, deferred_plan, state.as_ref())
-            .expect("requeue with explicit routing plan should succeed");
+            .return_transaction_guards(&mut deferred, state.as_ref())
+            .expect("deferred guard should return atomically");
 
         let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
         assert_eq!(next.len(), 1, "deferred transaction should be queued next");
@@ -15084,13 +16277,14 @@ pub mod tests {
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
 
         let mut consumed = BTreeMap::new();
-        let deferred = queue
+        let mut deferred = queue
             .enforce_lane_teu_limits_with_consumption_and_routing_plans(&mut guards, &mut consumed);
         assert_eq!(guards.len(), 1, "one Native AMX transaction should remain");
         assert_eq!(deferred.len(), 1, "one Native AMX transaction should defer");
         assert_eq!(guards[0].as_ref().hash(), first_hash);
 
-        let (deferred_tx, deferred_plan) = deferred.into_iter().next().expect("deferred tx");
+        let deferred_tx = deferred[0].clone_accepted();
+        let deferred_plan = deferred[0].routing_plan();
         assert_eq!(deferred_tx.as_ref().hash(), second_hash);
         assert_eq!(
             deferred_plan, second_plan,
@@ -15100,8 +16294,8 @@ pub mod tests {
 
         drop(guards);
         queue
-            .push_requeued_with_routing_plan(deferred_tx, deferred_plan, state.as_ref())
-            .expect("requeue with preserved Native AMX plan should succeed");
+            .return_transaction_guards(&mut deferred, state.as_ref())
+            .expect("deferred Native AMX guard should return atomically");
 
         let next = queue.collect_transactions_for_block(&state.view(), nonzero!(1usize));
         assert_eq!(
@@ -15307,7 +16501,7 @@ pub mod tests {
                 .collect::<Vec<_>>();
             let deferred_hashes = deferred
                 .iter()
-                .map(|tx| tx.as_ref().hash())
+                .map(|guard| guard.as_ref().hash())
                 .collect::<Vec<_>>();
             (retained_hashes, deferred_hashes)
         }
@@ -16723,11 +17917,12 @@ pub mod tests {
                 .map(|entry| *entry.value()),
             Some(routing)
         );
-        assert_eq!(
-            queue.tx_gossip.pop(),
-            Some(hash),
-            "successful requeue should still enqueue the gossip side channel"
+        assert!(
+            queue.tx_gossip.pop().is_none(),
+            "the batch owner must enqueue consensus-requeue gossip exactly once"
         );
+        queue.requeue_gossip_hashes([hash]);
+        assert_eq!(queue.tx_gossip.pop(), Some(hash));
 
         let mut expired = Vec::new();
         let guard = queue
@@ -17748,11 +18943,20 @@ pub mod tests {
         let dir = tempdir().expect("tempdir");
         install_test_reservation_journal(&queue, &dir);
         let mut malformed = lane_reservation_scope(&state, b"owner", b"proposal");
-        malformed.reservation_owner_hash = Hash::prehashed([0; Hash::LENGTH]);
-        assert!(matches!(
-            queue.reserve_transactions_for_lane(&state, malformed, nonzero!(1_usize)),
-            Err(LaneQueueReservationError::InvalidIdentity(_))
-        ));
+        malformed.lane_block_height = 0;
+        let error = match queue.reserve_transactions_for_lane(&state, malformed, nonzero!(1_usize))
+        {
+            Err(error) => error,
+            Ok(_) => panic!("zero lane-local height must be rejected before durability changes"),
+        };
+        assert!(
+            matches!(
+                &error,
+                LaneQueueReservationError::InvalidIdentity(reason)
+                    if reason == "lane block height must be non-zero"
+            ),
+            "unexpected validation error: {error:?}"
+        );
         assert!(!queue.lane_reservation_durability_faulted());
     }
 

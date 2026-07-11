@@ -26,7 +26,7 @@ axum = { workspace = true, default-features = false, features = ["http1", "json"
 tokio-stream = { workspace = true, features = ["sync"] }
 tokio-rustls = { workspace = true }
 rustls = { version = "0.23.35", default-features = false, features = ["std"] }
-hickory-proto = { version = "0.25.2", default-features = false }
+hickory-proto = { version = "0.26.1", default-features = false }
 iroha_primitives = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["json", "governance"] }
 iroha_crypto = { workspace = true }

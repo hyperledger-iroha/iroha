@@ -148,13 +148,22 @@ impl Actor {
                     attempts,
                     "kura persistence retries exhausted; requeuing block payload"
                 );
-                let (_requeued, _failures, _duplicates, _) = super::requeue_block_transactions(
+                let mut report = super::requeue_block_transactions(
                     queue,
                     state,
                     pending.block.external_entrypoints_cloned(),
                 );
+                let retained = report.requires_retry();
+                if retained {
+                    let retry_payload = report.take_retryable_entrypoints();
+                    pending.mark_requeue_pending(
+                        now,
+                        super::PENDING_REQUEUE_BASE_BACKOFF,
+                        retry_payload,
+                    );
+                }
                 KuraStoreFailure {
-                    pending: None,
+                    pending: retained.then_some(pending),
                     clean_block_hash: true,
                 }
             }

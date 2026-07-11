@@ -251,10 +251,6 @@ impl Actor {
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
         self.pending.missing_block_requests.clear();
         self.pending.missing_commit_qc_requests.clear();
-        self.subsystems.da_rbc.da.da_bundles.clear();
-        self.subsystems.da_rbc.da.da_pin_bundles.clear();
-        self.subsystems.da_rbc.da.sealed_commitments.clear();
-        self.subsystems.da_rbc.da.sealed_pin_intents.clear();
         self.new_view_rebroadcast_log.clear();
         self.proposal_rebroadcast_log.clear();
         self.payload_rebroadcast_log.clear();

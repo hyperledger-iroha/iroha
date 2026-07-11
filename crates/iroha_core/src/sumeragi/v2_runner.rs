@@ -44,12 +44,15 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{EffectExecutorStep, EffectQueueConfig, EffectTransportError, V2EffectExecutor},
-    v2_lane_work::{V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkLimits},
+    v2_lane_work::{
+        MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
+        V2LaneWorkLimits,
+    },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::ProductionV2Services,
 };
-use crate::{kura::Kura, queue::Queue, state::State};
+use crate::{block::BlockBuilder, kura::Kura, queue::Queue, state::State};
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
@@ -213,6 +216,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             signature_policy,
             effect_queue,
         )?;
+        let recovered_applied_height = pending_kura_apply.filter(|pending| {
+            usize::try_from(pending.height()).is_ok_and(|height| state.committed_height() == height)
+        });
         if let Some(pending) = pending_kura_apply.take() {
             executor.verify_pending_kura_apply_replay(pending)?;
         }
@@ -242,8 +248,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             Arc::clone(&state),
             Arc::clone(&kura),
             lane_work_limits(&shared_config)?,
+            recovered_applied_height,
         )?;
         executor.consume_effects(startup_effects, &mut services)?;
+        let startup_directive = executor.local_proposal_directive()?;
+        lane_work.retain_merge_sidecars_for_global_view(
+            startup_directive.tag().view(),
+            startup_directive.locked_subject(),
+            startup_directive.decided_subject(),
+        )?;
         dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
         ingress_ready.store(true, Ordering::Release);
 
@@ -277,6 +290,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             }
 
             services.drain_completions(&mut executor)?;
+            drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
             services
                 .replay_buffered_chunks(&mut executor)
                 .map_err(V2RunnerError::Service)?;
@@ -339,6 +353,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 executor.current_tag().view(),
                 control_queue_capacity,
             );
+            drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
             drain_retired_v1_queues(
                 &rbc_chunk_rx,
                 &consensus_rx,
@@ -356,10 +371,21 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
 
             advance_executor(&mut executor, &mut services, control_queue_capacity)?;
-            while let Some(prepared) = services.take_prepared_candidate() {
-                if prepared.tag() == executor.current_tag() {
-                    lane_work.mark_global_body_validated(prepared.subject().block_hash);
+            let directive = executor.local_proposal_directive()?;
+            lane_work.retain_merge_sidecars_for_global_view(
+                directive.tag().view(),
+                directive.locked_subject(),
+                directive.decided_subject(),
+            )?;
+            if let Some(locked) = directive.locked_subject() {
+                let newly_locked = lane_work.mark_global_body_locked(locked.block_hash);
+                if newly_locked && local_validator.is_some() {
+                    services
+                        .request_locked_candidate(executor.current_tag(), locked)
+                        .map_err(V2RunnerError::Service)?;
                 }
+            }
+            while let Some(prepared) = services.take_prepared_candidate() {
                 let matches = pending_local_events
                     .as_ref()
                     .is_some_and(|(tag, subject, _)| {
@@ -385,13 +411,14 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
 
             if executor.ready_to_finish() {
                 close_ingress_for_rollover(&ingress_ready);
+                lane_work.persist_anchored_sessions()?;
+                lane_work.prune_finalized_merge_sidecars()?;
+                dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
                 let (runtime, receipt, artifact) = executor.into_finalized_parts()?;
                 let finalized = runtime.into_driver().finish_height(&receipt, &artifact)?;
                 if let Some(warning) = finalized.wal_retirement_warning() {
                     iroha_logger::warn!(warning, "retained finalized Sumeragi v2 WAL");
                 }
-                lane_work.persist_anchored_sessions()?;
-                dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
                 services
                     .finish_height(receipt.clone())
                     .map_err(V2RunnerError::Service)?;
@@ -468,16 +495,22 @@ fn schedule_local_proposal(
     }
     while let Some(loaded) = services.take_loaded_candidate() {
         let current = executor.local_proposal_directive()?;
-        if loaded.tag() != current.tag()
-            || current.locked_subject() != Some(loaded.subject())
-            || current.leader() != local_validator
-        {
+        if loaded.tag() != current.tag() || current.locked_subject() != Some(loaded.subject()) {
+            continue;
+        }
+        let canonical_wire = loaded.into_canonical_wire();
+        let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
+            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+        if lane_work.bind_locked_global_body(&block) == V2LaneIngressOutcome::Rejected {
+            return Err(V2RunnerError::LaneCandidateBinding);
+        }
+        if current.leader() != local_validator {
             continue;
         }
         submit_exact_body(
             context,
             current,
-            loaded.into_canonical_wire(),
+            canonical_wire,
             executor,
             services,
             local_subject,
@@ -533,8 +566,15 @@ fn schedule_local_proposal(
             .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
         u64::try_from(logical_time.as_millis()).map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
         let (_, time_source) = iroha_primitives::time::TimeSource::new_mock(logical_time);
-        let assembler = V2CandidateAssembler::new(candidate_limits, time_source);
-        let attachments = candidate_attachments(context, state, npos_config)?;
+        let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
+        let attachments = candidate_attachments(
+            context,
+            state,
+            npos_config,
+            parent.as_ref(),
+            directive.tag().view(),
+            time_source,
+        )?;
         let candidate = if heartbeat_only_tag == Some(directive.tag()) {
             assembler.assemble(CandidateRequest {
                 context,
@@ -988,7 +1028,30 @@ fn candidate_attachments(
     context: &wire::HeightContext,
     state: &State,
     npos_config: &SumeragiNpos,
+    parent: &SignedBlock,
+    view: wire::View,
+    time_source: iroha_primitives::time::TimeSource,
 ) -> Result<CandidateAttachments, V2RunnerError> {
+    let round_header = BlockBuilder::new_with_time_source(Vec::new(), time_source)
+        .chain(view, Some(parent))
+        .carrier_context_header();
+    if round_header.height().get() != context.height
+        || round_header.prev_block_hash() != Some(parent.hash())
+        || round_header.view_change_index() != view
+    {
+        return Err(V2RunnerError::Candidate(
+            "certified merge carrier probe differs from the frozen round".to_owned(),
+        ));
+    }
+    let expected_merge_epoch = state
+        .merge_ledger()
+        .latest()
+        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+    let certified_merge_entry = state
+        .select_pending_certified_merge_entry_for_round(&round_header, expected_merge_epoch)
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+        .map(|(_, entry, _)| entry);
+
     let mode = match context.mode {
         wire::ConsensusMode::Permissioned => ConfigConsensusMode::Permissioned,
         wire::ConsensusMode::Npos => ConfigConsensusMode::Npos,
@@ -1007,6 +1070,7 @@ fn candidate_attachments(
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     Ok(CandidateAttachments {
         npos_consensus_effects: (!effects.is_empty()).then_some(effects),
+        certified_merge_entry,
         ..CandidateAttachments::default()
     })
 }
@@ -1059,8 +1123,72 @@ fn dispatch_lane_work_effects(
             V2LaneWorkEffect::BroadcastMerge(signature) => {
                 services.broadcast_merge_to_voters(signature);
             }
+            V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message } => {
+                services.post_certified_merge_sidecar(peer, message);
+            }
         }
     }
+    Ok(())
+}
+
+fn drive_merge_sidecar_recovery(
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+    lane_work: &mut V2LaneWorkAdapter,
+) -> Result<(), V2RunnerError> {
+    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
+    while let Some(deferred) = services.take_merge_sidecar_deferral() {
+        let entry_hash = deferred.reference().entry_hash;
+        if !executor.retains_deferred_merge_sidecar(
+            deferred.work_id(),
+            deferred.round(),
+            deferred.subject(),
+            entry_hash,
+        ) {
+            continue;
+        }
+        let disposition = if executor.deferred_merge_sidecar_is_decided(deferred.work_id()) {
+            lane_work.defer_missing_decided_merge_sidecar(
+                deferred.round(),
+                deferred.subject(),
+                deferred.reference().clone(),
+            )?
+        } else {
+            lane_work.defer_missing_merge_sidecar(
+                deferred.round(),
+                deferred.subject(),
+                deferred.reference().clone(),
+            )?
+        };
+        match disposition {
+            MergeSidecarDeferralDisposition::Fetching
+            | MergeSidecarDeferralDisposition::Available => {}
+            MergeSidecarDeferralDisposition::RetryLater => {
+                services
+                    .requeue_merge_sidecar_deferral(deferred)
+                    .map_err(V2RunnerError::Service)?;
+                break;
+            }
+            MergeSidecarDeferralDisposition::Rejected(reason) => {
+                let _ = executor.reject_deferred_merge_sidecar_work(
+                    deferred.work_id(),
+                    reason,
+                    services,
+                )?;
+            }
+        }
+    }
+    while let Some(entry_hash) = lane_work.take_completed_merge_sidecar() {
+        let _ = executor.retry_deferred_merge_sidecar(entry_hash, services)?;
+    }
+    while let Some(rejected) = lane_work.take_rejected_merge_sidecar() {
+        let _ = executor.reject_deferred_merge_sidecar(
+            rejected.entry_hash(),
+            rejected.reason(),
+            services,
+        )?;
+    }
+    lane_work.retain_deferred_merge_sidecars(&executor.deferred_merge_sidecar_blocks())?;
     Ok(())
 }
 

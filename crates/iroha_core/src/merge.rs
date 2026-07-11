@@ -1,14 +1,17 @@
 //! Merge-ledger helpers (reduction, validation, and related utilities).
 
+use std::collections::BTreeMap;
+
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
+    da::commitment::DaProofScheme,
     merge::{
         MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot,
         MergeLedgerEntry, MergeQuorumCertificate,
     },
-    nexus::LaneConfig,
+    nexus::{DataSpaceId, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
@@ -24,7 +27,9 @@ const MERGE_CHAIN_ID_DOMAIN_TAG: &[u8] = b"iroha:merge:chain-id:v1\0";
 /// Domain separator for exact lane-incarnation activation commitments.
 const MERGE_ACTIVATION_ROOT_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-activations:v1\0";
 /// Domain separator for individual lane configuration commitments.
-const MERGE_LANE_CONFIG_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-config:v1\0";
+const MERGE_LANE_CONFIG_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-config:v2\0";
+/// Layout version for the consensus-relevant lane configuration projection.
+const MERGE_LANE_CONFIG_PROJECTION_VERSION: u16 = 1;
 /// Domain separator for one lane execution transcript.
 const MERGE_LANE_EXECUTION_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-execution:v1\0";
 /// Domain separator for the ordered execution root.
@@ -233,10 +238,60 @@ pub fn merge_activation_root(active_lanes: &[MergeLaneBinding]) -> Hash {
     Hash::new_from_chunks(&[MERGE_ACTIVATION_ROOT_DOMAIN_TAG, encoded.as_slice()])
 }
 
-/// Compute the canonical configuration hash embedded in an active merge binding.
+#[derive(Encode)]
+struct MergeLaneConfigConsensusProjection {
+    version: u16,
+    id: LaneId,
+    dataspace_id: DataSpaceId,
+    visibility: LaneVisibility,
+    lane_type: Option<String>,
+    governance: Option<String>,
+    settlement: Option<String>,
+    storage: LaneStorageProfile,
+    proof_scheme: DaProofScheme,
+    metadata: BTreeMap<String, String>,
+}
+
+impl MergeLaneConfigConsensusProjection {
+    fn from_lane(lane: &LaneConfig) -> Self {
+        // Keep this destructuring exhaustive so adding a field to `LaneConfig`
+        // requires an explicit decision about whether consensus must bind it.
+        let LaneConfig {
+            id,
+            dataspace_id,
+            alias: _,
+            description: _,
+            visibility,
+            lane_type,
+            governance,
+            settlement,
+            storage,
+            proof_scheme,
+            metadata,
+        } = lane;
+
+        Self {
+            version: MERGE_LANE_CONFIG_PROJECTION_VERSION,
+            id: *id,
+            dataspace_id: *dataspace_id,
+            visibility: *visibility,
+            lane_type: lane_type.clone(),
+            governance: governance.clone(),
+            settlement: settlement.clone(),
+            storage: *storage,
+            proof_scheme: *proof_scheme,
+            metadata: metadata.clone(),
+        }
+    }
+}
+
+/// Compute the canonical consensus configuration hash embedded in an active merge binding.
+///
+/// Human-facing aliases and descriptions remain committed by the exact catalog
+/// hash, but do not alter the lane consensus projection.
 #[must_use]
 pub fn merge_lane_config_hash(lane: &LaneConfig) -> Hash {
-    let encoded = lane.encode();
+    let encoded = MergeLaneConfigConsensusProjection::from_lane(lane).encode();
     Hash::new_from_chunks(&[MERGE_LANE_CONFIG_DOMAIN_TAG, encoded.as_slice()])
 }
 
@@ -483,7 +538,122 @@ pub fn reduce_merge_hint_roots(roots: &[Hash]) -> Hash {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
+    use iroha_data_model::nexus::{LaneCatalog, LaneLifecycleParameterV1};
+
     use super::*;
+
+    fn exact_catalog_hash(lane: LaneConfig) -> Hash {
+        let catalog = LaneCatalog::new(NonZeroU32::new(1).expect("one is non-zero"), vec![lane])
+            .expect("single default-id lane must form a valid catalog");
+        LaneLifecycleParameterV1::catalog_hash(&catalog)
+    }
+
+    #[test]
+    fn merge_lane_config_hash_excludes_display_fields_but_exact_catalog_hash_keeps_them() {
+        let base = LaneConfig {
+            description: Some("Primary settlement lane".to_owned()),
+            ..LaneConfig::default()
+        };
+        let mut renamed = base.clone();
+        renamed.alias = "renamed-primary".to_owned();
+        let mut redescribed = base.clone();
+        redescribed.description = Some("Updated operator-facing description".to_owned());
+
+        let consensus_hash = merge_lane_config_hash(&base);
+        assert_eq!(merge_lane_config_hash(&renamed), consensus_hash);
+        assert_eq!(merge_lane_config_hash(&redescribed), consensus_hash);
+
+        let exact_hash = exact_catalog_hash(base);
+        assert_ne!(exact_catalog_hash(renamed), exact_hash);
+        assert_ne!(exact_catalog_hash(redescribed), exact_hash);
+    }
+
+    #[test]
+    fn merge_lane_config_hash_commits_every_functional_field_and_all_metadata() {
+        let mut base = LaneConfig {
+            lane_type: Some("retail".to_owned()),
+            governance: Some("boi".to_owned()),
+            settlement: Some("gross".to_owned()),
+            ..LaneConfig::default()
+        };
+        base.metadata
+            .insert("consensus.max_txs".to_owned(), "100".to_owned());
+        base.metadata
+            .insert("operator.policy".to_owned(), "strict".to_owned());
+
+        let mut changed_id = base.clone();
+        changed_id.id = LaneId::new(1);
+        let mut changed_dataspace = base.clone();
+        changed_dataspace.dataspace_id = DataSpaceId::new(7);
+        let mut changed_visibility = base.clone();
+        changed_visibility.visibility = LaneVisibility::Restricted;
+        let mut changed_lane_type = base.clone();
+        changed_lane_type.lane_type = Some("wholesale".to_owned());
+        let mut changed_governance = base.clone();
+        changed_governance.governance = Some("committee".to_owned());
+        let mut changed_settlement = base.clone();
+        changed_settlement.settlement = Some("net".to_owned());
+        let mut changed_storage = base.clone();
+        changed_storage.storage = LaneStorageProfile::SplitReplica;
+        let mut changed_proof_scheme = base.clone();
+        changed_proof_scheme.proof_scheme = DaProofScheme::KzgBls12_381;
+        let mut changed_metadata_value = base.clone();
+        changed_metadata_value
+            .metadata
+            .insert("consensus.max_txs".to_owned(), "101".to_owned());
+        let mut changed_metadata_entries = base.clone();
+        changed_metadata_entries
+            .metadata
+            .insert("consensus.timeout_ms".to_owned(), "500".to_owned());
+
+        let baseline_hash = merge_lane_config_hash(&base);
+        for (field, changed) in [
+            ("id", changed_id),
+            ("dataspace_id", changed_dataspace),
+            ("visibility", changed_visibility),
+            ("lane_type", changed_lane_type),
+            ("governance", changed_governance),
+            ("settlement", changed_settlement),
+            ("storage", changed_storage),
+            ("proof_scheme", changed_proof_scheme),
+            ("metadata value", changed_metadata_value),
+            ("metadata entries", changed_metadata_entries),
+        ] {
+            assert_ne!(
+                merge_lane_config_hash(&changed),
+                baseline_hash,
+                "changing {field} must change the merge lane consensus hash"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_lane_config_hash_matches_protocol_golden() {
+        let mut lane = LaneConfig {
+            id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "operator-display-name".to_owned(),
+            description: Some("operator display description".to_owned()),
+            visibility: LaneVisibility::Restricted,
+            lane_type: Some("retail".to_owned()),
+            governance: Some("boi".to_owned()),
+            settlement: Some("gross".to_owned()),
+            storage: LaneStorageProfile::SplitReplica,
+            proof_scheme: DaProofScheme::KzgBls12_381,
+            metadata: BTreeMap::new(),
+        };
+        lane.metadata
+            .insert("consensus.max_txs".to_owned(), "100".to_owned());
+        lane.metadata
+            .insert("operator.policy".to_owned(), "strict".to_owned());
+
+        assert_eq!(
+            merge_lane_config_hash(&lane).to_string(),
+            "3cfede3ff6488a005392fe462b04975fdc81214ab52ae2bd90203c5271130027"
+        );
+    }
 
     #[test]
     fn typed_merge_proof_roots_bind_order_and_duplicate_leaves() {
@@ -588,7 +758,10 @@ mod tests {
                 lane_block_height: 9,
                 tip_hash: HashOf::from_untyped_unchecked(Hash::new(b"lane-0")),
                 merge_hint_root: Hash::new(b"hint-0"),
-                settlement_hash: HashOf::new(&settlement_commitment),
+                settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
+                    &settlement_commitment,
+                )
+                .expect("test settlement should hash canonically"),
                 settlement_commitment,
                 relay_envelope: None,
             }],

@@ -204,10 +204,30 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
+    let lane_lifecycle = staged
+        .nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .map(
+            |lane| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
+                lane_id: lane.id,
+                incarnation: *staged
+                    .lane_incarnations
+                    .get(&lane.id)
+                    .expect("validated staged genesis has every active lane incarnation"),
+                activation_height: *staged
+                    .lane_incarnation_activation_heights
+                    .get(&lane.id)
+                    .expect("validated staged genesis has every lane activation height"),
+            },
+        )
+        .collect::<Vec<_>>();
     iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
         &staged.nexus,
         &staged.pipeline,
         &active_validators,
+        &lane_lifecycle,
     )
 }
 

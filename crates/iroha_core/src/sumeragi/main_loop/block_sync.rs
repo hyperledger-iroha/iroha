@@ -3087,7 +3087,15 @@ impl Actor {
             }
         }
         if inserted_pending_block {
-            self.enforce_pending_block_cap(block_hash, "certified_block_fetch_response");
+            if !self.enforce_pending_block_cap(block_hash, "certified_block_fetch_response") {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "deferring certified block fetch body because retained requeue owners fill the pending-body cap"
+                );
+                return false;
+            }
         }
         self.maybe_cache_rehydrated_kura_body(&block);
         self.deferred_missing_payload_qcs
@@ -9001,7 +9009,15 @@ impl Actor {
         }
 
         self.pending.pending_blocks.insert(block_hash, pending);
-        self.enforce_pending_block_cap(block_hash, "frontier_block_sync_payload");
+        if !self.enforce_pending_block_cap(block_hash, "frontier_block_sync_payload") {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                "deferring frontier block-sync payload because retained requeue owners fill the pending-body cap"
+            );
+            return false;
+        }
         self.deferred_block_sync_updates
             .remove(&(block_height, block_view, block_hash));
         self.flush_frontier_body_requesters(block);

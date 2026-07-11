@@ -2331,6 +2331,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "crates/iroha_core/src/smartcontracts/isi/mod.rs",
     "crates/iroha_core/src/smartcontracts/isi/world.rs",
     "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+    "crates/iroha_core/src/validation_fee.rs",
     "crates/iroha_data_model/src/isi/mod.rs",
     "crates/iroha_data_model/src/isi/registry.rs",
     "crates/iroha_data_model/src/proof.rs",

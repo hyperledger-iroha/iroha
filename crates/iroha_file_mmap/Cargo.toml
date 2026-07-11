@@ -15,7 +15,7 @@ documentation.workspace = true
 workspace = true
 
 [dependencies]
-memmap2 = "0.9.9"
+memmap2 = "0.9.11"
 
 [dev-dependencies]
 tempfile = "3.23.0"

@@ -15,7 +15,11 @@ use std::{
 };
 
 use iroha_crypto::{HashOf, KeyPair, Signature};
-use iroha_data_model::{block::consensus_v2 as wire, merge::MergeCommitteeSignature, peer::PeerId};
+use iroha_data_model::{
+    block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
+    merge::MergeCommitteeSignature,
+    peer::PeerId,
+};
 use iroha_p2p::{Post, Priority};
 use iroha_sumeragi_core::{EquivocationKind, EventTag};
 
@@ -31,7 +35,10 @@ use super::{
     },
     v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk},
 };
-use crate::{EventsSender, IrohaNetwork, NetworkMessage, kura::KuraV2CommitReceipt};
+use crate::{
+    EventsSender, IrohaNetwork, NetworkMessage, kura::KuraV2CommitReceipt,
+    merge_sidecar::CertifiedMergeSidecarMessage,
+};
 
 enum V2IoCommand {
     Sign(ConsensusSignTask),
@@ -52,6 +59,10 @@ enum V2IoCompletion {
     Stored(BodyStoreCompletion),
     Validated(BodyValidationCompletion),
     Applied(DurableApplyCompletion),
+    ApplyDeferred {
+        work_id: EffectWorkId,
+        reference: CertifiedMergeLedgerReference,
+    },
     CertifiedResponse {
         recipient: PeerId,
         response: wire::CertifiedBodyResponse,
@@ -95,10 +106,20 @@ impl V2IoHandle {
                             })
                             .map(V2IoCompletion::Validated)
                             .map_err(|error| error.to_string()),
-                        V2IoCommand::Apply(task) => apply_service
-                            .execute(&context, &mut body_store, &task)
-                            .map(V2IoCompletion::Applied)
-                            .map_err(|error| error.to_string()),
+                        V2IoCommand::Apply(task) => {
+                            match apply_service.execute(&context, &mut body_store, &task) {
+                                Ok(completion) => Ok(V2IoCompletion::Applied(completion)),
+                                Err(
+                                    super::v2_apply::V2ApplyError::MissingCertifiedMergeSidecar {
+                                        reference,
+                                    },
+                                ) => Ok(V2IoCompletion::ApplyDeferred {
+                                    work_id: task.id(),
+                                    reference,
+                                }),
+                                Err(error) => Err(error.to_string()),
+                            }
+                        }
                         V2IoCommand::Serve(request) => {
                             serve_certified_body(&body_store, &key_pair, local_validator, request)
                         }
@@ -295,6 +316,38 @@ pub(crate) struct RejectedCandidateBody {
     reason: String,
 }
 
+/// Exact body/reference tuple retained when validation or decided application
+/// reports that only its certified merge sidecar is unavailable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DeferredMergeSidecarWork {
+    work_id: EffectWorkId,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    reference: CertifiedMergeLedgerReference,
+}
+
+impl DeferredMergeSidecarWork {
+    /// Exact executor work identifier owning this deferral.
+    pub(crate) const fn work_id(&self) -> EffectWorkId {
+        self.work_id
+    }
+
+    /// Wire proposal round retaining the exact durable work item.
+    pub(crate) const fn round(&self) -> wire::ConsensusRound {
+        self.round
+    }
+
+    /// Exact certified subject waiting for recovery.
+    pub(crate) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Complete compact reference recovered from the durable body.
+    pub(crate) const fn reference(&self) -> &CertifiedMergeLedgerReference {
+        &self.reference
+    }
+}
+
 /// Exact body for which the reducer durably persisted local Prepare intent and
 /// released the corresponding signing effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -370,11 +423,13 @@ pub(crate) struct ProductionV2Services {
     orphan_chunk_bytes: u64,
     max_orphan_chunks: usize,
     max_orphan_chunk_bytes: u64,
+    max_merge_sidecar_deferrals: usize,
     local_completions: VecDeque<LocalCompletion>,
     pending_candidate_loads: BTreeSet<EventTag>,
     loaded_candidates: VecDeque<LoadedCandidateBody>,
     prepared_candidates: VecDeque<PreparedCandidateBody>,
     validation_rejections: VecDeque<RejectedCandidateBody>,
+    merge_sidecar_deferrals: VecDeque<DeferredMergeSidecarWork>,
     outbound_chunks: BTreeMap<HashOf<wire::PayloadManifest>, Vec<wire::ConsensusMessageV2>>,
     entered_view: Option<EventTag>,
     last_status: Option<EffectExecutorStatus>,
@@ -442,11 +497,13 @@ impl ProductionV2Services {
             orphan_chunk_bytes: 0,
             max_orphan_chunks: orphan_chunk_capacity,
             max_orphan_chunk_bytes,
+            max_merge_sidecar_deferrals: io_queue_capacity,
             local_completions: VecDeque::new(),
             pending_candidate_loads: BTreeSet::new(),
             loaded_candidates: VecDeque::new(),
             prepared_candidates: VecDeque::new(),
             validation_rejections: VecDeque::new(),
+            merge_sidecar_deferrals: VecDeque::new(),
             outbound_chunks: BTreeMap::new(),
             entered_view: None,
             last_status: None,
@@ -542,6 +599,38 @@ impl ProductionV2Services {
     /// Take the next deterministic body rejection observed by the worker.
     pub(crate) fn take_validation_rejection(&mut self) -> Option<RejectedCandidateBody> {
         self.validation_rejections.pop_front()
+    }
+
+    /// Take the next exact validation deferral for bounded sidecar recovery.
+    pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarWork> {
+        self.merge_sidecar_deferrals.pop_front()
+    }
+
+    /// Put back a transiently capacity-blocked deferral without losing its
+    /// exact durable validation intent.
+    pub(crate) fn requeue_merge_sidecar_deferral(
+        &mut self,
+        deferred: DeferredMergeSidecarWork,
+    ) -> Result<(), String> {
+        if let Some(existing) = self
+            .merge_sidecar_deferrals
+            .iter()
+            .find(|existing| existing.work_id == deferred.work_id)
+        {
+            return if existing.round == deferred.round
+                && existing.subject == deferred.subject
+                && existing.reference == deferred.reference
+            {
+                Ok(())
+            } else {
+                Err("Sumeragi v2 work ID claimed conflicting merge-sidecar deferrals".to_owned())
+            };
+        }
+        if self.merge_sidecar_deferrals.len() >= self.max_merge_sidecar_deferrals {
+            return Err("Sumeragi v2 merge-sidecar deferral queue is full".to_owned());
+        }
+        self.merge_sidecar_deferrals.push_back(deferred);
+        Ok(())
     }
 
     /// Take the next reducer-authorized local Prepare intent.
@@ -682,6 +771,10 @@ impl ProductionV2Services {
                 V2IoCompletion::Applied(completion) => {
                     let _ = executor.complete_application(completion, self)?;
                 }
+                V2IoCompletion::ApplyDeferred { work_id, reference } => {
+                    let _ =
+                        executor.defer_application_for_merge_sidecar(work_id, &reference, self)?;
+                }
                 V2IoCompletion::CertifiedResponse {
                     recipient,
                     response,
@@ -815,6 +908,20 @@ impl ProductionV2Services {
         }
         self.post_block_message(peer, message);
         Ok(())
+    }
+
+    /// Send one bounded certified merge-sidecar request or response through
+    /// the dedicated authenticated network envelope.
+    pub(crate) fn post_certified_merge_sidecar(
+        &self,
+        peer: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    ) {
+        self.network.post(Post {
+            data: NetworkMessage::CertifiedMergeSidecar(Box::new(message)),
+            peer_id: peer,
+            priority: Priority::High,
+        });
     }
 
     /// Send one context-bound Native AMX v2 message to a participant peer.
@@ -1038,6 +1145,21 @@ impl V2EffectServices for ProductionV2Services {
         self.io()?.enqueue(V2IoCommand::Validate(task))
     }
 
+    fn work_deferred_for_merge_sidecar(
+        &mut self,
+        work_id: EffectWorkId,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        reference: &CertifiedMergeLedgerReference,
+    ) -> Result<(), Self::Error> {
+        self.requeue_merge_sidecar_deferral(DeferredMergeSidecarWork {
+            work_id,
+            round,
+            subject,
+            reference: reference.clone(),
+        })
+    }
+
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error> {
         self.io()?.enqueue(V2IoCommand::Apply(task))
     }
@@ -1109,7 +1231,11 @@ impl V2EffectServices for ProductionV2Services {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{ChainId, block::BlockHeader};
+    use iroha_data_model::{
+        ChainId,
+        block::{BlockHeader, CertifiedMergeLedgerReference},
+        merge::{MergeLedgerEntry, MergeQuorumCertificate},
+    };
 
     use super::*;
     use crate::sumeragi::v2_chunks::encode_payload;
@@ -1167,11 +1293,13 @@ mod tests {
             orphan_chunk_bytes: 0,
             max_orphan_chunks: 1,
             max_orphan_chunk_bytes: 32,
+            max_merge_sidecar_deferrals: 1,
             local_completions: VecDeque::new(),
             pending_candidate_loads: BTreeSet::new(),
             loaded_candidates: VecDeque::new(),
             prepared_candidates: VecDeque::new(),
             validation_rejections: VecDeque::new(),
+            merge_sidecar_deferrals: VecDeque::new(),
             outbound_chunks: BTreeMap::new(),
             entered_view: None,
             last_status: None,
@@ -1182,6 +1310,35 @@ mod tests {
 
     fn manifest_hash(label: &[u8]) -> HashOf<wire::PayloadManifest> {
         HashOf::from_untyped_unchecked(Hash::new(label))
+    }
+
+    fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {
+        CertifiedMergeLedgerReference {
+            version: 1,
+            entry_hash: HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(label)),
+            encoded_len: 512,
+            epoch_id: 9,
+            execution_batch_hash: None,
+            entrypoint_count: None,
+            entrypoint_merkle_root: None,
+            result_merkle_root: None,
+            base_state_height: None,
+            base_state_hash: None,
+            merge_qc: MergeQuorumCertificate::new(
+                2,
+                9,
+                1,
+                HashOf::from_untyped_unchecked(Hash::new(b"merge parent")),
+                Hash::new(b"chain id"),
+                1,
+                HashOf::new(&Vec::<PeerId>::new()),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Hash::new(b"merge certificate message"),
+            ),
+        }
     }
 
     fn chunk(
@@ -1270,6 +1427,100 @@ mod tests {
         assert!(service.orphan_chunks.is_empty());
         assert_eq!(service.orphan_chunk_count, 0);
         assert_eq!(service.orphan_chunk_bytes, 0);
+    }
+
+    #[test]
+    fn merge_sidecar_validation_deferral_retains_exact_request_idempotently() {
+        let (mut service, _) = fixture();
+        let round = wire::ConsensusRound {
+            context_id: service.context.id(),
+            height: service.context.height,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"merge carrier parent",
+            ))),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"merge carrier block")),
+            payload_hash: Hash::new(b"merge carrier payload"),
+        };
+        let reference = merge_sidecar_reference(b"merge sidecar");
+        let work_id = EffectWorkId::for_test(7);
+
+        service
+            .work_deferred_for_merge_sidecar(work_id, round, subject, &reference)
+            .expect("retain exact merge-sidecar deferral");
+        service
+            .work_deferred_for_merge_sidecar(work_id, round, subject, &reference)
+            .expect("exact retransmission is idempotent");
+        let mut conflicting = reference.clone();
+        conflicting.encoded_len += 1;
+        assert!(
+            service
+                .work_deferred_for_merge_sidecar(work_id, round, subject, &conflicting)
+                .is_err(),
+            "one work ID cannot claim conflicting reference metadata"
+        );
+
+        assert_eq!(service.merge_sidecar_deferrals.len(), 1);
+        let deferred = service
+            .take_merge_sidecar_deferral()
+            .expect("retained merge-sidecar deferral");
+        assert_eq!(deferred.round(), round);
+        assert_eq!(deferred.work_id(), work_id);
+        assert_eq!(deferred.subject(), subject);
+        assert_eq!(deferred.reference(), &reference);
+        assert!(service.take_merge_sidecar_deferral().is_none());
+    }
+
+    #[test]
+    fn merge_sidecar_validation_deferral_returns_error_at_capacity_without_eviction() {
+        let (mut service, _) = fixture();
+        let round = wire::ConsensusRound {
+            context_id: service.context.id(),
+            height: service.context.height,
+            view: 3,
+        };
+        let first_subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"first merge carrier")),
+            payload_hash: Hash::new(b"first merge payload"),
+        };
+        let second_subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"second merge carrier")),
+            payload_hash: Hash::new(b"second merge payload"),
+            ..first_subject
+        };
+        let first_reference = merge_sidecar_reference(b"first merge sidecar");
+        let second_reference = merge_sidecar_reference(b"second merge sidecar");
+
+        service
+            .work_deferred_for_merge_sidecar(
+                EffectWorkId::for_test(1),
+                round,
+                first_subject,
+                &first_reference,
+            )
+            .expect("fill bounded deferral queue");
+        assert_eq!(service.merge_sidecar_deferrals.len(), 1);
+        assert!(
+            service
+                .work_deferred_for_merge_sidecar(
+                    EffectWorkId::for_test(2),
+                    round,
+                    second_subject,
+                    &second_reference,
+                )
+                .is_err(),
+            "a different validation cannot displace the retained exact request"
+        );
+
+        assert_eq!(service.merge_sidecar_deferrals.len(), 1);
+        let retained = service
+            .take_merge_sidecar_deferral()
+            .expect("original deferral remains retained");
+        assert_eq!(retained.subject(), first_subject);
+        assert_eq!(retained.reference(), &first_reference);
     }
 
     #[test]

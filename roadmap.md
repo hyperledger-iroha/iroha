@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-09
+Last updated: 2026-07-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -404,6 +404,10 @@ proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
 
+The following direct-WSV paragraphs describe the compatibility/main-loop
+standalone-lane surface; the Sumeragi V2 global-body path does not wait for or
+directly reapply a lane certificate.
+
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
 lane/dataspace has a valid certified lane-block sidecar without a matching
@@ -629,8 +633,11 @@ in-memory pending queue, so restarted peers keep publishing applied
 committed-lane evidence for both canonical block receipts and direct execution
 receipts even when already receipted sessions are skipped by execution
 hydration.
-The remaining multilane execution work is the broader independent-lane
-multi-peer rollout corridor.
+The remaining multilane execution work is a four-or-more-peer V2 Nexus rollout
+corridor covering global view changes, exact-view merge-carrier failover,
+Kura-before-WSV and certificate-before-receipt restart boundaries, and lane
+retire/recreate/reset cycles. `lane_block_view` remains intentionally coupled to
+the locked global proposal view; independently paced lane views are future work.
 
 Kagemusha online-to-offline top-up now has a first-class
 `KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
@@ -3374,13 +3381,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   remain enforced for carried bytes. Local RBC plan installation now moves the
   prepared session into the live session map instead of cloning it before
   broadcast, so proposal broadcast plans stop retaining a second copy of the
-  chunk buffers. P2P runtime subscriber/control update channels are now bounded
-  and coalesce to the latest pending update, Sumeragi RBC committed-session
-  cleanup clears payload metric markers and rebroadcast cursors with the live
-  session owner, and Kagemusha Pallas open-envelope archives validate the
-  Norito frame and read the sequence-length prefix before vector decode so
-  count-only frames cannot allocate count-sized vector/offset state. If RSS
-  still climbs during the guarded repro, inspect remaining persistence caches
+  chunk buffers. P2P runtime subscriber registration is now bounded, while each
+  control-update category uses an independent Arc-backed,
+  single-retained-snapshot latest-value slot that overwrites stale pending
+  state. Consensus reconnect intent is generation-tracked across coalescing,
+  peer capabilities remain independent of topology application order, and the
+  actor combines fair control selection with bounded service-message priority
+  and explicit shutdown checks. Sumeragi RBC committed-session cleanup clears
+  payload metric markers and rebroadcast cursors with the live session owner,
+  and Kagemusha Pallas open-envelope archives validate the Norito frame and
+  read the sequence-length prefix before vector decode so count-only frames
+  cannot allocate count-sized vector/offset state. If RSS still climbs during
+  the guarded repro, inspect remaining persistence caches
   and validation/commit inflight owners with the same memory report before
   changing recovery pruning semantics.
 - Kagemusha is now the only active chain implementation for offline payments.

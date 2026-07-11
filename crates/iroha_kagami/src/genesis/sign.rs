@@ -1053,8 +1053,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .any(|transaction| !transaction.topology().is_empty());
             assert_eq!(has_topology, has_sample_topology, "{genesis_path}");
             let config = checked_in_config(&root.join(config_path));
-            let expected =
-                actual::sumeragi_v2_nexus_amx_context_hash(&config.nexus, &config.pipeline, &[]);
+            let expected = actual::sumeragi_v2_nexus_amx_context_hash(
+                &config.nexus,
+                &config.pipeline,
+                &[],
+                &[],
+            );
             assert_eq!(
                 manifest
                     .sumeragi_v2_context_parameters()

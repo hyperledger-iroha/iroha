@@ -4,6 +4,25 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Made `build:dist` concurrency-safe and content-idempotent: explicit builds
+  stage and validate the complete ESM tree under an inter-process lock, then
+  replace `dist` only when its content changed, with stale-lock recovery,
+  rollback to the last good tree after interrupted publication, and a shared
+  reader lock for packaging. Consuming `file:` installs no longer run a mutating
+  `prepare` hook; release gates now build first and verify the exact fresh tree
+  through source/dist parity, safe tarball inspection, clean installation, and
+  public/subpath imports.
+- Added fail-closed proof-carrying deployed-contract submission. Callers now
+  provide independently trusted ledger code and full-artifact identities;
+  Torii simulation, fetched bytes, derived/proved bytecode, gas, entrypoint,
+  payload, and proof/verifying-key backends are bound before signing. The new
+  browser-safe `computeIvmArtifactHashes` helper and `./ivm-artifact` subpath
+  compute both identities. Validation-fee policy verification now uses strict
+  uncofactored Ed25519 verification, rejects duplicate governance keyset ids,
+  bounds adversarial inputs before allocation, and fails closed on unaudited
+  overlay instruction families. IVM proof polling validates options before job
+  creation and best-effort cancels failed or aborted jobs.
+
 ## [0.0.3] - 2026-07-11
 
 - Hardened Nexus wallet-signing boundaries: signables are now copied and
