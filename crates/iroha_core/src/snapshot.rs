@@ -3414,7 +3414,13 @@ mod tests {
         assert_eq!(kura.durable_blocks_count(), 2);
 
         drop(kura);
-        let (reopened, _) = Kura::new(&kura_config, &lane_config).expect("reopen kura");
+        let (reopened, BlockCount(reopened_count)) =
+            Kura::new(&kura_config, &lane_config).expect("reopen kura");
+        assert_eq!(
+            reopened_count, 2,
+            "cold restart must retain the verified snapshot hash-only suffix"
+        );
+        assert_eq!(reopened.durable_blocks_count(), 2);
         assert!(
             reopened.get_block(nonzero!(1_usize)).is_some(),
             "verified local snapshot recovery must preserve retained block bodies"
@@ -3444,6 +3450,7 @@ mod tests {
         );
         store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
         let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
+        let expected_chain_id = state.chain_id.clone();
 
         try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
             .expect("snapshot write");
@@ -3474,6 +3481,29 @@ mod tests {
         assert!(
             kura.get_block(nonzero!(2_usize)).is_none(),
             "snapshot-recovered suffix should be hash-only"
+        );
+
+        drop(snapshot_state);
+        drop(state);
+        drop(kura);
+        let (reopened, BlockCount(reopened_count)) =
+            Kura::new(&kura_config, &lane_config).expect("cold reopen Kura");
+        assert_eq!(reopened_count, 2);
+        let restarted_snapshot_state = try_read_snapshot(
+            &snapshot_store_dir,
+            &reopened,
+            LiveQueryStore::start_test,
+            BlockCount(reopened_count),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &expected_chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("verified snapshot and hash-only suffix should survive a cold restart");
+        assert_eq!(
+            canonical_state_snapshot_bytes_for_tests(&restarted_snapshot_state),
+            expected_snapshot
         );
     }
 

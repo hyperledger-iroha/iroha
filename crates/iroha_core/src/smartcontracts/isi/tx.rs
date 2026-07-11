@@ -873,7 +873,10 @@ mod tests {
             native_amx_receipts: vec![None, None],
             result_hashes,
             results,
-            settlement_hash: HashOf::new(&settlement_commitment),
+            settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
+                &settlement_commitment,
+            )
+            .expect("test settlement should hash canonically"),
             settlement_commitment,
         };
         let lanes = vec![execution];

@@ -2224,6 +2224,17 @@ fn validate_merge_snapshot_against_nexus(
     Ok(())
 }
 
+fn canonical_merge_settlement_hash(
+    settlement: &LaneBlockCommitment,
+) -> Result<HashOf<LaneBlockCommitment>, MergeLedgerCommitError> {
+    iroha_data_model::nexus::compute_settlement_hash(settlement).map_err(|err| {
+        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+            "lane {} settlement commitment could not be canonically hashed: {err}",
+            settlement.lane_id
+        ))
+    })
+}
+
 fn validate_merge_entry_incarnation_context(
     lane_catalog_hash: Hash,
     active_lanes: &[MergeLaneBinding],
@@ -2319,11 +2330,12 @@ fn validate_merge_entry_incarnation_context(
             });
         }
         let settlement = &snapshot.settlement_commitment;
+        let settlement_hash = canonical_merge_settlement_hash(settlement)?;
         if settlement.lane_id != snapshot.lane_id
             || settlement.lane_incarnation != snapshot.lane_incarnation
             || settlement.dataspace_id != snapshot.dataspace_id
             || settlement.block_height != snapshot.lane_block_height
-            || HashOf::new(settlement) != snapshot.settlement_hash
+            || settlement_hash != snapshot.settlement_hash
         {
             return Err(MergeLedgerCommitError::SettlementCommitmentMismatch {
                 lane_id: snapshot.lane_id,
@@ -28337,11 +28349,11 @@ impl State {
                 native_amx_receipts: source.input.native_amx_receipts,
                 result_hashes,
                 results,
-                settlement_hash: HashOf::new(&placeholder),
+                settlement_hash: canonical_merge_settlement_hash(&placeholder)?,
                 settlement_commitment: placeholder,
             };
             let commitment = state_block.drain_merge_lane_settlement_commitment(&execution)?;
-            execution.settlement_hash = HashOf::new(&commitment);
+            execution.settlement_hash = canonical_merge_settlement_hash(&commitment)?;
             execution.settlement_commitment = commitment;
             executions.push(execution);
         }
@@ -30479,11 +30491,12 @@ impl State {
                 });
             }
             let settlement = &snapshot.settlement_commitment;
+            let settlement_hash = canonical_merge_settlement_hash(settlement)?;
             if settlement.lane_id != snapshot.lane_id
                 || settlement.lane_incarnation != snapshot.lane_incarnation
                 || settlement.dataspace_id != snapshot.dataspace_id
                 || settlement.block_height != snapshot.lane_block_height
-                || HashOf::new(settlement) != snapshot.settlement_hash
+                || settlement_hash != snapshot.settlement_hash
             {
                 return Err(MergeLedgerCommitError::SettlementCommitmentMismatch {
                     lane_id: snapshot.lane_id,
@@ -31016,11 +31029,12 @@ impl State {
                 ));
             }
             let settlement = &execution.settlement_commitment;
+            let settlement_hash = canonical_merge_settlement_hash(settlement)?;
             if settlement.lane_id != descriptor.lane_id
                 || settlement.dataspace_id != descriptor.dataspace_id
                 || settlement.lane_incarnation != descriptor.lane_incarnation
                 || settlement.block_height != descriptor.lane_block_height
-                || HashOf::new(settlement) != execution.settlement_hash
+                || settlement_hash != execution.settlement_hash
             {
                 return Err(MergeLedgerCommitError::SettlementCommitmentMismatch {
                     lane_id: descriptor.lane_id,
@@ -69564,7 +69578,7 @@ mod tests {
         ] {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
             {
                 let mut nexus = state.nexus.write();
                 nexus.enabled = true;
@@ -69579,6 +69593,7 @@ mod tests {
                 .unwrap_or_else(|err| panic!("corrupted {} catalog: {err}", case.name));
                 nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
             }
+            state.reseed_static_lane_incarnations();
 
             state
                 .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
@@ -69597,10 +69612,57 @@ mod tests {
     }
 
     #[test]
-    fn apply_lane_lifecycle_allows_retiring_manual_lane_inside_active_autoscale_range() {
+    fn apply_lane_lifecycle_repair_retire_rejects_incarnation_map_mismatch_atomically() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
+        let corrupt_lane = LaneId::new(1);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.lane_catalog = LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: corrupt_lane,
+                        alias: "repair-with-missing-incarnation".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("two-lane corrupt fixture catalog");
+            nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let catalog_before = state.nexus_snapshot().lane_catalog;
+        let incarnations_before = state.lane_incarnations.read().clone();
+        let activation_heights_before = state.lane_incarnation_activation_heights.read().clone();
+        let err = state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: Vec::new(),
+                retire: vec![corrupt_lane],
+            })
+            .expect_err("repair retire must not synthesize missing consensus identity");
+
+        assert!(matches!(
+            err,
+            LaneLifecycleError::LaneIncarnationState(reason)
+                if reason.contains("do not match incarnation ids")
+        ));
+        assert_eq!(state.nexus_snapshot().lane_catalog, catalog_before);
+        assert_eq!(*state.lane_incarnations.read(), incarnations_before);
+        assert_eq!(
+            *state.lane_incarnation_activation_heights.read(),
+            activation_heights_before
+        );
+    }
+
+    #[test]
+    fn apply_lane_lifecycle_allows_retiring_manual_lane_inside_active_autoscale_range() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
         {
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -69620,6 +69682,7 @@ mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
+        state.reseed_static_lane_incarnations();
 
         state
             .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
@@ -69721,9 +69784,7 @@ mod tests {
     fn apply_lane_lifecycle_internal_autoscale_rejects_base_profile_drift() {
         let mut base_lane = LaneConfig {
             lane_type: Some("regulated-public".to_owned()),
-            governance: Some("governance-v2".to_owned()),
             settlement: Some("settlement-v3".to_owned()),
-            storage: LaneStorageProfile::SplitReplica,
             proof_scheme: DaProofScheme::KzgBls12_381,
             ..LaneConfig::default()
         };
@@ -69753,7 +69814,7 @@ mod tests {
             }),
             ("storage", {
                 let mut drift = valid_lane.clone();
-                drift.storage = LaneStorageProfile::FullReplica;
+                drift.storage = LaneStorageProfile::SplitReplica;
                 drift
             }),
             ("proof scheme", {
@@ -70085,6 +70146,7 @@ mod tests {
             nexus.lane_catalog = lane_catalog;
             nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
         }
+        state.reseed_static_lane_incarnations();
         let mut future_pin_intent = DaPinIntent::new(
             LaneId::new(1),
             7,
@@ -72477,8 +72539,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let (_, validator_keypair) = bls_account_in("validators");
-        let signers = [&validator_keypair];
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -72501,7 +72561,13 @@ mod tests {
             .set_nexus(two_lane_nexus)
             .expect("configure initial two-lane nexus");
         let commit_keypairs = configure_commit_topology(&state, 1);
-        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
+        install_lane_manifest_registry_for_keypairs(
+            &state,
+            &[LaneId::SINGLE, LaneId::new(1)],
+            &commit_keypairs,
+        );
+        let lane1_h1 =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs);
         state
             .lane_relays
             .write()
@@ -72563,7 +72629,13 @@ mod tests {
         );
 
         let commit_keypairs = configure_commit_topology(&restarted, 1);
-        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
+        install_lane_manifest_registry_for_keypairs(
+            &restarted,
+            &[LaneId::SINGLE, LaneId::new(1)],
+            &commit_keypairs,
+        );
+        let lane1_h1 =
+            sample_lane_relay_envelope_for_state(&restarted, 1, LaneId::new(1), &commit_keypairs);
         restarted
             .lane_relays
             .write()
@@ -74692,12 +74764,24 @@ mod tests {
                 .exists(),
             "fresh tiered snapshot segment must not inherit old-incarnation marker files"
         );
-        assert!(
-            std::fs::read_dir(store_root.join("retired").join("blocks"))
-                .expect("retired Kura blocks root exists")
-                .next()
-                .is_some(),
-            "old Kura segment should be retained as retired historical storage"
+        let geometry_archive_root = store_root.join("retired").join("lane_geometry");
+        let transition_archives = std::fs::read_dir(&geometry_archive_root)
+            .expect("retired Kura geometry root exists")
+            .map(|entry| entry.expect("retired Kura transition entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            transition_archives.len(),
+            1,
+            "same-plan replacement should create one authenticated transition archive"
+        );
+        let archived_kura_marker = transition_archives[0]
+            .join("lane_0000000001")
+            .join("previous_blocks")
+            .join("old-incarnation-marker");
+        assert_eq!(
+            std::fs::read(&archived_kura_marker).expect("archived Kura marker exists"),
+            b"old kura data",
+            "old Kura data should be retained under the transition-scoped archive"
         );
         assert!(
             std::fs::read_dir(cold_root.join("retired").join("lanes"))
@@ -75276,8 +75360,6 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
-        let (_, validator_keypair) = bls_account_in("validators");
-        let signers = [&validator_keypair];
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig {
@@ -75291,9 +75373,16 @@ mod tests {
             .apply_lane_lifecycle(&plan)
             .expect("added second lane");
         let commit_keypairs = configure_commit_topology(&state, 1);
+        install_lane_manifest_registry_for_keypairs(
+            &state,
+            &[LaneId::SINGLE, LaneId::new(1)],
+            &commit_keypairs,
+        );
 
-        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
-        let lane0_h1 = sample_lane_relay_envelope(1, LaneId::new(0), &signers, vec![0b0000_0001]);
+        let lane1_h1 =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs);
+        let lane0_h1 =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &commit_keypairs);
         {
             let mut relays = state.lane_relays.write();
             let _ = relays.insert(lane0_h1.clone()).expect("lane0 relay stored");
@@ -75405,8 +75494,13 @@ mod tests {
         state
             .apply_lane_lifecycle(&plan)
             .expect("re-added second lane");
+        install_lane_manifest_registry_for_keypairs(
+            &state,
+            &[LaneId::SINGLE, LaneId::new(1)],
+            &commit_keypairs,
+        );
         let lane1_recreated_h1 =
-            sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs);
         state
             .lane_relays
             .write()
@@ -75660,8 +75754,6 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
         state.nexus.write().enabled = true;
-        let (_, validator_keypair) = bls_account_in("validators");
-        let signers = [&validator_keypair];
         let lane1_config = LaneConfig {
             id: LaneId::new(1),
             alias: "beta".to_string(),
@@ -75681,7 +75773,13 @@ mod tests {
             .apply_lane_lifecycle(&add_lane)
             .expect("added second lane");
         let commit_keypairs = configure_commit_topology(&state, 1);
-        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
+        install_lane_manifest_registry_for_keypairs(
+            &state,
+            &[LaneId::SINGLE, LaneId::new(1)],
+            &commit_keypairs,
+        );
+        let lane1_h1 =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(1), &commit_keypairs);
         state
             .lane_relays
             .write()
@@ -75747,7 +75845,13 @@ mod tests {
         );
 
         let commit_keypairs = configure_commit_topology(&restarted, 1);
-        let lane1_h1 = sample_lane_relay_envelope(1, LaneId::new(1), &signers, vec![0b0000_0001]);
+        install_lane_manifest_registry_for_keypairs(
+            &restarted,
+            &[LaneId::SINGLE, LaneId::new(1)],
+            &commit_keypairs,
+        );
+        let lane1_h1 =
+            sample_lane_relay_envelope_for_state(&restarted, 1, LaneId::new(1), &commit_keypairs);
         restarted
             .lane_relays
             .write()
@@ -76696,7 +76800,8 @@ mod tests {
         )
         .expect("two-lane catalog");
         let two_lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
-        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &two_lane_config);
+        let initial_lane_config = RuntimeLaneConfig::from_catalog(&LaneCatalog::default());
+        let kura = strict_kura_for_testing(temp_dir.path().join("kura"), &initial_lane_config);
         let mut state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
@@ -76827,8 +76932,9 @@ mod tests {
         )
         .expect("two-lane catalog");
         let two_lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
+        let initial_lane_config = RuntimeLaneConfig::from_catalog(&LaneCatalog::default());
         let kura =
-            strict_kura_for_testing(temp_dir.path().join("same-plan-kura"), &two_lane_config);
+            strict_kura_for_testing(temp_dir.path().join("same-plan-kura"), &initial_lane_config);
         let mut state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
@@ -78341,6 +78447,27 @@ mod tests {
         state.install_lane_manifests(&registry);
     }
 
+    fn install_lane_manifest_registry_for_keypairs(
+        state: &State,
+        lane_ids: &[LaneId],
+        keypairs: &[KeyPair],
+    ) {
+        let validators = keypairs
+            .iter()
+            .map(|keypair| AccountId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let nexus = state.nexus_snapshot();
+        let lanes = lane_ids
+            .iter()
+            .map(|lane_id| {
+                let dataspace_id = nexus_catalog_geometry_lane_dataspace(*lane_id, &nexus)
+                    .expect("manifest fixture lane must exist in the Nexus catalog");
+                (*lane_id, dataspace_id, validators.clone())
+            })
+            .collect::<Vec<_>>();
+        install_lane_manifest_registry(state, &lanes);
+    }
+
     fn install_lane_manifest_registry_with_bindings(
         state: &State,
         lane_id: LaneId,
@@ -79000,6 +79127,10 @@ mod tests {
         let dataspace_id = nexus_catalog_geometry_lane_dataspace(lane_id, &nexus)
             .expect("test lane must exist in Nexus catalog");
         let committee = lane_relay_committee_for_state_test(state, height, lane_id, dataspace_id);
+        assert!(
+            !committee.is_empty(),
+            "state-aware relay fixture requires an authoritative validator committee"
+        );
         let signer_indices: Vec<_> = (0..committee.len()).collect();
         sample_lane_relay_envelope_for_state_signers(
             state,
@@ -79061,7 +79192,9 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
-            lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
+            lane_incarnation: state
+                .lane_incarnation_at_height(lane_id, height)
+                .expect("test relay must target the active lane incarnation"),
             dataspace_id,
             tx_count: 1,
             total_local_micro: 1,
@@ -96608,7 +96741,8 @@ mod tests {
                 lane_block_height: epoch.saturating_add(u64::try_from(idx).expect("height fits")),
                 tip_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([tip])),
                 merge_hint_root: iroha_crypto::Hash::new([hint]),
-                settlement_hash: HashOf::new(&settlement_commitment),
+                settlement_hash: canonical_merge_settlement_hash(&settlement_commitment)
+                    .expect("test settlement commitment should hash canonically"),
                 settlement_commitment,
                 relay_envelope: None,
             });
@@ -97887,6 +98021,34 @@ mod tests {
             } if lane_id == LaneId::new(0) && dataspace_id == DataSpaceId::UNIVERSAL
         ));
         assert_eq!(state.merge_ledger().len(), 1);
+    }
+
+    #[test]
+    fn commit_merge_entry_rejects_headerless_settlement_hash() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        let (mut candidate, commit_keypairs) =
+            record_commit_ready_merge_candidate_with_lanes(&mut state, 1, 1);
+        let settlement = candidate.lane_snapshots[0].settlement_commitment.clone();
+        let canonical_hash = candidate.lane_snapshots[0].settlement_hash;
+        let headerless_hash = HashOf::new(&settlement);
+        assert_ne!(
+            headerless_hash, canonical_hash,
+            "test requires framed and headerless Norito hashes to remain distinct"
+        );
+        candidate.lane_snapshots[0].settlement_hash = headerless_hash;
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+
+        let err = state
+            .commit_merge_entry(merge_entry_from_candidate(candidate, qc))
+            .expect_err("merge admission must reject the non-protocol headerless hash");
+        assert!(matches!(
+            err,
+            MergeLedgerCommitError::SettlementCommitmentMismatch { lane_id }
+                if lane_id == LaneId::SINGLE
+        ));
+        assert!(state.merge_ledger().is_empty());
     }
 
     #[test]

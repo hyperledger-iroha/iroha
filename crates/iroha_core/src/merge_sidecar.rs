@@ -566,7 +566,7 @@ struct OutboundTransfer {
     request: CertifiedMergeSidecarRequestV1,
     bytes: Vec<u8>,
     next_chunk: usize,
-    created_at: Instant,
+    last_progress_at: Instant,
 }
 
 /// Network action emitted by the bounded transfer manager.
@@ -1144,7 +1144,7 @@ impl MergeSidecarTransport {
                 request,
                 bytes,
                 next_chunk: 0,
-                created_at: now,
+                last_progress_at: now,
             },
         );
         Ok(())
@@ -1157,7 +1157,7 @@ impl MergeSidecarTransport {
         now: Instant,
     ) -> Vec<MergeSidecarPost> {
         self.outbound.retain(|_, transfer| {
-            now.saturating_duration_since(transfer.created_at) <= OUTBOUND_SESSION_TTL
+            now.saturating_duration_since(transfer.last_progress_at) <= OUTBOUND_SESSION_TTL
         });
         let mut posts = Vec::new();
         while posts.len() < limit {
@@ -1198,6 +1198,7 @@ impl MergeSidecarTransport {
                         message: CertifiedMergeSidecarMessage::Chunk(chunk),
                     });
                     transfer.next_chunk += 1;
+                    transfer.last_progress_at = now;
                     completed = transfer.next_chunk == count;
                 }
             }
@@ -2826,6 +2827,38 @@ mod tests {
         let (mut transport, _, _, _, _) = start_session(1, 2);
         transport.retain_pending_blocks(&BTreeSet::from([original]), 2);
         assert_eq!(transport.inbound_len(), 0);
+    }
+
+    #[test]
+    fn progressive_max_size_response_does_not_expire_while_chunks_advance() {
+        let len = MAX_MERGE_LEDGER_ENTRY_BYTES;
+        let (_, requester, _, request, started_at) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        server
+            .admit_server_request(&requester, &request, &local_peer, started_at)
+            .expect("admit exact authenticated request");
+        server
+            .enqueue_response(request, vec![0x5A; len], started_at)
+            .expect("queue protocol-sized response");
+
+        let expected_chunks = len.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        let mut seen = 0usize;
+        for tick in 0_u64..64 {
+            let now = started_at + Duration::from_secs(tick * 2);
+            for post in server.drain_outbound_chunks(8, now) {
+                let CertifiedMergeSidecarMessage::Chunk(chunk) = post.message else {
+                    panic!("outbound response emitted a request")
+                };
+                assert_eq!(usize::try_from(chunk.chunk_index).unwrap(), seen);
+                seen += 1;
+            }
+            if seen == expected_chunks {
+                assert!(now.duration_since(started_at) > OUTBOUND_SESSION_TTL);
+                break;
+            }
+        }
+        assert_eq!(seen, expected_chunks);
     }
 
     #[test]

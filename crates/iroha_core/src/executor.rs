@@ -734,6 +734,17 @@ fn redeem_funded_nexus_fee_capacity(
         if let Some(redeem) =
             any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
         {
+            // Do not admit a transaction against credit that execution cannot
+            // produce.  The public V2 wire type remains decodable while its
+            // recursive proof backend is unavailable, but Core rejects the
+            // instruction before mutating balances.  Returning `None` also
+            // denies mixed batches rather than letting another redeem mask the
+            // unsupported instruction.
+            // TODO: Remove this gate only when the V2 proof backend and complete
+            // Core execution path ship atomically.
+            if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+                return Ok(None);
+            }
             if &redeem.request.recipient != payer {
                 return Ok(None);
             }
@@ -8310,6 +8321,140 @@ mod tests {
         }
     }
 
+    fn kagemusha_fee_test_recursive_redeem_v2(
+        asset: AssetDefinitionId,
+        recipient: AccountId,
+        signer: &KeyPair,
+    ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
+        use iroha_data_model::{
+            confidential::ConfidentialStatus,
+            offline::{
+                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+                KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendBundleV2,
+                KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendProofV2,
+                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
+                KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRequestAuthorizationV2,
+                KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+                KagemushaUnshieldPublicInputsBindingV2,
+            },
+            proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
+            zk::BackendTag,
+        };
+
+        let chain_id = ChainId::from("fee-policy-chain");
+        let amount = KagemushaScaledAmountV2 {
+            atomic_units: 1,
+            scale: 0,
+        };
+        let note = KagemushaSpendableNoteDescriptorV2 {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            note_commitment: [0x41; 32],
+            spend_nullifier: [0x42; 32],
+            amount,
+        };
+        let branch_path = KagemushaRecursiveSpendBranchPathV2 {
+            lineage_root: [0x43; 32],
+            depth: 0,
+            path_bits: [0; 8],
+        };
+        let verifier_key_id = VerifyingKeyId::new(
+            "halo2/ipa",
+            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+        );
+        let bundle = KagemushaRecursiveSpendBundleV2 {
+            statement: KagemushaRecursiveSpendPublicStatementV2 {
+                chain_id: chain_id.clone(),
+                asset: asset.clone(),
+                asset_scale: 0,
+                initial_root: [0x44; 32],
+                final_root: [0x45; 32],
+                topup_anchor_nullifiers: vec![[0x46; 32]],
+                proof_step_count: 1,
+                peer_hop_count: 0,
+                current_note: note.clone(),
+                topup_operation_id: [0x47; 32],
+                branch_path,
+                transition: None,
+                artifact_generation: "fee-policy-v2".to_owned(),
+                lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
+                verifier_key_id: verifier_key_id.clone(),
+            },
+            recursive_proof: KagemushaRecursiveSpendProofV2 {
+                verifier_key_id: verifier_key_id.clone(),
+                public_statement_digest: [0x48; 32],
+                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x49; 32]),
+            },
+        };
+        let operation_id = [0x4A; 32];
+        let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
+            input_commitment_0: note.note_commitment,
+            input_commitment_1: [0; 32],
+            nullifier_0: note.spend_nullifier,
+            nullifier_1: [0; 32],
+            change_output_commitment: [0; 32],
+            root: bundle.statement.final_root,
+            public_amount: iroha_data_model::offline::kagemusha_confidential_amount_encoding_v2(
+                amount.atomic_units,
+            ),
+            asset_tag: [0x4B; 32],
+            chain_tag: [0x4C; 32],
+        };
+        let redemption = KagemushaRecursiveSpendRedemptionIntentV2 {
+            chain_id,
+            asset,
+            input_note: note,
+            parent_branch_path: branch_path,
+            parent_bundle_digest: [0x4D; 32],
+            input_root: bundle.statement.final_root,
+            recipient: recipient.clone(),
+            public_amount: amount,
+            change_output: None,
+            unshield_public_inputs,
+            unshield_public_inputs_digest: [0x4E; 32],
+            operation_id,
+        };
+        let mut lineage_verifier_record = VerifyingKeyRecord::new(
+            1,
+            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+            BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0x4F; 32],
+            [0x50; 32],
+        );
+        lineage_verifier_record.status = ConfidentialStatus::Active;
+        let authorization = KagemushaRequestAuthorizationV2 {
+            authority: recipient.clone(),
+            device_id: "fee-policy-v2-device".to_owned(),
+            operation_id,
+            issued_at_ms: 1,
+            expires_at_ms: 2,
+            nonce: [0x51; 32],
+            payload_digest: [0x52; 32],
+            app_attest_evidence_sha256: None,
+            app_attest_evidence: None,
+            signature: iroha_crypto::Signature::try_new(
+                signer.private_key(),
+                b"fee-policy-v2-unsupported",
+            )
+            .expect("fixture signature"),
+        };
+        let request = KagemushaRecursiveSpendRedeemRequestV2 {
+            bundle,
+            recipient,
+            amount,
+            redeem_proof: kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-v2"),
+            redemption,
+            lineage_witness: None,
+            lineage_verifier_record,
+            offline_change: None,
+            block_height: 1,
+            operation_id,
+            authorization,
+        };
+        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2::new(request)
+    }
+
     fn signed_fee_policy_transaction(
         authority_id: AccountId,
         authority_kp: &KeyPair,
@@ -9782,6 +9927,34 @@ mod tests {
         let view = state.view();
         check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
             .expect("same-asset offline-to-online redeem can fund its Nexus fee");
+    }
+
+    #[test]
+    fn unavailable_kagemusha_v2_redeem_cannot_self_fund_nexus_fee() {
+        assert!(
+            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+            "this regression test must be replaced by end-to-end V2 execution coverage when the backend ships"
+        );
+        let (mut state, authority_id, authority_kp, asset_def_id) =
+            nexus_fee_lane_relay_burn_admission_fixture();
+        state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
+        let redeem = kagemusha_fee_test_recursive_redeem_v2(
+            asset_def_id,
+            authority_id.clone(),
+            &authority_kp,
+        );
+        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
+
+        let view = state.view();
+        let capacity =
+            redeem_funded_nexus_fee_capacity(&view.world, &view.nexus.fees, &tx, 0, false)
+                .expect("unsupported V2 classification must not fail");
+        assert_eq!(
+            capacity, None,
+            "an unavailable V2 proof backend cannot produce fee-paying credit"
+        );
+        drop(view);
+        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
     #[test]

@@ -21,6 +21,7 @@ ARG BINARIES="irohad iroha kagami"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
 ARG VALIDATOR_LOCK_SHA256=""
+ARG VALIDATOR_SOURCE_TREE_SHA256=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
@@ -29,10 +30,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     locked_arg=""; \
     if [ "${CONFIG_PROFILE}" = "taira" ]; then \
         test -n "${VALIDATOR_LOCK_SHA256}" || { echo "VALIDATOR_LOCK_SHA256 is required for Taira builds" >&2; exit 1; }; \
+        test "${#VALIDATOR_SOURCE_TREE_SHA256}" -eq 64 || { echo "VALIDATOR_SOURCE_TREE_SHA256 must be exactly 64 lowercase hex characters" >&2; exit 1; }; \
+        case "${VALIDATOR_SOURCE_TREE_SHA256}" in *[!0-9a-f]*) echo "VALIDATOR_SOURCE_TREE_SHA256 must be exactly 64 lowercase hex characters" >&2; exit 1;; esac; \
         test -f /app/Cargo.lock || { echo "reviewed Cargo.lock is required for Taira builds" >&2; exit 1; }; \
         actual_lock_sha="$(sha256sum /app/Cargo.lock | awk '{print $1}')"; \
         test "${actual_lock_sha}" = "${VALIDATOR_LOCK_SHA256}" || { echo "Taira Cargo.lock checksum mismatch" >&2; exit 1; }; \
         cp /app/Cargo.lock /outprovenance/Cargo.lock; \
+        printf '%s\n' "${VALIDATOR_SOURCE_TREE_SHA256}" > /outprovenance/source-tree.sha256; \
+        test "${USE_PREBUILT}" != "1" || { echo "Taira images cannot use unproven prebuilt binaries" >&2; exit 1; }; \
         locked_arg="--locked"; \
     fi; \
     if [ "${USE_PREBUILT}" = "1" ]; then \
@@ -80,6 +85,7 @@ FROM debian:bookworm-slim
 ARG PROFILE="deploy"
 ARG CONFIG_PROFILE="single"
 ARG VALIDATOR_LOCK_SHA256=""
+ARG VALIDATOR_SOURCE_TREE_SHA256=""
 ARG APP_DIR=/opt/iroha
 ARG  STORAGE=/storage
 ARG  TARGET_DIR=/app/target/${PROFILE}
@@ -93,6 +99,7 @@ ENV  USER=iroha
 ENV  UID=1001
 ENV  GID=1001
 LABEL org.soramitsu.iroha.validator-lock-sha256=$VALIDATOR_LOCK_SHA256
+LABEL org.soramitsu.iroha.validator-source-tree-sha256=$VALIDATOR_SOURCE_TREE_SHA256
 
 RUN <<EOT
   set -ex

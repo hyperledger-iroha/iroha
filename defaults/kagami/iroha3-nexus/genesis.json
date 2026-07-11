@@ -2,9 +2,9 @@
   "bls_domain": "bls-iroha2:npos-sumeragi:v2",
   "chain": "iroha3-nexus",
   "chain_discriminant": 753,
-  "consensus_fingerprint": "0xe1c473dca0104b3628316e1456773d019dcc47846cda9a3f1ac8d5cde0be9f50",
+  "consensus_fingerprint": "0x1f40527373768fe76d73a2ea261d37bb01bce62696a33de0efd2ea2aef28d0a3",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"60C0397F7C1480941842C6FF340378A15E14C136097751F379493592553FE0C5"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"FB248A9960141ADB0AA8F5EC811A7759F00EB504F3844990A0F90811E3752753"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -214,7 +214,7 @@
             "AssetDefinition": {
               "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "34mSYmtx2t7jKZDQcTrSU7yorGfw66QkKeezR6Zw7fBGfqXcX5SwYirXkjzFr8jaucEUD8m8S"
+              "source": "sorauﾛ1P6ﾒbWｦﾅﾌuﾕｸﾏeｵgｵifdﾖヱuQRXﾔvx9ﾗｸﾌﾜﾉｿHdﾔbGPYHMX"
             }
           }
         },

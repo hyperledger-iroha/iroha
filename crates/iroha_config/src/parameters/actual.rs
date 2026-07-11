@@ -12488,7 +12488,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "76fc637fec320c7ead22a65e693658fbb1187a3b0152900d64644c841e77ca7f",
+            "d446d219eb801ae752cd0168e0f47b3acf53ba4d5c965fd2983f4f93f4da6ea7",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),

@@ -588,7 +588,10 @@ mod tests {
                 lane_block_height: 9,
                 tip_hash: HashOf::from_untyped_unchecked(Hash::new(b"lane-0")),
                 merge_hint_root: Hash::new(b"hint-0"),
-                settlement_hash: HashOf::new(&settlement_commitment),
+                settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
+                    &settlement_commitment,
+                )
+                .expect("test settlement should hash canonically"),
                 settlement_commitment,
                 relay_envelope: None,
             }],

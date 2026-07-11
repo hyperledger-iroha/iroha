@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-10
+Last updated: 2026-07-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -404,6 +404,10 @@ proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
 
+The following direct-WSV paragraphs describe the compatibility/main-loop
+standalone-lane surface; the Sumeragi V2 global-body path does not wait for or
+directly reapply a lane certificate.
+
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
 lane/dataspace has a valid certified lane-block sidecar without a matching
@@ -629,8 +633,11 @@ in-memory pending queue, so restarted peers keep publishing applied
 committed-lane evidence for both canonical block receipts and direct execution
 receipts even when already receipted sessions are skipped by execution
 hydration.
-The remaining multilane execution work is the broader independent-lane
-multi-peer rollout corridor.
+The remaining multilane execution work is a four-or-more-peer V2 Nexus rollout
+corridor covering global view changes, exact-view merge-carrier failover,
+Kura-before-WSV and certificate-before-receipt restart boundaries, and lane
+retire/recreate/reset cycles. `lane_block_view` remains intentionally coupled to
+the locked global proposal view; independently paced lane views are future work.
 
 Kagemusha online-to-offline top-up now has a first-class
 `KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side

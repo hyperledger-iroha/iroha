@@ -140,18 +140,17 @@ OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd -P)"
 
 git_head="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 git_status="$(git -C "$REPO_ROOT" status --short)"
-if [[ -n "$git_status" && $ALLOW_DIRTY -ne 1 ]]; then
-  echo "refusing to build Taira rollout bundle from a dirty worktree" >&2
-  printf '%s\n' "$git_status" >&2
-  echo "rerun with --allow-dirty only for local debugging" >&2
+if ! git -C "$REPO_ROOT" verify-commit "$git_head" >/dev/null 2>&1; then
+  echo "refusing to build Taira rollout bundle from an unsigned or unverifiable Git commit: $git_head" >&2
   exit 1
 fi
 
-python3 - "$validator_build_provenance" "$validator_lock_actual_sha" "$git_head" <<'PY'
+source_validation="$(python3 - "$validator_build_provenance" "$validator_lock_actual_sha" "$git_head" "$git_status" "$ALLOW_DIRTY" <<'PY'
 import json
+import re
 import sys
 
-path, expected_lock_sha, expected_head = sys.argv[1:]
+path, expected_lock_sha, expected_head, status, allow_dirty = sys.argv[1:]
 with open(path, encoding="utf-8") as stream:
     payload = json.load(stream)
 if payload.get("schema_version") != 1:
@@ -160,15 +159,54 @@ if payload.get("validator_lock_sha256") != expected_lock_sha:
     raise SystemExit("validator build provenance lock checksum does not match Cargo.lock")
 if payload.get("iroha_git_head") != expected_head:
     raise SystemExit("validator build provenance Git HEAD does not match the source checkout")
-if payload.get("iroha_worktree_clean") is not True:
-    raise SystemExit("validator build provenance does not attest a clean source checkout")
+worktree_clean = not bool(status)
+if payload.get("iroha_worktree_clean") is not worktree_clean:
+    raise SystemExit("validator build provenance cleanliness does not match the source checkout")
+if worktree_clean:
+    print("clean - - -")
+elif payload.get("iroha_source_attested") is True:
+    source_tree = payload.get("iroha_source_tree_sha256", "")
+    tracked_patch = payload.get("iroha_tracked_patch_sha256", "")
+    bundle_provenance = payload.get("iroha_source_bundle_provenance_sha256", "")
+    if not all(
+        re.fullmatch(r"[0-9a-f]{64}", value)
+        for value in (source_tree, tracked_patch, bundle_provenance)
+    ):
+        raise SystemExit("attested validator source provenance has invalid digests")
+    print("attested", source_tree, tracked_patch, bundle_provenance)
+elif allow_dirty == "1":
+    print("debug-dirty - - -")
+else:
+    raise SystemExit("dirty validator source is neither clean nor the exact attested release patch")
 PY
+)"
+reference_validator_source_mode=""
+reference_source_tree_sha=""
+reference_tracked_patch_sha=""
+reference_source_bundle_provenance_sha=""
+read -r reference_validator_source_mode reference_source_tree_sha reference_tracked_patch_sha reference_source_bundle_provenance_sha <<<"$source_validation"
+
+validator_source_bundle="${IROHA_VALIDATOR_SOURCE_BUNDLE_DIR:-}"
+validator_source_verifier="${IROHA_VALIDATOR_SOURCE_VERIFIER:-}"
+if [[ "$reference_validator_source_mode" == "attested" ]]; then
+  if [[ -z "$validator_source_bundle" || ! -d "$validator_source_bundle" || -L "$validator_source_bundle" ]]; then
+    echo "attested validator release requires IROHA_VALIDATOR_SOURCE_BUNDLE_DIR" >&2
+    exit 1
+  fi
+  if [[ -z "$validator_source_verifier" || ! -f "$validator_source_verifier" || -L "$validator_source_verifier" ]]; then
+    echo "attested validator release requires IROHA_VALIDATOR_SOURCE_VERIFIER" >&2
+    exit 1
+  fi
+  python3 "$validator_source_verifier" verify --repo "$REPO_ROOT" --bundle-dir "$validator_source_bundle"
+fi
 
 if [[ $SKIP_LOCAL_REGRESSIONS -ne 1 ]]; then
   (
     cd "$REPO_ROOT"
     cargo test --locked -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
     cargo test --locked -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib
+    cargo test --locked -p iroha_core snapshot_hash_reconcile_extends_verified_local_snapshot_ahead_of_kura --lib
+    cargo test --locked -p iroha_core snapshot_read_extends_verified_local_snapshot_ahead_of_kura --lib
   )
 fi
 
@@ -202,6 +240,10 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
   )
 fi
 
+if [[ "$reference_validator_source_mode" == "attested" ]]; then
+  python3 "$validator_source_verifier" verify --repo "$REPO_ROOT" --bundle-dir "$validator_source_bundle"
+fi
+
 for binary in irohad iroha sorafs_manifest_stub sorafs_tx_stdin_builder; do
   if [[ ! -x "${binary_dir}/${binary}" ]]; then
     echo "missing built binary: ${binary_dir}/${binary}" >&2
@@ -217,6 +259,16 @@ cp "${REPO_ROOT}/scripts/render_taira_edge_nginx_conf.py" "${bundle_dir}/scripts
 cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
 cp "$validator_lock_path" "${bundle_dir}/provenance/Cargo.lock"
 cp "$validator_build_provenance" "${bundle_dir}/provenance/dpn-validator-build.provenance.json"
+if [[ "$reference_validator_source_mode" == "attested" ]]; then
+  mkdir -p "${bundle_dir}/provenance/source-bundle"
+  for component in provenance.json tracked.patch untracked.tar untracked.manifest.json source.manifest.json; do
+    if [[ ! -f "${validator_source_bundle}/${component}" || -L "${validator_source_bundle}/${component}" ]]; then
+      echo "attested source bundle component is missing or not regular: $component" >&2
+      exit 1
+    fi
+    cp "${validator_source_bundle}/${component}" "${bundle_dir}/provenance/source-bundle/${component}"
+  done
+fi
 chmod 755 "${bundle_dir}/configs/soranexus/taira/check_inrou_host_prereqs.sh"
 
 manifest_path="${bundle_dir}/rollout.manifest.json"
@@ -237,6 +289,10 @@ BUNDLE_NAME="$bundle_name" \
 REPO_ROOT="$REPO_ROOT" \
 SKIP_LOCAL_REGRESSIONS="$SKIP_LOCAL_REGRESSIONS" \
 VALIDATOR_LOCK_SHA256="$validator_lock_actual_sha" \
+VALIDATOR_SOURCE_MODE="$reference_validator_source_mode" \
+VALIDATOR_SOURCE_TREE_SHA256="$reference_source_tree_sha" \
+VALIDATOR_TRACKED_PATCH_SHA256="$reference_tracked_patch_sha" \
+VALIDATOR_SOURCE_BUNDLE_PROVENANCE_SHA256="$reference_source_bundle_provenance_sha" \
 python3 - <<'PY' >"$manifest_path"
 import json
 import os
@@ -251,6 +307,16 @@ payload = {
     "cargo_profile": os.environ["PROFILE_NAME"],
     "cargo_locked": True,
     "validator_lock_sha256": os.environ["VALIDATOR_LOCK_SHA256"],
+    "validator_source_mode": os.environ["VALIDATOR_SOURCE_MODE"],
+    "validator_source_tree_sha256": None
+    if os.environ["VALIDATOR_SOURCE_TREE_SHA256"] == "-"
+    else os.environ["VALIDATOR_SOURCE_TREE_SHA256"],
+    "validator_tracked_patch_sha256": None
+    if os.environ["VALIDATOR_TRACKED_PATCH_SHA256"] == "-"
+    else os.environ["VALIDATOR_TRACKED_PATCH_SHA256"],
+    "validator_source_bundle_provenance_sha256": None
+    if os.environ["VALIDATOR_SOURCE_BUNDLE_PROVENANCE_SHA256"] == "-"
+    else os.environ["VALIDATOR_SOURCE_BUNDLE_PROVENANCE_SHA256"],
     "irohad_features": [
         "embedded-soracloud-runtime",
     ],
@@ -272,6 +338,16 @@ payload = {
             "command": "cargo test --locked -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib",
             "skipped": os.environ["SKIP_LOCAL_REGRESSIONS"] == "1",
         },
+        {
+            "name": "snapshot_hash_reconcile_extends_verified_local_snapshot_ahead_of_kura",
+            "command": "cargo test --locked -p iroha_core snapshot_hash_reconcile_extends_verified_local_snapshot_ahead_of_kura --lib",
+            "skipped": os.environ["SKIP_LOCAL_REGRESSIONS"] == "1",
+        },
+        {
+            "name": "snapshot_read_extends_verified_local_snapshot_ahead_of_kura",
+            "command": "cargo test --locked -p iroha_core snapshot_read_extends_verified_local_snapshot_ahead_of_kura --lib",
+            "skipped": os.environ["SKIP_LOCAL_REGRESSIONS"] == "1",
+        },
     ],
     "included_paths": [
         "configs/soranexus/taira/",
@@ -280,6 +356,11 @@ payload = {
         "scripts/taira_faucet_canary.py",
         "provenance/Cargo.lock",
         "provenance/dpn-validator-build.provenance.json",
+        *(
+            ["provenance/source-bundle/"]
+            if os.environ["VALIDATOR_SOURCE_MODE"] == "attested"
+            else []
+        ),
     ],
     "required_followup": [
         "install the native Inrou prerequisites reported by configs/soranexus/taira/check_inrou_host_prereqs.sh or run the CONFIG_PROFILE=taira container image",
@@ -312,8 +393,10 @@ PY
 
 mkdir -p "$OUTPUT_DIR"
 tar -C "$OUTPUT_DIR" -czf "$archive_path" "$bundle_name"
+printf '%s  %s\n' "$(sha256_file "$archive_path")" "$(basename "$archive_path")" >"${archive_path}.sha256"
 
 echo "Taira rollout bundle ready:"
 echo "  manifest: $manifest_path"
 echo "  checksums: $checksums_path"
 echo "  archive: $archive_path"
+echo "  archive checksum: ${archive_path}.sha256"

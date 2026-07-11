@@ -11,12 +11,13 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroUsize,
     sync::Arc,
+    time::Instant,
 };
 
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     block::{
-        BlockHeader, SignedBlock,
+        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
             CertPhase, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
             LaneBlockQcV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
@@ -25,7 +26,7 @@ use iroha_data_model::{
         consensus_v2 as wire,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    merge::{MergeCommitteeSignature, MergeQuorumCertificate, MergeSignerProof},
+    merge::{MergeCommitteeSignature, MergeLedgerEntry, MergeQuorumCertificate, MergeSignerProof},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
 };
@@ -45,6 +46,11 @@ use crate::{
     lane_consensus::{
         CommittedLaneBlockSession, LaneBlockSessionCache, LaneBlockSessionInsertOutcome,
         LaneBlockVoteV1,
+    },
+    merge_sidecar::{
+        CertifiedMergeSidecarMessage, ChunkIngestOutcome, MergeSidecarError, MergeSidecarPost,
+        MergeSidecarTransport, certified_merge_reference_digest, certified_merge_sidecar_holders,
+        decode_certified_merge_sidecar,
     },
     native_amx::{
         NativeAmxCommitRequestV2, NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError,
@@ -105,6 +111,47 @@ pub(crate) enum V2LaneWorkEffect {
     },
     /// Broadcast a merge signature share to the frozen voting roster.
     BroadcastMerge(MergeCommitteeSignature),
+    /// Send one authenticated certified merge-sidecar request or response.
+    PostCertifiedMergeSidecar {
+        /// Exact destination selected by the sidecar transport.
+        peer: PeerId,
+        /// Bounded request or fixed-boundary response chunk.
+        message: CertifiedMergeSidecarMessage,
+    },
+}
+
+/// Result of registering an otherwise-valid body whose certified merge
+/// sidecar is not yet present locally.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MergeSidecarDeferralDisposition {
+    /// A bounded authenticated fetch is active (or already active).
+    Fetching,
+    /// The exact entry was already durable and validation can retry now.
+    Available,
+    /// A transient bounded transport cap prevented registration; the caller
+    /// must retain and retry the exact deferral.
+    RetryLater,
+    /// The compact reference cannot describe this body's exact carrier.
+    Rejected(String),
+}
+
+/// Terminal validation result for an exact fetched merge sidecar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RejectedMergeSidecar {
+    entry_hash: HashOf<MergeLedgerEntry>,
+    reason: String,
+}
+
+impl RejectedMergeSidecar {
+    /// Hash shared by every deferred body waiting for this exact entry.
+    pub(crate) const fn entry_hash(&self) -> HashOf<MergeLedgerEntry> {
+        self.entry_hash
+    }
+
+    /// Deterministic full-entry validation diagnostic.
+    pub(crate) fn reason(&self) -> &str {
+        &self.reason
+    }
 }
 
 /// Outcome of one bounded lane/AMX ingress operation.
@@ -194,6 +241,9 @@ pub(crate) struct V2LaneWorkAdapter {
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, u64, Hash)>,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
+    merge_sidecars: MergeSidecarTransport,
+    completed_merge_sidecars: BTreeSet<HashOf<MergeLedgerEntry>>,
+    rejected_merge_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
     effects: VecDeque<V2LaneWorkEffect>,
     effect_keys: BTreeSet<Hash>,
     lane_fanout_cursor: usize,
@@ -280,6 +330,9 @@ impl V2LaneWorkAdapter {
             admitted_relays: BTreeSet::new(),
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
+            merge_sidecars: MergeSidecarTransport::new(),
+            completed_merge_sidecars: BTreeSet::new(),
+            rejected_merge_sidecars: BTreeMap::new(),
             effects: VecDeque::new(),
             effect_keys: BTreeSet::new(),
             lane_fanout_cursor: 0,
@@ -637,6 +690,99 @@ impl V2LaneWorkAdapter {
         outcome
     }
 
+    /// Register a deterministic validation blocked only on one exact certified
+    /// merge sidecar. Locked bodies may be re-proposed in a later consensus
+    /// round, so the immutable carrier view is taken from the merge QC and may
+    /// be earlier than `round.view`; it is never rebound to the later view.
+    pub(crate) fn defer_missing_merge_sidecar(
+        &mut self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        reference: CertifiedMergeLedgerReference,
+    ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
+        let Some(parent_hash) = subject.parent_block_hash else {
+            return Ok(MergeSidecarDeferralDisposition::Rejected(
+                "height-one body cannot carry a certified merge entry".to_owned(),
+            ));
+        };
+        if round.context_id != self.context.id()
+            || round.height != self.context.height
+            || reference.merge_qc.carrier_height != round.height
+            || reference.merge_qc.carrier_parent_hash != parent_hash
+            || reference.merge_qc.view > round.view
+        {
+            return Ok(MergeSidecarDeferralDisposition::Rejected(
+                "certified merge reference is not bound to the body's exact carrier height, parent, and immutable origin view"
+                    .to_owned(),
+            ));
+        }
+        if let Err(error) = certified_merge_sidecar_holders(&reference) {
+            return Ok(MergeSidecarDeferralDisposition::Rejected(error.to_string()));
+        }
+
+        match self.kura.merge_entry_by_hash(reference.entry_hash) {
+            Ok(Some(entry)) => {
+                if !reference.matches_entry(&entry) {
+                    return Ok(MergeSidecarDeferralDisposition::Rejected(
+                        "durable merge sidecar differs from the block's compact reference"
+                            .to_owned(),
+                    ));
+                }
+                if let Err(error) = self
+                    .state
+                    .validate_certified_merge_entry_for_global_order(&entry)
+                {
+                    return Ok(MergeSidecarDeferralDisposition::Rejected(error.to_string()));
+                }
+                self.completed_merge_sidecars.insert(reference.entry_hash);
+                return Ok(MergeSidecarDeferralDisposition::Available);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(V2LaneWorkError::Persistence(error.to_string()));
+            }
+        }
+
+        let committed_height = u64::try_from(self.state.committed_height())
+            .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
+        match self.merge_sidecars.defer_block(
+            subject.block_hash,
+            round.height,
+            reference.merge_qc.view,
+            reference,
+            &self.local_peer,
+            committed_height,
+            Instant::now(),
+        ) {
+            Ok(Some(post)) => {
+                self.push_merge_sidecar_post(post);
+                Ok(MergeSidecarDeferralDisposition::Fetching)
+            }
+            Ok(None) => Ok(MergeSidecarDeferralDisposition::Fetching),
+            Err(MergeSidecarError::Capacity(_)) => Ok(MergeSidecarDeferralDisposition::RetryLater),
+            Err(error) => Ok(MergeSidecarDeferralDisposition::Rejected(error.to_string())),
+        }
+    }
+
+    /// Take one exact entry hash whose durable installation permits validation
+    /// of all retained bodies referencing it to retry.
+    pub(crate) fn take_completed_merge_sidecar(&mut self) -> Option<HashOf<MergeLedgerEntry>> {
+        let hash = self.completed_merge_sidecars.iter().next().copied()?;
+        self.completed_merge_sidecars.remove(&hash);
+        Some(hash)
+    }
+
+    /// Take one exact full-entry rejection to apply to every retained body
+    /// referencing the same hash.
+    pub(crate) fn take_rejected_merge_sidecar(&mut self) -> Option<RejectedMergeSidecar> {
+        let entry_hash = self.rejected_merge_sidecars.keys().next().copied()?;
+        let reason = self
+            .rejected_merge_sidecars
+            .remove(&entry_hash)
+            .expect("selected rejection exists");
+        Some(RejectedMergeSidecar { entry_hash, reason })
+    }
+
     /// Accept one lane relay, merge signature, or context-bound Native AMX message.
     pub(super) fn accept_relay_message(
         &mut self,
@@ -648,8 +794,10 @@ impl V2LaneWorkAdapter {
             LaneRelayMessage::MergeSignature(signature) => {
                 self.accept_merge_signature(signature, active_view)
             }
-            LaneRelayMessage::CertifiedMergeSidecar { .. }
-            | LaneRelayMessage::MergeCandidate { .. } => V2LaneIngressOutcome::Rejected,
+            LaneRelayMessage::CertifiedMergeSidecar { sender, message } => {
+                self.accept_certified_merge_sidecar(sender, message)
+            }
+            LaneRelayMessage::MergeCandidate { .. } => V2LaneIngressOutcome::Rejected,
             LaneRelayMessage::NativeAmx { sender, message } => {
                 self.accept_native_amx(sender, message, active_view)
             }
@@ -754,6 +902,173 @@ impl V2LaneWorkAdapter {
         }
         for effect in merge_effects {
             self.push_effect(effect);
+        }
+        for post in self.merge_sidecars.tick(&self.local_peer, Instant::now()) {
+            self.push_merge_sidecar_post(post);
+        }
+    }
+
+    fn push_merge_sidecar_post(&mut self, post: MergeSidecarPost) {
+        self.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer: post.peer,
+            message: post.message,
+        });
+    }
+
+    fn accept_certified_merge_sidecar(
+        &mut self,
+        sender: PeerId,
+        message: CertifiedMergeSidecarMessage,
+    ) -> V2LaneIngressOutcome {
+        match message {
+            CertifiedMergeSidecarMessage::Request(request) => {
+                self.accept_certified_merge_sidecar_request(sender, request)
+            }
+            CertifiedMergeSidecarMessage::Chunk(chunk) => {
+                self.accept_certified_merge_sidecar_chunk(sender, chunk)
+            }
+        }
+    }
+
+    fn accept_certified_merge_sidecar_request(
+        &mut self,
+        sender: PeerId,
+        request: crate::merge_sidecar::CertifiedMergeSidecarRequestV1,
+    ) -> V2LaneIngressOutcome {
+        let now = Instant::now();
+        if let Err(error) =
+            self.merge_sidecars
+                .admit_server_request(&sender, &request, &self.local_peer, now)
+        {
+            iroha_logger::debug!(%sender, ?error, "dropping v2 certified merge-sidecar request");
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let entry = match self.kura.merge_entry_by_hash(request.entry_hash) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => return V2LaneIngressOutcome::Rejected,
+            Err(error) => {
+                iroha_logger::warn!(
+                    %sender,
+                    entry_hash = %request.entry_hash,
+                    ?error,
+                    "failed to read a requested v2 certified merge sidecar"
+                );
+                return V2LaneIngressOutcome::Rejected;
+            }
+        };
+        let reference = CertifiedMergeLedgerReference::new(&entry);
+        let metadata_matches = request.encoded_len == reference.encoded_len
+            && request.epoch_id == reference.epoch_id
+            && request.reference_digest == certified_merge_reference_digest(&reference);
+        let local_is_holder = certified_merge_sidecar_holders(&reference)
+            .is_ok_and(|holders| holders.contains(&self.local_peer));
+        if !metadata_matches || !local_is_holder {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        if let Err(error) =
+            self.merge_sidecars
+                .enqueue_response(request, entry.canonical_bytes(), now)
+        {
+            iroha_logger::debug!(%sender, ?error, "v2 merge-sidecar response budget rejected request");
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let posts = self.merge_sidecars.drain_outbound_chunks(8, now);
+        let inserted = !posts.is_empty();
+        for post in posts {
+            self.push_merge_sidecar_post(post);
+        }
+        if inserted {
+            V2LaneIngressOutcome::Inserted
+        } else {
+            V2LaneIngressOutcome::Duplicate
+        }
+    }
+
+    fn accept_certified_merge_sidecar_chunk(
+        &mut self,
+        sender: PeerId,
+        chunk: crate::merge_sidecar::CertifiedMergeSidecarChunkV1,
+    ) -> V2LaneIngressOutcome {
+        let entry_hash = chunk.entry_hash;
+        let now = Instant::now();
+        let outcome = match self.merge_sidecars.ingest_chunk(&sender, chunk, now) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                iroha_logger::debug!(%sender, %entry_hash, ?error, "dropping invalid v2 merge-sidecar chunk");
+                return V2LaneIngressOutcome::Rejected;
+            }
+        };
+        let ChunkIngestOutcome::Complete(completed) = outcome else {
+            return V2LaneIngressOutcome::Inserted;
+        };
+        let entry = match decode_certified_merge_sidecar(&completed.reference, &completed.bytes) {
+            Ok(entry) => entry,
+            Err(error) => {
+                iroha_logger::warn!(
+                    %sender,
+                    %entry_hash,
+                    ?error,
+                    "reassembled v2 certified merge sidecar is corrupt; rotating holder"
+                );
+                self.retry_completed_merge_sidecar(entry_hash, now);
+                return V2LaneIngressOutcome::Rejected;
+            }
+        };
+        if let Err(error) = self
+            .state
+            .validate_certified_merge_entry_for_global_order(&entry)
+        {
+            let affected = self.merge_sidecars.discard_invalid(entry_hash);
+            if !affected.is_empty() {
+                self.rejected_merge_sidecars
+                    .entry(entry_hash)
+                    .or_insert_with(|| error.to_string());
+            }
+            return V2LaneIngressOutcome::Rejected;
+        }
+        match self.kura.persist_pending_certified_merge_entry(&entry) {
+            Ok(persisted_hash) if persisted_hash == entry_hash => {
+                let (affected, _) =
+                    self.merge_sidecars
+                        .finish_completed(entry_hash, true, &self.local_peer, now);
+                if !affected.is_empty() {
+                    self.completed_merge_sidecars.insert(entry_hash);
+                }
+                V2LaneIngressOutcome::Inserted
+            }
+            Ok(other_hash) => {
+                let affected = self.merge_sidecars.discard_invalid(entry_hash);
+                if !affected.is_empty() {
+                    self.rejected_merge_sidecars.entry(entry_hash).or_insert_with(|| {
+                        format!(
+                            "Kura persisted conflicting certified merge sidecar hash {other_hash}"
+                        )
+                    });
+                }
+                V2LaneIngressOutcome::Rejected
+            }
+            Err(error) => {
+                iroha_logger::warn!(
+                    %entry_hash,
+                    ?error,
+                    "failed to persist a validated v2 merge sidecar; rotating holder"
+                );
+                self.retry_completed_merge_sidecar(entry_hash, now);
+                V2LaneIngressOutcome::Rejected
+            }
+        }
+    }
+
+    fn retry_completed_merge_sidecar(
+        &mut self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+        now: Instant,
+    ) {
+        let (_, retry) =
+            self.merge_sidecars
+                .finish_completed(entry_hash, false, &self.local_peer, now);
+        if let Some(post) = retry {
+            self.push_merge_sidecar_post(post);
         }
     }
 
@@ -2180,6 +2495,11 @@ fn lane_work_effect_key(effect: &V2LaneWorkEffect) -> Hash {
             encoded.push(2);
             encoded.extend(signature.encode());
         }
+        V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message } => {
+            encoded.push(3);
+            encoded.extend(peer.encode());
+            encoded.extend(message.encode());
+        }
     }
     Hash::new(encoded)
 }
@@ -2522,6 +2842,106 @@ mod tests {
         )
         .expect("open lane adapter");
         (adapter, keys)
+    }
+
+    fn missing_sidecar_reference(
+        adapter: &V2LaneWorkAdapter,
+        carrier_view: wire::View,
+    ) -> CertifiedMergeLedgerReference {
+        let validator_set = adapter
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let local_index = validator_set
+            .iter()
+            .position(|peer| peer == &adapter.local_peer)
+            .expect("local validator in fixture roster");
+        let holder_index = (local_index + 1) % validator_set.len();
+        let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+        signers_bitmap[holder_index / 8] |= 1_u8 << (holder_index % 8);
+        let parent = adapter
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .expect("non-genesis fixture context")
+            .subject
+            .block_hash;
+        CertifiedMergeLedgerReference {
+            version: 1,
+            entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"missing v2 merge sidecar")),
+            encoded_len: 64,
+            epoch_id: 1,
+            execution_batch_hash: None,
+            entrypoint_count: None,
+            entrypoint_merkle_root: None,
+            result_merkle_root: None,
+            base_state_height: None,
+            base_state_hash: None,
+            merge_qc: MergeQuorumCertificate {
+                view: carrier_view,
+                epoch_id: 1,
+                carrier_height: adapter.context.height,
+                carrier_parent_hash: parent,
+                chain_id_digest: crate::merge::merge_chain_id_digest(&adapter.context.chain_id),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                signers_bitmap,
+                signer_proofs: Vec::new(),
+                aggregate_signature: vec![0; 96],
+                message_digest: Hash::new(b"missing v2 merge sidecar QC"),
+            },
+        }
+    }
+
+    #[test]
+    fn missing_sidecar_deferral_preserves_origin_view_and_rejects_carrier_drift() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let round = wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"deferred v2 carrier")),
+            payload_hash: Hash::new(b"deferred v2 carrier payload"),
+        };
+        let reference = missing_sidecar_reference(&adapter, 1);
+
+        let mut wrong_height = reference.clone();
+        wrong_height.merge_qc.carrier_height = round.height + 1;
+        let mut wrong_parent = reference.clone();
+        wrong_parent.merge_qc.carrier_parent_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"wrong carrier parent"));
+        let mut future_view = reference.clone();
+        future_view.merge_qc.view = round.view + 1;
+        for invalid in [wrong_height, wrong_parent, future_view] {
+            assert!(matches!(
+                adapter
+                    .defer_missing_merge_sidecar(round, subject, invalid)
+                    .expect("carrier drift is a deterministic rejection"),
+                MergeSidecarDeferralDisposition::Rejected(_)
+            ));
+        }
+        assert!(adapter.drain_effects(usize::MAX).is_empty());
+
+        assert_eq!(
+            adapter
+                .defer_missing_merge_sidecar(round, subject, reference)
+                .expect("earlier immutable carrier view remains fetchable"),
+            MergeSidecarDeferralDisposition::Fetching
+        );
+        assert!(matches!(
+            adapter.drain_effects(1).as_slice(),
+            [V2LaneWorkEffect::PostCertifiedMergeSidecar { .. }]
+        ));
     }
 
     fn commit_test_block_to_state(
@@ -3551,6 +3971,65 @@ mod tests {
         assert_eq!(adapter.drain_effects(1).len(), 1);
         assert!(adapter.push_effect(effect));
         assert_eq!(adapter.effects.len(), 1);
+    }
+
+    #[test]
+    fn certified_merge_sidecar_effect_dedup_is_destination_and_payload_bound() {
+        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let responder = adapter.context.roster[0].validator.clone();
+        let alternate_destination = adapter.context.roster[1].validator.clone();
+        let request = crate::merge_sidecar::CertifiedMergeSidecarRequestV1 {
+            version: crate::merge_sidecar::CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            request_id: Hash::new(b"v2-lane-work-sidecar-request"),
+            entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"v2-lane-work-sidecar-entry")),
+            encoded_len: 128,
+            epoch_id: 4,
+            reference_digest: Hash::new(b"v2-lane-work-sidecar-reference"),
+            requester: adapter.local_peer.clone(),
+            responder: responder.clone(),
+        };
+        let effect = V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer: responder,
+            message: CertifiedMergeSidecarMessage::Request(request.clone()),
+        };
+
+        assert!(adapter.push_effect(effect.clone()));
+        assert!(adapter.push_effect(effect.clone()));
+        assert_eq!(adapter.effects.len(), 1, "an exact retry is deduplicated");
+
+        assert!(
+            adapter.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: alternate_destination,
+                message: CertifiedMergeSidecarMessage::Request(request.clone()),
+            })
+        );
+        assert_eq!(
+            adapter.effects.len(),
+            2,
+            "the authenticated destination is part of the effect identity"
+        );
+
+        let mut distinct_request = request;
+        distinct_request.request_id = Hash::new(b"v2-lane-work-sidecar-request-2");
+        assert!(
+            adapter.push_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: distinct_request.responder.clone(),
+                message: CertifiedMergeSidecarMessage::Request(distinct_request),
+            })
+        );
+        assert_eq!(
+            adapter.effects.len(),
+            3,
+            "the bounded sidecar payload is part of the effect identity"
+        );
+
+        assert_eq!(adapter.drain_effects(usize::MAX).len(), 3);
+        assert!(adapter.push_effect(effect));
+        assert_eq!(
+            adapter.effects.len(),
+            1,
+            "a drained sidecar transport may be retried"
+        );
     }
 
     #[test]

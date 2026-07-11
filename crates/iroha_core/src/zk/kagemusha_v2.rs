@@ -207,7 +207,7 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
 }
 
 /// Constraint-system columns for the V2 transition relation.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct KagemushaRecursiveSpendTransitionConfigV2 {
     public_advice: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     public_instance: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,

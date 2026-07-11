@@ -142,7 +142,8 @@ so `fragmented_balance_spendable` and `supports_multi_input` must remain false.
 
 `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE` is currently `false`.
 The data model and Swift exact-amount API are available for integration and
-fixture convergence, but V2 append/verify/redeem entrypoints MUST return
+fixture convergence, but V2 top-up/append/verify/redeem entrypoints, including
+direct native instruction dispatch, MUST return
 `RecursiveSpendV2ProofBackendUnavailable` before proving or state mutation.
 Wallets MUST quarantine funded V1 state and disable fractional/split transfers;
 they MUST NOT emulate V2 by cloning V1 bundles or trusting a host-only split.

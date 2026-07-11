@@ -13,7 +13,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     ChainId, Encode as _,
     account::AccountId,
-    block::{SignedBlock, consensus_v2 as wire},
+    block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
     events::EventBox,
 };
 use iroha_primitives::time::TimeSource;
@@ -22,12 +22,12 @@ use thiserror::Error;
 use super::{
     network_topology::Topology,
     stake_snapshot::strict_v2_voting_roster,
-    v2_body_store::V2BodyStore,
+    v2_body_store::{BodyValidationError, V2BodyStore},
     v2_effects::{ApplyTask, DurableApplyCompletion},
 };
 use crate::{
     EventsSender,
-    block::ValidBlock,
+    block::{BlockValidationError, ValidBlock},
     kura::{CommitManifest, Kura},
     queue::{Queue, RoutingDecision},
     state::{StakeSnapshot, State},
@@ -45,6 +45,26 @@ pub(crate) struct V2ApplyService {
 }
 
 impl V2ApplyService {
+    fn classify_candidate_validation_error(
+        merge_reference: Option<&CertifiedMergeLedgerReference>,
+        error: &BlockValidationError,
+    ) -> V2ApplyError {
+        if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = error {
+            return match merge_reference {
+                Some(reference) if reference.entry_hash == *entry_hash => {
+                    V2ApplyError::MissingCertifiedMergeSidecar {
+                        reference: reference.clone(),
+                    }
+                }
+                _ => V2ApplyError::Validation(
+                    "validator reported a missing certified merge sidecar that is not bound to the candidate execution context"
+                        .to_owned(),
+                ),
+            };
+        }
+        V2ApplyError::Validation(error.to_string())
+    }
+
     fn validate_lane_payload_plan(
         &self,
         context: &wire::HeightContext,
@@ -211,6 +231,9 @@ impl V2ApplyService {
         body: &SignedBlock,
     ) -> Result<(), V2ApplyError> {
         self.validate_lane_payload_plan(context, body)?;
+        let merge_reference = body
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.as_ref());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut voting_block = None;
         let result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
@@ -225,8 +248,9 @@ impl V2ApplyService {
             &mut voting_block,
         )
         .unpack(|_| {});
-        let (_valid, state_block) =
-            result.map_err(|(_, error)| V2ApplyError::Validation(error.to_string()))?;
+        let (_valid, state_block) = result.map_err(|(_, error)| {
+            Self::classify_candidate_validation_error(merge_reference, error.as_ref())
+        })?;
         drop(state_block);
         Ok(())
     }
@@ -238,6 +262,9 @@ impl V2ApplyService {
         store_block: bool,
     ) -> Result<(), V2ApplyError> {
         self.validate_lane_payload_plan(context, &body)?;
+        let merge_reference = body
+            .execution_context()
+            .and_then(|bundle| bundle.merge_entry.clone());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
         let mut voting_block = None;
         let mut pipeline_events = Vec::new();
@@ -254,7 +281,9 @@ impl V2ApplyService {
                 &mut voting_block,
             )
             .unpack(|event| pipeline_events.push(event))
-            .map_err(|(_, error)| V2ApplyError::Validation(error.to_string()))?;
+            .map_err(|(_, error)| {
+                Self::classify_candidate_validation_error(merge_reference.as_ref(), error.as_ref())
+            })?;
         let committed_block = valid_block
             .commit_with_certificate()
             .unpack(|event| pipeline_events.push(event))
@@ -418,6 +447,13 @@ pub(crate) enum V2ApplyError {
     /// Deterministic validation rejected the exact durable body.
     #[error("Sumeragi v2 application validation failed: {0}")]
     Validation(String),
+    /// The candidate is otherwise valid but its exact certified merge sidecar
+    /// has not reached durable local storage yet.
+    #[error("certified merge sidecar `{}` is not available locally yet", reference.entry_hash)]
+    MissingCertifiedMergeSidecar {
+        /// Compact, certificate-bound reference used for bounded recovery.
+        reference: CertifiedMergeLedgerReference,
+    },
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
@@ -430,6 +466,15 @@ pub(crate) enum V2ApplyError {
     /// NPoS boundary lacks a finalized election roster.
     #[error("Sumeragi v2 NPoS epoch boundary lacks a finalized next-epoch roster")]
     MissingFinalizedEpochRoster,
+}
+
+impl BodyValidationError for V2ApplyError {
+    fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
+        match self {
+            Self::MissingCertifiedMergeSidecar { reference } => Some(reference),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

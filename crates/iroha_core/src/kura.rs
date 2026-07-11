@@ -103,6 +103,8 @@ const INDEX_FILE_NAME: &str = "blocks.index";
 const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
 const COUNT_FILE_NAME: &str = "blocks.count.norito";
+const VERIFIED_SNAPSHOT_TAIL_FILE_NAME: &str = "verified_snapshot_tail.norito";
+const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
@@ -3359,9 +3361,11 @@ impl Kura {
         }
         if entry.merge_qc.carrier_height != block.header().height().get()
             || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
+            || entry.merge_qc.view != block.header().view_change_index()
         {
             return Err(Error::MergeReferenceMismatch(
-                "merge QC carrier height or parent does not match the referencing block".to_owned(),
+                "merge QC carrier height, parent, or view does not match the referencing block"
+                    .to_owned(),
             ));
         }
         Ok(MergeLedgerCarrierRecord::new(entry, block))
@@ -3583,12 +3587,20 @@ impl Kura {
                     record.entry_hash
                 ))
             })?;
+        if entry.merge_qc.carrier_height != block.header().height().get()
+            || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
+            || entry.merge_qc.view != block.header().view_change_index()
+        {
+            return Err(Error::MergeCarrierConflict(format!(
+                "carrier block {} merge QC height, parent, or view differs from its canonical block header",
+                record.block_height
+            )));
+        }
         if block.hash() != record.block_hash
             || reference.entry_hash != record.entry_hash
             || reference.epoch_id != record.epoch_id
             || entry.epoch_id != record.epoch_id
             || entry.merge_qc.carrier_height != record.block_height
-            || Some(entry.merge_qc.carrier_parent_hash) != block.header().prev_block_hash()
             || !reference.matches_entry(&entry)
         {
             return Err(Error::MergeCarrierConflict(format!(
@@ -4071,7 +4083,9 @@ impl Kura {
     ///
     /// # Errors
     /// Returns an error for an oversized or conflicting sidecar, or when the
-    /// atomic file publication cannot be completed.
+    /// atomic file publication cannot be completed. This method never prunes
+    /// other carrier rounds; callers that own the active round must invoke the
+    /// explicit exact-round pruning API first.
     pub(crate) fn persist_pending_certified_merge_entry(
         &self,
         entry: &MergeLedgerEntry,
@@ -4089,11 +4103,6 @@ impl Kura {
         let _guard = self.sidecar_lock.lock();
         std::fs::create_dir_all(&directory).map_err(|err| Error::MkDir(err, directory.clone()))?;
         self.reconcile_pending_merge_temp_files_unlocked()?;
-        self.prune_pending_certified_merge_entries_not_bound_to_unlocked(
-            entry.merge_qc.carrier_height,
-            entry.merge_qc.carrier_parent_hash,
-            entry.merge_qc.view,
-        )?;
         let temp_path = path.with_extension("norito.tmp");
         if let Err(err) = std::fs::remove_file(&temp_path)
             && err.kind() != ErrorKind::NotFound
@@ -7596,6 +7605,15 @@ impl Kura {
             file.flush()
         })?;
 
+        if matches!(mode, HashOnlySnapshotExtensionMode::VerifiedLocalSnapshot) {
+            // The marker is the durable proof that these zero-length entries came from a fully
+            // verified local snapshot. Sync its hash/index inputs first even when normal Kura
+            // fsync is disabled, then publish the ordinary count marker last.
+            block_store.sync_target(FsyncTarget::Hashes, BlockStore::ensure_hashes_file)?;
+            block_store.sync_target(FsyncTarget::Index, BlockStore::ensure_index_file)?;
+            block_store.write_verified_snapshot_tail_marker(start, snapshot_hashes)?;
+        }
+
         block_store.publish_commit_marker(target_u64)?;
         drop(block_store);
 
@@ -7938,6 +7956,42 @@ struct BlockStoreCommitMarker {
     version: u32,
     /// Count of blocks that are fully durable on disk.
     count: u64,
+}
+
+/// Authenticated metadata for a body-less Kura suffix recovered from a verified local snapshot.
+#[derive(Debug, Clone, Encode, Decode)]
+struct VerifiedSnapshotTailMarkerV1 {
+    /// Marker format version.
+    version: u32,
+    /// Count of entries preceding the recovered body-less suffix.
+    body_prefix_count: u64,
+    /// Signed snapshot height represented by the hash journal and zero-length indices.
+    snapshot_height: u64,
+    /// Domain-separated digest of the canonical hash journal through `snapshot_height`.
+    hash_journal_digest: Hash,
+}
+
+impl VerifiedSnapshotTailMarkerV1 {
+    const VERSION: u32 = 1;
+
+    fn new(body_prefix_count: u64, snapshot_height: u64, hash_journal_digest: Hash) -> Self {
+        Self {
+            version: Self::VERSION,
+            body_prefix_count,
+            snapshot_height,
+            hash_journal_digest,
+        }
+    }
+}
+
+fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]) -> Result<Hash> {
+    let snapshot_height = u64::try_from(snapshot_hashes.len())?;
+    let snapshot_height_bytes = snapshot_height.to_le_bytes();
+    let mut chunks = Vec::with_capacity(snapshot_hashes.len().saturating_add(2));
+    chunks.push(VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN);
+    chunks.push(snapshot_height_bytes.as_slice());
+    chunks.extend(snapshot_hashes.iter().map(|hash| hash.as_ref().as_slice()));
+    Ok(Hash::new_from_chunks(&chunks))
 }
 
 impl BlockStoreCommitMarker {
@@ -16327,6 +16381,161 @@ impl BlockStore {
         self.path_to_blockchain.join(COUNT_FILE_NAME)
     }
 
+    fn verified_snapshot_tail_marker_path(&self) -> PathBuf {
+        self.path_to_blockchain
+            .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME)
+    }
+
+    fn remove_verified_snapshot_tail_marker(&self) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let path = self.verified_snapshot_tail_marker_path();
+        let tmp_path = path.with_extension("norito.tmp");
+        for candidate in [&path, &tmp_path] {
+            match std::fs::remove_file(candidate) {
+                Ok(()) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => return Err(Error::IO(err, candidate.clone())),
+            }
+        }
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        Ok(())
+    }
+
+    fn write_verified_snapshot_tail_marker(
+        &self,
+        body_prefix_count: u64,
+        snapshot_hashes: &[HashOf<BlockHeader>],
+    ) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let snapshot_height = u64::try_from(snapshot_hashes.len())?;
+        if body_prefix_count >= snapshot_height {
+            return Err(Error::NoritoFrame(norito::core::Error::Message(
+                "verified snapshot tail marker requires a non-empty suffix".to_owned(),
+            )));
+        }
+        let marker = VerifiedSnapshotTailMarkerV1::new(
+            body_prefix_count,
+            snapshot_height,
+            verified_snapshot_hash_journal_digest(snapshot_hashes)?,
+        );
+        let bytes = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
+        let path = self.verified_snapshot_tail_marker_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
+            file.write_all(&bytes)
+                .and_then(|()| file.flush())
+                .and_then(|()| file.sync_data())
+                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
+        }
+        if let Err(err) = std::fs::rename(&tmp_path, &path) {
+            if err.kind() == ErrorKind::AlreadyExists {
+                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
+                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
+            } else {
+                return Err(Error::IO(err, path));
+            }
+        }
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        Ok(())
+    }
+
+    fn read_verified_snapshot_tail_marker(&self) -> Result<Option<VerifiedSnapshotTailMarkerV1>> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let path = self.verified_snapshot_tail_marker_path();
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(Error::IO(err, path)),
+        };
+        match norito::decode_from_bytes::<VerifiedSnapshotTailMarkerV1>(&bytes) {
+            Ok(marker) if marker.version == VerifiedSnapshotTailMarkerV1::VERSION => {
+                Ok(Some(marker))
+            }
+            Ok(marker) => {
+                warn!(
+                    version = marker.version,
+                    "discarding verified snapshot tail marker with unsupported version"
+                );
+                self.remove_verified_snapshot_tail_marker()?;
+                Ok(None)
+            }
+            Err(err) => {
+                warn!(?err, "discarding malformed verified snapshot tail marker");
+                self.remove_verified_snapshot_tail_marker()?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn validated_verified_snapshot_tail(
+        &mut self,
+        logical_count: u64,
+        hashes_count: u64,
+    ) -> Result<Option<VerifiedSnapshotTailMarkerV1>> {
+        let Some(marker) = self.read_verified_snapshot_tail_marker()? else {
+            return Ok(None);
+        };
+        let valid_bounds = marker.body_prefix_count < marker.snapshot_height
+            && marker.snapshot_height <= logical_count
+            && marker.snapshot_height <= hashes_count;
+        if !valid_bounds {
+            warn!(
+                body_prefix_count = marker.body_prefix_count,
+                snapshot_height = marker.snapshot_height,
+                logical_count,
+                hashes_count,
+                "discarding verified snapshot tail marker with invalid bounds"
+            );
+            self.remove_verified_snapshot_tail_marker()?;
+            return Ok(None);
+        }
+        for index_pos in marker.body_prefix_count..marker.snapshot_height {
+            let index = self.read_block_index(index_pos)?;
+            if !index.is_evicted() || index.length != 0 {
+                warn!(
+                    index_pos,
+                    start = index.start,
+                    length = index.length,
+                    "discarding verified snapshot tail marker with non-placeholder index"
+                );
+                self.remove_verified_snapshot_tail_marker()?;
+                return Ok(None);
+            }
+        }
+        let snapshot_height = usize::try_from(marker.snapshot_height)?;
+        let hashes = self.read_block_hashes(0, snapshot_height)?;
+        let actual_digest = verified_snapshot_hash_journal_digest(&hashes)?;
+        if actual_digest != marker.hash_journal_digest {
+            warn!(
+                expected = %marker.hash_journal_digest,
+                actual = %actual_digest,
+                "discarding verified snapshot tail marker with mismatched hash journal digest"
+            );
+            self.remove_verified_snapshot_tail_marker()?;
+            return Ok(None);
+        }
+        Ok(Some(marker))
+    }
+
     fn read_commit_marker(&mut self) -> Result<Option<BlockStoreCommitMarker>> {
         let path = self.commit_marker_path();
         if path.as_os_str().is_empty() {
@@ -16458,7 +16667,7 @@ impl BlockStore {
         &mut self,
         mut candidate: u64,
         hashes_count: u64,
-        allow_hash_only_tail: bool,
+        trusted_hash_only_tail: Option<(u64, u64)>,
     ) -> Result<u64> {
         if candidate > hashes_count {
             warn!(
@@ -16473,14 +16682,25 @@ impl BlockStore {
         }
         let data_len = self.data_file_len()?;
         if data_len == 0 {
-            return Ok(0);
+            return Ok(
+                if trusted_hash_only_tail.is_some_and(|(start, end)| start == 0 && candidate <= end)
+                {
+                    candidate
+                } else {
+                    0
+                },
+            );
         }
         let initial = candidate;
         while candidate > 0 {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
                     if index.is_evicted() {
-                        if allow_hash_only_tail && index.length == 0 && candidate <= hashes_count {
+                        if index.length == 0
+                            && trusted_hash_only_tail.is_some_and(|(start, end)| {
+                                candidate > start && candidate <= end && candidate <= hashes_count
+                            })
+                        {
                             break;
                         }
                         if index.length == 0
@@ -16548,12 +16768,24 @@ impl BlockStore {
             aligned / BlockIndex::SIZE
         };
         let hashes_count = self.align_hashes_len()?;
-        let data_backed_count = self.data_backed_count(
-            logical_count,
-            hashes_count,
-            hard_fork_snapshot_bootstrap_enabled(),
-        )?;
+        let verified_snapshot_tail =
+            self.validated_verified_snapshot_tail(logical_count, hashes_count)?;
+        let trusted_hash_only_tail = if hard_fork_snapshot_bootstrap_enabled() {
+            Some((0, hashes_count))
+        } else {
+            verified_snapshot_tail
+                .as_ref()
+                .map(|marker| (marker.body_prefix_count, marker.snapshot_height))
+        };
+        let data_backed_count =
+            self.data_backed_count(logical_count, hashes_count, trusted_hash_only_tail)?;
         if matches!(self.fsync.mode, FsyncMode::Off) {
+            if verified_snapshot_tail
+                .as_ref()
+                .is_some_and(|marker| data_backed_count < marker.snapshot_height)
+            {
+                self.remove_verified_snapshot_tail_marker()?;
+            }
             self.write_commit_marker(data_backed_count)?;
             self.truncate_hashes_to_count(data_backed_count)?;
             self.truncate_data_to_index(data_backed_count)?;
@@ -16568,6 +16800,14 @@ impl BlockStore {
             self.write_commit_marker(data_backed_count)?;
             data_backed_count
         };
+
+        if let Some(marker) = &verified_snapshot_tail
+            && durable_count < marker.snapshot_height
+            && data_backed_count >= marker.snapshot_height
+        {
+            durable_count = marker.snapshot_height;
+            self.write_commit_marker(durable_count)?;
+        }
 
         if durable_count > data_backed_count {
             warn!(
@@ -16595,6 +16835,12 @@ impl BlockStore {
 
         self.truncate_hashes_to_count(durable_count)?;
         self.truncate_data_to_index(durable_count)?;
+        if verified_snapshot_tail
+            .as_ref()
+            .is_some_and(|marker| durable_count < marker.snapshot_height)
+        {
+            self.remove_verified_snapshot_tail_marker()?;
+        }
 
         self.commit_marker_count = durable_count;
         self.commit_marker_pending = None;
@@ -17475,6 +17721,12 @@ impl BlockStore {
         self.commit_marker_pending = None;
         self.commit_marker_count = self.commit_marker_count.min(pruned_index_count);
         self.write_commit_marker(self.commit_marker_count)?;
+        if self
+            .read_verified_snapshot_tail_marker()?
+            .is_some_and(|marker| pruned_index_count < marker.snapshot_height)
+        {
+            self.remove_verified_snapshot_tail_marker()?;
+        }
 
         Ok(())
     }
@@ -18728,7 +18980,7 @@ mod tests {
                 nexus_fee_receipts: Vec::new(),
                 native_amx_receipts: Vec::new(),
             },
-            settlement_hash: HashOf::new(
+            settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
                 &iroha_data_model::block::consensus::LaneBlockCommitment {
                     block_height: epoch,
                     lane_id: LaneId::SINGLE,
@@ -18744,7 +18996,8 @@ mod tests {
                     nexus_fee_receipts: Vec::new(),
                     native_amx_receipts: Vec::new(),
                 },
-            ),
+            )
+            .expect("test settlement should hash canonically"),
             relay_envelope: None,
         }];
         let merge_hint_roots: Vec<Hash> = lane_snapshots
@@ -18795,6 +19048,7 @@ mod tests {
             .expect("merge carrier fixture must not be the genesis block");
         entry.merge_qc.carrier_height = block.header().height().get();
         entry.merge_qc.carrier_parent_hash = carrier_parent_hash;
+        entry.merge_qc.view = block.header().view_change_index();
         let execution_context = block
             .execution_context()
             .cloned()
@@ -18814,6 +19068,105 @@ mod tests {
             .last_mut()
             .expect("dummy generator contains the carrier") = Arc::clone(&carrier);
         carrier
+    }
+
+    #[test]
+    fn pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut entry = sample_merge_entry(1);
+        let carrier_parent =
+            HashOf::from_untyped_unchecked(Hash::new(b"exact pending merge carrier parent"));
+        let wrong_parent =
+            HashOf::from_untyped_unchecked(Hash::new(b"wrong pending merge carrier parent"));
+        entry.merge_qc.carrier_height = 7;
+        entry.merge_qc.carrier_parent_hash = carrier_parent;
+        entry.merge_qc.view = 3;
+
+        for (height, parent, view, drift) in [
+            (8, carrier_parent, 3, "height"),
+            (7, wrong_parent, 3, "parent"),
+            (7, carrier_parent, 4, "view"),
+        ] {
+            kura.persist_pending_certified_merge_entry(&entry)
+                .expect("persist exact-round pending merge fixture");
+            assert_eq!(
+                kura.prune_pending_certified_merge_entries_not_bound_to(height, parent, view)
+                    .expect("prune mismatched pending merge fixture"),
+                1,
+                "{drift} drift must retire the pending merge sidecar"
+            );
+            assert!(
+                kura.select_pending_certified_merge_entry()
+                    .expect("pending merge store remains readable")
+                    .is_none(),
+                "{drift} drift must leave no reusable pending merge sidecar"
+            );
+        }
+
+        let entry_hash = kura
+            .persist_pending_certified_merge_entry(&entry)
+            .expect("persist exact pending merge sidecar");
+        assert_eq!(
+            kura.prune_pending_certified_merge_entries_not_bound_to(7, carrier_parent, 3)
+                .expect("retain exact pending merge fixture"),
+            0
+        );
+        let (selected_hash, selected) = kura
+            .select_pending_certified_merge_entry()
+            .expect("pending merge store remains readable")
+            .expect("exact round retains the sidecar");
+        assert_eq!(selected_hash, entry_hash);
+        assert_eq!(selected, entry);
+    }
+
+    #[test]
+    fn late_stale_pending_merge_sidecar_does_not_evict_current_round() {
+        let kura = Kura::blank_kura_for_testing();
+        let carrier_parent =
+            HashOf::from_untyped_unchecked(Hash::new(b"current pending merge carrier parent"));
+        let mut current = sample_merge_entry(2);
+        current.merge_qc.carrier_height = 9;
+        current.merge_qc.carrier_parent_hash = carrier_parent;
+        current.merge_qc.view = 4;
+        let mut stale = sample_merge_entry(1);
+        stale.merge_qc.carrier_height = 9;
+        stale.merge_qc.carrier_parent_hash = carrier_parent;
+        stale.merge_qc.view = 3;
+
+        let current_hash = kura
+            .persist_pending_certified_merge_entry(&current)
+            .expect("persist current-round certified merge sidecar");
+        let stale_hash = kura
+            .persist_pending_certified_merge_entry(&stale)
+            .expect("persist late stale certified merge sidecar without implicit pruning");
+        assert_ne!(current_hash, stale_hash);
+
+        let pending = kura
+            .pending_certified_merge_entries()
+            .expect("pending merge store remains readable");
+        assert_eq!(pending.len(), 2);
+        assert!(
+            pending
+                .iter()
+                .any(|(hash, entry)| *hash == current_hash && entry == &current),
+            "late stale persistence must retain the current-round sidecar"
+        );
+        assert!(
+            pending
+                .iter()
+                .any(|(hash, entry)| *hash == stale_hash && entry == &stale),
+            "authenticated stale evidence remains available until the round owner prunes it"
+        );
+
+        assert_eq!(
+            kura.prune_pending_certified_merge_entries_not_bound_to(9, carrier_parent, 4)
+                .expect("explicitly prune outside the current carrier round"),
+            1
+        );
+        let pending = kura
+            .pending_certified_merge_entries()
+            .expect("pending merge store remains readable after pruning");
+        assert_eq!(pending, vec![(current_hash, current)]);
     }
 
     #[test]
@@ -18997,6 +19350,78 @@ mod tests {
                 log.entry_by_hash(target).is_err(),
                 "indexed lookup must fail closed after {}",
                 if truncate { "truncation" } else { "corruption" }
+            );
+        }
+    }
+
+    #[test]
+    fn store_block_with_merge_entry_rejects_carrier_round_drift_without_mutation() {
+        #[derive(Clone, Copy)]
+        enum Drift {
+            Height,
+            Parent,
+            View,
+        }
+
+        for (drift, label) in [
+            (Drift::Height, "height"),
+            (Drift::Parent, "parent"),
+            (Drift::View, "view"),
+        ] {
+            let kura = Kura::blank_kura_for_testing();
+            let mut blocks = DummyBlocks::new();
+            let parent = blocks.next();
+            let mut entry = sample_merge_entry(1);
+            let carrier = next_merge_carrier(&mut blocks, &mut entry);
+            kura.store_block(parent).expect("store carrier parent");
+
+            match drift {
+                Drift::Height => {
+                    entry.merge_qc.carrier_height = entry.merge_qc.carrier_height.saturating_add(1);
+                }
+                Drift::Parent => {
+                    entry.merge_qc.carrier_parent_hash =
+                        HashOf::from_untyped_unchecked(Hash::new(b"wrong merge carrier parent"));
+                }
+                Drift::View => {
+                    entry.merge_qc.view = entry.merge_qc.view.saturating_add(1);
+                }
+            }
+
+            let mut carrier = carrier.as_ref().clone();
+            let execution_context = carrier
+                .execution_context()
+                .cloned()
+                .unwrap_or_else(|| BlockExecutionContextBundle::new(Vec::new()))
+                .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
+            carrier.set_execution_context(Some(execution_context));
+            let entry_hash = entry.canonical_hash();
+            let error = kura
+                .store_block_with_merge_entry(Arc::new(carrier), &entry)
+                .expect_err("carrier-round drift must fail closed");
+
+            assert!(
+                matches!(
+                    &error,
+                    Error::MergeReferenceMismatch(message)
+                        if message.contains("height, parent, or view")
+                ),
+                "{label} drift must report the exact carrier-round mismatch: {error}"
+            );
+            assert_eq!(
+                kura.blocks_count(),
+                1,
+                "{label} drift must not append the carrier block"
+            );
+            assert!(
+                kura.merge_ledger_snapshot().is_empty(),
+                "{label} drift must not append the merge log"
+            );
+            assert_eq!(
+                kura.merge_carrier_for_entry(entry_hash)
+                    .expect("carrier index remains readable"),
+                None,
+                "{label} drift must not publish a sparse carrier record"
             );
         }
     }
@@ -28637,12 +29062,12 @@ mod tests {
         store.write_block_hash(1, tail.as_ref().hash()).unwrap();
 
         assert_eq!(
-            store.data_backed_count(2, 2, false).unwrap(),
+            store.data_backed_count(2, 2, None).unwrap(),
             1,
             "ordinary init must still treat a zero-length evicted tail as not data-backed"
         );
         assert_eq!(
-            store.data_backed_count(2, 2, true).unwrap(),
+            store.data_backed_count(2, 2, Some((0, 2))).unwrap(),
             2,
             "hard-fork snapshot bootstrap keeps hash-only tail metadata durable"
         );
@@ -28911,12 +29336,12 @@ mod tests {
         assert_eq!(store.read_index_count().unwrap(), 3);
         assert_eq!(store.read_hashes_count().unwrap(), 3);
         assert_eq!(
-            store.data_backed_count(3, 3, false).unwrap(),
+            store.data_backed_count(3, 3, None).unwrap(),
             2,
             "normal recovery should prune hash-only placeholder tails"
         );
         assert_eq!(
-            store.data_backed_count(3, 3, true).unwrap(),
+            store.data_backed_count(3, 3, Some((0, 3))).unwrap(),
             3,
             "hard-fork bootstrap should preserve audited hash-only placeholder tails"
         );
@@ -28961,6 +29386,183 @@ mod tests {
             reopened.read_block_index(2).unwrap(),
             (EVICTED_BLOCK_START, 0)
         );
+    }
+
+    #[test]
+    fn verified_snapshot_tail_survives_fsync_off_reopen_and_second_restart() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Off;
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
+        assert_eq!(count, 2);
+
+        let mut snapshot_hashes = vec![
+            kura.get_block_hash(nonzero!(1_usize)).unwrap(),
+            kura.get_block_hash(nonzero!(2_usize)).unwrap(),
+        ];
+        let snapshot_tail_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xa1; 32]));
+        snapshot_hashes.push(snapshot_tail_hash);
+        assert_eq!(
+            kura.extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
+                .unwrap(),
+            1
+        );
+        drop(kura);
+
+        for restart in 1..=2 {
+            let (reopened, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
+            assert_eq!(
+                count, 3,
+                "restart {restart} must retain the verified suffix"
+            );
+            assert_eq!(reopened.durable_blocks_count(), 3);
+            assert_eq!(
+                reopened.block_hash_at_height(nonzero!(3_usize)),
+                Some(snapshot_tail_hash)
+            );
+            assert!(reopened.get_block(nonzero!(3_usize)).is_none());
+            drop(reopened);
+        }
+    }
+
+    #[test]
+    fn unmarked_zero_length_tail_is_pruned_with_fsync_off() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Off;
+        let lane_config = RuntimeLaneConfig::default();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        let unverified_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xa2; 32]));
+        store.write_block_index(2, EVICTED_BLOCK_START, 0).unwrap();
+        store.write_block_hash(2, unverified_hash).unwrap();
+        drop(store);
+
+        let (reopened, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
+        assert_eq!(count, 2);
+        drop(reopened);
+        let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        assert_eq!(reopened.read_index_count().unwrap(), 2);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 2);
+        assert!(!blocks_dir.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn verified_snapshot_tail_with_mismatched_hash_digest_is_pruned() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Off;
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).unwrap();
+        let mut snapshot_hashes = vec![
+            kura.get_block_hash(nonzero!(1_usize)).unwrap(),
+            kura.get_block_hash(nonzero!(2_usize)).unwrap(),
+        ];
+        snapshot_hashes.push(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xa3; 32]),
+        ));
+        kura.extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
+            .unwrap();
+        drop(kura);
+
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut tampered = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        tampered
+            .write_block_hash(
+                2,
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xff; 32])),
+            )
+            .unwrap();
+        drop(tampered);
+
+        let (reopened, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
+        assert_eq!(count, 2);
+        drop(reopened);
+        let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        assert_eq!(reopened.read_index_count().unwrap(), 2);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 2);
+        assert!(!blocks_dir.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn malformed_verified_snapshot_tail_marker_is_pruned() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Off;
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).unwrap();
+        let mut snapshot_hashes = vec![
+            kura.get_block_hash(nonzero!(1_usize)).unwrap(),
+            kura.get_block_hash(nonzero!(2_usize)).unwrap(),
+        ];
+        snapshot_hashes.push(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xa5; 32]),
+        ));
+        kura.extend_hash_only_suffix_from_verified_snapshot(&snapshot_hashes)
+            .unwrap();
+        drop(kura);
+
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        std::fs::write(
+            blocks_dir.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
+            b"malformed marker",
+        )
+        .unwrap();
+
+        let (reopened, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
+        assert_eq!(count, 2);
+        drop(reopened);
+        let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        assert_eq!(reopened.read_index_count().unwrap(), 2);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 2);
+        assert!(!blocks_dir.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn hard_fork_prefix_real_suffix_and_verified_tail_survive_reopen() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        for index in 0..2 {
+            store
+                .write_block_index(index, EVICTED_BLOCK_START, 0)
+                .unwrap();
+        }
+        let mut snapshot_hashes = store.read_block_hashes(0, 4).unwrap();
+        snapshot_hashes.push(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xa4; 32]),
+        ));
+        store.write_block_index(4, EVICTED_BLOCK_START, 0).unwrap();
+        store.write_block_hash(4, snapshot_hashes[4]).unwrap();
+        store
+            .sync_target(FsyncTarget::Hashes, BlockStore::ensure_hashes_file)
+            .unwrap();
+        store
+            .sync_target(FsyncTarget::Index, BlockStore::ensure_index_file)
+            .unwrap();
+        store
+            .write_verified_snapshot_tail_marker(4, &snapshot_hashes)
+            .unwrap();
+        store.publish_commit_marker(5).unwrap();
+        drop(store);
+
+        for _ in 0..2 {
+            let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+            reopened.create_files_if_they_do_not_exist().unwrap();
+            assert_eq!(reopened.read_durable_index_count().unwrap(), 5);
+            let validation = Kura::init_hash_only_hard_fork_mode(&mut reopened, 5, 2).unwrap();
+            assert_eq!(validation.hashes, snapshot_hashes);
+            assert_eq!(validation.hard_fork_hash_only_block_count, 2);
+            assert!(!validation.truncated);
+        }
     }
 
     #[test]

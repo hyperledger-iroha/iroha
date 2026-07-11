@@ -44,7 +44,10 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{EffectExecutorStep, EffectQueueConfig, EffectTransportError, V2EffectExecutor},
-    v2_lane_work::{V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkLimits},
+    v2_lane_work::{
+        MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
+        V2LaneWorkLimits,
+    },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::ProductionV2Services,
@@ -281,6 +284,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             }
 
             services.drain_completions(&mut executor)?;
+            drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
             services
                 .replay_buffered_chunks(&mut executor)
                 .map_err(V2RunnerError::Service)?;
@@ -343,6 +347,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 executor.current_tag().view(),
                 control_queue_capacity,
             );
+            drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
             drain_retired_v1_queues(
                 &rbc_chunk_rx,
                 &consensus_rx,
@@ -1109,7 +1114,49 @@ fn dispatch_lane_work_effects(
             V2LaneWorkEffect::BroadcastMerge(signature) => {
                 services.broadcast_merge_to_voters(signature);
             }
+            V2LaneWorkEffect::PostCertifiedMergeSidecar { peer, message } => {
+                services.post_certified_merge_sidecar(peer, message);
+            }
         }
+    }
+    Ok(())
+}
+
+fn drive_merge_sidecar_recovery(
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+    lane_work: &mut V2LaneWorkAdapter,
+) -> Result<(), V2RunnerError> {
+    while let Some(deferred) = services.take_merge_sidecar_deferral() {
+        let entry_hash = deferred.reference().entry_hash;
+        let disposition = lane_work.defer_missing_merge_sidecar(
+            deferred.round(),
+            deferred.subject(),
+            deferred.reference().clone(),
+        )?;
+        match disposition {
+            MergeSidecarDeferralDisposition::Fetching
+            | MergeSidecarDeferralDisposition::Available => {}
+            MergeSidecarDeferralDisposition::RetryLater => {
+                services
+                    .requeue_merge_sidecar_deferral(deferred)
+                    .map_err(V2RunnerError::Service)?;
+                break;
+            }
+            MergeSidecarDeferralDisposition::Rejected(reason) => {
+                let _ = executor.reject_deferred_merge_sidecar(entry_hash, reason, services)?;
+            }
+        }
+    }
+    while let Some(entry_hash) = lane_work.take_completed_merge_sidecar() {
+        let _ = executor.retry_deferred_merge_sidecar(entry_hash, services)?;
+    }
+    while let Some(rejected) = lane_work.take_rejected_merge_sidecar() {
+        let _ = executor.reject_deferred_merge_sidecar(
+            rejected.entry_hash(),
+            rejected.reason(),
+            services,
+        )?;
     }
     Ok(())
 }

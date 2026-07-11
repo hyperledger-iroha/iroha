@@ -15,6 +15,7 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     num::NonZeroUsize,
+    time::Duration,
 };
 
 use iroha_crypto::{Hash, HashOf, KeyPair};
@@ -562,8 +563,12 @@ impl V2CandidateAssembler {
             if certified_merge_filter
                 .as_ref()
                 .is_some_and(|(application_time, entrypoints)| {
-                    transaction.creation_time() >= *application_time
-                        || entrypoints.contains(&Hash::from(transaction.hash_as_entrypoint()))
+                    transaction_conflicts_with_certified_merge(
+                        transaction.creation_time(),
+                        Hash::from(transaction.hash_as_entrypoint()),
+                        *application_time,
+                        entrypoints,
+                    )
                 })
             {
                 report.work_deferred = report.work_deferred.saturating_add(1);
@@ -695,6 +700,15 @@ impl V2CandidateAssembler {
             .map_err(|error| CandidateError::CanonicalEncoding(error.to_string()))?;
         Ok((block, canonical_wire, events))
     }
+}
+
+fn transaction_conflicts_with_certified_merge(
+    creation_time: Duration,
+    entrypoint_hash: Hash,
+    application_time: Duration,
+    certified_entrypoints: &BTreeSet<Hash>,
+) -> bool {
+    creation_time >= application_time || certified_entrypoints.contains(&entrypoint_hash)
 }
 
 fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), CandidateError> {
@@ -1212,5 +1226,38 @@ mod tests {
                 .iter()
                 .any(|entry| entry.entrypoint_hash == removed_hash)
         );
+    }
+
+    #[test]
+    fn certified_merge_filter_defers_time_boundary_and_duplicate_entrypoints() {
+        let application_time = Duration::from_millis(1_000);
+        let duplicate = Hash::new(b"certified merge duplicate entrypoint");
+        let unrelated = Hash::new(b"ordinary queue entrypoint");
+        let certified_entrypoints = BTreeSet::from([duplicate]);
+
+        assert!(!transaction_conflicts_with_certified_merge(
+            Duration::from_millis(999),
+            unrelated,
+            application_time,
+            &certified_entrypoints,
+        ));
+        assert!(transaction_conflicts_with_certified_merge(
+            Duration::from_millis(999),
+            duplicate,
+            application_time,
+            &certified_entrypoints,
+        ));
+        assert!(transaction_conflicts_with_certified_merge(
+            application_time,
+            unrelated,
+            application_time,
+            &certified_entrypoints,
+        ));
+        assert!(transaction_conflicts_with_certified_merge(
+            Duration::from_millis(1_001),
+            unrelated,
+            application_time,
+            &certified_entrypoints,
+        ));
     }
 }
