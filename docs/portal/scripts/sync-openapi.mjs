@@ -11,6 +11,8 @@ import {dirname, join, relative} from 'node:path';
 import {createHash} from 'node:crypto';
 import {mkdir, readFile, readdir, stat, writeFile} from 'node:fs/promises';
 
+import {validateOpenApiGeneratorProvenance} from './lib/openapi-provenance.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -201,6 +203,11 @@ async function prepareManifestTemplate(manifestPath, specBytes, {requireSigned =
   try {
     const text = await readFile(manifestPath, 'utf8');
     const manifest = JSON.parse(text);
+    validateOpenApiGeneratorProvenance(manifest, {
+      label: `manifest ${manifestPath}`,
+      signed: manifest?.artifact?.signature != null,
+      requireClean: requireSigned,
+    });
     const recorded = manifest?.artifact?.sha256_hex;
     if (typeof recorded !== 'string') {
       const message = `manifest ${manifestPath} is missing artifact.sha256_hex; rerun 'cargo xtask openapi --sign <key>' or 'cargo xtask openapi --signature-envelope <path>' to refresh the signed manifest.`;

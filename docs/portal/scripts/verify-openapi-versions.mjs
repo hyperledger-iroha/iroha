@@ -8,6 +8,8 @@ import {readdir, readFile} from 'node:fs/promises';
 import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
+import {validateOpenApiGeneratorProvenance} from './lib/openapi-provenance.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -32,7 +34,10 @@ export async function verifyOpenApiVersions(options = {}) {
   ensureLatestAndCurrentAligned(latestEntry, currentEntry);
 
   for (const entry of entries) {
-    await verifyEntry(entry, {outputDir});
+    await verifyEntry(entry, {
+      outputDir,
+      allowDirtyUnsigned: options.allowUnsigned === true,
+    });
   }
 }
 
@@ -101,6 +106,7 @@ async function verifyEntry(entry, context) {
       specPath,
       specSha: digest,
       specBytes: specBuffer.length,
+      allowDirtyUnsigned: context.allowDirtyUnsigned,
     });
   } else if (entry.signed) {
     throw new Error(
@@ -120,9 +126,18 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
   if (typeof manifest.generated_unix_ms !== 'number') {
     throw new Error(`manifest ${manifestPath} is missing generated_unix_ms. ${staleHint}`);
   }
-  if (!isNonEmptyString(manifest.generator_commit)) {
-    throw new Error(`manifest ${manifestPath} is missing generator_commit. ${staleHint}`);
-  }
+  const recordedSignature = manifest?.artifact?.signature;
+  const manifestSigned = Boolean(
+    recordedSignature &&
+      isNonEmptyString(recordedSignature.algorithm) &&
+      isNonEmptyString(recordedSignature.public_key_hex) &&
+      isNonEmptyString(recordedSignature.signature_hex),
+  );
+  validateOpenApiGeneratorProvenance(manifest, {
+    label: `manifest ${manifestPath}`,
+    signed: manifestSigned,
+    requireClean: !specContext.allowDirtyUnsigned,
+  });
   const artifact = manifest?.artifact;
   if (!artifact || typeof artifact.path !== 'string') {
     throw new Error(
@@ -155,13 +170,6 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
       `manifest ${manifestPath} sha256 (${artifact.sha256_hex}) does not match the spec (${specContext.specSha}). ${staleHint}`,
     );
   }
-  const recordedSignature = artifact.signature;
-  const manifestSigned = Boolean(
-    recordedSignature &&
-      isNonEmptyString(recordedSignature.algorithm) &&
-      isNonEmptyString(recordedSignature.public_key_hex) &&
-      isNonEmptyString(recordedSignature.signature_hex),
-  );
   if (Boolean(entry.signed) !== manifestSigned) {
     throw new Error(
       `versions.json entry ${entry.label} signed=${entry.signed} disagrees with manifest ${manifestPath}. ${staleHint}`,
@@ -380,7 +388,12 @@ function isNonEmptyString(value) {
 }
 
 async function runCli() {
-  await verifyOpenApiVersions();
+  const args = process.argv.slice(2);
+  const unknown = args.filter((arg) => arg !== '--allow-unsigned');
+  if (unknown.length > 0) {
+    throw new Error(`unknown verify-openapi-versions option: ${unknown.join(', ')}`);
+  }
+  await verifyOpenApiVersions({allowUnsigned: args.includes('--allow-unsigned')});
 }
 
 const invokedUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;

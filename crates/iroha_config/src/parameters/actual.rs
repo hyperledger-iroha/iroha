@@ -7120,6 +7120,8 @@ pub struct ProofApi {
     pub burst: Option<NonZeroU32>,
     /// Maximum accepted proof request payload size.
     pub max_body_bytes: Bytes<u64>,
+    /// Maximum proof request bodies buffered concurrently before handler admission.
+    pub body_max_inflight: NonZeroUsize,
     /// Egress budget for proof responses (bytes/sec). None disables.
     pub egress_bytes_per_sec: Option<NonZeroU64>,
     /// Burst budget for proof responses (bytes).
@@ -7424,12 +7426,16 @@ pub struct Torii {
     ///
     /// Applies to the non-consensus helper endpoint `POST /v1/zk/ivm/prove`.
     pub zk_ivm_prove_max_queue: usize,
+    /// Wall-clock timeout for synchronous IVM derive/simulation/view tooling.
+    pub zk_ivm_tooling_timeout_ms: u64,
     /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
     pub zk_ivm_prove_job_ttl_secs: u64,
     /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
     ///
     /// Set to 0 to disable the cap (not recommended).
     pub zk_ivm_prove_job_max_entries: usize,
+    /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
+    pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
     /// Iroha Connect configuration.
     pub connect: Connect,
     /// ISO 20022 bridge configuration.

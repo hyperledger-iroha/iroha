@@ -123,7 +123,7 @@ export async function recordReleaseProvenance(options = {}) {
 async function defaultPackRunner({ packDir }) {
   const { stdout } = await runCommand(
     "npm",
-    ["pack", "--json", "--pack-destination", packDir],
+    ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
     { cwd: JS_DIR },
   );
   const trimmed = stdout.trim();

@@ -16,6 +16,7 @@ use core::str::FromStr;
 use std::time::Instant;
 use std::{
     collections::BTreeMap,
+    io::{Cursor, Seek, SeekFrom, Write},
     mem,
     sync::{Arc, OnceLock},
 };
@@ -70,7 +71,7 @@ use crate::{
         isi::settlement::{admission_validate_dvp, admission_validate_pvp},
         ivm::{
             cache::{IvmCache, ProgramSummary},
-            host::{AmxBudgetViolation, QueryStateSource},
+            host::{AmxBudgetViolation, HostOutputLimits, QueryStateSource},
         },
     },
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
@@ -885,6 +886,23 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
                     expected: expected_abi,
                     actual: abi_hash,
                 }),
+            ));
+        }
+        let stored_bytecode = artifacts.code_bytes.as_deref().ok_or_else(|| {
+            OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(format!(
+                "contract bytecode for bound instance `{contract_address}` is missing from WSV"
+            )))
+        })?;
+        let submitted_bytecode = match tx.instructions() {
+            Executable::Ivm(bytecode) => Some(bytecode.as_ref()),
+            Executable::IvmProved(proved) => Some(proved.bytecode.as_ref()),
+            Executable::Instructions(_) | Executable::ContractCall(_) => None,
+        };
+        if submitted_bytecode.is_some_and(|bytecode| bytecode != stored_bytecode) {
+            return Err(OverlayBuildError::HeaderPolicy(
+                IvmAdmissionError::BytecodeDecodingFailed(format!(
+                    "submitted contract bytecode does not exactly match the artifact stored for bound instance `{contract_address}`"
+                )),
             ));
         }
     }
@@ -5427,6 +5445,105 @@ seiyaku ReplayCallee {
     }
 
     #[test]
+    fn raw_and_proved_ivm_reject_header_substitution_for_bound_contract() {
+        use iroha_data_model::{
+            metadata::Metadata,
+            prelude::{AccountId, IvmBytecode, TransactionBuilder},
+            transaction::IvmProved,
+        };
+        use iroha_primitives::json::Json;
+        use std::sync::Arc;
+
+        let (stored_program, header_len, meta) = sample_program_zk_mode();
+        let (code_hash, abi_hash) =
+            super::compute_program_hashes(&meta, header_len, &stored_program);
+        let stored_bytecode = IvmBytecode::from_compiled(stored_program.clone());
+        let mut substituted_program = stored_program;
+        substituted_program[8] ^= 0x01;
+        let substituted_bytecode = IvmBytecode::from_compiled(substituted_program);
+        let substituted_summary = IvmCache::new()
+            .summarize_program(substituted_bytecode.as_ref())
+            .expect("substituted program summary");
+        assert_eq!(
+            substituted_summary.code_hash, code_hash,
+            "the negative control must preserve the body-only ledger code hash"
+        );
+        assert_ne!(
+            substituted_bytecode.as_ref(),
+            stored_bytecode.as_ref(),
+            "the negative control must alter the excluded IVM header"
+        );
+
+        let kp = checked_keypair();
+        let authority = AccountId::new(kp.public_key().clone());
+        let contract_address = ContractAddress::derive(
+            0,
+            &authority,
+            10,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut world = crate::state::World::default();
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        world
+            .contract_code
+            .insert(code_hash, stored_bytecode.as_ref().to_vec());
+        world.contract_manifests.insert(
+            code_hash,
+            ContractManifest {
+                code_hash: Some(code_hash),
+                abi_hash: Some(abi_hash),
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                states: None,
+                kotoba: None,
+                provenance: None,
+            }
+            .signed(&kp),
+        );
+        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
+
+        let executable_variants = [
+            Executable::Ivm(substituted_bytecode.clone()),
+            Executable::IvmProved(IvmProved {
+                bytecode: substituted_bytecode,
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }),
+        ];
+        for executable in executable_variants {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "contract_address".parse().expect("metadata key"),
+                Json::new(contract_address.to_string()),
+            );
+            insert_gas_limit(&mut metadata);
+            let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+                .with_metadata(metadata)
+                .with_executable(executable)
+                .sign(kp.private_key());
+            let error = validate_contract_binding(&state.view(), &tx, &substituted_summary)
+                .expect_err("header-substituted artifact must fail before VM/proof execution");
+            assert!(
+                matches!(
+                    error,
+                    OverlayBuildError::HeaderPolicy(
+                        IvmAdmissionError::BytecodeDecodingFailed(ref message)
+                    ) if message.contains("does not exactly match the artifact stored")
+                ),
+                "unexpected bytecode-binding error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn overlay_rejects_axt_without_policy_entries() {
         use iroha_data_model::{
@@ -7190,6 +7307,68 @@ where
     Ok(replay)
 }
 
+struct BoundedSeekBuffer {
+    cursor: Cursor<Vec<u8>>,
+    max_bytes: usize,
+}
+
+impl BoundedSeekBuffer {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            cursor: Cursor::new(Vec::new()),
+            max_bytes,
+        }
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.cursor.into_inner()
+    }
+}
+
+impl Write for BoundedSeekBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let position = usize::try_from(self.cursor.position()).unwrap_or(usize::MAX);
+        let end = position
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("proved overlay length overflow"))?;
+        if end > self.max_bytes {
+            return Err(std::io::Error::other(
+                "proved overlay exceeds transport limit",
+            ));
+        }
+        self.cursor.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.cursor.flush()
+    }
+}
+
+impl Seek for BoundedSeekBuffer {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        let next = self.cursor.seek(position)?;
+        if usize::try_from(next).unwrap_or(usize::MAX) > self.max_bytes {
+            return Err(std::io::Error::other(
+                "proved overlay seek exceeds transport limit",
+            ));
+        }
+        Ok(next)
+    }
+}
+
+fn encode_proved_overlay_bounded<T: norito::NoritoSerialize>(
+    value: &T,
+    max_bytes: usize,
+) -> Result<Vec<u8>, OverlayBuildError> {
+    let mut writer = BoundedSeekBuffer::new(max_bytes);
+    norito::core::to_writer_seek(&mut writer, value).map_err(|_| {
+        OverlayBuildError::ZkProof(format!(
+            "proved overlay exceeds the {max_bytes}-byte tooling transport limit"
+        ))
+    })?;
+    Ok(writer.into_inner())
+}
+
 /// Execute an `Executable::Ivm` transaction in the local state view and derive the corresponding
 /// [`iroha_data_model::transaction::IvmProved`] payload.
 ///
@@ -7201,6 +7380,76 @@ pub fn derive_ivm_proved_payload_from_ivm_execution<R>(
     state_ro: &R,
     tx: &SignedTransaction,
     vk_record: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    derive_ivm_proved_payload_from_ivm_execution_inner(
+        state_ro,
+        tx,
+        &vk_record.circuit_id,
+        vk_record.version,
+        vk_record.gas_schedule_id.as_deref(),
+        None,
+    )
+}
+
+/// Bounded Torii/operator variant of [`derive_ivm_proved_payload_from_ivm_execution`].
+///
+/// Output count is clamped by the live transaction instruction limit and
+/// output bytes are rejected by the host before queue/durable-state growth.
+pub fn derive_ivm_proved_payload_from_ivm_execution_bounded<R>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    vk_record: &iroha_data_model::proof::VerifyingKeyRecord,
+    max_output_bytes: usize,
+) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    derive_ivm_proved_payload_from_ivm_execution_inner(
+        state_ro,
+        tx,
+        &vk_record.circuit_id,
+        vk_record.version,
+        vk_record.gas_schedule_id.as_deref(),
+        Some(max_output_bytes),
+    )
+}
+
+/// Bounded tooling derivation using only the lightweight verifier policy
+/// fields required to construct the gas-policy commitment.
+///
+/// This variant lets request handlers avoid cloning an optional multi-megabyte
+/// inline verifying key merely to execute and derive an overlay.
+pub fn derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context<R>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    circuit_id: &str,
+    version: u32,
+    gas_schedule_id: Option<&str>,
+    max_output_bytes: usize,
+) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    derive_ivm_proved_payload_from_ivm_execution_inner(
+        state_ro,
+        tx,
+        circuit_id,
+        version,
+        gas_schedule_id,
+        Some(max_output_bytes),
+    )
+}
+
+fn derive_ivm_proved_payload_from_ivm_execution_inner<R>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    circuit_id: &str,
+    version: u32,
+    gas_schedule_id: Option<&str>,
+    max_output_bytes: Option<usize>,
 ) -> Result<iroha_data_model::transaction::IvmProved, OverlayBuildError>
 where
     R: StateReadOnly + QueryStateSource,
@@ -7245,7 +7494,7 @@ where
     // Proved executions do not support implicit manifest registration append.
     enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
 
-    let gas_schedule_id = vk_record.gas_schedule_id.as_deref().ok_or_else(|| {
+    let gas_schedule_id = gas_schedule_id.ok_or_else(|| {
         OverlayBuildError::ZkProof("verifying key missing gas_schedule_id".to_owned())
     })?;
 
@@ -7283,6 +7532,18 @@ where
             Arc::clone(&accounts),
         )
     };
+    if let Some(max_output_bytes) = max_output_bytes {
+        let max_items = usize::try_from(
+            state_ro
+                .world()
+                .parameters()
+                .transaction()
+                .max_instructions()
+                .get(),
+        )
+        .unwrap_or(usize::MAX);
+        host.set_output_limits(HostOutputLimits::new(max_items, max_output_bytes));
+    }
     let amx_analysis =
         ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
             ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
@@ -7316,6 +7577,11 @@ where
     vm.set_zk_trace_enabled(true);
     apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
     run_vm_with_host(&mut vm, &mut host)?;
+    if let Some(violation) = host.output_budget_violation() {
+        return Err(OverlayBuildError::ZkProof(format!(
+            "IVM tooling output budget exceeded before retention: {violation:?}"
+        )));
+    }
 
     let gas_used = gas_limit.saturating_sub(vm.remaining_gas());
     let trace_bundle = build_ivm_trace_bundle(&vm);
@@ -7331,9 +7597,13 @@ where
     let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = queued.into();
 
     let overlay_hash = {
-        let bytes = norito::to_bytes(&overlay).map_err(|_| {
-            OverlayBuildError::ZkProof("failed to encode proved overlay".to_owned())
-        })?;
+        let bytes = if let Some(max_output_bytes) = max_output_bytes {
+            encode_proved_overlay_bounded(&overlay, max_output_bytes)?
+        } else {
+            norito::to_bytes(&overlay).map_err(|_| {
+                OverlayBuildError::ZkProof("failed to encode proved overlay".to_owned())
+            })?
+        };
         Hash::new(&bytes)
     };
 
@@ -7342,8 +7612,8 @@ where
     let gas_policy_commitment = expected_ivm_gas_policy_commitment(
         summary.code_hash,
         overlay_hash,
-        &vk_record.circuit_id,
-        vk_record.version,
+        circuit_id,
+        version,
         gas_schedule_id,
         gas_limit,
         gas_used,

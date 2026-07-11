@@ -692,31 +692,63 @@ fn offline_paths() -> Map {
             })],
         )),
     );
-    for (path, summary, description, request_schema) in [
+    for (path, summary, description, request_schema, currently_unavailable) in [
         (
             "/v1/offline/v2/kagemusha/topup",
             "Top up recursive Kagemusha offline cash.",
             "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV2 archive in topup_request_norito_base64. The archive carries its signed payer/device authorization, exact atomic u128 amount and live asset scale. Unknown or retired Offline Note fields are rejected; no legacy issue fallback is mounted.",
             "#/components/schemas/KagemushaTopUpRequestV2Body",
+            false,
         ),
         (
             "/v1/offline/v2/notes/redeem",
             "Redeem recursive Kagemusha offline cash.",
-            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64. The archive carries its signed recipient/device authorization, exact atomic u128 credit amount, proof-bound optional offline change, and Reserved or verified semantic lineage data. Unknown, compact-projection, and retired Offline Note fields are rejected.",
+            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64. The archive carries its signed recipient/device authorization, exact atomic u128 credit amount, proof-bound optional offline change, and Reserved lineage data without a lineage witness. Semantic lineage and witness-bearing redemption remain disabled and fail closed. Unknown, compact-projection, and retired Offline Note fields are rejected. Current runtime state: every otherwise-valid redeem request fails closed with HTTP 503 before state mutation because the production proof backend and atomic operation-receipt persistence are unavailable. The typed HTTP 200 finality receipt is a conditional future contract and is unreachable until both dependencies are implemented and enabled.",
             "#/components/schemas/KagemushaRedeemRequestV2Body",
+            true,
         ),
     ] {
-        paths.insert(
-            path.to_owned(),
-            Value::Object(json_post_operation(
-                "Offline",
-                summary,
-                description,
-                request_schema,
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
+        let mut operation = json_post_operation(
+            "Offline",
+            summary,
+            description,
+            request_schema,
+            "#/components/schemas/KagemushaV2TerminalFinalityResponse",
+            Vec::new(),
         );
+        if currently_unavailable {
+            let post = operation
+                .get_mut("post")
+                .and_then(Value::as_object_mut)
+                .expect("JSON post helper must return a post operation");
+            post.insert(
+                "x-iroha-current-runtime-status".to_owned(),
+                Value::String("fail-closed-503".to_owned()),
+            );
+            let responses = post
+                .get_mut("responses")
+                .and_then(Value::as_object_mut)
+                .expect("JSON post helper must return response metadata");
+            responses
+                .get_mut("200")
+                .and_then(Value::as_object_mut)
+                .expect("JSON post helper must return a typed 200 response")
+                .insert(
+                    "description".to_owned(),
+                    Value::String(
+                        "Conditional future success contract; unreachable in the current runtime until the production proof backend and atomic operation-receipt persistence are implemented and enabled."
+                            .to_owned(),
+                    ),
+                );
+            responses.insert(
+                "503".to_owned(),
+                json_response(
+                    "Current runtime fails closed before state mutation because the production proof backend and atomic operation-receipt persistence are unavailable.",
+                    error_schema_reference(),
+                ),
+            );
+        }
+        paths.insert(path.to_owned(), Value::Object(operation));
     }
     paths
 }
@@ -2387,13 +2419,24 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/zk/ivm/derive".to_owned(),
+        Value::Object(json_post_operation(
+            "ZK",
+            "Derive an IVM proved payload.",
+            "Execute ZK-mode IVM bytecode under bounded host output, blocking-worker concurrency, and timeout limits; plaintext gas usage is not returned.",
+            "#/components/schemas/ZkIvmDeriveRequest",
+            "#/components/schemas/ZkIvmDeriveResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/zk/ivm/prove".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Prove IVM execution (job).",
-            "Submit an IVM proved payload and return a job identifier for proof generation.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Execute and prove ZK-mode IVM bytecode asynchronously. POST returns only a job identifier; canonical proved and compact proof attachment material are available from the terminal GET state.",
+            "#/components/schemas/ZkIvmProveRequest",
+            "#/components/schemas/ZkIvmProveJobCreated",
             Vec::new(),
         )),
     );
@@ -2403,8 +2446,8 @@ fn zk_paths() -> Map {
             let get_op = json_get_operation(
                 "ZK",
                 "Fetch an IVM prove job.",
-                "Fetch the status of an IVM proof generation job.",
-                "#/components/schemas/JsonValue",
+                "Fetch one state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64.",
+                "#/components/schemas/ZkIvmProveJob",
                 vec![string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
@@ -2413,8 +2456,8 @@ fn zk_paths() -> Map {
             let delete_op = json_delete_operation(
                 "ZK",
                 "Delete an IVM prove job.",
-                "Delete an IVM proof generation job entry.",
-                "#/components/schemas/JsonValue",
+                "Cancel and delete an IVM proof generation job entry. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
+                "#/components/schemas/ZkIvmProveJobCreated",
                 vec![string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
@@ -9282,6 +9325,160 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "ZkIvmVerifyingKeyRef".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "name"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": { "type": "string", "minLength": 1 },
+                "name": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProvedPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["bytecode", "overlay", "events_commitment", "gas_policy_commitment"],
+            "additionalProperties": false,
+            "maxProperties": 4,
+            "description": "Canonical IvmProved JSON. Torii rejects an encoded proved payload above 16 MiB and bounds host output before queue/durable-state growth.",
+            "properties": {
+                "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 },
+                "overlay": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Ordered canonical InstructionBox JSON values, bounded by the live transaction instruction limit."
+                },
+                "events_commitment": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "gas_policy_commitment": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmDeriveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["vk_ref", "authority", "bytecode"],
+            "additionalProperties": false,
+            "description": "Body is limited to 8 MiB before extraction. metadata must carry gas_limit.",
+            "properties": {
+                "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
+                "authority": { "type": "string", "minLength": 1 },
+                "metadata": { "type": "object", "additionalProperties": true },
+                "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmDeriveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proved"],
+            "additionalProperties": false,
+            "properties": { "proved": { "$ref": "#/components/schemas/ZkIvmProvedPayload" } }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["vk_ref", "authority", "bytecode"],
+            "additionalProperties": false,
+            "description": "Body is limited to 8 MiB before extraction. Optional proved is equality-checked against authoritative node execution and is never echoed by POST.",
+            "properties": {
+                "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
+                "authority": { "type": "string", "minLength": 1 },
+                "metadata": { "type": "object", "additionalProperties": true },
+                "bytecode": { "type": "string", "contentEncoding": "base64", "maxLength": 5592408 },
+                "proved": { "$ref": "#/components/schemas/ZkIvmProvedPayload" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobCreated".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["job_id"],
+            "additionalProperties": false,
+            "properties": { "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" } }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmCompactProof".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "bytes_b64"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": { "type": "string", "minLength": 1 },
+                "bytes_b64": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "minLength": 4,
+                    "maxLength": 11184812,
+                    "description": "Canonical standard-base64 encoding of 1 byte through 8 MiB of proof bytes. Legacy numeric proof.bytes is accepted only on attachment input and is never emitted here."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmCompactProofAttachment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "proof", "vk_ref"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": { "type": "string", "minLength": 1 },
+                "proof": { "$ref": "#/components/schemas/ZkIvmCompactProof" },
+                "vk_ref": { "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef" },
+                "vk_commitment": { "type": "array", "minItems": 32, "maxItems": 32, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+                "envelope_hash": { "type": "array", "minItems": 32, "maxItems": 32, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+                "lane_privacy": { "$ref": "#/components/schemas/JsonValue" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobPendingOrRunning".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["job_id", "status"], "additionalProperties": false,
+            "properties": { "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "status": { "type": "string", "enum": ["pending", "running"] } }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobError".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["job_id", "status", "error"], "additionalProperties": false,
+            "properties": {
+                "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "status": { "type": "string", "enum": ["error"] },
+                "error": { "type": "string", "minLength": 1, "maxLength": 1036 }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJobDone".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["job_id", "status", "proved", "attachment"], "additionalProperties": false,
+            "description": "Canonical terminal response, serialized once and retained under the configurable aggregate job cache budget (128 MiB by default); total response is at most 32 MiB.",
+            "properties": {
+                "job_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "status": { "type": "string", "enum": ["done"] },
+                "proved": { "$ref": "#/components/schemas/ZkIvmProvedPayload" },
+                "attachment": { "$ref": "#/components/schemas/ZkIvmCompactProofAttachment" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ZkIvmProveJob".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/ZkIvmProveJobPendingOrRunning" },
+                { "$ref": "#/components/schemas/ZkIvmProveJobError" },
+                { "$ref": "#/components/schemas/ZkIvmProveJobDone" }
+            ]
+        }),
+    );
+    schemas.insert(
         "NexusLaneLifecycleIncarnationEntry".to_owned(),
         norito::json!({
             "type": "object",
@@ -10070,6 +10267,53 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "minLength": 1,
                     "description": "Canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "KagemushaV2TerminalFinalityResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "description": "Finalized Kagemusha V2 operation receipt. operation_id and transaction_hash are lowercase 64-hex strings; height and server time are positive. Top-up responses set both topup anchor fields, while redeem responses set both to null.",
+            "required": [
+                "version",
+                "operation_id",
+                "transaction_hash",
+                "finalized_block_height",
+                "status",
+                "server_time_ms",
+                "topup_anchor_norito_base64",
+                "topup_anchor_digest_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [2] },
+                "operation_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "transaction_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "finalized_block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "status": { "type": "string", "enum": ["Applied"] },
+                "server_time_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "topup_anchor_norito_base64": {
+                    "type": ["string", "null"]
+                },
+                "topup_anchor_digest_hex": {
+                    "type": ["string", "null"],
+                    "pattern": "^[0-9a-f]{64}$"
                 }
             }
         }),
@@ -13963,6 +14207,10 @@ mod tests {
         assert!(redeem_description.contains("redeem_request_norito_base64"));
         assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV2"));
         assert!(redeem_description.contains("signed recipient/device authorization"));
+        assert!(redeem_description.contains("Reserved lineage data without a lineage witness"));
+        assert!(redeem_description.contains(
+            "Semantic lineage and witness-bearing redemption remain disabled and fail closed"
+        ));
         let topup_request_schema = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
@@ -13979,6 +14227,26 @@ mod tests {
             topup_request_schema,
             "#/components/schemas/KagemushaTopUpRequestV2Body"
         );
+        for post in [topup_post, redeem_post] {
+            let response_schema = post
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                .expect("Kagemusha V2 finality response schema");
+            assert_eq!(
+                response_schema,
+                "#/components/schemas/KagemushaV2TerminalFinalityResponse"
+            );
+        }
     }
 
     #[test]
@@ -14010,7 +14278,152 @@ mod tests {
                 Some(&vec![Value::String(field.to_owned())])
             );
         }
+        let finality = schemas
+            .get("KagemushaV2TerminalFinalityResponse")
+            .and_then(Value::as_object)
+            .expect("Kagemusha V2 terminal finality response schema");
+        assert_eq!(
+            finality.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let required = finality
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("Kagemusha V2 finality required fields");
+        for field in [
+            "operation_id",
+            "transaction_hash",
+            "finalized_block_height",
+            "server_time_ms",
+            "topup_anchor_norito_base64",
+            "topup_anchor_digest_hex",
+        ] {
+            assert!(required.contains(&Value::String(field.to_owned())));
+        }
+        let properties = finality
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Kagemusha V2 finality properties");
+        for field in ["operation_id", "transaction_hash"] {
+            assert_eq!(
+                properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$")
+            );
+        }
+        for field in ["finalized_block_height", "server_time_ms"] {
+            assert_eq!(
+                properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("minimum")),
+                Some(&Value::from(1_u64))
+            );
+        }
         assert!(!schemas.contains_key("OfflineIssuerBodyAuthRequest"));
+    }
+
+    #[test]
+    fn generated_spec_marks_kagemusha_v2_redeem_fail_closed_until_backends_exist() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        let redeem_post = paths
+            .get("/v1/offline/v2/notes/redeem")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline redeem post operation");
+        assert_eq!(
+            redeem_post
+                .get("x-iroha-current-runtime-status")
+                .and_then(Value::as_str),
+            Some("fail-closed-503")
+        );
+        let description = redeem_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline redeem description");
+        for marker in [
+            "every otherwise-valid redeem request fails closed with HTTP 503 before state mutation",
+            "production proof backend",
+            "atomic operation-receipt persistence",
+            "typed HTTP 200 finality receipt is a conditional future contract",
+        ] {
+            assert!(
+                description.contains(marker),
+                "redeem description is missing current-runtime marker: {marker}"
+            );
+        }
+
+        let responses = redeem_post
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("offline redeem responses");
+        let future_success = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("conditional future 200 response");
+        assert!(
+            future_success
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.contains("unreachable in the current runtime"))
+        );
+        assert_eq!(
+            future_success
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/KagemushaV2TerminalFinalityResponse")
+        );
+        let unavailable = responses
+            .get("503")
+            .and_then(Value::as_object)
+            .expect("current fail-closed 503 response");
+        assert!(
+            unavailable
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.contains("before state mutation"))
+        );
+        assert_eq!(
+            unavailable
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ErrorEnvelope")
+        );
+
+        let topup_post = paths
+            .get("/v1/offline/v2/kagemusha/topup")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline Kagemusha top-up post operation");
+        assert!(!topup_post.contains_key("x-iroha-current-runtime-status"));
+        assert!(
+            !topup_post
+                .get("responses")
+                .and_then(Value::as_object)
+                .is_some_and(|responses| responses.contains_key("503")),
+            "the redeem-only backend limitation must not be copied to top-up"
+        );
     }
 
     #[test]
@@ -15907,5 +16320,93 @@ mod tests {
         assert!(has_push, "tags should include Push");
         assert!(has_soracloud, "tags should include Soracloud");
         assert!(has_vpn, "tags should include VPN");
+    }
+
+    #[test]
+    fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
+        let doc = generate_spec();
+        let paths = doc.get("paths").and_then(Value::as_object).expect("paths");
+        assert!(paths.contains_key("/v1/zk/ivm/derive"));
+        let prove_post = paths
+            .get("/v1/zk/ivm/prove")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("prove post");
+        let request_ref = prove_post
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(request_ref, Some("#/components/schemas/ZkIvmProveRequest"));
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas");
+        let job = schemas
+            .get("ZkIvmProveJob")
+            .and_then(Value::as_object)
+            .expect("job schema");
+        assert_eq!(
+            job.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(3)
+        );
+        let done = schemas
+            .get("ZkIvmProveJobDone")
+            .and_then(Value::as_object)
+            .expect("done schema");
+        assert_eq!(done.get("additionalProperties"), Some(&Value::Bool(false)));
+        let required = done
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("done required");
+        assert_eq!(
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec!["job_id", "status", "proved", "attachment"]
+        );
+        let proof_properties = schemas
+            .get("ZkIvmCompactProof")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("compact proof properties");
+        assert!(proof_properties.contains_key("bytes_b64"));
+        assert!(!proof_properties.contains_key("bytes"));
+        assert_eq!(
+            proof_properties
+                .get("bytes_b64")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxLength"))
+                .and_then(Value::as_u64),
+            Some(11_184_812)
+        );
+        for state in [
+            "ZkIvmProveJobPendingOrRunning",
+            "ZkIvmProveJobError",
+            "ZkIvmProveJobDone",
+        ] {
+            let pattern = schemas
+                .get(state)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("job_id"))
+                .and_then(Value::as_object)
+                .and_then(|job_id| job_id.get("pattern"))
+                .and_then(Value::as_str);
+            assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{state}");
+        }
     }
 }

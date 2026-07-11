@@ -39,7 +39,50 @@ export const BUNDLE_TARGETS = Object.freeze([
     // Keep narrow headroom over the first enforced baseline (187.7 KiB).
     limitKb: 205,
   }),
+  Object.freeze({
+    label: "canonicalRequest.js (browser)",
+    entryPoint: join(ROOT, "dist", "canonicalRequest.js"),
+    platform: "browser",
+    target: "es2020",
+    // First packed browser-safe baseline is 67.9 KiB with pinned esbuild.
+    limitKb: 75,
+    forbidNodeInputs: true,
+  }),
+  Object.freeze({
+    label: "ivmArtifact.js (browser)",
+    entryPoint: join(ROOT, "dist", "ivmArtifact.js"),
+    platform: "browser",
+    target: "es2020",
+    // This leaf helper must remain suitable for strict-DOM browser consumers.
+    limitKb: 12,
+    forbidNodeInputs: true,
+    forbidGlobalBuffer: true,
+  }),
+  Object.freeze({
+    label: "browser.js (public aggregate)",
+    entryPoint: join(ROOT, "dist", "browser.js"),
+    platform: "browser",
+    target: "es2020",
+    // First browser-clean public-aggregate baseline is 278.1 KiB with pinned esbuild.
+    // Keep narrow headroom while covering the complete namespace export.
+    limitKb: 300,
+    forbidNodeInputs: true,
+  }),
 ]);
+
+const NODE_ONLY_BROWSER_INPUT_PATTERNS = Object.freeze([
+  /^node:/u,
+  /[/\\](?:src|dist)[/\\]crypto\.js$/u,
+  /[/\\](?:src|dist)[/\\]cryptoHash\.js$/u,
+  /[/\\](?:src|dist)[/\\]native\.js$/u,
+  /[/\\](?:src|dist)[/\\]toriiClient\.js$/u,
+]);
+
+export function findForbiddenBrowserInputs(inputs) {
+  return inputs.filter((input) =>
+    NODE_ONLY_BROWSER_INPUT_PATTERNS.some((pattern) => pattern.test(input)),
+  );
+}
 
 async function loadRequiredEsbuild(loadEsbuild) {
   let esbuild;
@@ -68,6 +111,7 @@ async function checkBundle(esbuild, target, log) {
     treeShaking: true,
     sourcemap: false,
     minify: true,
+    metafile: target.forbidNodeInputs === true,
   });
   const output = result.outputFiles?.[0];
   if (!output) {
@@ -80,6 +124,22 @@ async function checkBundle(esbuild, target, log) {
     throw new Error(
       `${target.label} bundle size ${kb} KiB exceeds limit ${target.limitKb} KiB`,
     );
+  }
+  if (target.forbidNodeInputs === true) {
+    const forbidden = findForbiddenBrowserInputs(
+      Object.keys(result.metafile?.inputs ?? {}),
+    );
+    if (forbidden.length > 0) {
+      throw new Error(
+        `${target.label} includes forbidden Node-only inputs: ${forbidden.join(", ")}`,
+      );
+    }
+  }
+  if (
+    target.forbidGlobalBuffer === true &&
+    /(?:globalThis|window|global)\.Buffer\s*=/u.test(output.text ?? "")
+  ) {
+    throw new Error(`${target.label} installs a forbidden global Buffer shim`);
   }
 }
 
@@ -118,6 +178,9 @@ export async function runBundleSizeCheck({
   await checkDistExport(pkg, "./torii", "import");
   await checkDistExport(pkg, "./transaction-codec", "browser");
   await checkDistExport(pkg, "./nexus-app", "browser");
+  await checkDistExport(pkg, "./canonical-request", "browser");
+  await checkDistExport(pkg, "./ivm-artifact", "browser");
+  await checkDistExport(pkg, "./browser", "browser");
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

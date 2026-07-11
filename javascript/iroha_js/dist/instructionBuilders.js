@@ -1,5 +1,5 @@
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { Buffer } from "buffer";
+import { createHash } from "./cryptoHash.js";
 import {
   noritoEncodeInstruction,
   noritoDecodePrivacyProofEnvelope,

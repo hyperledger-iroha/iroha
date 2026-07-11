@@ -27,8 +27,6 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 
-#[cfg(test)]
-use super::CertifiedLaneBlockArtifact;
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
     AutonomousLaneBlockArtifact, BlockStore, CERTIFIED_LANE_BLOCKS_DATA_FILE,
@@ -5518,6 +5516,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::kura::CertifiedLaneBlockArtifact;
     use crate::{
         block::BlockBuilder,
         lane_consensus::{

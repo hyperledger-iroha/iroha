@@ -7,6 +7,7 @@ import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {verifyOpenApiSignature} from './lib/openapi-signature.mjs';
+import {validateOpenApiGeneratorProvenance} from './lib/openapi-provenance.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -250,8 +251,14 @@ export async function checkOpenApiSignatures(options = {}) {
       ) {
         entryIssues.push('manifest missing generated_unix_ms');
       }
-      if (!isNonEmptyString(manifestJson.generator_commit)) {
-        entryIssues.push('manifest missing generator_commit');
+      try {
+        validateOpenApiGeneratorProvenance(manifestJson, {
+          label: 'manifest',
+          signed: manifestJson?.artifact?.signature != null,
+          requireClean: requiresSignature,
+        });
+      } catch (error) {
+        entryIssues.push(error.message ?? String(error));
       }
       const artifact = manifestJson.artifact;
       if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {

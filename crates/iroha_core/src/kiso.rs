@@ -945,10 +945,14 @@ mod tests {
                 zk_ivm_prove_max_inflight:
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_INFLIGHT,
                 zk_ivm_prove_max_queue: iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_MAX_QUEUE,
+                zk_ivm_tooling_timeout_ms:
+                    iroha_config::parameters::defaults::torii::ZK_IVM_TOOLING_TIMEOUT_MS,
                 zk_ivm_prove_job_ttl_secs:
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_TTL_SECS,
                 zk_ivm_prove_job_max_entries:
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
+                zk_ivm_prove_job_max_retained_bytes:
+                    iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
                 rbc_sampling: RbcSampling::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
                 connect: Connect {
@@ -1015,6 +1019,8 @@ mod tests {
                     burst: iroha_config::parameters::defaults::torii::PROOF_BURST
                         .and_then(NonZeroU32::new),
                     max_body_bytes: iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES,
+                    body_max_inflight:
+                        iroha_config::parameters::defaults::torii::PROOF_BODY_MAX_INFLIGHT,
                     egress_bytes_per_sec: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC
                         .and_then(std::num::NonZeroU64::new),
                     egress_burst_bytes: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BURST_BYTES

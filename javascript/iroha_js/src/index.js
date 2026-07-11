@@ -20,6 +20,11 @@ export {
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export {
+  computeIvmArtifactHashes,
+  IVM_ARTIFACT_MAX_BYTES,
+  IVM_PROGRAM_HEADER_LENGTH,
+} from "./ivmArtifact.js";
+export {
   assetReferencesMatch,
   composeAssetHoldingId,
   ensureCanonicalAccountId,
@@ -386,6 +391,7 @@ export {
   browserTransactionPayloadHashHex,
   buildBrowserTransferPayload,
   finalizeBrowserSignedTransaction,
+  validateBrowserTransferSignable,
 } from "./transactionCodec.js";
 export {
   OfflineQrPayloadKind,

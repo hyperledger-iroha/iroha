@@ -333,6 +333,70 @@ fn apply_sm_openssl_preview(enabled: bool) {
 #[cfg(not(feature = "sm-ffi-openssl"))]
 fn apply_sm_openssl_preview(_: bool) {}
 
+/// Bounds for artifacts retained by a host execution used by non-consensus tooling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostOutputLimits {
+    /// Maximum queued instructions, pending FastPQ entries, durable writes, and completed AXT items.
+    pub max_items: usize,
+    /// Maximum aggregate encoded/retained bytes for those artifacts.
+    pub max_bytes: usize,
+}
+
+impl HostOutputLimits {
+    /// Construct an output budget.
+    #[must_use]
+    pub const fn new(max_items: usize, max_bytes: usize) -> Self {
+        Self {
+            max_items,
+            max_bytes,
+        }
+    }
+}
+
+/// Sticky reason a bounded host stopped retaining execution output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostOutputBudgetViolation {
+    /// Retained item count would exceed the configured limit.
+    ItemCount {
+        /// Item count that would have been retained.
+        attempted: usize,
+        /// Configured maximum item count.
+        limit: usize,
+    },
+    /// Retained bytes would exceed the configured limit.
+    EncodedBytes {
+        /// Byte count that would have been retained.
+        attempted: usize,
+        /// Configured maximum retained bytes.
+        limit: usize,
+    },
+    /// An artifact could not be measured with the canonical encoder.
+    EncodingFailed,
+}
+
+struct BoundedCountingWriter {
+    written: usize,
+    max: usize,
+}
+
+impl std::io::Write for BoundedCountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next = self
+            .written
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("encoded output length overflow"))?;
+        if next > self.max {
+            return Err(std::io::Error::other("encoded output exceeds host limit"));
+        }
+        self.written = next;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Core host adapter used by Iroha to run IVM bytecode.
 ///
 /// Stateful operations must be translated into ISIs and executed via the
@@ -348,6 +412,10 @@ pub struct CoreHostImpl<QS> {
     stark_config: iroha_config::parameters::actual::Stark,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
     queued: Vec<QueuedInstruction>,
+    instruction_queue_limits: Option<HostOutputLimits>,
+    instruction_queue_count: usize,
+    instruction_queue_encoded_bytes: usize,
+    instruction_queue_violation: Option<HostOutputBudgetViolation>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Snapshot of accounts available for simple iteration helpers used by samples.
     accounts_snapshot: Arc<Vec<AccountId>>,
@@ -1460,6 +1528,10 @@ struct NestedContractCallHostSnapshot {
     axt_proof_cache: BTreeMap<DataSpaceId, CachedProofEntry>,
     last_axt_reject: Option<AxtRejectContext>,
     amx_budget_violation: Option<AmxBudgetViolation>,
+    output_count_before: usize,
+    output_bytes_before: usize,
+    output_violation_before: Option<HostOutputBudgetViolation>,
+    output_clone_reservation_bytes: usize,
 }
 
 impl HostExecutionArtifacts {
@@ -1720,6 +1792,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
+            instruction_queue_limits: None,
+            instruction_queue_count: 0,
+            instruction_queue_encoded_bytes: 0,
+            instruction_queue_violation: None,
             fastpq_batch_entries: None,
             accounts_snapshot: Arc::new(Vec::new()),
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -1807,6 +1883,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
+            instruction_queue_limits: None,
+            instruction_queue_count: 0,
+            instruction_queue_encoded_bytes: 0,
+            instruction_queue_violation: None,
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -1877,6 +1957,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
+            instruction_queue_limits: None,
+            instruction_queue_count: 0,
+            instruction_queue_encoded_bytes: 0,
+            instruction_queue_violation: None,
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -3241,6 +3325,138 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .collect()
     }
 
+    /// Configure a sticky aggregate output budget for tooling executions.
+    ///
+    /// Consensus execution leaves this unset and retains its existing policy.
+    /// Torii helpers set it before running untrusted bytecode so output is
+    /// rejected before vectors/maps grow past the transport budget.
+    pub fn set_output_limits(&mut self, limits: HostOutputLimits) {
+        self.instruction_queue_limits = Some(limits);
+        self.instruction_queue_count = 0;
+        self.instruction_queue_encoded_bytes = 0;
+        self.instruction_queue_violation = None;
+    }
+
+    /// Return the first output-budget violation observed by this host.
+    #[must_use]
+    pub const fn output_budget_violation(&self) -> Option<HostOutputBudgetViolation> {
+        self.instruction_queue_violation
+    }
+
+    /// Number of items currently accounted against a configured output budget.
+    #[must_use]
+    pub const fn retained_output_items(&self) -> usize {
+        self.instruction_queue_count
+    }
+
+    /// Encoded/retained bytes currently accounted against a configured output budget.
+    #[must_use]
+    pub const fn retained_output_bytes(&self) -> usize {
+        self.instruction_queue_encoded_bytes
+    }
+
+    fn try_reserve_output(&mut self, items: usize, bytes: usize) -> bool {
+        let Some(limits) = self.instruction_queue_limits else {
+            return true;
+        };
+        if self.instruction_queue_violation.is_some() {
+            return false;
+        }
+        let attempted_items = self
+            .instruction_queue_count
+            .checked_add(items)
+            .unwrap_or(usize::MAX);
+        if attempted_items > limits.max_items {
+            self.instruction_queue_violation = Some(HostOutputBudgetViolation::ItemCount {
+                attempted: attempted_items,
+                limit: limits.max_items,
+            });
+            return false;
+        }
+        let attempted_bytes = self
+            .instruction_queue_encoded_bytes
+            .checked_add(bytes)
+            .unwrap_or(usize::MAX);
+        if attempted_bytes > limits.max_bytes {
+            self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {
+                attempted: attempted_bytes,
+                limit: limits.max_bytes,
+            });
+            return false;
+        }
+        self.instruction_queue_count = attempted_items;
+        self.instruction_queue_encoded_bytes = attempted_bytes;
+        true
+    }
+
+    fn try_reserve_serialized_output<T: NoritoSerialize + ?Sized>(
+        &mut self,
+        value: &T,
+        items: usize,
+    ) -> bool {
+        const RETAINED_ITEM_OVERHEAD_BYTES: usize = 64;
+        let Some(limits) = self.instruction_queue_limits else {
+            return true;
+        };
+        if self.instruction_queue_violation.is_some() {
+            return false;
+        }
+        let remaining = limits
+            .max_bytes
+            .saturating_sub(self.instruction_queue_encoded_bytes);
+        // A single retained Norito value is later rendered as JSON by tooling.
+        // Bound each canonical fragment as well as the aggregate so one value
+        // cannot trigger an attacker-sized temporary JSON allocation before
+        // the final response writer observes its cap. The 1/8 share leaves a
+        // conservative expansion allowance for JSON strings/base64/field names.
+        let per_item_limit = limits.max_bytes.saturating_div(8).max(1);
+        let payload_limit = remaining
+            .saturating_sub(RETAINED_ITEM_OVERHEAD_BYTES)
+            .min(per_item_limit);
+        let mut writer = BoundedCountingWriter {
+            written: 0,
+            max: payload_limit,
+        };
+        if value.serialize(&mut writer).is_err() {
+            self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {
+                attempted: limits.max_bytes.saturating_add(1),
+                limit: limits.max_bytes,
+            });
+            return false;
+        }
+        self.try_reserve_output(
+            items,
+            writer.written.saturating_add(RETAINED_ITEM_OVERHEAD_BYTES),
+        )
+    }
+
+    fn try_reserve_durable_state_update(&mut self, key: &Name, value_len: usize) -> bool {
+        const DURABLE_ENTRY_OVERHEAD_BYTES: usize = 64;
+        let Some(_limits) = self.instruction_queue_limits else {
+            return true;
+        };
+        let new_bytes = key
+            .as_ref()
+            .len()
+            .saturating_add(value_len)
+            .saturating_add(DURABLE_ENTRY_OVERHEAD_BYTES);
+        let old_bytes = self.durable_state_overlay.get(key).map_or(0, |value| {
+            key.as_ref()
+                .len()
+                .saturating_add(value.as_ref().map_or(0, Vec::len))
+                .saturating_add(DURABLE_ENTRY_OVERHEAD_BYTES)
+        });
+        let items = usize::from(old_bytes == 0);
+        if new_bytes >= old_bytes {
+            self.try_reserve_output(items, new_bytes - old_bytes)
+        } else {
+            self.instruction_queue_encoded_bytes = self
+                .instruction_queue_encoded_bytes
+                .saturating_sub(old_bytes - new_bytes);
+            true
+        }
+    }
+
     fn drain_queued_instructions(&mut self) -> Vec<QueuedInstruction> {
         self.flush_pending_fastpq_batch();
         mem::take(&mut self.queued)
@@ -3497,11 +3713,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         if !self.access_log_enabled {
             return;
         }
+        if self.state_access_log.read_keys.contains(key) {
+            return;
+        }
+        if !self.try_reserve_output(1, key.len().saturating_add(64)) {
+            return;
+        }
         self.state_access_log.read_keys.insert(key.to_string());
     }
 
     fn log_state_write_key(&mut self, key: &str) {
         if !self.access_log_enabled {
+            return;
+        }
+        let unique_key = !self.state_access_log.write_keys.contains(key);
+        let items = 1_usize.saturating_add(usize::from(unique_key));
+        let bytes = key.len().saturating_add(64).saturating_add(
+            unique_key
+                .then_some(key.len().saturating_add(32))
+                .unwrap_or(0),
+        );
+        if !self.try_reserve_output(items, bytes) {
             return;
         }
         self.state_access_log.write_keys.insert(key.to_string());
@@ -4371,6 +4603,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let expiry_with_skew = proof
             .expiry_slot
             .map(|slot| self.axt_expiry_slot_with_skew(slot, None));
+        if !self.try_reserve_output(1, proof.payload.len().saturating_add(128)) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         // Keep the recorded proof expiry as provided; skew is only applied to cache/slot checks.
         let proof_for_state = ProofBlob {
             payload: proof.payload.clone(),
@@ -4567,8 +4802,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
     }
 
-    fn snapshot_nested_contract_call(&self) -> NestedContractCallHostSnapshot {
-        NestedContractCallHostSnapshot {
+    fn snapshot_nested_contract_call(&mut self) -> Option<NestedContractCallHostSnapshot> {
+        // A nested rollback snapshot deep-clones retained host artifacts. In
+        // bounded tooling mode, reserve that duplicate before cloning so call
+        // depth cannot multiply the output budget in transient memory.
+        let output_count_before = self.instruction_queue_count;
+        let output_bytes_before = self.instruction_queue_encoded_bytes;
+        let output_violation_before = self.instruction_queue_violation;
+        let output_clone_reservation_bytes = if self.instruction_queue_limits.is_some() {
+            self.instruction_queue_encoded_bytes
+        } else {
+            0
+        };
+        if output_clone_reservation_bytes > 0
+            && !self.try_reserve_output(0, output_clone_reservation_bytes)
+        {
+            return None;
+        }
+        Some(NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
             current_contract_runtime_context: self.current_contract_runtime_context.clone(),
             args: self.args.clone(),
@@ -4593,7 +4844,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             axt_proof_cache: self.axt_proof_cache.clone(),
             last_axt_reject: self.last_axt_reject.clone(),
             amx_budget_violation: self.amx_budget_violation,
-        }
+            output_count_before,
+            output_bytes_before,
+            output_violation_before,
+            output_clone_reservation_bytes,
+        })
     }
 
     fn restore_nested_contract_call_frame(&mut self, snapshot: &NestedContractCallHostSnapshot) {
@@ -4601,6 +4856,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_contract_runtime_context = snapshot.current_contract_runtime_context.clone();
         self.args = snapshot.args.clone();
         self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
+        self.instruction_queue_encoded_bytes = self
+            .instruction_queue_encoded_bytes
+            .saturating_sub(snapshot.output_clone_reservation_bytes);
     }
 
     fn rollback_nested_contract_call(&mut self, snapshot: &NestedContractCallHostSnapshot) {
@@ -4625,6 +4883,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.axt_proof_cache = snapshot.axt_proof_cache.clone();
         self.last_axt_reject = snapshot.last_axt_reject.clone();
         self.amx_budget_violation = snapshot.amx_budget_violation;
+        self.instruction_queue_count = snapshot.output_count_before;
+        self.instruction_queue_encoded_bytes = snapshot.output_bytes_before;
+        self.instruction_queue_violation = snapshot.output_violation_before;
     }
 
     fn encode_nested_contract_return(
@@ -4851,7 +5112,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         child_vm.set_gas_limit(child_gas_limit);
 
-        let snapshot = self.snapshot_nested_contract_call();
+        let snapshot = self
+            .snapshot_nested_contract_call()
+            .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
         self.authority = caller_context.contract_subject.clone();
         self.current_contract_runtime_context = Some(callee_context);
         self.args = Some(call_context.args().clone());
@@ -5967,11 +6230,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn queue_instruction(&mut self, instr: InstructionBox) -> u64 {
         let gas = crate::gas::meter_instruction(&instr);
-        self.queued.push(QueuedInstruction {
-            instruction: instr,
-            authority: self.authority.clone(),
-            contract_runtime_context: self.current_contract_runtime_context.clone(),
-        });
+        if self.try_reserve_serialized_output(&instr, 1) {
+            self.queued.push(QueuedInstruction {
+                instruction: instr,
+                authority: self.authority.clone(),
+                contract_runtime_context: self.current_contract_runtime_context.clone(),
+            });
+        }
         gas
     }
 
@@ -5988,17 +6253,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     {
         let mut gas = 0_u64;
         for instr in instrs {
-            gas = gas.saturating_add(crate::gas::meter_instruction(&instr));
-            self.queued.push(QueuedInstruction {
-                instruction: instr,
-                authority: self.authority.clone(),
-                contract_runtime_context: self.current_contract_runtime_context.clone(),
-            });
+            gas = gas.saturating_add(self.queue_instruction(instr));
         }
         gas
     }
 
     fn enqueue_fastpq_batch(&mut self, entries: Vec<TransferAssetBatchEntry>) {
+        // Entries are accounted incrementally by `push_fastpq_batch_entry` so
+        // a long unfinished batch cannot grow without bound.
         self.queued.push(QueuedInstruction {
             instruction: InstructionBox::from(TransferAssetBatch::new(entries)),
             authority: self.authority.clone(),
@@ -6042,14 +6304,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn push_fastpq_batch_entry(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        let Some(entries) = self.fastpq_batch_entries.as_mut() else {
+        if self.fastpq_batch_entries.is_none() {
             return Err(ivm::VMError::PermissionDenied);
-        };
+        }
         let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
         let asset_id = AssetId::of(asset_def.clone(), from.clone());
         let isi = Transfer::asset_numeric(asset_id, amount.clone(), to.clone());
-        let gas = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
-        entries.push(TransferAssetBatchEntry::new(from, to, asset_def, amount));
+        let instruction = InstructionBox::from(TransferBox::from(isi));
+        let gas = crate::gas::meter_instruction(&instruction);
+        if self.try_reserve_serialized_output(&instruction, 1) {
+            self.fastpq_batch_entries
+                .as_mut()
+                .expect("batch checked above")
+                .push(TransferAssetBatchEntry::new(from, to, asset_def, amount));
+        }
         Ok(gas)
     }
 
@@ -6131,6 +6399,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .as_ref()
             .and_then(Self::policy_current_slot);
         self.reset_axt_proof_cache_for_slot(policy_slot);
+        if !self.try_reserve_output(
+            1,
+            descriptor_tlv
+                .payload
+                .len()
+                .saturating_mul(3)
+                .saturating_add(256),
+        ) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
         Ok(gas)
     }
@@ -6174,6 +6452,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 None,
             );
             return Err(err);
+        }
+        if !self.try_reserve_output(1, gas_len.saturating_mul(2).saturating_add(128)) {
+            return Err(ivm::VMError::PermissionDenied);
         }
         let record_result = {
             let state = self.axt_state.as_mut().expect("axt_state checked above");
@@ -6675,6 +6956,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             amount_commitment: resolved_amount.amount_commitment,
         };
         self.enforce_axt_policy(&usage)?;
+        if !self.try_reserve_output(1, gas_len.saturating_mul(2).saturating_add(256)) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         let state = self.axt_state.as_mut().expect("axt_state checked above");
         let usage_for_logging = usage.clone();
         if let Err(err) = state.record_handle(usage) {
@@ -6765,6 +7049,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         match state.validate_commit() {
             Ok(()) => {
+                // AXT_BEGIN/TOUCH/PROOF/HANDLE admitted each owned component
+                // before it was cloned into active state. Completion transfers
+                // the state into the terminal vector without further growth.
                 self.completed_axt.push(state);
                 Ok(gas)
             }
@@ -8302,8 +8589,14 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 {
                     return Err(ivm::VMError::PermissionDenied);
                 }
+                let stored_len = 7_usize
+                    .saturating_add(val_tlv.payload.len())
+                    .saturating_add(Hash::LENGTH);
+                if !self.try_reserve_durable_state_update(&key, stored_len) {
+                    return Ok(Self::state_query_gas(val_tlv.payload.len()));
+                }
                 self.log_state_write_key(path.as_ref());
-                let mut stored = Vec::with_capacity(7 + val_tlv.payload.len() + Hash::LENGTH);
+                let mut stored = Vec::with_capacity(stored_len);
                 stored.extend_from_slice(&(val_tlv.type_id as u16).to_be_bytes());
                 stored.push(val_tlv.version);
                 let payload_len = u32::try_from(val_tlv.payload.len())
@@ -8326,10 +8619,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 {
                     return Err(ivm::VMError::PermissionDenied);
                 }
-                self.log_state_write_key(path.as_ref());
                 if let Some(scoped_path) = scoped_path {
+                    if !self.try_reserve_durable_state_update(&scoped_path, 0) {
+                        return Ok(16);
+                    }
                     self.durable_state_overlay.insert(scoped_path, None);
                 }
+                if !self.try_reserve_durable_state_update(&path, 0) {
+                    return Ok(16);
+                }
+                self.log_state_write_key(path.as_ref());
                 self.durable_state_overlay.insert(path, None);
                 Ok(16)
             }
@@ -13883,6 +14182,53 @@ seiyaku OuterCaller {
     }
 
     #[test]
+    fn bounded_host_stops_queue_growth_before_push() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        host.set_output_limits(HostOutputLimits::new(2, 1024 * 1024));
+        let instruction =
+            InstructionBox::from(Log::new(iroha_logger::Level::INFO, "bounded".to_owned()));
+
+        for _ in 0..10_000 {
+            host.queue_instruction(instruction.clone());
+        }
+
+        assert_eq!(host.queued.len(), 2);
+        assert!(matches!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::ItemCount {
+                attempted: 3,
+                limit: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn bounded_host_stops_unique_durable_state_growth_before_insert() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        host.set_output_limits(HostOutputLimits::new(3, 1024 * 1024));
+
+        for index in 0..10_000 {
+            let key: Name = format!("bounded_state_{index}")
+                .parse()
+                .expect("valid name");
+            if host.try_reserve_durable_state_update(&key, 32) {
+                host.durable_state_overlay.insert(key, Some(vec![0; 32]));
+            }
+        }
+
+        assert_eq!(host.durable_state_overlay.len(), 3);
+        assert!(matches!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::ItemCount {
+                attempted: 4,
+                limit: 3
+            })
+        ));
+    }
+
+    #[test]
     fn execute_instruction_syscall_allows_sccp_record_message() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
@@ -14125,6 +14471,7 @@ seiyaku RecordFromPayload {
     fn fastpq_batch_entry_syscall_returns_transfer_gas() {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
+        host.set_output_limits(HostOutputLimits::new(1, 1024 * 1024));
         let mut vm = IVM::new(1_000);
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load meta");
@@ -14165,12 +14512,23 @@ seiyaku RecordFromPayload {
         let gas = host
             .syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("batch entry");
+        for _ in 0..10_000 {
+            host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
+                .expect("over-limit batch entry remains metered");
+        }
         let asset_id = AssetId::of(asset_def, from.clone());
         let isi = Transfer::asset_numeric(asset_id, amount, to);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
         assert_eq!(host.fastpq_batch_entries.as_ref().map(Vec::len), Some(1));
+        assert!(matches!(
+            host.output_budget_violation(),
+            Some(HostOutputBudgetViolation::ItemCount {
+                attempted: 2,
+                limit: 1
+            })
+        ));
     }
 
     fn scoped_transfer_state(

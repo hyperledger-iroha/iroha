@@ -1917,12 +1917,12 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 "append",
                 "KagemushaRecursiveSpendBundleV1",
                 13622,
-                "e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0"),
+                "42c7b1b0e2dc838a6660b3691e08474bb936fa001e446310930d387b00ba686b"),
             ["verify_request"] = (
                 "verify",
                 "KagemushaRecursiveSpendVerifyRequestV1",
                 13628,
-                "d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43"),
+                "829be9daba04c4c928a34e1502ad2f1e467853ad2f02cdac0b6735f852fff44e"),
             ["verify_result"] = (
                 "verify",
                 "KagemushaRecursiveSpendVerifyResultV1",
@@ -1932,12 +1932,12 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 "redeem",
                 "KagemushaRecursiveSpendRedeemRequestV1",
                 26275,
-                "f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d"),
+                "de704684a72f8e79264f62337327395c3ca426cbe26da57fc133aa97f4e240c0"),
             ["redeem_instruction"] = (
                 "redeem",
                 "RedeemKagemushaRecursive",
                 26262,
-                "69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6"),
+                "bcd7306e54db93a09ffb013860adaae223655205d77651201cb49dd3a5d5d980"),
         };
 
         var seenArchives = new HashSet<string>();
