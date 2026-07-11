@@ -36,9 +36,8 @@ use super::{
     LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE, LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
     LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
     LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
-    LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact, MergeLedgerCarrierRecord,
-    PIPELINE_INDEX_ENTRY_SIZE, RecoveredLaneBlockPayload, Result, SidecarIndexEntry,
-    SidecarIndexLayout, create_dir_all_with_context, sync_dir,
+    MergeLedgerCarrierRecord, PIPELINE_INDEX_ENTRY_SIZE, RecoveredLaneBlockPayload, Result,
+    SidecarIndexEntry, SidecarIndexLayout, create_dir_all_with_context, sync_dir,
 };
 
 const LEGACY_JOURNAL_VERSION: u8 = 1;

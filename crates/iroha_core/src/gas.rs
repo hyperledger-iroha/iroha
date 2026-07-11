@@ -298,6 +298,51 @@ fn gas_for_recursive_kagemusha_topup(topup: &dm_isi::offline::TopUpKagemushaRecu
     gas
 }
 
+fn gas_for_recursive_kagemusha_topup_v2(
+    topup: &dm_isi::offline::TopUpKagemushaRecursiveV2,
+) -> u64 {
+    let inner = &topup.request.init_request.init_request;
+    let mut gas = inner.record_bundle.bundle.steps.first().map_or(0, |step| {
+        gas_for_proof_attachment(
+            &step.attachment,
+            step.input_nullifiers.len(),
+            step.output_commitments.len(),
+        )
+    });
+    let pallas_archive_bytes =
+        u64::try_from(inner.pallas_open_envelopes_archive.len()).unwrap_or(u64::MAX);
+    gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(pallas_archive_bytes));
+    gas
+}
+
+fn gas_for_recursive_kagemusha_redeem_v2(
+    redeem: &dm_isi::offline::RedeemKagemushaRecursiveV2,
+) -> u64 {
+    let request = &redeem.request;
+    let mut gas = gas_for_proof_attachment(
+        &request.redeem_proof,
+        1,
+        usize::from(request.offline_change.is_some()),
+    );
+    let recursive_proof_bytes =
+        u64::try_from(request.bundle.recursive_proof.proof.bytes.len()).unwrap_or(u64::MAX);
+    gas = gas.saturating_add(zk_gas_base_verify());
+    gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(recursive_proof_bytes));
+    gas = gas.saturating_add(
+        zk_gas_per_public_input().saturating_mul(
+            u64::try_from(crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)
+                .unwrap_or(u64::MAX),
+        ),
+    );
+    if let Some(witness) = &request.lineage_witness {
+        let witness_bytes = norito::to_bytes(witness)
+            .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+            .unwrap_or(u64::MAX);
+        gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(witness_bytes));
+    }
+    gas
+}
+
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
 pub fn meter_instruction(instr: &InstructionBox) -> u64 {
@@ -490,6 +535,12 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
         return gas_for_recursive_kagemusha_redeem(redeem);
     }
+    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV2>() {
+        return gas_for_recursive_kagemusha_topup_v2(topup);
+    }
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV2>() {
+        return gas_for_recursive_kagemusha_redeem_v2(redeem);
+    }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);
     }
@@ -555,6 +606,12 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     }
     if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
         return gas_for_recursive_kagemusha_redeem(redeem);
+    }
+    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV2>() {
+        return gas_for_recursive_kagemusha_topup_v2(topup);
+    }
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV2>() {
+        return gas_for_recursive_kagemusha_redeem_v2(redeem);
     }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);

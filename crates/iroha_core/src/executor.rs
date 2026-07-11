@@ -731,6 +731,18 @@ fn redeem_funded_nexus_fee_capacity(
             ));
             continue;
         }
+        if let Some(redeem) =
+            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
+        {
+            if &redeem.request.recipient != payer {
+                return Ok(None);
+            }
+            candidate_redeems.push((
+                redeem.request.bundle.statement.asset.clone(),
+                redeem.request.amount.public_numeric(),
+            ));
+            continue;
+        }
         return Ok(None);
     }
 

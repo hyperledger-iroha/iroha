@@ -941,6 +941,23 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         _ = try Self.optionSomePayload(initWithoutBlockHeightFields[4])
         try Self.assertOptionNone(initWithoutBlockHeightFields[5])
 
+        let semanticInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
+            KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: note,
+                blockHeight: 9
+            )
+        )
+        let semanticInitFields = try Self.requestFields(
+            semanticInitArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName
+        )
+        XCTAssertEqual(semanticInitFields.count, 6)
+        try Self.assertOptionNone(semanticInitFields[3])
+        try Self.assertOptionNone(semanticInitFields[4])
+        XCTAssertEqual(UInt64(9), try Self.readUInt64Payload(Self.optionSomePayload(semanticInitFields[5])))
+
         let topUpInitArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpInitRequest(
             KagemushaRecursiveSpendTopUpInitRequest(
                 recordBundle: recordBundle,
@@ -1489,6 +1506,32 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendRequestCodecError,
                 .invalidField("lineageVerifierKey")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
+                lineageVerifierKey: lineageVerifierKey
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("lineageKeyArtifacts")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
+                lineageProvingKeyArchive: lineageProvingKeyArchive
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("lineageKeyArtifacts")
             )
         }
         XCTAssertThrowsError(

@@ -24,6 +24,8 @@ extern "C" {
 #define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE -312
 #define CONNECT_NORITO_ERR_OFFLINE_NOTE_VERIFY -313
+#define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE -314
+#define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT -315
 #define CONNECT_NORITO_ERR_SORAFS_REFERENCE -114
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
@@ -482,6 +484,169 @@ int32_t connect_norito_kagemusha_recursive_spend_verify(
 // Input: Norito-archive bytes of `KagemushaRecursiveSpendRedeemRequestV1`.
 // Output: Norito-archive bytes of `RedeemKagemushaRecursive`.
 int32_t connect_norito_kagemusha_recursive_spend_redeem(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_instruction_ptr,
+    unsigned long* out_instruction_len);
+
+// ---------------- Kagemusha recursive spend V2 ----------------
+#define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_INIT_V2 3
+#define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_APPEND_V2 4
+#define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_REDEEM_CHANGE_V2 5
+
+// Streams an exact content-addressed proving package directly to a private
+// local spool. Finalize checks the declared byte count and SHA-256. Cancel also
+// releases finalized artifacts. Peer calls never fetch artifacts or depend on
+// network availability.
+int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v2(
+    const uint8_t* reference_norito_ptr,
+    unsigned long reference_norito_len,
+    uint32_t expected_role,
+    uint64_t* out_handle);
+
+int32_t connect_norito_kagemusha_recursive_spend_artifact_write_v2(
+    uint64_t handle,
+    const uint8_t* chunk_ptr,
+    unsigned long chunk_len);
+
+int32_t connect_norito_kagemusha_recursive_spend_artifact_finalize_v2(uint64_t handle);
+int32_t connect_norito_kagemusha_recursive_spend_artifact_cancel_v2(uint64_t handle);
+
+// Receiver request signing and sender verification. Signing-byte and digest
+// outputs are raw byte strings (the digest is exactly 32 bytes); request inputs
+// and outputs are canonical Norito archives.
+int32_t connect_norito_kagemusha_receiver_key_reference_v2(
+    uint8_t algorithm,
+    const uint8_t* public_key_ptr,
+    unsigned long public_key_len,
+    uint8_t** out_reference_ptr,
+    unsigned long* out_reference_len);
+
+int32_t connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2(
+    const uint8_t* payload_norito_ptr,
+    unsigned long payload_norito_len,
+    uint8_t** out_signing_bytes_ptr,
+    unsigned long* out_signing_bytes_len);
+
+int32_t connect_norito_kagemusha_recipient_payment_request_create_v2(
+    const uint8_t* payload_norito_ptr,
+    unsigned long payload_norito_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    uint8_t** out_request_ptr,
+    unsigned long* out_request_len);
+
+int32_t connect_norito_kagemusha_recipient_payment_request_verify_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint64_t verified_at_ms,
+    uint8_t** out_digest_ptr,
+    unsigned long* out_digest_len);
+
+// Authorization signing uses a canonical template with a disposable non-empty
+// signature marker. The create call replaces that marker and verifies the real
+// account signature before returning a protocol archive.
+int32_t connect_norito_kagemusha_request_authorization_signing_bytes_v2(
+    const uint8_t* template_norito_ptr,
+    unsigned long template_norito_len,
+    uint8_t** out_signing_bytes_ptr,
+    unsigned long* out_signing_bytes_len);
+
+int32_t connect_norito_kagemusha_request_authorization_create_v2(
+    const uint8_t* template_norito_ptr,
+    unsigned long template_norito_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    uint8_t** out_authorization_ptr,
+    unsigned long* out_authorization_len);
+
+// Durable receiver ACK lifecycle. Creation and verification bind the exact
+// signed request and recipient bundle; callers must additionally check the
+// device key against their registered-device lineage policy.
+int32_t connect_norito_kagemusha_receiver_acknowledgement_payload_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* recipient_bundle_norito_ptr,
+    unsigned long recipient_bundle_norito_len,
+    uint64_t accepted_at_ms,
+    uint8_t** out_payload_ptr,
+    unsigned long* out_payload_len);
+
+int32_t connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2(
+    const uint8_t* payload_norito_ptr,
+    unsigned long payload_norito_len,
+    uint8_t** out_signing_bytes_ptr,
+    unsigned long* out_signing_bytes_len);
+
+int32_t connect_norito_kagemusha_receiver_acknowledgement_create_v2(
+    const uint8_t* payload_norito_ptr,
+    unsigned long payload_norito_len,
+    const uint8_t* signature_ptr,
+    unsigned long signature_len,
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* recipient_bundle_norito_ptr,
+    unsigned long recipient_bundle_norito_len,
+    uint8_t** out_acknowledgement_ptr,
+    unsigned long* out_acknowledgement_len);
+
+int32_t connect_norito_kagemusha_receiver_acknowledgement_verify_v2(
+    const uint8_t* acknowledgement_norito_ptr,
+    unsigned long acknowledgement_norito_len,
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* recipient_bundle_norito_ptr,
+    unsigned long recipient_bundle_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+
+// Proof/accumulator internals remain opaque to the SDK; this helper returns the
+// validated wallet-safe `KagemushaRecursiveSpendBundleSummaryV2` archive.
+int32_t connect_norito_kagemusha_recursive_spend_bundle_summary_v2(
+    const uint8_t* bundle_norito_ptr,
+    unsigned long bundle_norito_len,
+    uint8_t** out_summary_ptr,
+    unsigned long* out_summary_len);
+
+int32_t connect_norito_kagemusha_recursive_spend_init_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* topup_anchor_norito_ptr,
+    unsigned long topup_anchor_norito_len,
+    uint8_t** out_bundle_ptr,
+    unsigned long* out_bundle_len);
+
+int32_t connect_norito_kagemusha_recursive_spend_topup_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_instruction_ptr,
+    unsigned long* out_instruction_len);
+
+// Output: Norito `KagemushaRecursiveSpendSplitResultV2`, containing an
+// independently spendable recipient bundle and optional change bundle.
+int32_t connect_norito_kagemusha_recursive_spend_append_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* recipient_request_norito_ptr,
+    unsigned long recipient_request_norito_len,
+    uint64_t verified_at_ms,
+    uint8_t** out_split_result_ptr,
+    unsigned long* out_split_result_len);
+
+// Input/output: canonical `KagemushaRecursiveSpendRedeemChangeBuild{Request,Result}V2`.
+int32_t connect_norito_kagemusha_recursive_spend_redeem_change_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+
+int32_t connect_norito_kagemusha_recursive_spend_verify_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+
+int32_t connect_norito_kagemusha_recursive_spend_redeem_v2(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
     uint8_t** out_instruction_ptr,
