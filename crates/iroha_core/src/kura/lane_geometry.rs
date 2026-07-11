@@ -4404,11 +4404,12 @@ impl Kura {
     fn apply_geometry_operations_forward(
         &self,
         operations: &[LaneGeometryOperation],
+        evidence_policy: GeometryEvidencePolicy,
     ) -> Result<()> {
         for operation in operations {
             match operation.kind {
                 LaneGeometryOperationKind::Create => {
-                    self.restore_unpublished_or_provision(operation)?;
+                    self.restore_unpublished_or_provision(operation, evidence_policy)?;
                 }
                 LaneGeometryOperationKind::Retire => {
                     let previous = operation
@@ -4422,7 +4423,7 @@ impl Kura {
                     )?;
                 }
                 LaneGeometryOperationKind::Replace => {
-                    self.apply_replaced_geometry_binding_forward(operation)?;
+                    self.apply_replaced_geometry_binding_forward(operation, evidence_policy)?;
                 }
                 LaneGeometryOperationKind::Relabel => {
                     self.move_geometry_binding(
@@ -4438,16 +4439,12 @@ impl Kura {
     fn apply_geometry_operations_rollback(
         &self,
         operations: &[LaneGeometryOperation],
+        evidence_policy: GeometryEvidencePolicy,
     ) -> Result<()> {
         for operation in operations.iter().rev() {
             match operation.kind {
                 LaneGeometryOperationKind::Create => {
-                    let updated = operation.updated.as_ref().expect("create updated");
-                    self.archive_geometry_binding(
-                        updated,
-                        &operation.unpublished_blocks_path,
-                        &operation.unpublished_merge_path,
-                    )?;
+                    self.rollback_created_geometry_binding(operation, evidence_policy)?;
                 }
                 LaneGeometryOperationKind::Retire => {
                     let previous = operation.previous.as_ref().expect("retire previous");
@@ -4458,7 +4455,7 @@ impl Kura {
                     )?;
                 }
                 LaneGeometryOperationKind::Replace => {
-                    self.rollback_replaced_geometry_binding(operation)?;
+                    self.rollback_replaced_geometry_binding(operation, evidence_policy)?;
                 }
                 LaneGeometryOperationKind::Relabel => {
                     self.move_geometry_binding(
@@ -4474,6 +4471,7 @@ impl Kura {
     fn apply_replaced_geometry_binding_forward(
         &self,
         operation: &LaneGeometryOperation,
+        evidence_policy: GeometryEvidencePolicy,
     ) -> Result<()> {
         let previous = operation.previous.as_ref().expect("replace previous");
         let updated = operation.updated.as_ref().expect("replace updated");
@@ -4499,7 +4497,7 @@ impl Kura {
                         "live replacement has no complete authenticated previous archive",
                     ));
                 }
-                self.restore_unpublished_or_provision(operation)?;
+                self.restore_unpublished_or_provision(operation, evidence_policy)?;
                 return self.require_complete_geometry_binding_at(
                     updated,
                     &updated_blocks,
@@ -4527,11 +4525,15 @@ impl Kura {
             &operation.archived_blocks_path,
             &operation.archived_merge_path,
         )?;
-        self.restore_unpublished_or_provision(operation)?;
+        self.restore_unpublished_or_provision(operation, evidence_policy)?;
         self.require_complete_geometry_binding_at(updated, &updated_blocks, &updated_merge)
     }
 
-    fn rollback_replaced_geometry_binding(&self, operation: &LaneGeometryOperation) -> Result<()> {
+    fn rollback_replaced_geometry_binding(
+        &self,
+        operation: &LaneGeometryOperation,
+        evidence_policy: GeometryEvidencePolicy,
+    ) -> Result<()> {
         let previous = operation.previous.as_ref().expect("replace previous");
         let updated = operation.updated.as_ref().expect("replace updated");
         let previous_blocks = self.binding_blocks_path(previous);
