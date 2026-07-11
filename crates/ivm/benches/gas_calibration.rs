@@ -68,33 +68,61 @@ fn positive_with_limbs(limbs: usize, low: u8) -> BigInt {
     BigInt::from_twos_bytes(&bytes).expect("calibration operand fits generic bigint")
 }
 
+fn wrap_v1(value: &BigInt) -> BigInt {
+    let source = value.to_twos_bytes();
+    let extension = if value.is_negative() { 0xff } else { 0x00 };
+    let mut low = vec![extension; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
+    let copied = source.len().min(low.len());
+    low[..copied].copy_from_slice(&source[..copied]);
+    BigInt::from_twos_bytes(&low).expect("V1 reduction is representable")
+}
+
 fn bench_numeric_limb_work(c: &mut Criterion) {
     let mut group = c.benchmark_group("ivm-numeric-limb-cal");
     for limbs in 1_usize..=8 {
         let lhs = positive_with_limbs(limbs, 0x5b);
         let rhs = positive_with_limbs(limbs, 0x13);
+        let checked_add_work = ivm::numeric_gas::checked_int_additive_work(
+            u64::try_from(limbs).expect("limb count"),
+            u64::try_from(limbs).expect("limb count"),
+        )
+        .expect("bounded checked-add work");
         group.bench_with_input(
-            BenchmarkId::new("add", format!("limbs={limbs};work={limbs}")),
+            BenchmarkId::new(
+                "checked_add",
+                format!("limbs={limbs};work={checked_add_work}"),
+            ),
             &limbs,
             |b, _| {
                 b.iter(|| {
-                    std::hint::black_box(lhs.checked_add(&rhs).expect("calibration addition fits"))
+                    let result = lhs.checked_add(&rhs).expect("calibration addition fits");
+                    std::hint::black_box(result.twos_byte_len());
+                    std::hint::black_box(result)
                 });
             },
         );
+        let checked_multiplication_work = ivm::numeric_gas::checked_int_multiplication_work(
+            u64::try_from(limbs).expect("limb count"),
+            u64::try_from(limbs).expect("limb count"),
+        )
+        .expect("bounded checked-multiplication work");
         group.bench_with_input(
-            BenchmarkId::new("multiply", format!("limbs={limbs};work={}", limbs * limbs)),
+            BenchmarkId::new(
+                "checked_multiply",
+                format!("limbs={limbs};work={checked_multiplication_work}"),
+            ),
             &limbs,
             |b, _| {
                 b.iter(|| {
-                    std::hint::black_box(
-                        lhs.checked_mul(&rhs)
-                            .expect("512-bit inputs fit the generic product domain"),
-                    )
+                    let result = lhs
+                        .checked_mul(&rhs)
+                        .expect("512-bit inputs fit the generic product domain");
+                    std::hint::black_box(result.twos_byte_len());
+                    std::hint::black_box(result)
                 });
             },
         );
-        let division_work = ivm::numeric_gas::quotient_remainder_work(
+        let division_work = ivm::numeric_gas::checked_int_division_work(
             u64::try_from(limbs).expect("limb count"),
             u64::try_from(limbs).expect("limb count"),
         )
@@ -107,37 +135,149 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
             &limbs,
             |b, _| {
                 b.iter(|| {
-                    std::hint::black_box(
-                        lhs.checked_div_rem(&rhs)
-                            .expect("nonzero calibration divisor"),
-                    )
+                    let (quotient, remainder) = lhs
+                        .checked_div_rem(&rhs)
+                        .expect("nonzero calibration divisor");
+                    std::hint::black_box(quotient.twos_byte_len());
+                    std::hint::black_box(remainder.twos_byte_len());
+                    std::hint::black_box((quotient, remainder))
                 });
             },
         );
     }
 
+    let wrapping_lhs = positive_with_limbs(8, 0x5b);
+    let wrapping_rhs = positive_with_limbs(8, 0x13);
+    let wrapping_intermediate = wrapping_lhs
+        .checked_mul(&wrapping_rhs)
+        .expect("512-bit inputs fit the generic product domain");
+    let source_limbs = ivm::numeric_gas::limbs_for_bits(
+        u64::try_from(wrapping_intermediate.bit_len()).expect("bounded bit width") + 1,
+    );
+    let wrapping_work = ivm::numeric_gas::wrapping_multiplication_work(8, 8)
+        .and_then(|work| {
+            ivm::numeric_gas::wrapping_reduction_work(source_limbs)
+                .and_then(|reduction| ivm::numeric_gas::checked_add(work, reduction))
+        })
+        .expect("bounded wrapping work");
+    group.bench_with_input(
+        BenchmarkId::new(
+            "wrapping_multiply",
+            format!("limbs=8;source_limbs={source_limbs};work={wrapping_work}"),
+        ),
+        &wrapping_work,
+        |b, _| {
+            b.iter(|| {
+                let intermediate = wrapping_lhs
+                    .checked_mul(&wrapping_rhs)
+                    .expect("512-bit inputs fit the generic product domain");
+                std::hint::black_box(wrap_v1(&intermediate))
+            });
+        },
+    );
+
     let one: Numeric = "1".parse().expect("decimal one");
     let seven: Numeric = "7".parse().expect("decimal seven");
-    group.bench_function("decimal_div_round/scale=28", |b| {
-        b.iter(|| {
-            std::hint::black_box(
-                one.try_decimal_div_round(&seven, 28, RoundingMode::NearestEven)
-                    .expect("rounded division"),
-            )
-        });
-    });
+    let mut rounded_division_work =
+        ivm::numeric_gas::scale_work(1, 28).expect("bounded scale work");
+    for work in [
+        ivm::numeric_gas::materialization_work(1),
+        ivm::numeric_gas::rounded_division_work(2, 1).expect("bounded rounded division"),
+        // The scale-28 result is noncanonical until one failed divide-by-ten
+        // normalization probe confirms its last digit.
+        ivm::numeric_gas::quotient_remainder_work(2, 1).expect("bounded normalization"),
+        ivm::numeric_gas::finalization_work(2),
+    ] {
+        rounded_division_work =
+            ivm::numeric_gas::checked_add(rounded_division_work, work).expect("bounded work sum");
+    }
+    group.bench_with_input(
+        BenchmarkId::new(
+            "decimal_div_round",
+            format!("scale=28;work={rounded_division_work}"),
+        ),
+        &rounded_division_work,
+        |b, _| {
+            b.iter(|| {
+                std::hint::black_box(
+                    one.try_decimal_div_round(&seven, 28, RoundingMode::NearestEven)
+                        .expect("rounded division"),
+                )
+            });
+        },
+    );
     let mut maximum_bytes = vec![0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
     *maximum_bytes.last_mut().expect("nonempty mantissa") = 0x7f;
-    let maximum = Numeric::new(
-        BigInt::from_twos_bytes(&maximum_bytes).expect("signed maximum"),
-        0,
-    );
+    let maximum_int = BigInt::from_twos_bytes(&maximum_bytes).expect("signed maximum");
+    let maximum = Numeric::new(maximum_int.clone(), 0);
     let scale_28: Numeric = "0.0000000000000000000000000001"
         .parse()
         .expect("scale-28 decimal");
-    group.bench_function("decimal_compare/aligned_limbs=10", |b| {
-        b.iter(|| std::hint::black_box(maximum.cmp(&scale_28)));
-    });
+    let comparison_work =
+        ivm::numeric_gas::aligned_work(8, 28, 10, 1, 0, 1).expect("bounded scale-alignment work");
+    group.bench_with_input(
+        BenchmarkId::new(
+            "decimal_compare",
+            format!("aligned_limbs=10;work={comparison_work}"),
+        ),
+        &comparison_work,
+        |b, _| b.iter(|| std::hint::black_box(maximum.cmp(&scale_28))),
+    );
+
+    for (label, value) in [("minimum", BigInt::zero()), ("maximum", maximum_int)] {
+        let envelope = ivm::numeric_tlv::encode_int(&value).expect("numeric envelope");
+        let frame_bytes = envelope.len() - 39;
+        let validation_work =
+            ivm::numeric_gas::numeric_frame_validation_work(frame_bytes).expect("validation work");
+        let input_gas = u64::try_from(envelope.len() + frame_bytes).expect("bounded byte work")
+            + ivm::numeric_gas::work_gas(validation_work).expect("validation gas");
+        group.bench_with_input(
+            BenchmarkId::new(
+                "input_envelope_pipeline",
+                format!(
+                    "{label};envelope={};frame={frame_bytes};gas={input_gas}",
+                    envelope.len()
+                ),
+            ),
+            &envelope,
+            |b, envelope| {
+                b.iter(|| {
+                    std::hint::black_box(
+                        ivm::numeric_tlv::decode_int_bytes(envelope)
+                            .expect("decode calibration envelope"),
+                    )
+                });
+            },
+        );
+
+        let length_work = ivm::numeric_gas::limbs_for_bits(
+            u64::try_from(value.bit_len()).expect("bounded bit width") + 1,
+        );
+        let output_gas = ivm::numeric_gas::output_serialization_gas(envelope.len(), frame_bytes)
+            .and_then(|bytes| {
+                ivm::numeric_gas::work_gas(length_work)
+                    .and_then(|probe| ivm::numeric_gas::checked_add(bytes, probe))
+            })
+            .expect("bounded output gas");
+        group.bench_with_input(
+            BenchmarkId::new(
+                "output_envelope_pipeline",
+                format!(
+                    "{label};envelope={};frame={frame_bytes};gas={output_gas}",
+                    envelope.len()
+                ),
+            ),
+            &value,
+            |b, value| {
+                b.iter(|| {
+                    std::hint::black_box(value.twos_byte_len());
+                    std::hint::black_box(
+                        ivm::numeric_tlv::encode_int(value).expect("encode calibration envelope"),
+                    )
+                });
+            },
+        );
+    }
     group.finish();
 }
 

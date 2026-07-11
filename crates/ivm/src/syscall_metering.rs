@@ -42,29 +42,25 @@ pub enum SyscallMeteringPhase {
     Entry = 0,
     /// Read and validate one pointer/TLV header and capped length.
     PointerHeader = 1,
-    /// Snapshot/read one complete canonical pointer envelope.
+    /// Snapshot/read the declared frame portion of a canonical pointer envelope.
     PointerEnvelope = 2,
-    /// Validate the pointer payload checksum.
+    /// Read and validate the fixed pointer payload digest.
     PayloadHash = 3,
     /// Decode the complete nested Norito frame.
     NoritoDecode = 4,
     /// Validate a canonical value representation and domain bounds.
     CanonicalValidation = 5,
-    /// Validate or apply an explicit scale and rounding mode.
-    ScaleAndRounding = 6,
-    /// Validate a divisor and the division-by-zero branch.
-    DivisorValidation = 7,
     /// Perform one deterministic logical arithmetic phase.
-    Arithmetic = 8,
+    Arithmetic = 6,
     /// Canonicalize or reduce decimal scale.
-    Normalization = 9,
+    Normalization = 7,
     /// Size, debit, allocate, and serialize the output envelope.
-    OutputSerialization = 10,
+    OutputSerialization = 8,
 }
 
 impl SyscallMeteringPhase {
     /// Number of stable staged-metering phase tags in ABI V1.
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 9;
 
     /// Return the stable numeric tag used in diagnostics and gas vectors.
     #[must_use]
@@ -157,8 +153,6 @@ mod tests {
             SyscallMeteringPhase::PayloadHash,
             SyscallMeteringPhase::NoritoDecode,
             SyscallMeteringPhase::CanonicalValidation,
-            SyscallMeteringPhase::ScaleAndRounding,
-            SyscallMeteringPhase::DivisorValidation,
             SyscallMeteringPhase::Arithmetic,
             SyscallMeteringPhase::Normalization,
             SyscallMeteringPhase::OutputSerialization,

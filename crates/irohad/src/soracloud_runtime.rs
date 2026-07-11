@@ -2322,7 +2322,6 @@ impl SoracloudIvmHost {
         syscall: u32,
     ) -> Result<(SoracloudHostRequestPayloadV1, usize), VMError> {
         let tlv = vm
-            .memory
             .validate_tlv(vm.register(10))
             .map_err(|err| VMError::metered(ivm::gas::G_SORACLOUD, err))?;
         let request_bytes = tlv.payload.len();
@@ -2676,7 +2675,6 @@ impl SoracloudIvmHost {
     fn read_public_input(&self, vm: &mut IVM) -> Result<u64, VMError> {
         let ptr = vm.register(10);
         let tlv = vm
-            .memory
             .validate_tlv(ptr)
             .map_err(|error| VMError::metered(ivm::gas::G_SORACLOUD, error))?;
         let request_bytes = tlv.payload.len();
@@ -2694,7 +2692,7 @@ impl SoracloudIvmHost {
         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
         self.record_metering_allocation();
         let dst = vm
-            .alloc_input_tlv(bytes)
+            .alloc_host_tlv(bytes)
             .map_err(|error| VMError::metered(gas, error))?;
         vm.set_register(10, dst);
         Ok(gas)
@@ -7669,7 +7667,7 @@ fn decode_vm_output(
     if response_ptr == 0 {
         return Ok((Vec::new(), None));
     }
-    let tlv = vm.memory.validate_tlv(response_ptr).map_err(|error| {
+    let tlv = vm.validate_tlv(response_ptr).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
@@ -15030,6 +15028,139 @@ mod tests {
             .expect_err("insufficient gas must reject the Soracloud syscall");
         assert_eq!(vm.register(10), request_ptr);
         Ok(error)
+    }
+
+    fn store_owned_heap_tlv(vm: &mut IVM, tlv: &[u8]) -> u64 {
+        let pointer = vm
+            .alloc_heap(u64::try_from(tlv.len()).expect("TLV length fits u64"))
+            .expect("allocate owned HEAP TLV");
+        vm.store_bytes(pointer, tlv).expect("store owned HEAP TLV");
+        pointer
+    }
+
+    #[test]
+    fn soracloud_request_decoder_accepts_owned_heap_and_rejects_unowned_heap() -> Result<()> {
+        let bundle = load_deployment_bundle_fixture()?;
+        let temp_dir = tempfile::tempdir()?;
+        let runtime_request = sample_ordered_mailbox_request(
+            &bundle,
+            "query",
+            sample_mailbox_message(&bundle, "query", b"request-decoder".to_vec()),
+        );
+        let host = SoracloudIvmHost::new(
+            runtime_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            BTreeMap::new(),
+        );
+        let request = SoracloudHostRequestEnvelopeV1 {
+            schema_version: iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::ReadConfig,
+            payload: SoracloudHostRequestPayloadV1::ReadConfig(
+                iroha_data_model::soracloud::SoracloudReadConfigRequestV1 {
+                    config_name: "ui/settings".to_owned(),
+                },
+            ),
+        };
+        let payload = norito::to_bytes(&request)?;
+        let tlv = make_pointer_tlv(PointerType::SoracloudRequest, &payload);
+
+        let mut vm = IVM::new(u64::MAX);
+        let pointer = store_owned_heap_tlv(&mut vm, &tlv);
+        vm.set_register(10, pointer);
+        let (decoded, request_bytes) = host.read_request_payload(
+            &vm,
+            SoracloudHostOperationV1::ReadConfig,
+            SYSCALL_SORACLOUD_READ_CONFIG,
+        )?;
+        assert!(matches!(
+            decoded,
+            SoracloudHostRequestPayloadV1::ReadConfig(_)
+        ));
+        assert_eq!(request_bytes, payload.len());
+
+        let mut forged = IVM::new(u64::MAX);
+        forged.store_bytes(Memory::HEAP_START, &tlv)?;
+        forged.set_register(10, Memory::HEAP_START);
+        assert!(
+            host.read_request_payload(
+                &forged,
+                SoracloudHostOperationV1::ReadConfig,
+                SYSCALL_SORACLOUD_READ_CONFIG,
+            )
+            .is_err(),
+            "an unallocated HEAP envelope must fail provenance validation"
+        );
+        assert_eq!(host.metering_query_count(), 0);
+        assert_eq!(host.metering_allocation_count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_public_input_spills_to_heap_from_heap_backed_name() -> Result<()> {
+        let bundle = load_deployment_bundle_fixture()?;
+        let temp_dir = tempfile::tempdir()?;
+        let runtime_request = sample_ordered_mailbox_request(
+            &bundle,
+            "query",
+            sample_mailbox_message(&bundle, "query", b"public-input".to_vec()),
+        );
+        let input_name: Name = "request_body".parse()?;
+        let response_payload = vec![0xA5; Memory::INPUT_SIZE as usize + 1];
+        let response_tlv = make_pointer_tlv(PointerType::Blob, &response_payload);
+        let mut host = SoracloudIvmHost::new(
+            runtime_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            BTreeMap::new(),
+        )
+        .with_public_inputs(BTreeMap::from([(input_name.clone(), response_tlv)]));
+
+        let mut code = Vec::new();
+        code.extend_from_slice(
+            &ivm::encoding::wide::encode_syscallx(ivm_syscalls::SYSCALL_GET_PUBLIC_INPUT)
+                .to_le_bytes(),
+        );
+        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&code)?;
+        let name_payload = norito::to_bytes(&input_name)?;
+        let name_tlv = make_pointer_tlv(PointerType::Name, &name_payload);
+        let name_pointer = store_owned_heap_tlv(&mut vm, &name_tlv);
+        vm.set_register(10, name_pointer);
+        vm.run_with_host(&mut host)?;
+
+        let response_pointer = vm.register(10);
+        assert!(
+            (Memory::HEAP_START..Memory::INPUT_START).contains(&response_pointer),
+            "oversized public input must use owned HEAP storage"
+        );
+        let response = vm.validate_tlv(response_pointer)?;
+        assert_eq!(response.type_id, PointerType::Blob);
+        assert_eq!(response.payload, response_payload.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_vm_output_decoder_enforces_heap_ownership() -> Result<()> {
+        let response_payload = vec![0x5A; Memory::INPUT_SIZE as usize + 1];
+        let response_tlv = make_pointer_tlv(PointerType::Blob, &response_payload);
+        let mut vm = IVM::new(u64::MAX);
+        let response_pointer = vm.alloc_host_tlv(&response_tlv)?;
+        assert!((Memory::HEAP_START..Memory::INPUT_START).contains(&response_pointer));
+        vm.set_register(10, response_pointer);
+        let (decoded, content_type) = decode_vm_output(&vm, "query", "read", "service", "v1")?;
+        assert_eq!(decoded, response_payload);
+        assert_eq!(content_type.as_deref(), Some("application/octet-stream"));
+
+        let mut forged = IVM::new(u64::MAX);
+        forged.store_bytes(Memory::HEAP_START, &response_tlv)?;
+        forged.set_register(10, Memory::HEAP_START);
+        assert!(
+            decode_vm_output(&forged, "query", "read", "service", "v1").is_err(),
+            "an unallocated HEAP response must fail provenance validation"
+        );
+        Ok(())
     }
 
     #[test]

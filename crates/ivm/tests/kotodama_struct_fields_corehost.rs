@@ -11,7 +11,7 @@ fn struct_fields_lower_to_corehost_syscall_args() {
     // and ultimately to correct TLVs in r10/r11 for the syscall.
     let src = r#"
         seiyaku C {
-            struct TransferArgs { domain: DomainId; to: AccountId; }
+            struct TransferArgs { DomainId domain; AccountId to; }
             kotoage fn main() authorize("TransferDomain") {
                 let args = TransferArgs {
                     domain: DomainId::parse("wonderland.universal"),

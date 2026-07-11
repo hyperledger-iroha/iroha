@@ -2,6 +2,7 @@
 
 use ivm::{IVM, KotodamaCompiler, ProgramMetadata};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};
+mod common;
 
 fn run(source: &str) -> IVM {
     run_with_gas(source).0
@@ -43,12 +44,19 @@ fn run_main_body_with_gas(result_type: &str, body: &str) -> (IVM, u64) {
     ))
 }
 
-fn returned_list_words(vm: &IVM, capacity: u64) -> Vec<u64> {
+fn returned_int_list(vm: &IVM, capacity: u64) -> (u64, u64, Vec<i64>, Vec<u64>) {
     let layout = ListLayoutV1::try_new(capacity, 1).expect("List<int, N> layout");
     let base = vm.register(10);
-    (0..layout.allocation_bytes().expect("bounded allocation") / 8)
+    let words = (0..layout.allocation_bytes().expect("bounded allocation") / 8)
         .map(|word| vm.load_u64(base + word * 8).expect("returned List word"))
-        .collect()
+        .collect::<Vec<_>>();
+    let length = words[0];
+    let active_end = 2 + usize::try_from(length).expect("bounded List length");
+    let elements = words[2..active_end]
+        .iter()
+        .map(|pointer| common::decode_i64_word(vm, *pointer))
+        .collect();
+    (length, words[1], elements, words[active_end..].to_vec())
 }
 
 fn positive_gas_delta(measured: u64, control: u64, operation: &str) -> u64 {
@@ -75,7 +83,7 @@ fn safe_mutations_execute_with_transactional_failures() {
             }
         }
         "#);
-    assert_eq!(vm.register(10), 312);
+    assert_eq!(common::decode_i64_register(&vm, 10), 312);
 }
 
 #[test]
@@ -94,7 +102,7 @@ fn comprehension_and_take_execute_as_bounded_copies() {
             }
         }
         "#);
-    assert_eq!(vm.register(10), 6);
+    assert_eq!(common::decode_i64_register(&vm, 10), 6);
 }
 
 #[test]
@@ -118,7 +126,10 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
             "#
         );
         let (vm, gas_used) = run_with_gas(&source);
-        assert_eq!(vm.register(10), active_len);
+        assert_eq!(
+            common::decode_i64_register(&vm, 10),
+            i64::try_from(active_len).expect("bounded active length")
+        );
         samples.push((active_len, gas_used));
     }
 
@@ -143,7 +154,7 @@ fn get_gas_is_constant_for_present_indices_and_cheaper_for_missing_indices() {
             "#
             ),
         );
-        assert_eq!(vm.register(10), expected);
+        assert_eq!(common::decode_i64_register(&vm, 10), expected);
         samples.push((index, gas));
     }
 
@@ -170,7 +181,7 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         return values;
         "#,
     );
-    let control_words = returned_list_words(&control, 4);
+    let control_values = returned_int_list(&control, 4);
 
     let (success, success_gas) = run_main_body_with_gas(
         "List<int, 4>",
@@ -180,7 +191,10 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         return values;
         "#,
     );
-    assert_eq!(returned_list_words(&success, 4), [2, 4, 10, 99, 0, 0]);
+    assert_eq!(
+        returned_int_list(&success, 4),
+        (2, 4, vec![10, 99], vec![0, 0])
+    );
 
     let (failure, failure_gas) = run_main_body_with_gas(
         "List<int, 4>",
@@ -191,8 +205,8 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         "#,
     );
     assert_eq!(
-        returned_list_words(&failure, 4),
-        control_words,
+        returned_int_list(&failure, 4),
+        control_values,
         "failed try_set must leave the complete allocation unchanged"
     );
 
@@ -202,6 +216,42 @@ fn try_set_gas_and_transactionality_cover_success_and_failure() {
         failure_delta < success_delta,
         "failed try_set must skip element writes: success={success_delta}, failure={failure_delta}"
     );
+}
+
+#[test]
+fn arbitrary_width_out_of_range_indices_are_total_and_transactional() {
+    const SIGNED_512_MIN: &str = "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
+    const SIGNED_512_MAX: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047";
+
+    for index in [
+        "9223372036854775808",
+        "18446744073709551615",
+        "18446744073709551616",
+        SIGNED_512_MIN,
+        SIGNED_512_MAX,
+    ] {
+        let (vm, _) = run_main_body_with_gas(
+            "List<int, 4>",
+            &format!(
+                r#"
+                var List<int, 4> values = [10, 20];
+                let int index = {index};
+                if values.get(index).unwrap_or(77) != 77 {{
+                    values.try_set(index: 0, value: -1);
+                }}
+                if values.try_set(index: index, value: 99) {{
+                    values.try_set(index: 0, value: -2);
+                }}
+                return values;
+                "#
+            ),
+        );
+        assert_eq!(
+            returned_int_list(&vm, 4),
+            (2, 4, vec![10, 20], vec![0, 0]),
+            "index {index} must produce none/false without mutating the List"
+        );
+    }
 }
 
 #[test]
@@ -221,7 +271,10 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         return values;
         "#,
     );
-    assert_eq!(returned_list_words(&success, 3), [3, 3, 10, 20, 30]);
+    assert_eq!(
+        returned_int_list(&success, 3),
+        (3, 3, vec![10, 20, 30], vec![])
+    );
 
     let (full_control, full_control_gas) = run_main_body_with_gas(
         "List<int, 3>",
@@ -230,7 +283,7 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         return values;
         "#,
     );
-    let full_control_words = returned_list_words(&full_control, 3);
+    let full_control_values = returned_int_list(&full_control, 3);
     let (failure, failure_gas) = run_main_body_with_gas(
         "List<int, 3>",
         r#"
@@ -240,11 +293,14 @@ fn try_push_gas_and_transactionality_cover_space_and_full_capacity() {
         "#,
     );
     assert_eq!(
-        returned_list_words(&failure, 3),
-        full_control_words,
+        returned_int_list(&failure, 3),
+        full_control_values,
         "full-capacity try_push must leave the complete allocation unchanged"
     );
-    assert_eq!(returned_list_words(&space_control, 3), [2, 3, 10, 20, 0]);
+    assert_eq!(
+        returned_int_list(&space_control, 3),
+        (2, 3, vec![10, 20], vec![0])
+    );
 
     let success_delta = positive_gas_delta(success_gas, space_control_gas, "successful try_push");
     let failure_delta = positive_gas_delta(failure_gas, full_control_gas, "full-capacity try_push");
@@ -263,7 +319,10 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
         return values;
         "#,
     );
-    assert_eq!(returned_list_words(&nonempty_control, 3), [2, 3, 10, 20, 0]);
+    assert_eq!(
+        returned_int_list(&nonempty_control, 3),
+        (2, 3, vec![10, 20], vec![0])
+    );
     let (nonempty, nonempty_gas) = run_main_body_with_gas(
         "List<int, 3>",
         r#"
@@ -273,8 +332,8 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
         "#,
     );
     assert_eq!(
-        returned_list_words(&nonempty, 3),
-        [1, 3, 10, 0, 0],
+        returned_int_list(&nonempty, 3),
+        (1, 3, vec![10], vec![0, 0]),
         "pop must clear the vacated slot"
     );
 
@@ -285,7 +344,7 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
         return values;
         "#,
     );
-    let empty_control_words = returned_list_words(&empty_control, 3);
+    let empty_control_values = returned_int_list(&empty_control, 3);
     let (empty, empty_gas) = run_main_body_with_gas(
         "List<int, 3>",
         r#"
@@ -295,8 +354,8 @@ fn pop_gas_and_transactionality_cover_nonempty_and_empty_lists() {
         "#,
     );
     assert_eq!(
-        returned_list_words(&empty, 3),
-        empty_control_words,
+        returned_int_list(&empty, 3),
+        empty_control_values,
         "empty pop must leave the complete allocation unchanged"
     );
 
@@ -322,7 +381,7 @@ fn contains_gas_increases_by_one_exact_scan_step_per_mismatch() {
             "#
             ),
         );
-        assert_eq!(vm.register(10), expected);
+        assert_eq!(common::decode_i64_register(&vm, 10), expected);
         samples.push((needle, gas));
     }
 
@@ -353,7 +412,10 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
             "#
             ),
         );
-        assert_eq!(control.register(10), active_len);
+        assert_eq!(
+            common::decode_i64_register(&control, 10),
+            i64::try_from(active_len).expect("bounded active length")
+        );
         let (copied, copied_gas) = run_main_body_with_gas(
             "int",
             &format!(
@@ -364,7 +426,10 @@ fn comprehension_gas_delta_is_exactly_linear_in_active_source_elements() {
             "#
             ),
         );
-        assert_eq!(copied.register(10), active_len);
+        assert_eq!(
+            common::decode_i64_register(&copied, 10),
+            i64::try_from(active_len).expect("bounded active length")
+        );
         deltas.push((
             active_len,
             positive_gas_delta(copied_gas, control_gas, "List comprehension"),
@@ -398,7 +463,7 @@ fn enumerate_materializes_bounded_structured_elements() {
             }
         }
         "#);
-    assert_eq!(vm.register(10), 18);
+    assert_eq!(common::decode_i64_register(&vm, 10), 18);
 }
 
 #[test]
@@ -421,9 +486,14 @@ fn list_of_options_uses_one_word_per_element() {
     let elements = ivm::list::read_words(&vm, list, list_layout).expect("read returned List");
     assert_eq!(elements.len(), 2);
     let sum_layout = SumLayoutV1::option(1).expect("Option<int> layout");
+    let (present, payload) =
+        ivm::sum::read_words(&vm, elements[0][0], sum_layout).expect("read present option");
+    assert!(present);
+    assert_eq!(payload.len(), 1);
     assert_eq!(
-        ivm::sum::read_words(&vm, elements[0][0], sum_layout),
-        Ok((true, vec![7]))
+        common::decode_i64_word(&vm, payload[0]),
+        7,
+        "Option::some payload"
     );
     assert_eq!(
         ivm::sum::read_words(&vm, elements[1][0], sum_layout),
@@ -496,7 +566,7 @@ fn contains_compares_nested_lists_sums_and_structs_by_value() {
             }
         }
         "#);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]

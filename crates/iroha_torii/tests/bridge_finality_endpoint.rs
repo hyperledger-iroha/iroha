@@ -1,10 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Bridge finality endpoint pairs cleanly with the light-client verifier.
+//! Bridge finality endpoints expose only Kura's exact Sumeragi-v2 artifact.
 
 use std::{num::NonZeroU64, sync::Arc};
 
 use axum::{
-    body::{Body, to_bytes},
+    Router,
+    body::{Body, Bytes, to_bytes},
     extract::connect_info::ConnectInfo,
     http::Request,
 };
@@ -16,63 +17,56 @@ use iroha_core::{
     query::store::LiveQueryStore,
     queue::Queue,
     state::{State, World},
-    sumeragi::{
-        consensus::{PERMISSIONED_TAG, Phase, Vote, default_chain_order_hash, vote_preimage},
-        status::{record_commit_qc, reset_commit_certs_for_tests},
-    },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     ChainId,
-    block::BlockHeader,
-    bridge::{BridgeFinalityVerifier, BridgeFinalityVerifyError},
-    consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+            GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
+            ValidatorPower, finality::V2FinalityArtifact,
+        },
+    },
+    bridge::{
+        BridgeFinalityBundle, BridgeFinalityProof, BridgeFinalityVerifier,
+        BridgeFinalityVerifyError,
+    },
     peer::PeerId,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use norito::codec::Encode as _;
 use tower::ServiceExt as _;
 
-struct CommitCertHistoryGuard;
-
-impl CommitCertHistoryGuard {
-    fn new() -> Self {
-        reset_commit_certs_for_tests();
-        Self
-    }
+struct EndpointFixture {
+    app: Router,
+    chain_id: ChainId,
+    block: Arc<SignedBlock>,
+    artifact: V2FinalityArtifact,
+    kura: Arc<Kura>,
 }
 
-impl Drop for CommitCertHistoryGuard {
-    fn drop(&mut self) {
-        reset_commit_certs_for_tests();
-    }
-}
+fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact) {
+    let mut keys = (0..4)
+        .map(|_| {
+            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                .expect("generate bridge finality BLS fixture key")
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| {
+        PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+    });
+    let roster = keys
+        .iter()
+        .zip([40_u64, 30, 20, 10])
+        .map(|(key, power)| ValidatorPower {
+            validator: PeerId::new(key.public_key().clone()),
+            power,
+        })
+        .collect::<Vec<_>>();
 
-fn checked_bls_validator_fixture() -> KeyPair {
-    KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-        .expect("generate checked bridge finality BLS validator fixture keypair")
-}
-
-#[test]
-fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
-    let key_pair = checked_bls_validator_fixture();
-    let algorithm = key_pair
-        .public_key()
-        .try_algorithm()
-        .expect("fixture validator public key has a valid algorithm");
-
-    assert_eq!(algorithm, Algorithm::BlsNormal);
-}
-
-#[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn bridge_finality_endpoint_roundtrips_into_verifier() {
-    let _guard = CommitCertHistoryGuard::new();
-    let cfg = test_utils::mk_minimal_root_cfg();
-    let chain_id: ChainId = cfg.common.chain.clone();
-
-    let kp = checked_bls_validator_fixture();
-    let peer_id = PeerId::from(kp.public_key().clone());
-
+    let block_key = KeyPair::try_random().expect("generate block fixture key");
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
         None,
@@ -81,141 +75,232 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
         0,
         0,
     );
-    let block = iroha_data_model::block::builder::BlockBuilder::new(header)
-        .build_with_signature(0, kp.private_key());
-    let block_hash = block.hash();
+    let block = Arc::new(
+        iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, block_key.private_key()),
+    );
+    let context = HeightContext {
+        chain_id,
+        protocol_version: PROTOCOL_VERSION,
+        height: 1,
+        epoch: 0,
+        epoch_end_height: 10,
+        next_epoch_snapshot: None,
+        mode: ConsensusMode::Npos,
+        parent_commit_qc: None,
+        quorum: DualQuorum::from_roster(&roster).expect("valid powered fixture roster"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"Torii exact-v2 bridge context"),
+        da_layout: DataAvailabilityLayout {
+            encoding: PayloadEncoding::Plain,
+            chunk_size_bytes: 1024,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 4,
+        },
+        leader_seed: [0x42; 32],
+    };
+    let subject = BlockSubject {
+        parent_block_hash: None,
+        block_hash: block.hash(),
+        payload_hash: Hash::new(b"Torii exact-v2 bridge payload"),
+    };
+    let mut commit_qc = QuorumCertificate {
+        round: ConsensusRound {
+            context_id: context.id(),
+            height: 1,
+            view: 0,
+        },
+        phase: GlobalPhase::Commit,
+        subject,
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![1],
+    };
+    let preimage = commit_qc
+        .signer_preimage(&context, 0)
+        .expect("valid commit certificate signer");
+    let signatures = commit_qc
+        .signers
+        .iter()
+        .map(|index| {
+            Signature::try_new(
+                keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                &preimage,
+            )
+            .expect("sign exact v2 commit vote")
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .expect("aggregate exact v2 commit votes");
+    let validator_set_pops = keys
+        .iter()
+        .map(|key| {
+            iroha_crypto::bls_normal_pop_prove(key.private_key())
+                .expect("derive exact v2 validator PoP")
+        })
+        .collect();
+    let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+    artifact
+        .verify()
+        .expect("endpoint fixture is an exact cryptographically valid v2 artifact");
+    (block, artifact)
+}
 
+fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
+    let cfg = test_utils::mk_minimal_root_cfg();
+    let chain_id = cfg.common.chain.clone();
+    let (block, artifact) = exact_v2_fixture(chain_id.clone());
     let kura = Kura::blank_kura_for_testing();
-    kura.store_block(block).expect("store block");
-    let query = LiveQueryStore::start_test();
-    let mut world = World::default();
-    let validator_pop =
-        iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("generate validator pop");
-    world.register_validator_pop_for_testing(kp.public_key().clone(), validator_pop);
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical endpoint block");
+    if persist_artifact {
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist exact v2 finality artifact");
+    }
+
     let state = Arc::new(State::new_with_chain_for_testing(
-        world,
-        kura.clone(),
-        query,
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
         chain_id.clone(),
     ));
-
-    let validator_set = vec![peer_id.clone()];
-    let validator_set_hash = HashOf::new(&validator_set);
-    let mode_tag = PERMISSIONED_TAG;
-    let vote = Vote {
-        phase: Phase::Commit,
-        block_hash,
-        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        height: 1,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    let preimage = vote_preimage(&chain_id, mode_tag, &vote);
-    let signature = Signature::try_new(kp.private_key(), &preimage).expect("BLS vote signature");
-    let signature_payload = signature.payload().to_vec();
-    let aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&[signature_payload.as_slice()])
-            .expect("aggregate signature");
-    let cert = Qc {
-        phase: Phase::Commit,
-        height: 1,
-        subject_block_hash: block_hash,
-        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        view: 0,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: mode_tag.to_string(),
-        highest_qc: None,
-        validator_set_hash,
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![1],
-            bls_aggregate_signature: aggregate_signature,
-        },
-    };
-    record_commit_qc(cert);
-
-    let queue_cfg = QueueConfig::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
+    let queue = Arc::new(Queue::from_config(QueueConfig::default(), events_sender));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     drop(peers_tx);
-
     let torii = Torii::new_with_handle(
-        cfg.common.chain.clone(),
+        chain_id.clone(),
         KisoHandle::mock(&cfg),
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
+        Arc::clone(&kura),
         state,
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
         MaybeTelemetry::disabled(),
     );
-    let app = torii.api_router_for_tests();
+    EndpointFixture {
+        app: torii.api_router_for_tests(),
+        chain_id,
+        block,
+        artifact,
+        kura,
+    }
+}
 
-    let mut req = Request::builder()
-        .uri("/v1/bridge/finality/1")
+async fn get_norito(app: &Router, uri: &str) -> (StatusCode, Bytes) {
+    let mut request = Request::builder()
+        .uri(uri)
         .header(axum::http::header::ACCEPT, "application/x-norito")
         .body(Body::empty())
-        .expect("request");
-    req.extensions_mut()
+        .expect("build endpoint request");
+    request
+        .extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
-    let resp = app.oneshot(req).await.expect("response");
-    let status = resp.status();
-    let body = to_bytes(resp.into_body(), usize::MAX)
+    let response = app
+        .clone()
+        .oneshot(request)
         .await
-        .expect("body bytes");
-    if !cfg!(feature = "telemetry") {
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "unexpected body: {}",
-            String::from_utf8_lossy(&body)
-        );
-        return;
-    }
+        .expect("endpoint response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 16 * 1024 * 1024)
+        .await
+        .expect("bounded endpoint body");
+    (status, bytes)
+}
+
+#[tokio::test]
+async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
+    let fixture = endpoint_fixture(true);
+    let (status, bytes) = get_norito(&fixture.app, "/v1/bridge/finality/1").await;
     assert_eq!(
         status,
         StatusCode::OK,
         "unexpected body: {}",
-        String::from_utf8_lossy(&body)
+        String::from_utf8_lossy(&bytes)
     );
-    let proof: iroha_data_model::bridge::BridgeFinalityProof =
-        norito::decode_from_bytes(&body).expect("decode proof");
+    let proof: BridgeFinalityProof =
+        norito::decode_from_bytes(&bytes).expect("decode exact bridge finality proof");
+    assert_eq!(proof.block_header, fixture.block.header());
+    assert_eq!(proof.finality_artifact, fixture.artifact);
 
-    let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-        chain_id,
-        validator_set_hash,
-        VALIDATOR_SET_HASH_VERSION_V1,
-        0,
+    let mut missing_anchor = BridgeFinalityVerifier::new(fixture.chain_id.clone());
+    assert_eq!(
+        missing_anchor.verify(&proof),
+        Err(BridgeFinalityVerifyError::MissingContextAnchor)
     );
+    let mut verifier = BridgeFinalityVerifier::with_context(
+        fixture.chain_id.clone(),
+        fixture.artifact.context_id(),
+    );
+    verifier
+        .verify(&proof)
+        .expect("trusted verifier accepts exact endpoint proof");
 
-    if let Err(err) = verifier.verify(&proof) {
-        panic!("verifier should accept endpoint proof, got {err:?}");
+    let (status, bytes) = get_norito(&fixture.app, "/v1/bridge/finality/bundle/1").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let bundle: BridgeFinalityBundle =
+        norito::decode_from_bytes(&bytes).expect("decode exact bridge finality bundle");
+    assert_eq!(bundle.finality_proof, proof);
+    assert_eq!(bundle.commitment.chain_id, fixture.chain_id);
+    assert_eq!(bundle.commitment.block_height, 1);
+    assert_eq!(bundle.commitment.block_hash, fixture.block.hash());
+    assert_eq!(
+        bundle.commitment.height_context_id,
+        fixture.artifact.context_id()
+    );
+    let mut bundle_verifier = BridgeFinalityVerifier::with_context(
+        fixture.chain_id,
+        fixture.artifact.context_id(),
+    );
+    bundle_verifier
+        .verify_bundle(&bundle)
+        .expect("trusted verifier accepts exact endpoint bundle");
+}
+
+#[tokio::test]
+async fn proof_and_bundle_endpoints_fail_closed_when_the_sidecar_is_missing() {
+    let fixture = endpoint_fixture(false);
+    for uri in ["/v1/bridge/finality/1", "/v1/bridge/finality/bundle/1"] {
+        let (status, _) = get_norito(&fixture.app, uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "unexpected status for {uri}");
     }
+}
 
-    let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
-        proof.chain_id.clone(),
-        proof.commit_qc.validator_set_hash,
-        VALIDATOR_SET_HASH_VERSION_V1,
-        1,
-    );
-    let err = verifier.verify(&proof).unwrap_err();
-    assert!(matches!(
-        err,
-        BridgeFinalityVerifyError::UnexpectedEpoch { .. }
-    ));
+#[tokio::test]
+async fn proof_and_bundle_endpoints_fail_closed_for_a_forged_durable_qc() {
+    let fixture = endpoint_fixture(true);
+    let mut forged = fixture.artifact.clone();
+    forged.commit_qc.aggregate_signature[0] ^= 0x80;
+    forged
+        .validate()
+        .expect("aggregate substitution remains structurally valid");
+    let path = fixture
+        .kura
+        .store_root()
+        .join("blocks")
+        .join("v2_finality")
+        .join("00000000000000000001.norito");
+    std::fs::write(&path, forged.encode()).expect("substitute forged durable artifact bytes");
+
+    for uri in ["/v1/bridge/finality/1", "/v1/bridge/finality/bundle/1"] {
+        let (status, _) = get_norito(&fixture.app, uri).await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "forged durable artifact must fail closed for {uri}"
+        );
+    }
 }

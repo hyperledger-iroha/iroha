@@ -35,14 +35,8 @@ pub fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
 
-fn i64_state_schema() -> StateValueSchemaV1 {
-    StateValueSchemaV1 {
-        nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
-    }
-}
-
-/// Encode an `i64` using the schema-bound Kotodama V1 durable-value record.
-pub fn encode_i64_state_value(value: i64) -> Vec<u8> {
+/// Encode a small fixture integer using the schema-bound Kotodama V1 `int` record.
+pub fn encode_int_state_value(value: i64) -> Vec<u8> {
     let frame = IntValueV1::try_new(BigInt::from_i128(i128::from(value)))
         .expect("i64 is inside V1 int domain")
         .encode_frame()
@@ -50,8 +44,8 @@ pub fn encode_i64_state_value(value: i64) -> Vec<u8> {
     encode_pointer_state_value(StateValueKindV1::Int, PointerType::Int, &frame)
 }
 
-/// Decode and validate an `i64` Kotodama V1 durable-value record.
-pub fn decode_i64_state_value(payload: &[u8]) -> i64 {
+/// Decode and validate a Kotodama V1 `int` state record known to fit `i64`.
+pub fn decode_int_state_value(payload: &[u8]) -> i64 {
     let envelope = decode_pointer_state_value(payload, StateValueKindV1::Int);
     ivm::numeric_tlv::decode_int_bytes(&envelope)
         .expect("decode canonical int envelope")
@@ -59,26 +53,43 @@ pub fn decode_i64_state_value(payload: &[u8]) -> i64 {
         .expect("test state int fits i64")
 }
 
-/// Decode one pointer-backed Kotodama `int` return register.
-pub fn decode_int_register(vm: &IVM, register: usize) -> BigInt {
+/// Decode one pointer-backed Kotodama `int` word.
+pub fn decode_int_word(vm: &IVM, pointer: u64) -> BigInt {
     let tlv = vm
-        .validate_tlv(vm.register(register))
-        .unwrap_or_else(|error| panic!("validate int return in r{register}: {error:?}"));
+        .validate_tlv(pointer)
+        .unwrap_or_else(|error| panic!("validate int pointer 0x{pointer:08x}: {error:?}"));
     assert_eq!(
         tlv.type_id,
         PointerType::Int,
-        "r{register} must contain an Int pointer"
+        "word 0x{pointer:08x} must contain an Int pointer"
     );
     IntValueV1::decode_frame(tlv.payload)
-        .unwrap_or_else(|error| panic!("decode int return in r{register}: {error:?}"))
+        .unwrap_or_else(|error| panic!("decode int pointer 0x{pointer:08x}: {error:?}"))
         .into_int()
+}
+
+/// Decode one pointer-backed Kotodama `int` word known to fit an `i64`.
+pub fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
+    decode_int_word(vm, pointer)
+        .try_to_i64()
+        .unwrap_or_else(|| panic!("int pointer 0x{pointer:08x} does not fit i64"))
+}
+
+/// Decode one pointer-backed Kotodama `int` return register.
+pub fn decode_int_register(vm: &IVM, register: usize) -> BigInt {
+    decode_int_word(vm, vm.register(register))
 }
 
 /// Decode one pointer-backed Kotodama `int` return known to fit an `i64`.
 pub fn decode_i64_register(vm: &IVM, register: usize) -> i64 {
+    decode_i64_word(vm, vm.register(register))
+}
+
+/// Decode one non-negative pointer-backed Kotodama `int` return as `u64`.
+pub fn decode_u64_register(vm: &IVM, register: usize) -> u64 {
     decode_int_register(vm, register)
-        .try_to_i64()
-        .unwrap_or_else(|| panic!("int return in r{register} does not fit i64"))
+        .try_to_u64()
+        .unwrap_or_else(|| panic!("int return in r{register} does not fit u64"))
 }
 
 /// Encode one pointer-backed value using the schema-bound Kotodama V1 record.

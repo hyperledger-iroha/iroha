@@ -12694,6 +12694,25 @@ impl NexusFees {
                 return None;
             }
         };
+        for (field, value) in [
+            ("base_fee", &self.base_fee),
+            ("per_byte_fee", &self.per_byte_fee),
+            ("per_instruction_fee", &self.per_instruction_fee),
+            ("per_gas_unit_fee", &self.per_gas_unit_fee),
+            ("sponsor_max_fee", &self.sponsor_max_fee),
+            (
+                "sponsor_verified_balance_safety_floor",
+                &self.sponsor_verified_balance_safety_floor,
+            ),
+        ] {
+            if value.mantissa().is_negative() {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach(format!("nexus.fees.{field} must be non-negative")),
+                );
+                return None;
+            }
+        }
         if self.fee_sink_account_id.trim().is_empty() {
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
@@ -12921,6 +12940,43 @@ mod nexus_asset_selector_tests {
         let mut emitter = Emitter::new();
         assert!(cfg.parse(&mut emitter).is_none());
         assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_negative_numeric_fields() {
+        let negative = Numeric::new(-1_i32, 0);
+        let cases = [
+            NexusFees {
+                base_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_byte_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_instruction_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_gas_unit_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                sponsor_max_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                sponsor_verified_balance_safety_floor: negative,
+                ..NexusFees::default()
+            },
+        ];
+
+        for cfg in cases {
+            let mut emitter = Emitter::new();
+            assert!(cfg.parse(&mut emitter).is_none());
+            assert!(emitter.into_result().is_err());
+        }
     }
 }
 

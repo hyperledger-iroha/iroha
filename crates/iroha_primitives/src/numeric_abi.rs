@@ -10,7 +10,10 @@ use norito::{Archived, Error as NoritoError, NoritoDeserialize, NoritoSerialize}
 
 use crate::{
     bigint::{BigInt, BigIntError},
-    numeric::{MAX_DECIMAL_SCALE, MAX_MANTISSA_BYTES, Numeric, NumericOperationError, Quantity},
+    numeric::{
+        MAX_DECIMAL_SCALE, MAX_MANTISSA_BYTES, Numeric, NumericOperationError, NumericWorkStep,
+        ObservedNumericError, Quantity,
+    },
 };
 
 /// Nominal schema name of a V1 integer frame.
@@ -97,6 +100,32 @@ impl PartialEq for NumericAbiError {
 
 impl Eq for NumericAbiError {}
 
+/// Failure from a staged numeric-frame decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObservedNumericAbiError<E> {
+    /// Structural or canonical frame failure.
+    Abi(NumericAbiError),
+    /// The caller rejected the canonical-value phase before it began.
+    Observer(E),
+}
+
+/// A canonical-value decode work unit reported immediately before it begins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericAbiWorkStep {
+    /// Scan and decode the bounded numeric body.
+    CanonicalBody {
+        /// Complete body length in bytes.
+        body_bytes: u16,
+    },
+    /// Probe a scaled decimal mantissa for divisibility by ten.
+    CanonicalityProbe {
+        /// Mantissa width in logical 64-bit limbs.
+        mantissa_limbs: u16,
+        /// Encoded decimal scale.
+        scale: u8,
+    },
+}
+
 /// Canonical V1 integer frame value.
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -140,12 +169,33 @@ impl IntValueV1 {
     /// Rejects malformed headers, checksum errors, wrong schemas, nonzero
     /// flags, noncanonical signed bytes, trailing bytes, and oversized values.
     pub fn decode_frame(frame: &[u8]) -> Result<Self, NumericAbiError> {
-        validate_frame(frame, INT_SCHEMA_HASH_V1, MAX_INT_FRAME_BYTES_V1)?;
-        let (value, used) = decode_int_body(&frame[NUMERIC_FRAME_HEADER_BYTES_V1..])?;
-        if used != frame.len() - NUMERIC_FRAME_HEADER_BYTES_V1 {
-            return Err(NumericAbiError::LengthMismatch);
+        match Self::decode_frame_observed(frame, |_| Ok::<_, core::convert::Infallible>(())) {
+            Ok(value) => Ok(value),
+            Err(ObservedNumericAbiError::Abi(error)) => Err(error),
+            Err(ObservedNumericAbiError::Observer(never)) => match never {},
         }
-        Ok(Self(value))
+    }
+
+    /// Decode in stages, reporting each canonical-value work unit after
+    /// structural Norito validation and before that work begins.
+    ///
+    /// # Errors
+    /// Returns a structural/canonical ABI error or the observer error.
+    pub fn decode_frame_observed<E>(
+        frame: &[u8],
+        mut observer: impl FnMut(NumericAbiWorkStep) -> Result<(), E>,
+    ) -> Result<Self, ObservedNumericAbiError<E>> {
+        decode_frame_observed(
+            frame,
+            INT_SCHEMA_HASH_V1,
+            MAX_INT_FRAME_BYTES_V1,
+            &mut observer,
+            |body, _| {
+                decode_int_body(body)
+                    .map(|(value, used)| (Self(value), used))
+                    .map_err(ObservedNumericAbiError::Abi)
+            },
+        )
     }
 }
 
@@ -197,12 +247,31 @@ impl DecimalValueV1 {
     /// # Errors
     /// Rejects every noncanonical or malformed representation.
     pub fn decode_frame(frame: &[u8]) -> Result<Self, NumericAbiError> {
-        validate_frame(frame, DECIMAL_SCHEMA_HASH_V1, MAX_DECIMAL_FRAME_BYTES_V1)?;
-        let (value, used) = decode_scaled_body(&frame[NUMERIC_FRAME_HEADER_BYTES_V1..])?;
-        if used != frame.len() - NUMERIC_FRAME_HEADER_BYTES_V1 {
-            return Err(NumericAbiError::LengthMismatch);
+        match Self::decode_frame_observed(frame, |_| Ok::<_, core::convert::Infallible>(())) {
+            Ok(value) => Ok(value),
+            Err(ObservedNumericAbiError::Abi(error)) => Err(error),
+            Err(ObservedNumericAbiError::Observer(never)) => match never {},
         }
-        Ok(Self(value))
+    }
+
+    /// Decode in stages, reporting each canonical-value work unit after
+    /// structural Norito validation and before that work begins.
+    ///
+    /// # Errors
+    /// Returns a structural/canonical ABI error or the observer error.
+    pub fn decode_frame_observed<E>(
+        frame: &[u8],
+        mut observer: impl FnMut(NumericAbiWorkStep) -> Result<(), E>,
+    ) -> Result<Self, ObservedNumericAbiError<E>> {
+        decode_frame_observed(
+            frame,
+            DECIMAL_SCHEMA_HASH_V1,
+            MAX_DECIMAL_FRAME_BYTES_V1,
+            &mut observer,
+            |body, observer| {
+                decode_scaled_body_observed(body, observer).map(|(value, used)| (Self(value), used))
+            },
+        )
     }
 }
 
@@ -243,17 +312,41 @@ impl QuantityValueV1 {
     /// # Errors
     /// Rejects every malformed, noncanonical, or negative representation.
     pub fn decode_frame(frame: &[u8]) -> Result<Self, NumericAbiError> {
-        validate_frame(frame, QUANTITY_SCHEMA_HASH_V1, MAX_QUANTITY_FRAME_BYTES_V1)?;
-        let (value, used) = decode_scaled_body(&frame[NUMERIC_FRAME_HEADER_BYTES_V1..])?;
-        if used != frame.len() - NUMERIC_FRAME_HEADER_BYTES_V1 {
-            return Err(NumericAbiError::LengthMismatch);
+        match Self::decode_frame_observed(frame, |_| Ok::<_, core::convert::Infallible>(())) {
+            Ok(value) => Ok(value),
+            Err(ObservedNumericAbiError::Abi(error)) => Err(error),
+            Err(ObservedNumericAbiError::Observer(never)) => match never {},
         }
-        let quantity = Quantity::from_canonical_numeric(value).map_err(|error| match error {
-            NumericOperationError::NegativeQuantity => NumericAbiError::NegativeQuantity,
-            NumericOperationError::NonCanonical => NumericAbiError::NonCanonicalDecimal,
-            _ => NumericAbiError::Norito(error.to_string()),
-        })?;
-        Ok(Self(quantity))
+    }
+
+    /// Decode in stages, reporting each canonical-value work unit after
+    /// structural Norito validation and before that work begins.
+    ///
+    /// # Errors
+    /// Returns a structural/canonical ABI error or the observer error.
+    pub fn decode_frame_observed<E>(
+        frame: &[u8],
+        mut observer: impl FnMut(NumericAbiWorkStep) -> Result<(), E>,
+    ) -> Result<Self, ObservedNumericAbiError<E>> {
+        decode_frame_observed(
+            frame,
+            QUANTITY_SCHEMA_HASH_V1,
+            MAX_QUANTITY_FRAME_BYTES_V1,
+            &mut observer,
+            |body, observer| {
+                let (value, used) = decode_scaled_body_observed(body, observer)?;
+                let quantity = Quantity::from_canonical_numeric(value)
+                    .map_err(|error| match error {
+                        NumericOperationError::NegativeQuantity => {
+                            NumericAbiError::NegativeQuantity
+                        }
+                        NumericOperationError::NonCanonical => NumericAbiError::NonCanonicalDecimal,
+                        _ => NumericAbiError::Norito(error.to_string()),
+                    })
+                    .map_err(ObservedNumericAbiError::Abi)?;
+                Ok((Self(quantity), used))
+            },
+        )
     }
 }
 
@@ -325,6 +418,32 @@ fn validate_frame(frame: &[u8], schema: [u8; 16], maximum: usize) -> Result<(), 
     Ok(())
 }
 
+fn decode_frame_observed<T, E, F>(
+    frame: &[u8],
+    schema: [u8; 16],
+    maximum: usize,
+    observer: &mut F,
+    decode_body: impl FnOnce(&[u8], &mut F) -> Result<(T, usize), ObservedNumericAbiError<E>>,
+) -> Result<T, ObservedNumericAbiError<E>>
+where
+    F: FnMut(NumericAbiWorkStep) -> Result<(), E>,
+{
+    validate_frame(frame, schema, maximum).map_err(ObservedNumericAbiError::Abi)?;
+    let body = &frame[NUMERIC_FRAME_HEADER_BYTES_V1..];
+    observer(NumericAbiWorkStep::CanonicalBody {
+        body_bytes: u16::try_from(body.len())
+            .expect("the bounded numeric V1 body length always fits u16"),
+    })
+    .map_err(ObservedNumericAbiError::Observer)?;
+    let (value, used) = decode_body(body, observer)?;
+    if used != body.len() {
+        return Err(ObservedNumericAbiError::Abi(
+            NumericAbiError::LengthMismatch,
+        ));
+    }
+    Ok(value)
+}
+
 fn decode_int_body(bytes: &[u8]) -> Result<(BigInt, usize), NumericAbiError> {
     if bytes.len() < 4 {
         return Err(NumericAbiError::LengthMismatch);
@@ -355,23 +474,66 @@ fn decode_int_body(bytes: &[u8]) -> Result<(BigInt, usize), NumericAbiError> {
 }
 
 fn decode_scaled_body(bytes: &[u8]) -> Result<(Numeric, usize), NumericAbiError> {
-    let (mantissa, used) = decode_int_body(bytes)?;
-    let end = used.checked_add(1).ok_or(NumericAbiError::LengthMismatch)?;
+    match decode_scaled_body_observed(bytes, &mut |_| Ok::<_, core::convert::Infallible>(())) {
+        Ok(value) => Ok(value),
+        Err(ObservedNumericAbiError::Abi(error)) => Err(error),
+        Err(ObservedNumericAbiError::Observer(never)) => match never {},
+    }
+}
+
+fn decode_scaled_body_observed<E, F>(
+    bytes: &[u8],
+    observer: &mut F,
+) -> Result<(Numeric, usize), ObservedNumericAbiError<E>>
+where
+    F: FnMut(NumericAbiWorkStep) -> Result<(), E>,
+{
+    let (mantissa, used) = decode_int_body(bytes).map_err(ObservedNumericAbiError::Abi)?;
+    let end = used
+        .checked_add(1)
+        .ok_or_else(|| ObservedNumericAbiError::Abi(NumericAbiError::LengthMismatch))?;
     if end > bytes.len() {
-        return Err(NumericAbiError::LengthMismatch);
+        return Err(ObservedNumericAbiError::Abi(
+            NumericAbiError::LengthMismatch,
+        ));
     }
     let scale = u32::from(bytes[used]);
     if scale > MAX_DECIMAL_SCALE {
-        return Err(NumericAbiError::InvalidScale);
+        return Err(ObservedNumericAbiError::Abi(NumericAbiError::InvalidScale));
     }
-    let value = Numeric::try_new_raw(mantissa, scale).map_err(|error| match error {
-        crate::numeric::NumericError::MantissaTooLarge => NumericAbiError::MantissaOverflow,
-        crate::numeric::NumericError::ScaleTooLarge => NumericAbiError::InvalidScale,
-        crate::numeric::NumericError::Malformed => unreachable!("decoded fields are structured"),
+    let value = Numeric::try_new_raw(mantissa, scale).map_err(|error| {
+        ObservedNumericAbiError::Abi(match error {
+            crate::numeric::NumericError::MantissaTooLarge => NumericAbiError::MantissaOverflow,
+            crate::numeric::NumericError::ScaleTooLarge => NumericAbiError::InvalidScale,
+            crate::numeric::NumericError::Malformed => {
+                unreachable!("decoded fields are structured")
+            }
+        })
     })?;
-    value
-        .validate_decimal()
-        .map_err(|_| NumericAbiError::NonCanonicalDecimal)?;
+    let validation = value.validate_decimal_observed(&mut |step| {
+        let NumericWorkStep::CanonicalityProbe {
+            mantissa_limbs,
+            scale,
+        } = step
+        else {
+            unreachable!("decimal validation emits only canonicality probes")
+        };
+        observer(NumericAbiWorkStep::CanonicalityProbe {
+            mantissa_limbs,
+            scale,
+        })
+    });
+    match validation {
+        Ok(()) => {}
+        Err(ObservedNumericError::Numeric(_)) => {
+            return Err(ObservedNumericAbiError::Abi(
+                NumericAbiError::NonCanonicalDecimal,
+            ));
+        }
+        Err(ObservedNumericError::Observer(error)) => {
+            return Err(ObservedNumericAbiError::Observer(error));
+        }
+    }
     Ok((value, end))
 }
 
@@ -457,7 +619,60 @@ impl_frame_codec!(
 
 #[cfg(test)]
 mod tests {
+    use core::fmt::Write as _;
+
     use super::*;
+
+    fn schema_hash_hex(hash: &[u8; 16]) -> String {
+        let mut encoded = String::with_capacity(hash.len() * 2);
+        for byte in hash {
+            write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        encoded
+    }
+
+    #[test]
+    fn canonical_norito_document_matches_numeric_v1_wire_limits() {
+        let document = include_str!("../../../norito.md");
+        for (source_name, schema_name, schema_hash, maximum_frame_bytes) in [
+            (
+                "int",
+                INT_SCHEMA_NAME_V1,
+                INT_SCHEMA_HASH_V1,
+                MAX_INT_FRAME_BYTES_V1,
+            ),
+            (
+                "decimal",
+                DECIMAL_SCHEMA_NAME_V1,
+                DECIMAL_SCHEMA_HASH_V1,
+                MAX_DECIMAL_FRAME_BYTES_V1,
+            ),
+            (
+                "quantity",
+                QUANTITY_SCHEMA_NAME_V1,
+                QUANTITY_SCHEMA_HASH_V1,
+                MAX_QUANTITY_FRAME_BYTES_V1,
+            ),
+        ] {
+            let row = format!(
+                "| `{source_name}` | `{schema_name}` | `{}` | {maximum_frame_bytes} |",
+                schema_hash_hex(&schema_hash)
+            );
+            assert!(document.contains(&row), "missing canonical row: {row}");
+        }
+        assert!(document.contains(&format!(
+            "`byte_len_u32_le` is fixed-width (never a compact varint), is at most {},",
+            crate::numeric::MAX_MANTISSA_BYTES
+        )));
+        assert!(document.contains(&format!(
+            "{}, {}, and {} bytes",
+            MAX_INT_ENVELOPE_BYTES_V1,
+            MAX_DECIMAL_ENVELOPE_BYTES_V1,
+            MAX_QUANTITY_ENVELOPE_BYTES_V1
+        )));
+        assert!(document.contains("exactly one quotient/remainder attempt at that proven scale"));
+        assert!(!document.contains("Exact division tries output scales `0..=28`"));
+    }
 
     #[test]
     fn schema_hashes_match_normative_names() {
@@ -491,6 +706,28 @@ mod tests {
         let quantity = QuantityValueV1::new("12.50".parse().expect("quantity"));
         let quantity_frame = quantity.encode_frame().expect("encode quantity");
         assert_eq!(QuantityValueV1::decode_frame(&quantity_frame), Ok(quantity));
+    }
+
+    #[test]
+    fn signed_byte_boundaries_have_pinned_minimal_frame_lengths() {
+        for (value, mantissa_bytes) in [(0_i128, 0_usize), (127, 1), (128, 2), (-128, 1), (-129, 2)]
+        {
+            let frame = IntValueV1::try_new(BigInt::from_i128(value))
+                .expect("bounded boundary integer")
+                .encode_frame()
+                .expect("boundary frame");
+            assert_eq!(
+                frame.len(),
+                NUMERIC_FRAME_HEADER_BYTES_V1 + 4 + mantissa_bytes,
+                "value={value}"
+            );
+            assert_eq!(
+                IntValueV1::decode_frame(&frame)
+                    .expect("decode boundary")
+                    .into_int(),
+                BigInt::from_i128(value)
+            );
+        }
     }
 
     #[test]
@@ -656,5 +893,77 @@ mod tests {
             IntValueV1::decode_frame(&frame),
             Err(NumericAbiError::Norito(_))
         ));
+    }
+
+    #[test]
+    fn staged_decode_places_observer_between_structure_and_canonical_value_work() {
+        let valid = IntValueV1::try_new(BigInt::from_i128(42))
+            .expect("bounded integer")
+            .encode_frame()
+            .expect("valid frame");
+        assert_eq!(
+            IntValueV1::decode_frame_observed(&valid, |_| Err("out-of-gas")),
+            Err(ObservedNumericAbiError::Observer("out-of-gas"))
+        );
+
+        let mut bad_checksum = valid;
+        let final_index = bad_checksum.len() - 1;
+        bad_checksum[final_index] ^= 1;
+        let mut structure_callback_ran = false;
+        let result = IntValueV1::decode_frame_observed(&bad_checksum, |_| {
+            structure_callback_ran = true;
+            Ok::<_, ()>(())
+        });
+        assert!(!structure_callback_ran);
+        assert!(matches!(
+            result,
+            Err(ObservedNumericAbiError::Abi(NumericAbiError::Norito(_)))
+        ));
+
+        let mut noncanonical_body = Vec::new();
+        noncanonical_body.extend_from_slice(&1_u32.to_le_bytes());
+        noncanonical_body.push(0);
+        let noncanonical =
+            encode_frame::<IntValueV1>(&noncanonical_body).expect("recompute structural checksum");
+        let mut canonical_callback_ran = false;
+        assert_eq!(
+            IntValueV1::decode_frame_observed(&noncanonical, |_| {
+                canonical_callback_ran = true;
+                Ok::<_, ()>(())
+            }),
+            Err(ObservedNumericAbiError::Abi(
+                NumericAbiError::NonCanonicalMantissa
+            ))
+        );
+        assert!(canonical_callback_ran);
+
+        let decimal = DecimalValueV1::try_from_numeric("1.2".parse().expect("decimal"))
+            .expect("canonical decimal");
+        let decimal_frame = decimal.encode_frame().expect("decimal frame");
+        let mut steps = Vec::new();
+        assert_eq!(
+            DecimalValueV1::decode_frame_observed(&decimal_frame, |step| {
+                steps.push(step);
+                Ok::<_, ()>(())
+            }),
+            Ok(decimal)
+        );
+        assert_eq!(
+            steps,
+            [
+                NumericAbiWorkStep::CanonicalBody { body_bytes: 6 },
+                NumericAbiWorkStep::CanonicalityProbe {
+                    mantissa_limbs: 1,
+                    scale: 1,
+                },
+            ]
+        );
+        assert_eq!(
+            DecimalValueV1::decode_frame_observed(&decimal_frame, |step| match step {
+                NumericAbiWorkStep::CanonicalBody { .. } => Ok(()),
+                NumericAbiWorkStep::CanonicalityProbe { .. } => Err("out-of-gas"),
+            }),
+            Err(ObservedNumericAbiError::Observer("out-of-gas"))
+        );
     }
 }

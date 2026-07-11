@@ -107,7 +107,7 @@ struct TransferDeltaTranscript {
 དཔེར་ན་ Kotodama ལག་ལེན་:
 
 ```text
-fn pay(a: AccountId, b: AccountId, asset: AssetDefinitionId, x: int) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

@@ -2318,9 +2318,9 @@ pub mod sumeragi {
     );
     /// Read a self-contained bridge finality proof.
     pub const BRIDGE_FINALITY: RouteDescriptor =
-        telemetry_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
+        public_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
     /// Read a bridge finality commitment and justification bundle.
-    pub const BRIDGE_FINALITY_BUNDLE: RouteDescriptor = telemetry_get(
+    pub const BRIDGE_FINALITY_BUNDLE: RouteDescriptor = public_get(
         "bridge.finality_bundle.read",
         "/v1/bridge/finality/bundle/{height}",
     );
@@ -2609,10 +2609,10 @@ pub mod runtime_governance {
         "governance.proposal.deploy_contract",
         "/v1/gov/proposals/deploy-contract",
     );
-    /// Draft an SCCP route-manifest proposal.
+    /// Draft an SCCP route-governance proposal.
     pub const GOV_PROPOSE_SCCP: RouteDescriptor = app_post(
-        "governance.proposal.sccp_route_manifest",
-        "/v1/gov/proposals/sccp-route-manifest",
+        "governance.proposal.sccp_route_governance",
+        "/v1/gov/proposals/sccp-route-governance",
     );
     /// Read one governance proposal.
     pub const GOV_PROPOSAL_GET: RouteDescriptor =
@@ -4571,6 +4571,21 @@ mod tests {
             .collect();
         assert_eq!(ids.len(), offline::ROUTES.len());
         assert_eq!(method_paths.len(), offline::ROUTES.len());
+    }
+
+    #[test]
+    fn sccp_governance_descriptor_uses_the_canonical_uri() {
+        assert_eq!(
+            runtime_governance::GOV_PROPOSE_SCCP.path(),
+            crate::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
+        );
+    }
+
+    #[test]
+    fn bridge_finality_routes_are_not_telemetry_gated() {
+        for route in [sumeragi::BRIDGE_FINALITY, sumeragi::BRIDGE_FINALITY_BUNDLE] {
+            assert_eq!(route.feature_gate(), FeatureGate::Always);
+        }
     }
 
     #[test]

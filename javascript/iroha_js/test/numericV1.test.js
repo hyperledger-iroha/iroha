@@ -146,6 +146,21 @@ test("numeric V1 consumes the Rust-authored shared golden fixture", async () => 
     assert.equal(toHex(frame.subarray(40)), vector.body_hex, `${vector.id} body`);
     assert.equal(toHex(frame), vector.frame_hex, `${vector.id} frame`);
     assert.equal(toHex(envelope), vector.envelope_hex, `${vector.id} envelope`);
+
+    const fixtureFrame = fromHex(vector.frame_hex);
+    const fixtureEnvelope = fromHex(vector.envelope_hex);
+    const decodedFrame = vector.kind === "int"
+      ? NumericV1.decodeIntFrame(fixtureFrame)
+      : vector.kind === "decimal"
+        ? NumericV1.decodeDecimalFrame(fixtureFrame)
+        : NumericV1.decodeQuantityFrame(fixtureFrame);
+    const decodedEnvelope = vector.kind === "int"
+      ? NumericV1.decodeIntEnvelope(fixtureEnvelope)
+      : vector.kind === "decimal"
+        ? NumericV1.decodeDecimalEnvelope(fixtureEnvelope)
+        : NumericV1.decodeQuantityEnvelope(fixtureEnvelope);
+    assert.equal(decodedFrame.toString(), vector.canonical, `${vector.id} frame decode`);
+    assert.equal(decodedEnvelope.toString(), vector.canonical, `${vector.id} envelope decode`);
   }
 
   for (const vector of fixture.invalid) {

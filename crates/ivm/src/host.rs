@@ -279,7 +279,7 @@ const VERIFY_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 pub(crate) fn debug_log_gas(payload_len: usize) -> u64 {
     DEBUG_GAS.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
 }
-const TLV_ENVELOPE_OVERHEAD: usize = 7 + iroha_crypto::Hash::LENGTH;
+pub(crate) const TLV_ENVELOPE_OVERHEAD: usize = 7 + iroha_crypto::Hash::LENGTH;
 
 /// Build the injective V1 durable-map path for canonical Norito key bytes.
 pub(crate) fn canonical_state_map_path(base: &Name, key: &[u8]) -> Result<Name, VMError> {
@@ -1945,7 +1945,7 @@ impl DefaultHost {
 
     fn fastpq_batch_apply_gas_quote(vm: &IVM) -> Result<u64, VMError> {
         let ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(ptr)?;
+        let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != PointerType::NoritoBytes {
             return Err(VMError::NoritoInvalid);
         }
@@ -2013,8 +2013,10 @@ impl DefaultHost {
         if addr >= input_lo && addr < input_hi {
             return addr;
         }
-        Self::resolve_literal_pointer(vm, addr as usize)
-            .map(|resolved| resolved as u64)
+        usize::try_from(addr)
+            .ok()
+            .and_then(|address| Self::resolve_literal_pointer(vm, address))
+            .and_then(|resolved| u64::try_from(resolved).ok())
             .unwrap_or(addr)
     }
 
@@ -2188,8 +2190,17 @@ impl DefaultHost {
             .saturating_add(SIGNATURE_VERIFY_GAS_PER_BYTE.saturating_mul(bytes))
     }
 
+    fn sm4_ccm_tag_len(raw: u64) -> Option<usize> {
+        let normalized = match raw {
+            0 => 16,
+            4 | 6 | 8 | 10 | 12 | 14 | 16 => raw,
+            _ => return None,
+        };
+        usize::try_from(normalized).ok()
+    }
+
     fn decode_signature_inputs(vm: &IVM) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), VMError> {
-        let message_tlv = vm.memory.validate_tlv(vm.register(10))?;
+        let message_tlv = vm.validate_tlv(vm.register(10))?;
         let message = match message_tlv.type_id {
             PointerType::Blob | PointerType::NoritoBytes => message_tlv.payload.to_vec(),
             PointerType::Json => {
@@ -2202,7 +2213,7 @@ impl DefaultHost {
             _ => return Err(VMError::NoritoInvalid),
         };
         let decode_blob = |register: usize| -> Result<Vec<u8>, VMError> {
-            let tlv = vm.memory.validate_tlv(vm.register(register))?;
+            let tlv = vm.validate_tlv(vm.register(register))?;
             if tlv.type_id != PointerType::Blob {
                 return Err(VMError::NoritoInvalid);
             }
@@ -2316,7 +2327,7 @@ impl DefaultHost {
 
     fn handle_axt_begin(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let ptr = vm.register(10);
-        let tlv = vm.memory.validate_tlv(ptr)?;
+        let tlv = vm.validate_tlv(ptr)?;
         if tlv.type_id != PointerType::AxtDescriptor {
             return Err(VMError::NoritoInvalid);
         }
@@ -2332,7 +2343,7 @@ impl DefaultHost {
     fn handle_axt_touch(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
         let ds_ptr = vm.register(10);
-        let ds_tlv = vm.memory.validate_tlv(ds_ptr)?;
+        let ds_tlv = vm.validate_tlv(ds_ptr)?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::NoritoInvalid);
         }
@@ -2349,7 +2360,7 @@ impl DefaultHost {
                 write: Vec::new(),
             }
         } else {
-            let manifest_tlv = vm.memory.validate_tlv(manifest_ptr)?;
+            let manifest_tlv = vm.validate_tlv(manifest_ptr)?;
             if manifest_tlv.type_id != PointerType::NoritoBytes {
                 return Err(VMError::NoritoInvalid);
             }
@@ -2366,7 +2377,7 @@ impl DefaultHost {
     fn handle_axt_verify_ds_proof(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
         let ds_ptr = vm.register(10);
-        let ds_tlv = vm.memory.validate_tlv(ds_ptr)?;
+        let ds_tlv = vm.validate_tlv(ds_ptr)?;
         if ds_tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::NoritoInvalid);
         }
@@ -2382,7 +2393,7 @@ impl DefaultHost {
             state.record_proof(dsid, None, None)?;
             return Ok(gas);
         }
-        let proof_tlv = vm.memory.validate_tlv(proof_ptr)?;
+        let proof_tlv = vm.validate_tlv(proof_ptr)?;
         if proof_tlv.type_id != PointerType::ProofBlob {
             return Err(VMError::NoritoInvalid);
         }
@@ -2420,7 +2431,7 @@ impl DefaultHost {
     fn handle_axt_use_asset_handle(&mut self, vm: &mut IVM) -> Result<u64, VMError> {
         let state = self.axt_state.as_mut().ok_or(VMError::PermissionDenied)?;
         let handle_ptr = vm.register(10);
-        let handle_tlv = vm.memory.validate_tlv(handle_ptr)?;
+        let handle_tlv = vm.validate_tlv(handle_ptr)?;
         if handle_tlv.type_id != PointerType::AssetHandle {
             return Err(VMError::NoritoInvalid);
         }
@@ -2435,7 +2446,7 @@ impl DefaultHost {
         }
 
         let op_ptr = vm.register(11);
-        let op_tlv = vm.memory.validate_tlv(op_ptr)?;
+        let op_tlv = vm.validate_tlv(op_ptr)?;
         if op_tlv.type_id != PointerType::NoritoBytes {
             return Err(VMError::NoritoInvalid);
         }
@@ -2452,7 +2463,7 @@ impl DefaultHost {
         let proof: Option<ProofBlob> = match vm.register(12) {
             0 => None,
             ptr => {
-                let proof_tlv = vm.memory.validate_tlv(ptr)?;
+                let proof_tlv = vm.validate_tlv(ptr)?;
                 if proof_tlv.type_id != PointerType::ProofBlob {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -2999,7 +3010,8 @@ impl IVMHost for DefaultHost {
                         .map_err(|_| VMError::NoritoInvalid)?;
                     (inner.type_id, inner.version, inner.payload.to_vec())
                 };
-                let expected = vm.register(11) as u16;
+                let expected =
+                    u16::try_from(vm.register(11)).map_err(|_| VMError::NoritoInvalid)?;
                 if expected != 0 && expected != inner_type as u16 {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3075,14 +3087,18 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD => {
                 crate::argument_record::decode_argument_record(vm)
             }
-            crate::syscalls::SYSCALL_STATE_VALUE_ENCODE => crate::state_value::encode_state_value(
-                vm,
-                crate::core_host::CoreHost::resolve_code_tlv_addr,
-            ),
-            crate::syscalls::SYSCALL_STATE_VALUE_DECODE => crate::state_value::decode_state_value(
-                vm,
-                crate::core_host::CoreHost::resolve_code_tlv_addr,
-            ),
+            crate::syscalls::SYSCALL_STATE_VALUE_ENCODE => {
+                crate::state_value_runtime::encode_state_value(
+                    vm,
+                    crate::core_host::CoreHost::resolve_code_tlv_addr,
+                )
+            }
+            crate::syscalls::SYSCALL_STATE_VALUE_DECODE => {
+                crate::state_value_runtime::decode_state_value(
+                    vm,
+                    crate::core_host::CoreHost::resolve_code_tlv_addr,
+                )
+            }
             crate::syscalls::SYSCALL_DEBUG_LOG => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
@@ -3169,7 +3185,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
-                // r13=&Amount, r14=&DataSpaceId
+                // r13=&Quantity, r14=&DataSpaceId
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
@@ -3216,7 +3232,7 @@ impl IVMHost for DefaultHost {
                 const ERR_CHAIN: u64 = 8; // chain_id mismatch
 
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 let gas = Self::verify_gas(tlv.payload.len());
                 if tlv.type_id != PointerType::NoritoBytes {
                     vm.set_register(10, 0);
@@ -3405,7 +3421,7 @@ impl IVMHost for DefaultHost {
                 const ERR_CHAIN: u64 = 8;
 
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 let gas = Self::verify_gas(tlv.payload.len());
                 if tlv.type_id != PointerType::NoritoBytes {
                     vm.set_register(10, 0);
@@ -3604,8 +3620,11 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_GET_PRIVATE_INPUT => {
                 // Load a private input provided by the host. The index is in `x10`.
-                let idx = vm.register(10) as usize;
-                if let Some(&val) = self.private_inputs.get(idx) {
+                let value = usize::try_from(vm.register(10))
+                    .ok()
+                    .and_then(|index| self.private_inputs.get(index))
+                    .copied();
+                if let Some(val) = value {
                     vm.set_register(10, val);
                     Ok(GET_PRIVATE_INPUT_GAS)
                 } else {
@@ -3618,7 +3637,7 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
                 // Load a named public input provided by the host.
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3701,7 +3720,10 @@ impl IVMHost for DefaultHost {
                 // r10 = &message TLV, r11 = &Blob signature TLV, r12 = &Blob public key TLV, r13 = scheme code
                 let (msg, sig, pk) = Self::decode_signature_inputs(vm)?;
                 let gas = Self::signature_verify_gas(msg.len(), sig.len(), pk.len());
-                let scheme_code = vm.register(13) as u8;
+                let Ok(scheme_code) = u8::try_from(vm.register(13)) else {
+                    vm.set_register(10, 0);
+                    return Ok(gas);
+                };
                 let scheme = match scheme_code {
                     1 => crate::signature::SignatureScheme::Ed25519,
                     2 => crate::signature::SignatureScheme::Secp256k1,
@@ -3720,7 +3742,7 @@ impl IVMHost for DefaultHost {
                     return Err(VMError::PermissionDenied);
                 }
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3733,7 +3755,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_SHA256_HASH => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3745,7 +3767,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_SHA3_HASH => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3757,7 +3779,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_BLAKE2B256_HASH => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3769,7 +3791,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_KECCAK256_HASH => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3781,7 +3803,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_IROHA_HASH => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -3796,9 +3818,9 @@ impl IVMHost for DefaultHost {
                 if !self.sm_enabled {
                     return Err(VMError::PermissionDenied);
                 }
-                let msg_tlv = vm.memory.validate_tlv(vm.register(10))?;
-                let sig_tlv = vm.memory.validate_tlv(vm.register(11))?;
-                let pk_tlv = vm.memory.validate_tlv(vm.register(12))?;
+                let msg_tlv = vm.validate_tlv(vm.register(10))?;
+                let sig_tlv = vm.validate_tlv(vm.register(11))?;
+                let pk_tlv = vm.validate_tlv(vm.register(12))?;
 
                 if !matches!(
                     msg_tlv.type_id,
@@ -3816,7 +3838,7 @@ impl IVMHost for DefaultHost {
                     .saturating_add(sig_tlv.payload.len())
                     .saturating_add(pk_tlv.payload.len());
                 let distid = if distid_ptr != 0 {
-                    let distid_tlv = vm.memory.validate_tlv(distid_ptr)?;
+                    let distid_tlv = vm.validate_tlv(distid_ptr)?;
                     if distid_tlv.type_id != PointerType::Blob {
                         return Err(VMError::NoritoInvalid);
                     }
@@ -3861,14 +3883,14 @@ impl IVMHost for DefaultHost {
                 if !self.sm_enabled {
                     return Err(VMError::PermissionDenied);
                 }
-                let key_tlv = vm.memory.validate_tlv(vm.register(10))?;
-                let nonce_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                let key_tlv = vm.validate_tlv(vm.register(10))?;
+                let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
                     None
                 } else {
-                    Some(vm.memory.validate_tlv(vm.register(12))?)
+                    Some(vm.validate_tlv(vm.register(12))?)
                 };
-                let pt_tlv = vm.memory.validate_tlv(vm.register(13))?;
+                let pt_tlv = vm.validate_tlv(vm.register(13))?;
 
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
@@ -3917,14 +3939,14 @@ impl IVMHost for DefaultHost {
                 if !self.sm_enabled {
                     return Err(VMError::PermissionDenied);
                 }
-                let key_tlv = vm.memory.validate_tlv(vm.register(10))?;
-                let nonce_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                let key_tlv = vm.validate_tlv(vm.register(10))?;
+                let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
                     None
                 } else {
-                    Some(vm.memory.validate_tlv(vm.register(12))?)
+                    Some(vm.validate_tlv(vm.register(12))?)
                 };
-                let ct_tlv = vm.memory.validate_tlv(vm.register(13))?;
+                let ct_tlv = vm.validate_tlv(vm.register(13))?;
 
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
@@ -3980,15 +4002,15 @@ impl IVMHost for DefaultHost {
                 if !self.sm_enabled {
                     return Err(VMError::PermissionDenied);
                 }
-                let key_tlv = vm.memory.validate_tlv(vm.register(10))?;
-                let nonce_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                let key_tlv = vm.validate_tlv(vm.register(10))?;
+                let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
                     None
                 } else {
-                    Some(vm.memory.validate_tlv(vm.register(12))?)
+                    Some(vm.validate_tlv(vm.register(12))?)
                 };
-                let pt_tlv = vm.memory.validate_tlv(vm.register(13))?;
-                let tag_len_raw = vm.register(14) as usize;
+                let pt_tlv = vm.validate_tlv(vm.register(13))?;
+                let tag_len_raw = vm.register(14);
 
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
@@ -4003,6 +4025,10 @@ impl IVMHost for DefaultHost {
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, pt_tlv.payload.len());
+                let Some(tag_len) = Self::sm4_ccm_tag_len(tag_len_raw) else {
+                    vm.set_register(10, 0);
+                    return Ok(gas);
+                };
 
                 if key_tlv.payload.len() != 16 {
                     vm.set_register(10, 0);
@@ -4013,7 +4039,6 @@ impl IVMHost for DefaultHost {
                 let key = Sm4Key::new(key_bytes);
 
                 let aad = aad_opt.as_ref().map(|tlv| tlv.payload).unwrap_or(&[]);
-                let tag_len = if tag_len_raw == 0 { 16 } else { tag_len_raw };
 
                 match key.encrypt_ccm(nonce_tlv.payload, aad, pt_tlv.payload, tag_len) {
                     Ok((mut cipher, tag)) => {
@@ -4031,15 +4056,15 @@ impl IVMHost for DefaultHost {
                 if !self.sm_enabled {
                     return Err(VMError::PermissionDenied);
                 }
-                let key_tlv = vm.memory.validate_tlv(vm.register(10))?;
-                let nonce_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                let key_tlv = vm.validate_tlv(vm.register(10))?;
+                let nonce_tlv = vm.validate_tlv(vm.register(11))?;
                 let aad_opt = if vm.register(12) == 0 {
                     None
                 } else {
-                    Some(vm.memory.validate_tlv(vm.register(12))?)
+                    Some(vm.validate_tlv(vm.register(12))?)
                 };
-                let ct_tlv = vm.memory.validate_tlv(vm.register(13))?;
-                let tag_len_raw = vm.register(14) as usize;
+                let ct_tlv = vm.validate_tlv(vm.register(13))?;
+                let tag_len_raw = vm.register(14);
 
                 if key_tlv.type_id != PointerType::Blob
                     || nonce_tlv.type_id != PointerType::Blob
@@ -4054,6 +4079,10 @@ impl IVMHost for DefaultHost {
                 }
                 let aad_len = aad_opt.as_ref().map(|tlv| tlv.payload.len()).unwrap_or(0);
                 let gas = Self::sm4_gas(aad_len, ct_tlv.payload.len());
+                let Some(tag_len) = Self::sm4_ccm_tag_len(tag_len_raw) else {
+                    vm.set_register(10, 0);
+                    return Ok(gas);
+                };
 
                 if key_tlv.payload.len() != 16 {
                     vm.set_register(10, 0);
@@ -4064,7 +4093,6 @@ impl IVMHost for DefaultHost {
                 let key = Sm4Key::new(key_bytes);
 
                 let aad = aad_opt.as_ref().map(|tlv| tlv.payload).unwrap_or(&[]);
-                let tag_len = if tag_len_raw == 0 { 16 } else { tag_len_raw };
 
                 if ct_tlv.payload.len() < tag_len {
                     vm.set_register(10, 0);
@@ -4098,7 +4126,10 @@ impl IVMHost for DefaultHost {
                     let envelope_len = 7usize.saturating_add(tlv.payload.len()).saturating_add(32);
                     return Ok(Self::input_publish_gas(envelope_len));
                 }
-                let resolved = Self::resolve_literal_pointer(vm, src as usize)
+                let resolved = Self::resolve_literal_pointer(
+                    vm,
+                    usize::try_from(src).map_err(|_| VMError::NoritoInvalid)?,
+                )
                     .ok_or(VMError::NoritoInvalid)? as u64;
                 let bytes_vec = vm.clone_tlv(resolved)?;
                 let total = bytes_vec.len();
@@ -4137,11 +4168,11 @@ impl IVMHost for DefaultHost {
                     return Err(VMError::MemoryOutOfBounds);
                 }
                 let dest = vm.register(11);
-                let depth_cap_raw = vm.register(12) as usize;
+                let depth_cap_raw = vm.register(12);
                 let depth_cap = if depth_cap_raw == 0 {
                     None
                 } else {
-                    Some(depth_cap_raw.min(32))
+                    Some(usize::try_from(depth_cap_raw.min(32)).expect("depth cap fits usize"))
                 };
                 let root_out = vm.register(13);
                 let (proof, root) = vm.memory.merkle_compact(addr, depth_cap);
@@ -4170,11 +4201,11 @@ impl IVMHost for DefaultHost {
                     return Err(VMError::RegisterOutOfBounds);
                 }
                 let dest = vm.register(11);
-                let depth_cap_raw = vm.register(12) as usize;
+                let depth_cap_raw = vm.register(12);
                 let depth_cap = if depth_cap_raw == 0 {
                     None
                 } else {
-                    Some(depth_cap_raw.min(32))
+                    Some(usize::try_from(depth_cap_raw.min(32)).expect("depth cap fits usize"))
                 };
                 let root_out = vm.register(13);
                 let (proof, root) = vm.registers.merkle_compact(idx, depth_cap);
@@ -4202,7 +4233,7 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -4245,7 +4276,7 @@ impl IVMHost for DefaultHost {
                 // no ledger state, so it writes an empty deterministic response into
                 // INPUT and returns a pointer.
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -4297,7 +4328,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
                 let ptr = vm.register(10);
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -4501,6 +4532,92 @@ mod tests {
     }
 
     #[test]
+    fn default_host_pointer_decoders_enforce_owned_provenance_and_integrity() {
+        let blob = test_tlv(PointerType::Blob, b"owned-heap-input");
+
+        let mut heap_vm = IVM::new(u64::MAX);
+        let heap_pointer = heap_vm
+            .alloc_heap(u64::try_from(blob.len()).expect("TLV length fits u64"))
+            .expect("allocate complete HEAP envelope");
+        heap_vm
+            .store_bytes(heap_pointer, &blob)
+            .expect("store complete HEAP envelope");
+        heap_vm.set_register(10, heap_pointer);
+        DefaultHost::new()
+            .syscall(syscalls::SYSCALL_SHA256_HASH, &mut heap_vm)
+            .expect("allocated HEAP must be a valid pointer-ABI source");
+        let digest = heap_vm
+            .validate_tlv(heap_vm.register(10))
+            .expect("validate hash result");
+        assert_eq!(digest.type_id, PointerType::Blob);
+        assert_eq!(digest.payload.len(), 32);
+
+        for (label, pointer) in [
+            ("unallocated HEAP", Memory::HEAP_START),
+            ("OUTPUT", Memory::OUTPUT_START),
+            ("stack", Memory::STACK_START),
+        ] {
+            let mut vm = IVM::new(u64::MAX);
+            vm.store_bytes(pointer, &blob)
+                .unwrap_or_else(|error| panic!("store {label} envelope: {error:?}"));
+            vm.set_register(10, pointer);
+            assert!(
+                matches!(
+                    DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
+                    Err(VMError::NoritoInvalid)
+                ),
+                "{label} bytes must not acquire pointer provenance"
+            );
+            assert_eq!(vm.register(10), pointer);
+        }
+
+        let mut partial_vm = IVM::new(u64::MAX);
+        let owned_blob_bytes = blob
+            .len()
+            .checked_sub(8)
+            .expect("Blob envelope exceeds one HEAP alignment unit");
+        let partial_pointer = partial_vm
+            .alloc_heap(u64::try_from(owned_blob_bytes).expect("partial length fits u64"))
+            .expect("allocate truncated HEAP ownership");
+        partial_vm
+            .store_bytes(partial_pointer, &blob)
+            .expect("write across the unowned HEAP boundary");
+        partial_vm.set_register(10, partial_pointer);
+        assert!(matches!(
+            DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut partial_vm),
+            Err(VMError::NoritoInvalid)
+        ));
+
+        for malformed in [test_tlv(PointerType::Name, b"wrong-type"), {
+            let mut corrupted = blob.clone();
+            let last = corrupted.len() - 1;
+            corrupted[last] ^= 1;
+            corrupted
+        }] {
+            let mut vm = IVM::new(u64::MAX);
+            let pointer = vm
+                .alloc_host_tlv(&malformed)
+                .expect("allocate malformed adversarial envelope");
+            vm.set_register(10, pointer);
+            assert!(matches!(
+                DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut vm),
+                Err(VMError::NoritoInvalid)
+            ));
+        }
+
+        let mut code_vm = IVM::new(u64::MAX);
+        let mut code = crate::encoding::wide::encode_halt().to_le_bytes().to_vec();
+        let code_pointer = u64::try_from(code.len()).expect("code offset fits u64");
+        code.extend_from_slice(&blob);
+        code_vm.load_code(&code).expect("load arbitrary code bytes");
+        code_vm.set_register(10, code_pointer);
+        assert!(matches!(
+            DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut code_vm),
+            Err(VMError::NoritoInvalid)
+        ));
+    }
+
+    #[test]
     fn nested_call_journal_composes_and_rolls_back_nullifiers() {
         let mut host = DefaultHost::new();
         host.nullifiers.insert(1);
@@ -4671,7 +4788,8 @@ mod tests {
         let mut paths = Vec::new();
         for index in 0..syscalls::STATE_KEYS_MAX_ITEMS {
             let mut key = vec![0xa5; syscalls::STATE_MAP_MAX_KEY_BYTES];
-            key[key.len() - 1] = u8::try_from(index).expect("bounded index");
+            let last = key.len() - 1;
+            key[last] = u8::try_from(index).expect("bounded index");
             if index + 1 == syscalls::STATE_KEYS_MAX_ITEMS {
                 expected_last = key.clone();
             }
@@ -4794,7 +4912,7 @@ mod tests {
             host.syscall(syscalls::SYSCALL_SYSVAR_CHAIN_ID, &mut vm),
             Ok(DefaultHost::sysvar_gas(chain_id.len()))
         );
-        let tlv = vm.memory.validate_tlv(vm.register(10)).expect("chain tlv");
+        let tlv = vm.validate_tlv(vm.register(10)).expect("chain tlv");
         assert_eq!(tlv.type_id, PointerType::Blob);
         assert_eq!(tlv.payload, chain_id.as_slice());
     }
@@ -4866,7 +4984,7 @@ mod tests {
             Ok(DefaultHost::verify_gas(body.len()))
         );
         assert_eq!(vm.register(11), 0);
-        let out = vm.memory.validate_tlv(vm.register(10)).expect("output tlv");
+        let out = vm.validate_tlv(vm.register(10)).expect("output tlv");
         assert_eq!(out.type_id, PointerType::NoritoBytes);
         let outputs: Vec<[u8; 32]> = norito::decode_from_bytes(out.payload).expect("decode output");
         assert!(outputs.is_empty());
@@ -5190,7 +5308,7 @@ mod tests {
             .syscall(syscalls::SYSCALL_ZK_ROOTS_GET, &mut vm)
             .expect("roots get");
         assert!(roots_gas <= roots_quote);
-        let roots_out = vm.memory.validate_tlv(vm.register(10)).expect("roots tlv");
+        let roots_out = vm.validate_tlv(vm.register(10)).expect("roots tlv");
         assert_eq!(roots_out.type_id, PointerType::NoritoBytes);
         assert_eq!(
             roots_gas,
@@ -5214,7 +5332,7 @@ mod tests {
             .syscall(syscalls::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm)
             .expect("vote tally");
         assert!(tally_gas <= tally_quote);
-        let tally_out = vm.memory.validate_tlv(vm.register(10)).expect("tally tlv");
+        let tally_out = vm.validate_tlv(vm.register(10)).expect("tally tlv");
         assert_eq!(tally_out.type_id, PointerType::NoritoBytes);
         assert_eq!(
             tally_gas,
@@ -5292,7 +5410,7 @@ mod tests {
             .expect("STATE_KEYS");
         assert_eq!(vm.register(11), 1);
         assert_eq!(vm.register(12), 1);
-        let keys_tlv = vm.memory.validate_tlv(vm.register(10)).expect("keys tlv");
+        let keys_tlv = vm.validate_tlv(vm.register(10)).expect("keys tlv");
         let keys: Vec<Name> = norito::decode_from_bytes(keys_tlv.payload).expect("decode keys");
         assert_eq!(keys, vec![key.clone()]);
 
@@ -5402,7 +5520,7 @@ mod tests {
             Ok(DefaultHost::pointer_gas(envelope_len))
         );
         let wrapped_ptr = vm.register(10);
-        let wrapped = vm.memory.validate_tlv(wrapped_ptr).expect("wrapped tlv");
+        let wrapped = vm.validate_tlv(wrapped_ptr).expect("wrapped tlv");
         assert_eq!(wrapped.type_id, PointerType::NoritoBytes);
         assert_eq!(wrapped.payload.len(), envelope_len);
 
@@ -5716,7 +5834,7 @@ mod tests {
         );
         let sealed_ptr = vm.register(10);
         let sealed_len = {
-            let sealed = vm.memory.validate_tlv(sealed_ptr).expect("sealed tlv");
+            let sealed = vm.validate_tlv(sealed_ptr).expect("sealed tlv");
             assert_eq!(sealed.type_id, PointerType::Blob);
             assert_eq!(sealed.payload.len(), plaintext.len() + 16);
             sealed.payload.len()
@@ -5730,7 +5848,7 @@ mod tests {
             host.syscall(syscalls::SYSCALL_SM4_GCM_OPEN, &mut vm),
             Ok(DefaultHost::sm4_gas(aad.len(), sealed_len))
         );
-        let opened = vm.memory.validate_tlv(vm.register(10)).expect("opened tlv");
+        let opened = vm.validate_tlv(vm.register(10)).expect("opened tlv");
         assert_eq!(opened.type_id, PointerType::Blob);
         assert_eq!(opened.payload, plaintext);
     }

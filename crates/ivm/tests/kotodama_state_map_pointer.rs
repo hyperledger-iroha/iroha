@@ -36,11 +36,6 @@ fn map_path(base: &str, pointer_payload: &[u8]) -> String {
     format!("{base}/{}", hex::encode(pointer_payload))
 }
 
-fn encode_int_norito(value: i64) -> Vec<u8> {
-    let payload = common::encode_i64_state_value(value);
-    encode_pointer_tlv(PointerType::NoritoBytes, &payload)
-}
-
 #[test]
 fn durable_map_account_id_path_is_reversible_canonical_hex() {
     const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
@@ -50,12 +45,11 @@ fn durable_map_account_id_path_is_reversible_canonical_hex() {
     assert_eq!(path, format!("balances/{}", hex::encode(raw_ptr)));
 
     let mut host = CoreHost::new();
-    host.insert_state_value(&path, encode_int_norito(5));
+    host.insert_state_value(&path, common::encode_int_state_value(5));
     let stored = host
         .state_bytes(&path)
         .expect("stored value should be present");
-    let payload = common::encode_i64_state_value(5);
-    assert_eq!(stored.len(), 7 + payload.len() + IrohaHash::LENGTH);
+    assert_eq!(stored, common::encode_int_state_value(5));
 }
 
 #[test]

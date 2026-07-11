@@ -24,7 +24,7 @@ fn many_locals_force_spills_and_compute() {
     vm.load_program(&code).unwrap();
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute spills");
-    assert_eq!(vm.register(10), 39);
+    assert_eq!(common::decode_i64_register(&vm, 10), 39);
 }
 
 #[test]
@@ -199,7 +199,10 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
     vm.run().expect("execute wide-frame artifact");
     let expected =
         LIVE_VALUES as u64 * BLOCK_HEIGHT + (LIVE_VALUES as u64 * (LIVE_VALUES as u64 - 1)) / 2;
-    assert_eq!(vm.register(10), expected);
+    assert_eq!(
+        common::decode_i64_register(&vm, 10),
+        i64::try_from(expected).expect("bounded fixture result")
+    );
 
     assert!(
         words.windows(3).any(|window| {

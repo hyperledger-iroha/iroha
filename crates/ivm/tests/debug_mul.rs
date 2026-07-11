@@ -19,5 +19,5 @@ fn debug_mul() {
     vm.load_program(&code).unwrap();
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run");
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }

@@ -337,6 +337,14 @@ pub mod prelude {
     pub use iroha_primitives::{
         json::Json,
         numeric::{Numeric, NumericOperationError, NumericSpec, Quantity, numeric},
+        numeric_abi::{
+            DECIMAL_SCHEMA_HASH_V1, DECIMAL_SCHEMA_NAME_V1, INT_SCHEMA_HASH_V1,
+            INT_SCHEMA_NAME_V1, MAX_DECIMAL_ENVELOPE_BYTES_V1, MAX_DECIMAL_FRAME_BYTES_V1,
+            MAX_INT_ENVELOPE_BYTES_V1, MAX_INT_FRAME_BYTES_V1, MAX_QUANTITY_ENVELOPE_BYTES_V1,
+            MAX_QUANTITY_FRAME_BYTES_V1, NUMERIC_FRAME_HEADER_BYTES_V1,
+            NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, QUANTITY_SCHEMA_HASH_V1,
+            QUANTITY_SCHEMA_NAME_V1,
+        },
     };
 
     pub use super::{

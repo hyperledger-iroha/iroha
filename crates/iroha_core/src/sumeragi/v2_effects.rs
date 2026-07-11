@@ -2322,7 +2322,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         certificate: wire::QuorumCertificate,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
-        if certificate.phase != wire::GlobalPhase::Commit
+        if tag.height() != self.context.height
+            || certificate.phase != wire::GlobalPhase::Commit
             || certificate.subject != subject
             || certificate.round.context_id != self.context.id()
             || certificate.round.height != self.context.height
@@ -4442,6 +4443,48 @@ mod tests {
             executor.durable_finality().expect("durable finality").1,
             &artifact
         );
+    }
+
+    #[test]
+    fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor
+            .admit_local_proposal(
+                tag(0),
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("local proposal");
+        complete_local_proposal_chain(&mut executor, &mut services);
+
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        assert!(matches!(
+            executor.begin_apply(
+                EventTag::new(2, 3, Generation::new(7)),
+                fixture.manifest.subject,
+                commit.clone(),
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(_))
+        ));
+        assert!(executor.pending_applications.is_empty());
+        assert!(services.apply_tasks.is_empty());
+
+        executor
+            .begin_apply(
+                tag(3),
+                fixture.manifest.subject,
+                commit.clone(),
+                &mut services,
+            )
+            .expect("a delayed decided CommitQC remains actionable");
+        assert_eq!(executor.pending_applications.len(), 1);
+        assert_eq!(services.apply_tasks.len(), 1);
+        assert_eq!(services.apply_tasks[0].tag(), tag(3));
+        assert_eq!(services.apply_tasks[0].certificate(), &commit);
     }
 
     #[test]

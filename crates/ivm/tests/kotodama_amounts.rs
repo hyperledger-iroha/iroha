@@ -54,9 +54,13 @@ fn execute_rounded(mode: &str) -> Quantity {
 #[test]
 fn rounded_quantity_modes_execute_through_the_extended_syscall() {
     for (mode, expected) in [
+        ("toward_zero", "0.12"),
+        ("away_from_zero", "0.13"),
         ("floor", "0.12"),
         ("ceil", "0.13"),
         ("nearest_even", "0.12"),
+        ("nearest_away", "0.13"),
+        ("nearest_toward_zero", "0.12"),
     ] {
         let value = execute_rounded(mode);
         assert_eq!(value.to_string(), expected, "Rounding::{mode}");

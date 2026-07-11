@@ -36,6 +36,8 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+#[cfg(test)]
+use iroha_data_model::proof::ProofAttachment;
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::{
     account::prelude::FindAccounts,
@@ -475,7 +477,7 @@ impl std::io::Write for BoundedCountingWriter {
     }
 }
 
-/// Verifying-key record prepared for repeated host-side proof checks.
+/// Verifying-key metadata prepared and cached for repeated host-side proof checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedVerifyingKey {
     record: Arc<VerifyingKeyRecord>,
@@ -2977,6 +2979,35 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = Some(authorization);
     }
 
+    /// Bind a live, pre-authorized top-level contract for non-committing execution.
+    ///
+    /// This is the narrow cross-crate boundary used by Torii view and simulation handlers after
+    /// they have resolved the exact live address/alias/code binding and enforced the selected
+    /// artifact permission before payload decoding. It only seeds host provenance; transaction
+    /// application remains crate-private and independently revalidates the authorization snapshot.
+    pub fn bind_prevalidated_contract_runtime_context(
+        &mut self,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+        code_hash: Hash,
+        entrypoint: String,
+        permission: Option<String>,
+    ) {
+        let contract_subject = contract_address.subject_id();
+        let identity = crate::smartcontracts::code::BoundContractIdentity {
+            contract_address,
+            contract_alias,
+            code_hash,
+        };
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            self.authority.clone(),
+            entrypoint,
+            permission,
+            &identity,
+        );
+        self.bind_contract_runtime_context(contract_subject, authorization);
+    }
+
     /// Share the outer runtime's bounded immutable contract-artifact cache.
     pub fn set_prepared_contract_cache(&mut self, cache: PreparedContractCache) {
         self.prepared_contract_cache = cache;
@@ -5409,35 +5440,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .parse::<ContractAlias>()
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
         Ok(ContractInstanceLookup::Alias(alias))
-    }
-
-    /// Decode a typed pointer-ABI TLV from any provenance-valid VM region.
-    ///
-    /// This variant accepts heap-backed envelopes in addition to INPUT and
-    /// literal/code pointers, which is required for staged deployment helpers
-    /// that reconstruct large lifecycle requests outside the 64 KiB INPUT
-    /// window before queueing the final ISI.
-    ///
-    /// # Errors
-    /// Returns an error if the pointer does not resolve to an INPUT, allocated
-    /// HEAP, or exact loader-validated literal TLV, the type is not allowed by
-    /// the active ABI policy, or the Norito payload cannot be decoded.
-    pub fn decode_tlv_typed_any_region<T>(
-        vm: &IVM,
-        ptr: u64,
-        expected: PointerType,
-    ) -> Result<T, ivm::VMError>
-    where
-        T: for<'de> NoritoDeserialize<'de>,
-    {
-        let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
-        match decode_from_bytes(tlv.payload) {
-            Ok(value) => Ok(value),
-            Err(_) => {
-                let owned = tlv.payload.to_vec();
-                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
-            }
-        }
     }
 
     /// Decode a blob pointer-ABI TLV into owned bytes.
@@ -10529,7 +10531,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
                 let ptr = vm.register(10);
                 let request: scode::RegisterSmartContractBytes =
-                    Self::decode_tlv_typed_any_region(vm, ptr, PointerType::NoritoBytes)?;
+                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
                 let instr = InstructionBox::from(request);
                 Ok(self.queue_instruction(instr))
             }
@@ -11751,6 +11753,46 @@ mod pointer_abi_tests {
             host.nested_contract_call_depth, MAX_NESTED_CONTRACT_CALL_DEPTH,
             "rejection must not mutate the active-frame counter"
         );
+    }
+
+    #[test]
+    fn prevalidated_runtime_binding_captures_exact_root_authorization() {
+        let authority = ALICE_ID.clone();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            43,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let code_hash = Hash::new(b"Torii prevalidated runtime binding");
+        let mut host = CoreHost::new(authority.clone());
+
+        host.bind_prevalidated_contract_runtime_context(
+            contract.clone(),
+            None,
+            code_hash,
+            "inspect".to_owned(),
+            Some("CanInspectContract".to_owned()),
+        );
+
+        let context = host
+            .current_contract_runtime_context
+            .as_ref()
+            .expect("runtime context");
+        assert_eq!(context.contract_address, contract);
+        assert_eq!(context.contract_subject, contract.subject_id());
+        assert_eq!(context.entrypoint, "inspect");
+        let authorization = host
+            .current_entrypoint_authorization
+            .as_ref()
+            .expect("root authorization");
+        assert!(authorization.is_root());
+        assert_eq!(authorization.authority, authority);
+        assert_eq!(authorization.contract_address, contract);
+        assert_eq!(authorization.code_hash, code_hash);
+        assert_eq!(authorization.entrypoint, "inspect");
+        assert_eq!(authorization.permission.as_deref(), Some("CanInspectContract"));
     }
 
     fn fixture_account_literal(label: &str) -> String {
@@ -13420,7 +13462,7 @@ mod pointer_abi_tests {
             pointer_abi::validate_tlv_bytes(heap_bytes).expect("validate heap tlv bytes");
         assert_eq!(tlv_view.type_id, PointerType::NoritoBytes);
         let decoded: scode::RegisterSmartContractBytes =
-            CoreHost::decode_tlv_typed_any_region(&vm, ptr, PointerType::NoritoBytes)
+            CoreHost::decode_tlv_typed(&vm, ptr, PointerType::NoritoBytes)
                 .expect("decode heap register request");
         assert_eq!(decoded, request);
         vm.set_register(10, ptr);
@@ -13467,6 +13509,81 @@ mod pointer_abi_tests {
                     Err(ivm::VMError::NoritoInvalid)
                 ),
                 "{label} must not be accepted as pointer-ABI provenance"
+            );
+            assert!(host.queued.is_empty());
+        }
+
+        let mut vm = ivm::IVM::new(1_000);
+        let mut code = ivm::encoding::wide::encode_halt().to_le_bytes().to_vec();
+        let pointer = u64::try_from(code.len()).expect("code offset fits u64");
+        code.extend_from_slice(&tlv);
+        vm.load_code(&code).expect("load arbitrary code bytes");
+        vm.set_register(10, pointer);
+        let mut host = CoreHost::new(authority.clone());
+        assert!(matches!(
+            host.syscall(
+                ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                &mut vm,
+            ),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert!(host.queued.is_empty());
+
+        let mut partial_vm = ivm::IVM::new(1_000);
+        let owned_tlv_bytes = tlv
+            .len()
+            .checked_sub(8)
+            .expect("request envelope exceeds one HEAP alignment unit");
+        let partial_pointer = partial_vm
+            .alloc_heap(u64::try_from(owned_tlv_bytes).expect("partial TLV length fits u64"))
+            .expect("allocate truncated heap ownership");
+        partial_vm
+            .store_bytes(partial_pointer, &tlv)
+            .expect("store across unowned heap boundary");
+        partial_vm.set_register(10, partial_pointer);
+        let mut host = CoreHost::new(authority.clone());
+        assert!(matches!(
+            host.syscall(
+                ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                &mut partial_vm,
+            ),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert!(host.queued.is_empty());
+
+        let mut corrupted = tlv.clone();
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 1;
+        for (label, envelope, expected) in [
+            (
+                "wrong pointer type",
+                make_tlv(PointerType::Blob as u16, &payload),
+                ivm::VMError::NoritoInvalid,
+            ),
+            (
+                "corrupted payload hash",
+                corrupted,
+                ivm::VMError::NoritoInvalid,
+            ),
+            (
+                "malformed Norito payload",
+                make_tlv(PointerType::NoritoBytes as u16, b"not a request"),
+                ivm::VMError::DecodeError,
+            ),
+        ] {
+            let mut vm = ivm::IVM::new(1_000);
+            let pointer = vm
+                .alloc_host_tlv(&envelope)
+                .unwrap_or_else(|error| panic!("allocate {label} fixture: {error:?}"));
+            vm.set_register(10, pointer);
+            let mut host = CoreHost::new(authority.clone());
+            assert_eq!(
+                host.syscall(
+                    ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                    &mut vm,
+                ),
+                Err(expected),
+                "{label} must fail closed"
             );
             assert!(host.queued.is_empty());
         }
@@ -14635,7 +14752,7 @@ mod pointer_abi_tests {
     }
 
     #[test]
-    fn amount_decoder_requires_quantity_pointer_and_nominal_canonical_payloads() {
+    fn quantity_decoder_requires_nominal_canonical_payloads() {
         let mut vm = IVM::new(10_000);
         let canonical = Numeric::new(125_u32, 2);
         let canonical_ptr = store_quantity(&mut vm, &canonical);
@@ -14643,16 +14760,6 @@ mod pointer_abi_tests {
             CoreHost::decode_amount(&vm, canonical_ptr).expect("decode canonical amount"),
             canonical
         );
-
-        let retired_ptr = store_tlv(
-            &mut vm,
-            PointerType::RetiredAmount,
-            &quantity_frame(&canonical),
-        );
-        assert!(matches!(
-            CoreHost::decode_amount(&vm, retired_ptr),
-            Err(ivm::VMError::NoritoInvalid)
-        ));
 
         let wrong_type_ptr = store_tlv(
             &mut vm,
@@ -15536,19 +15643,19 @@ mod tests {
         let source = format!(
             r#"
 seiyaku AliasPayout {{
-  state SettlementAsset: AssetDefinitionId;
+  state AssetDefinitionId SettlementAsset;
 
-  hajimari(settlement_asset: AssetDefinitionId) {{
+  hajimari(AssetDefinitionId settlement_asset) {{
     SettlementAsset = settlement_asset;
   }}
 
-  kotoage fn bind(settlement_asset: AssetDefinitionId) authorize("AssetOps") {{
+  kotoage fn bind(AssetDefinitionId settlement_asset) authorize("AssetOps") {{
     SettlementAsset = settlement_asset;
   }}
 
-  kotoage fn pay(amount: i64) -> i64 authorize("AssetOps") {{
+  kotoage fn pay(quantity amount) -> quantity authorize("AssetOps") {{
     let merchant = {recipient_expr};
-    ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
+    ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
   }}
 }}
@@ -15798,7 +15905,7 @@ seiyaku TypedPoolViews {
   state AssetDefinitionId QuoteAsset;
   state AccountId PoolAccount;
 
-  kotoage fn bind(quote_asset: AssetDefinitionId, pool_account: AccountId) {
+  kotoage fn bind(AssetDefinitionId quote_asset, AccountId pool_account) {
     QuoteAsset = quote_asset;
     PoolAccount = pool_account;
   }
@@ -15824,9 +15931,9 @@ seiyaku TypedPoolBindingCaller {
   state AccountId ExpectedPoolAccount;
   state int Checked;
 
-  kotoage fn bind(pool_contract: bytes,
-                  expected_quote_asset: AssetDefinitionId,
-                  expected_pool_account: AccountId) {
+  kotoage fn bind(bytes pool_contract,
+                  AssetDefinitionId expected_quote_asset,
+                  AccountId expected_pool_account) {
     PoolContract = pool_contract;
     ExpectedQuoteAsset = expected_quote_asset;
     ExpectedPoolAccount = expected_pool_account;
@@ -16057,7 +16164,7 @@ seiyaku OuterCaller {
         vm.set_register(10, account_ptr);
         vm.set_register(11, asset_def_ptr);
 
-        let balance_payload = norito::to_bytes(&Numeric::new(42_u32, 0)).expect("encode balance");
+        let balance_payload = quantity_frame(&Numeric::new(42_u32, 0));
         let gas = host
             .syscall(ivm_sys::SYSCALL_GET_ACCOUNT_BALANCE, &mut vm)
             .expect("get balance");
@@ -18470,10 +18577,10 @@ seiyaku OuterCaller {
         let source = r#"
 seiyaku BurnWithMemo {
   kotoage fn burn_with_memo(
-    sender: AccountId,
-    settlement_asset: AssetDefinitionId,
-    amount: Amount,
-    memo: bytes
+    AccountId sender,
+    AssetDefinitionId settlement_asset,
+    quantity amount,
+    bytes memo
   ) authorize("AssetTransferRole") {
     ledger::asset::burn(account: sender, asset_definition: settlement_asset, amount: amount);
   }
@@ -18532,7 +18639,7 @@ seiyaku BurnWithMemo {
     fn kotodama_source_rejects_opaque_instruction_submission() {
         let source = r#"
 seiyaku OpaqueInstructionSubmission {
-  kotoage fn submit(record_instruction: bytes) authorize("AssetTransferRole") {
+  kotoage fn submit(bytes record_instruction) authorize("AssetTransferRole") {
     execute_instruction(record_instruction);
   }
 }
@@ -19886,7 +19993,7 @@ seiyaku OpaqueInstructionSubmission {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -19896,7 +20003,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> i64 {
+  view fn value() -> int {
     return 42;
   }
 }
@@ -19941,9 +20048,15 @@ seiyaku Callee {
                 &schema_bytes
             )
         );
+        let [
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1::Pointer(envelope),
+        ] = record.atoms.as_slice()
+        else {
+            panic!("exact Int return must contain one canonical pointer atom");
+        };
         assert_eq!(
-            record.atoms,
-            vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1::Int(42)]
+            ivm::numeric_tlv::decode_int_bytes(envelope).expect("decode returned Int"),
+            iroha_primitives::bigint::BigInt::from_i128(42),
         );
     }
 
@@ -20127,7 +20240,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20137,7 +20250,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> i64 { return 42; }
+  view fn value() -> int { return 42; }
 }
 "#,
             1,
@@ -20211,7 +20324,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> i64 { return 42; }
+  view fn value() -> int { return 42; }
 }
 "#,
             7,
@@ -20247,7 +20360,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20257,9 +20370,9 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  state Values: StateMap<i64, i64>;
+  state StateMap<int, int> Values;
 
-  view fn value() -> i64 {
+  view fn value() -> int {
     return Values.get(1).unwrap_or(0);
   }
 }
@@ -20402,7 +20515,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20412,7 +20525,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> i64 { return 42; }
+  view fn value() -> int { return 42; }
 }
 "#,
             1,
@@ -20464,7 +20577,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20474,11 +20587,11 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  state counter: i64;
+  state int counter;
 
   hajimari() { counter = 0; }
 
-  kotoage fn write() -> i64 authorize("AssetOps") {
+  kotoage fn write() -> int authorize("AssetOps") {
     counter = 9;
     return counter;
   }
@@ -20536,7 +20649,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20546,11 +20659,11 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  state counter: i64;
+  state int counter;
 
   hajimari() { counter = 0; }
 
-  kotoage fn fail_after_write() -> i64 authorize("AssetOps") {
+  kotoage fn fail_after_write() -> int authorize("AssetOps") {
     counter = 9;
     assert(false);
     return 0;
@@ -20608,7 +20721,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20618,7 +20731,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn value() -> i64 authorize("AssetOps") {
+  view fn value() -> int authorize("AssetOps") {
     return 42;
   }
 }
@@ -20677,7 +20790,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20687,7 +20800,7 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Lifecycle {
-  state initialized: i64;
+  state int initialized;
   hajimari() { initialized = 1; }
   kaizen() {}
 }
@@ -20723,7 +20836,7 @@ seiyaku Lifecycle {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -20735,7 +20848,7 @@ seiyaku Caller {
 seiyaku AwaitingHajimari {
   hajimari() {}
 
-  view fn value() -> i64 {
+  view fn value() -> int {
     return 42;
   }
 }
@@ -20769,7 +20882,7 @@ seiyaku AwaitingHajimari {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -21039,13 +21152,13 @@ seiyaku EffectfulView {
         let state = contract_test_state(&authority);
         let source = r#"
 seiyaku StoredAccountView {
-  state Stored: AccountId;
+  state AccountId Stored;
 
-  hajimari(account_id: AccountId) {
+  hajimari(AccountId account_id) {
     Stored = account_id;
   }
 
-  kotoage fn bind(account_id: AccountId) authorize("AssetOps") {
+  kotoage fn bind(AccountId account_id) authorize("AssetOps") {
     Stored = account_id;
   }
 
@@ -21141,7 +21254,7 @@ seiyaku StoredAccountView {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -21151,15 +21264,15 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  state backlog: i64;
-  state safe_mode: i64;
+  state int backlog;
+  state int safe_mode;
 
   hajimari() {
     backlog = 0;
     safe_mode = 0;
   }
 
-  kotoage fn report(backlog_value: i64, safe_mode_value: i64) authorize("AssetOps") {
+  kotoage fn report(int backlog_value, int safe_mode_value) authorize("AssetOps") {
     backlog = backlog_value;
     safe_mode = safe_mode_value;
   }
@@ -21208,7 +21321,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -21218,13 +21331,13 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  state counter: i64;
+  state int counter;
 
   hajimari() {
     counter = 0;
   }
 
-  kotoage fn fail_after_write() -> i64 authorize("AssetOps") {
+  kotoage fn fail_after_write() -> int authorize("AssetOps") {
     counter = 9;
     assert(false);
     return 0;
@@ -21260,7 +21373,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -21270,13 +21383,13 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  state counter: i64;
+  state int counter;
 
   hajimari() {
     counter = 0;
   }
 
-  kotoage fn write_then_return() -> i64 authorize("AssetOps") {
+  kotoage fn write_then_return() -> int authorize("AssetOps") {
     counter = 9;
     return 1000000;
   }
@@ -21380,7 +21493,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -21390,8 +21503,8 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  view fn no_args() -> i64 { return 1; }
-  view fn echo(value: i64) -> i64 { return value; }
+  view fn no_args() -> int { return 1; }
+  view fn echo(int value) -> int { return value; }
 }
 "#,
             1,
@@ -21589,7 +21702,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  view fn main() -> i64 { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             0,
@@ -21601,7 +21714,7 @@ seiyaku Caller {
 seiyaku Callee {
   kotoage fn pull_into_vault(target: AccountId,
                              asset: AssetDefinitionId,
-                             amount: i64) -> i64 authorize("AssetOps") {
+                             amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: target, asset_definition: asset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     return amount;
   }
@@ -21751,9 +21864,9 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku Caller {
-  state CallerAccount: AccountId;
-  state VaultContract: bytes;
-  state SettlementAsset: AssetDefinitionId;
+  state AccountId CallerAccount;
+  state bytes VaultContract;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(caller_account: AccountId,
        vault_contract: bytes,
@@ -21771,7 +21884,7 @@ seiyaku Caller {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn open(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn open(amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: CallerAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     let payload = json::object();
     let deposit_payload = json::set_i64(payload, Name::parse("amount"), amount);
@@ -21786,8 +21899,8 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Vault {
-  state VaultAccount: AccountId;
-  state SettlementAsset: AssetDefinitionId;
+  state AccountId VaultAccount;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(vault_account: AccountId, settlement_asset: AssetDefinitionId) {
     VaultAccount = vault_account;
@@ -21800,7 +21913,7 @@ seiyaku Vault {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn deposit(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn deposit(amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: VaultAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     return amount;
   }
@@ -21942,7 +22055,7 @@ seiyaku Vault {
             &authority,
             r#"
 seiyaku AliasPayout {
-  state SettlementAsset: AssetDefinitionId;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
@@ -21952,7 +22065,7 @@ seiyaku AliasPayout {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: AccountId::parse("merchant@paynet"), asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     return amount;
   }
@@ -22109,7 +22222,7 @@ seiyaku AliasPayout {
             &authority,
             r#"
 seiyaku AliasPayout {
-  state SettlementAsset: AssetDefinitionId;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
@@ -22119,7 +22232,7 @@ seiyaku AliasPayout {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
     let merchant = ledger::account::resolve_alias("merchant@paynet");
     ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     return amount;
@@ -22460,7 +22573,7 @@ seiyaku AliasPayout {
             &authority,
             r#"
 seiyaku AliasPayout {
-  state SettlementAsset: AssetDefinitionId;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
@@ -22470,7 +22583,7 @@ seiyaku AliasPayout {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
     let merchant = ledger::account::resolve_alias("merchant@paynet");
     ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     return amount;
@@ -23935,7 +24048,7 @@ seiyaku AliasPayout {
             &authority,
             r#"
 seiyaku AliasPayout {
-  state SettlementAsset: AssetDefinitionId;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(settlement_asset: AssetDefinitionId) {
     SettlementAsset = settlement_asset;
@@ -23945,7 +24058,7 @@ seiyaku AliasPayout {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: AccountId::parse("merchant@bank.paynet"), asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     return amount;
   }
@@ -24059,9 +24172,9 @@ seiyaku AliasPayout {
             &authority,
             r#"
 seiyaku Caller {
-  state CallerAccount: AccountId;
-  state ForwarderContract: bytes;
-  state SettlementAsset: AssetDefinitionId;
+  state AccountId CallerAccount;
+  state bytes ForwarderContract;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(caller_account: AccountId,
        forwarder_contract: bytes,
@@ -24079,7 +24192,7 @@ seiyaku Caller {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn open(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn open(amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: CallerAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     let payload = json::object();
     let forward_payload = json::set_i64(payload, Name::parse("amount"), amount);
@@ -24094,9 +24207,9 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Forwarder {
-  state ForwarderAccount: AccountId;
-  state VaultContract: bytes;
-  state SettlementAsset: AssetDefinitionId;
+  state AccountId ForwarderAccount;
+  state bytes VaultContract;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(forwarder_account: AccountId,
        vault_contract: bytes,
@@ -24114,7 +24227,7 @@ seiyaku Forwarder {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn forward(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn forward(amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: ForwarderAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     let payload = json::object();
     let deposit_payload = json::set_i64(payload, Name::parse("amount"), amount);
@@ -24129,8 +24242,8 @@ seiyaku Forwarder {
             &authority,
             r#"
 seiyaku Vault {
-  state VaultAccount: AccountId;
-  state SettlementAsset: AssetDefinitionId;
+  state AccountId VaultAccount;
+  state AssetDefinitionId SettlementAsset;
 
   hajimari(vault_account: AccountId, settlement_asset: AssetDefinitionId) {
     VaultAccount = vault_account;
@@ -24143,7 +24256,7 @@ seiyaku Vault {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn deposit(amount: i64) -> i64 authorize("AssetOps") {
+  kotoage fn deposit(amount: i64) -> int authorize("AssetOps") {
     ledger::asset::transfer(source: context::authority(), destination: VaultAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
     return amount;
   }

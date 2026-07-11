@@ -54,7 +54,7 @@ fn install_sm_entrypoint(
     for (name, value) in integer_fields {
         payload.insert(
             (*name).to_owned(),
-            norito::json::to_value(value).expect("encode integer argument"),
+            norito::json::Value::String(value.to_string()),
         );
     }
     let record = ivm::encode_argument_record_from_json(
@@ -75,7 +75,7 @@ fn install_sm_entrypoint(
 fn kotodama_sm3_hash_returns_expected_digest() {
     let src = r#"
         seiyaku Sm3Hash {
-        view fn sm_hash(msg: bytes) -> bytes {
+        view fn sm_hash(bytes msg) -> bytes {
             return crypto::sm3(msg);
         }
         }
@@ -105,7 +105,7 @@ fn kotodama_sm3_hash_returns_expected_digest() {
 fn compile_sm2_verify() -> Vec<u8> {
     let src = r#"
         seiyaku Sm2Verify {
-        view fn verify(msg: bytes, sig: bytes, pk: bytes) -> bool {
+        view fn verify(bytes msg, bytes sig, bytes pk) -> bool {
             return crypto::sm2::verify(message: msg, signature: sig, public_key: pk);
         }
         }
@@ -118,7 +118,7 @@ fn compile_sm2_verify() -> Vec<u8> {
 fn compile_sm2_verify_with_distid() -> Vec<u8> {
     let src = r#"
         seiyaku Sm2VerifyWithDistid {
-        view fn verify_with_distid(msg: bytes, sig: bytes, pk: bytes, distid: bytes) -> bool {
+        view fn verify_with_distid(bytes msg, bytes sig, bytes pk, bytes distid) -> bool {
             return crypto::sm2::verify(message: msg, signature: sig, public_key: pk, distid: distid);
         }
         }
@@ -131,7 +131,7 @@ fn compile_sm2_verify_with_distid() -> Vec<u8> {
 fn compile_sm4_gcm_seal() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4GcmSeal {
-        view fn seal(key: bytes, nonce: bytes, aad: bytes, pt: bytes) -> bytes {
+        view fn seal(bytes key, bytes nonce, bytes aad, bytes pt) -> bytes {
             return crypto::sm4_gcm::seal(key: key, nonce: nonce, aad: aad, payload: pt);
         }
         }
@@ -144,7 +144,7 @@ fn compile_sm4_gcm_seal() -> Vec<u8> {
 fn compile_sm4_gcm_open() -> Vec<u8> {
     let src = r#"
         seiyaku Sm4GcmOpen {
-        view fn open(key: bytes, nonce: bytes, aad: bytes, ct: bytes) -> bytes {
+        view fn open(bytes key, bytes nonce, bytes aad, bytes ct) -> bytes {
             return crypto::sm4_gcm::open(key: key, nonce: nonce, aad: aad, payload: ct);
         }
         }

@@ -3930,10 +3930,7 @@ mod tests_overlay_manifest {
         );
     }
 
-    fn minimal_contract_artifact_with_permission(
-        abi_version: u8,
-        permission: Option<&str>,
-    ) -> (Vec<u8>, ContractManifest) {
+    fn minimal_contract_artifact_bytes(abi_version: u8, permission: Option<&str>) -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
@@ -3969,13 +3966,21 @@ mod tests_overlay_manifest {
         let mut artifact = meta.encode();
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        artifact
+    }
+
+    fn minimal_contract_artifact_with_permission(
+        abi_version: u8,
+        permission: Option<&str>,
+    ) -> (Vec<u8>, ContractManifest) {
+        let artifact = minimal_contract_artifact_bytes(abi_version, permission);
         let verified =
             ivm::verify_contract_artifact(&artifact).expect("valid overlay test artifact");
         (artifact, verified.manifest)
     }
 
     fn minimal_contract_artifact(abi_version: u8) -> (Vec<u8>, ContractManifest) {
-        minimal_contract_artifact_with_permission(abi_version, None)
+        minimal_contract_artifact_with_permission(abi_version, Some("CanInvoke"))
     }
 
     #[test]
@@ -4020,7 +4025,7 @@ mod tests_overlay_manifest {
             .compile_source(
                 r#"
 seiyaku RebuildArguments {
-  view fn inspect(value: i64) -> i64 { return value; }
+  view fn inspect(int value) -> int { return value; }
 }
 "#,
             )
@@ -4033,7 +4038,7 @@ seiyaku RebuildArguments {
             .expect("inspect argument schema");
         let arguments = ivm::encode_argument_record_from_json(
             schema,
-            &Json::from(norito::json!({ "value": 7 })),
+            &Json::from(norito::json!({ "value": "7" })),
         )
         .expect("encode canonical rebuild arguments");
         let arguments =
@@ -4095,7 +4100,7 @@ seiyaku RebuildArguments {
             .compile_source(
                 r#"
 seiyaku ProtectedStateFreeOverlay {
-  kotoage fn write(value: i64) authorize("CanWriteStateFreeOverlay") {
+  kotoage fn write(int value) authorize("CanWriteStateFreeOverlay") {
     let _value = value;
   }
 }
@@ -4143,7 +4148,7 @@ seiyaku ProtectedStateFreeOverlay {
             .compile_source(
                 r#"
 seiyaku PermissionlessStateFreeOverlay {
-  kotoage fn write(value: i64) {
+  kotoage fn write(int value) {
     let _value = value;
   }
 }
@@ -4199,7 +4204,7 @@ seiyaku PermissionlessStateFreeOverlay {
             .compile_source(
                 r#"
 seiyaku ProtectedParameterizedOverlay {
-  kotoage fn write(value: i64) authorize("CanWriteParameterizedOverlay") {
+  kotoage fn write(int value) authorize("CanWriteParameterizedOverlay") {
     let _value = value;
   }
 }
@@ -4290,10 +4295,13 @@ seiyaku ProtectedParameterizedOverlay {
 
         const REQUIRED_PERMISSION: &str = "CanWriteGuardedState";
         let (authority, keypair) = gen_account_in("wonderland");
-        let contract_address: ContractAddress =
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4vp9ggff82m7"
-                .parse()
-                .expect("valid contract address");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            92,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive guarded contract address");
         let (artifact, manifest) =
             minimal_contract_artifact_with_permission(1, Some(REQUIRED_PERMISSION));
         let code_hash = manifest.code_hash.expect("verified code hash");
@@ -4355,7 +4363,7 @@ seiyaku ProtectedParameterizedOverlay {
         assert!(
             matches!(
                 denied,
-                OverlayBuildError::ContractCall(message)
+                OverlayBuildError::ContractCall(ref message)
                     if message.contains(REQUIRED_PERMISSION) && message.contains("main")
             ),
             "unexpected authorization error: {denied:?}"
@@ -5049,98 +5057,13 @@ seiyaku ProtectedParameterizedOverlay {
     }
 
     #[test]
-    fn permissionless_contract_overlay_still_carries_and_revalidates_live_binding() {
-        use iroha_data_model::transaction::executable::ContractInvocation;
-
-        let (authority, keypair) = gen_account_in("wonderland");
-        let domain = iroha_data_model::domain::Domain::new(
-            DomainId::try_new("wonderland", "universal").expect("valid domain"),
-        )
-        .build(&authority);
-        let account = build_wonderland_account(&authority);
-        let (artifact, manifest) = minimal_contract_artifact_with_permission(1, None);
-        let code_hash = manifest.code_hash.expect("verified code hash");
-        let contract_address = ContractAddress::derive(
-            iroha_data_model::account::address::chain_discriminant(),
-            &authority,
-            81,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive contract address");
-        let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-            "open",
-            Some("wonderland"),
-            "universal",
-        )
-        .expect("valid contract alias");
-        let mut world = crate::state::World::with([domain], [account], []);
-        world.contract_code.insert(code_hash, artifact);
-        world.contract_manifests.insert(code_hash, manifest);
-        world
-            .contract_instances
-            .insert(contract_address.clone(), code_hash);
-        world
-            .bind_contract_alias(&contract_address, contract_alias.clone(), None, None, 0)
-            .expect("bind contract alias");
-        let state = State::new_with_chain(
-            world,
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-            ChainId::from("permissionless-binding-overlay"),
-        );
-        let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
-        let transaction = TransactionBuilder::new(
-            ChainId::from("permissionless-binding-overlay"),
-            authority.clone(),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::ContractCall(ContractInvocation {
-            contract_address: contract_address.clone(),
-            entrypoint: "main".to_owned(),
-            arguments: None,
-        }))
-        .sign(keypair.private_key());
-        let mut overlay = build_overlay_for_transaction(&transaction, &state.view())
-            .expect("permissionless call prepares");
-        let authorization = overlay
-            .entrypoint_authorization
-            .as_ref()
-            .expect("every selected entrypoint carries an apply-time authorization snapshot");
-        assert_eq!(authorization.entrypoint, "main");
-        assert_eq!(authorization.permission, None);
-        assert_eq!(&authorization.contract_address, &contract_address);
-        assert_eq!(authorization.contract_alias.as_ref(), Some(&contract_alias));
-        assert_eq!(authorization.code_hash, code_hash);
-
-        let forbidden_effect: Name = "permissionless/forbidden"
-            .parse()
-            .expect("valid durable-state path");
-        overlay
-            .durable_state_overlay
-            .insert(forbidden_effect.clone(), Some(vec![0x5A]));
-        overlay.durable_state_authorizations.insert(
-            forbidden_effect.clone(),
-            overlay.entrypoint_authorization.clone(),
-        );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let mut state_tx = state_block.transaction();
-        state_tx
-            .world
-            .contract_instances
-            .remove(contract_address.clone());
-
-        overlay
-            .apply(&mut state_tx, &authority)
-            .expect_err("deactivation must invalidate even a permissionless prepared call");
+    fn policyless_transaction_entrypoint_artifact_is_rejected() {
+        let artifact = minimal_contract_artifact_bytes(1, None);
+        let error = ivm::verify_contract_artifact(&artifact)
+            .expect_err("ABI V1 must reject a kotoage entrypoint without caller authorization");
         assert!(
-            state_tx
-                .world
-                .smart_contract_state
-                .get(&forbidden_effect)
-                .is_none(),
-            "deactivation must be checked before permissionless durable effects"
+            error.to_string().contains("missing caller authorization"),
+            "unexpected policyless-artifact error: {error}"
         );
     }
 
@@ -5257,6 +5180,7 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
+    use nonzero_ext::nonzero;
 
     use super::*;
     use crate::state::State;
@@ -5584,11 +5508,11 @@ mod tests {
             .compile_source_with_manifest(
                 r#"
 seiyaku ProtectedProvedOverlay {
-  kotoage fn open() -> i64 authorize("CanBuildProvedOverlay") {
-    set_account_detail(
-      authority(),
-      name("proved_overlay_applied"),
-      json!{ source: "top_level" }
+  kotoage fn open() -> int authorize("CanBuildProvedOverlay") {
+    ledger::account::set_detail(
+      account: context::authority(),
+      key: Name::parse("proved_overlay_applied"),
+      value: Json::parse("{\"source\":\"top_level\"}")
     );
     return 0;
   }
@@ -7158,17 +7082,17 @@ seiyaku ProtectedProvedOverlay {
             .compile_source_with_manifest(
                 r#"
 seiyaku DeriveDispatch {
-  kotoage fn main() -> i64 authorize("DeriveDispatch") {
-    assert(false);
+  kotoage fn main() -> int authorize("DeriveDispatch") {
+    test::assert(false);
     return 0;
   }
 
-  kotoage fn open(amount: i64) -> i64 authorize("DeriveDispatch") {
-    assert(amount == 7);
+  kotoage fn open(int amount) -> int authorize("DeriveDispatch") {
+    test::assert(amount == 7);
     return 0;
   }
 
-  kotoage fn restricted() -> int permission(AssetOps) {
+  kotoage fn restricted() -> int authorize("AssetOps") {
     return 0;
   }
 }
@@ -7221,7 +7145,7 @@ seiyaku DeriveDispatch {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(norito::json!({ "amount": 7 })),
+            iroha_primitives::json::Json::new(norito::json!({ "amount": "7" })),
         );
         metadata.insert(
             "contract_address".parse().expect("metadata key"),
@@ -7257,6 +7181,10 @@ seiyaku DeriveDispatch {
             "contract_entrypoint".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("restricted"),
         );
+        restricted_metadata.insert(
+            "contract_address".parse().expect("metadata key"),
+            iroha_primitives::json::Json::new(contract_address.to_string()),
+        );
         let restricted_tx = TransactionBuilder::new(state.chain_id.clone(), authority)
             .with_metadata(restricted_metadata)
             .with_executable(Executable::Ivm(bytecode))
@@ -7275,247 +7203,135 @@ seiyaku DeriveDispatch {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn ivm_proved_replay_rejects_nested_authorization_context() {
-        use iroha_data_model::{
-            domain::Domain,
-            nexus::DataSpaceId,
-            prelude::{AccountId, IvmBytecode, TransactionBuilder},
-            transaction::{Executable, IvmProved},
-        };
-        use std::sync::Arc;
-
-        let compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                force_zk: true,
-                max_cycles: 100_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
-        let outer_source = r#"
-seiyaku ReplayOuter {
-  state bytes CalleeContract;
-
-  kotoage fn bind(callee_contract: bytes) {
-    CalleeContract = callee_contract;
-  }
-
-  kotoage fn run(value: int) -> int permission(AssetOps) {
-    let payload = json_object();
-    let payload = json_set_int(payload, name("value"), value);
-    return decode_int(call_contract(CalleeContract, "write", payload));
-  }
-}
-"#;
-        let (outer_code, _) = compiler
-            .compile_source_with_manifest(outer_source)
-            .expect("compile outer replay contract");
-        let bind_compiler =
-            ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
-                force_zk: false,
-                max_cycles: 100_000,
-                mode: ivm::kotodama::compiler::CompilerMode::Test,
-                ..ivm::kotodama::compiler::CompilerOptions::default()
-            });
-        let (outer_bind_code, _) = bind_compiler
-            .compile_source_with_manifest(outer_source)
-            .expect("compile non-ZK outer state initializer");
-        let (callee_code, _) = compiler
-            .compile_source_with_manifest(
-                r#"
-seiyaku ReplayCallee {
-  kotoage fn write(value: int) -> int permission(AssetOps) {
-    set_account_detail(
-      authority(),
-      name("proof_replay"),
-      json!{ source: "nested" }
-    );
-    return value;
-  }
-}
-"#,
-            )
-            .expect("compile nested replay contract");
-
-        let outer_verified =
-            ivm::verify_contract_artifact(&outer_code).expect("verify outer contract artifact");
-        let outer_bind_verified = ivm::verify_contract_artifact(&outer_bind_code)
-            .expect("verify non-ZK outer state initializer");
-        let callee_verified =
-            ivm::verify_contract_artifact(&callee_code).expect("verify callee contract artifact");
-        let kp = checked_keypair();
-        let authority = AccountId::new(kp.public_key().clone());
-        let outer_address = ContractAddress::derive(0, &authority, 1, DataSpaceId::UNIVERSAL)
-            .expect("derive outer contract address");
-        let callee_address = ContractAddress::derive(0, &authority, 2, DataSpaceId::UNIVERSAL)
-            .expect("derive callee contract address");
-
-        let domain =
-            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
-        let accounts = [
-            build_wonderland_account(&authority),
-            build_wonderland_account(&outer_address.subject_id()),
-            build_wonderland_account(&callee_address.subject_id()),
-        ];
-        let mut world = crate::state::World::with([domain], accounts, []);
-        let asset_ops = iroha_data_model::permission::Permission::new(
-            "AssetOps".to_owned(),
-            iroha_primitives::json::Json::new(()),
-        );
-        world.account_permissions.insert(
-            authority.clone(),
-            std::collections::BTreeSet::from([asset_ops.clone()]),
-        );
-        world.account_permissions.insert(
-            outer_address.subject_id(),
-            std::collections::BTreeSet::from([asset_ops]),
-        );
-        world.contract_code.insert(
-            outer_bind_verified.code_hash,
-            outer_bind_code.as_slice().to_vec(),
-        );
-        world.contract_manifests.insert(
-            outer_bind_verified.code_hash,
-            outer_bind_verified.manifest.signed(&kp),
-        );
-        world
-            .contract_instances
-            .insert(outer_address.clone(), outer_bind_verified.code_hash);
-        world
-            .contract_code
-            .insert(callee_verified.code_hash, callee_code.as_slice().to_vec());
-        world.contract_manifests.insert(
-            callee_verified.code_hash,
-            callee_verified.manifest.signed(&kp),
-        );
-        world
-            .contract_instances
-            .insert(callee_address.clone(), callee_verified.code_hash);
-
-        let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = crate::state::State::new_for_testing(world, Arc::clone(&kura), query);
-
-        let mut bind_metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut bind_metadata);
-        bind_metadata.insert(
-            "contract_address".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(outer_address.to_string()),
-        );
-        bind_metadata.insert(
-            "contract_entrypoint".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new("bind"),
-        );
-        bind_metadata.insert(
-            "contract_payload".parse().expect("metadata key"),
-            iroha_primitives::json::Json::from_str_norito(&format!(
-                r#"{{"callee_contract":"0x{}"}}"#,
-                hex::encode(callee_address.as_ref())
-            ))
-            .expect("bind payload"),
-        );
-        let bind_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(bind_metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(outer_bind_code)))
-            .sign(kp.private_key());
-        let bind_overlay = build_overlay_for_transaction(&bind_tx, &state.view())
-            .expect("build bound-state initialization overlay");
-        assert!(
-            bind_overlay.has_durable_state_changes(),
-            "outer contract binding must be represented as durable state"
-        );
-        let mut block = state.block(BlockHeader::new(
-            core::num::NonZeroU64::new(1).expect("non-zero block height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut state_tx = block.transaction();
-        bind_overlay
-            .apply(&mut state_tx, &authority)
-            .expect("apply bound-state initialization overlay");
-        // The initial state write must use a non-ZK executable because raw `Executable::Ivm`
-        // correctly rejects the ZK mode bit. Rebind the same address to the proof-capable artifact
-        // before deriving and replaying the proved call; durable state is address-scoped.
-        state_tx
-            .world
-            .contract_code
-            .insert(outer_verified.code_hash, outer_code.as_slice().to_vec());
-        state_tx.world.contract_manifests.insert(
-            outer_verified.code_hash,
-            outer_verified.manifest.signed(&kp),
-        );
-        state_tx
-            .world
-            .contract_instances
-            .insert(outer_address.clone(), outer_verified.code_hash);
-        state_tx.apply();
-        block.commit().expect("commit bound-state initialization");
-
-        let mut replay_metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut replay_metadata);
-        replay_metadata.insert(
-            "contract_address".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new(outer_address.to_string()),
-        );
-        replay_metadata.insert(
-            "contract_entrypoint".parse().expect("metadata key"),
-            iroha_primitives::json::Json::new("run"),
-        );
-        replay_metadata.insert(
-            "contract_payload".parse().expect("metadata key"),
-            iroha_primitives::json::Json::from_str_norito(r#"{"value":9}"#).expect("run payload"),
-        );
-        let empty_overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> =
-            Vec::new().into();
-        let proved = IvmProved {
-            bytecode: IvmBytecode::from_compiled(outer_code),
-            overlay: empty_overlay.clone(),
-            events_commitment: Hash::new(b"placeholder-events"),
-            gas_policy_commitment: Hash::new(b"placeholder-gas"),
-        };
-        let replay_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(replay_metadata)
-            .with_executable(Executable::IvmProved(proved.clone()))
-            .sign(kp.private_key());
-        let overlay_hash =
-            Hash::new(norito::to_bytes(&empty_overlay).expect("encode placeholder proved overlay"));
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let summary = ivm_cache
-            .summarize_program(proved.bytecode.as_ref())
-            .expect("summarize nested proved contract");
-        let error = replay_ivm_proved_overlay(
-            &state.view(),
-            &replay_tx,
-            &summary,
-            TEST_GAS_LIMIT,
-            overlay_hash,
+    fn ivm_proved_replay_rejects_nested_or_mismatched_authorization_context() {
+        let (authority, _) = gen_account_in("wonderland");
+        let (other_authority, _) = gen_account_in("wonderland");
+        let root_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            1,
+            DataSpaceId::UNIVERSAL,
         )
-        .expect_err("ABI V1 must reject nested proved authorization contexts");
-        assert!(
-            matches!(
-                &error,
-                OverlayBuildError::ZkProof(message)
-                    if message.contains("only exact top-level authorization")
-                        && message.contains("nested or mismatched contexts are forbidden")
-            ),
-            "unexpected nested proved replay error: {error:?}"
+        .expect("derive root contract address");
+        let child_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            2,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive child contract address");
+        let root_authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "run".to_owned(),
+            Some("RootPermission".to_owned()),
+            &code::BoundContractIdentity {
+                contract_address: root_address.clone(),
+                contract_alias: None,
+                code_hash: Hash::new(b"proved-root-code"),
+            },
         );
+        let root_context = crate::executor::ContractRuntimeExecutionContext {
+            contract_address: root_address.clone(),
+            contract_subject: root_address.subject_id(),
+            contract_alias: None,
+            entrypoint: "run".to_owned(),
+        };
+        let instruction: InstructionBox = iroha_data_model::isi::Log::new(
+            iroha_logger::Level::INFO,
+            "proved authorization invariant".to_owned(),
+        )
+        .into();
+        let queued = |
+            effect_authority: AccountId,
+            contract_runtime_context: Option<crate::executor::ContractRuntimeExecutionContext>,
+            entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
+        | crate::smartcontracts::ivm::host::QueuedInstruction {
+            instruction: instruction.clone(),
+            authority: effect_authority,
+            contract_runtime_context,
+            entrypoint_authorization,
+        };
 
-        let detail_key: Name = "proof_replay".parse().expect("detail key");
-        assert!(
-            state
-                .view()
-                .world()
-                .account(&outer_address.subject_id())
-                .expect("outer contract subject account")
-                .metadata()
-                .get(&detail_key)
-                .is_none(),
-            "rejected nested proved replay must apply no queued instruction"
+        let exact = queued(
+            authority.clone(),
+            Some(root_context.clone()),
+            Some(root_authorization.clone()),
         );
+        validate_ivm_proved_queued_authorization(
+            &[exact],
+            &authority,
+            &root_context,
+            &root_authorization,
+        )
+        .expect("exact top-level proved authorization must be retained");
+
+        let child_authorization = ContractEntrypointAuthorizationSnapshot::new(
+            root_address.subject_id(),
+            "write".to_owned(),
+            Some("ChildPermission".to_owned()),
+            &code::BoundContractIdentity {
+                contract_address: child_address.clone(),
+                contract_alias: None,
+                code_hash: Hash::new(b"proved-child-code"),
+            },
+        )
+        .with_parent(Some(root_authorization.clone()));
+        let child_context = crate::executor::ContractRuntimeExecutionContext {
+            contract_subject: child_address.subject_id(),
+            contract_address: child_address,
+            contract_alias: None,
+            entrypoint: "write".to_owned(),
+        };
+        let adversarial = [
+            (
+                "nested authorization",
+                queued(
+                    root_address.subject_id(),
+                    Some(child_context),
+                    Some(child_authorization),
+                ),
+            ),
+            (
+                "changed effect authority",
+                queued(
+                    other_authority,
+                    Some(root_context.clone()),
+                    Some(root_authorization.clone()),
+                ),
+            ),
+            (
+                "missing runtime context",
+                queued(authority.clone(), None, Some(root_authorization.clone())),
+            ),
+            (
+                "missing authorization snapshot",
+                queued(authority.clone(), Some(root_context.clone()), None),
+            ),
+        ];
+        for (label, queued) in adversarial {
+            let error = validate_ivm_proved_queued_authorization(
+                &[queued],
+                &authority,
+                &root_context,
+                &root_authorization,
+            )
+            .expect_err(label);
+            assert!(
+                matches!(
+                    &error,
+                    OverlayBuildError::ZkProof(message)
+                        if message.contains("only exact top-level authorization")
+                            && message.contains("nested or mismatched contexts are forbidden")
+                ),
+                "unexpected {label} error: {error:?}"
+            );
+        }
+
+        let nested_root = root_authorization
+            .clone()
+            .with_parent(Some(root_authorization.clone()));
+        validate_ivm_proved_queued_authorization(&[], &authority, &root_context, &nested_root)
+            .expect_err("proved replay root authorization must itself be top-level");
     }
 
     #[test]
@@ -7530,7 +7346,7 @@ seiyaku ReplayCallee {
             .compile_source_with_manifest(
                 r#"
 seiyaku ProtectedProved {
-  kotoage fn write(value: i64) authorize("CanWriteProved") {
+  kotoage fn write(int value) authorize("CanWriteProved") {
     let _value = value;
   }
 }
@@ -9299,6 +9115,35 @@ fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
             .is_some_and(|normalized| normalized == IVM_OVERLAY_BIND_CIRCUIT_CANONICAL)
 }
 
+fn validate_ivm_proved_queued_authorization(
+    queued: &[crate::smartcontracts::ivm::host::QueuedInstruction],
+    authority: &AccountId,
+    runtime_context: &crate::executor::ContractRuntimeExecutionContext,
+    authorization: &ContractEntrypointAuthorizationSnapshot,
+) -> Result<(), OverlayBuildError> {
+    let invalid = !authorization.is_root()
+        || queued.iter().any(|queued| {
+            queued.authority != *authority
+                || queued.entrypoint_authorization.as_ref() != Some(authorization)
+                || queued
+                    .contract_runtime_context
+                    .as_ref()
+                    .is_none_or(|context| {
+                        context.contract_subject != runtime_context.contract_subject
+                            || context.contract_address != runtime_context.contract_address
+                            || context.contract_alias != runtime_context.contract_alias
+                            || context.entrypoint != runtime_context.entrypoint
+                    })
+        });
+    if invalid {
+        return Err(OverlayBuildError::ZkProof(
+            "Executable::IvmProved ABI V1 can preserve only exact top-level authorization for queued host writes; nested or mismatched contexts are forbidden"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn replay_ivm_proved_overlay<R>(
     state_ro: &R,
     tx: &SignedTransaction,
@@ -9371,24 +9216,12 @@ where
         ));
     }
     debug_assert!(durable_state_authorizations.is_empty());
-    if queued.iter().any(|queued| {
-        queued.authority != *tx.authority()
-            || queued.entrypoint_authorization.as_ref() != Some(&entrypoint_authorization)
-            || queued
-                .contract_runtime_context
-                .as_ref()
-                .is_none_or(|context| {
-                    context.contract_subject != contract_runtime_context.contract_subject
-                        || context.contract_address != contract_runtime_context.contract_address
-                        || context.contract_alias != contract_runtime_context.contract_alias
-                        || context.entrypoint != contract_runtime_context.entrypoint
-                })
-    }) {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved ABI V1 can preserve only exact top-level authorization for queued host writes; nested or mismatched contexts are forbidden"
-                .to_owned(),
-        ));
-    }
+    validate_ivm_proved_queued_authorization(
+        &queued,
+        tx.authority(),
+        &contract_runtime_context,
+        &entrypoint_authorization,
+    )?;
     let mut queued_instructions = queued
         .iter()
         .map(|queued| queued.instruction.clone())
@@ -9428,6 +9261,7 @@ where
     })
 }
 
+#[derive(Debug)]
 pub(crate) struct IvmProvedReplay {
     pub(crate) queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
     pub(crate) completed_axt: Vec<ivm::axt::HostAxtState>,
@@ -10062,24 +9896,12 @@ where
         ));
     }
     debug_assert!(durable_state_authorizations.is_empty());
-    if queued.iter().any(|queued| {
-        queued.authority != *tx.authority()
-            || queued.entrypoint_authorization.as_ref() != Some(&entrypoint_authorization)
-            || queued
-                .contract_runtime_context
-                .as_ref()
-                .is_none_or(|context| {
-                    context.contract_subject != contract_runtime_context.contract_subject
-                        || context.contract_address != contract_runtime_context.contract_address
-                        || context.contract_alias != contract_runtime_context.contract_alias
-                        || context.entrypoint != contract_runtime_context.entrypoint
-                })
-    }) {
-        return Err(OverlayBuildError::ZkProof(
-            "proved payload derivation ABI V1 can encode only exact top-level authorization for queued host writes; nested or mismatched contexts are forbidden"
-                .to_owned(),
-        ));
-    }
+    validate_ivm_proved_queued_authorization(
+        &queued,
+        tx.authority(),
+        &contract_runtime_context,
+        &entrypoint_authorization,
+    )?;
     let mut queued = queued
         .into_iter()
         .map(|queued| queued.instruction)

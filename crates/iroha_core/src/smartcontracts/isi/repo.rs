@@ -7,7 +7,7 @@ use iroha_data_model::{
         RepoAccountRole, RepoAccountSettled,
     },
     isi::{
-        error::InstructionExecutionError,
+        error::{InstructionExecutionError, MathError},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
     prelude::*,
@@ -24,6 +24,26 @@ use crate::{
 const MAX_HAIRCUT_BPS: u16 = 10_000;
 const MS_PER_DAY: u64 = 86_400_000;
 const ACT_360_YEAR_MS: u64 = MS_PER_DAY * 360;
+
+fn ensure_positive_quantity(quantity: &Numeric, label: &str) -> Result<(), Error> {
+    if quantity.mantissa().is_negative() {
+        return Err(InstructionExecutionError::Math(MathError::NegativeValue));
+    }
+    if quantity.is_zero() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("{label} must be greater than zero").into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_agreement_quantities(agreement: &RepoAgreement) -> Result<(), Error> {
+    ensure_positive_quantity(agreement.cash_leg().quantity(), "stored repo cash quantity")?;
+    ensure_positive_quantity(
+        agreement.collateral_leg().quantity(),
+        "stored repo collateral quantity",
+    )
+}
 
 fn ensure_accounts(
     stx: &StateTransaction<'_, '_>,
@@ -191,11 +211,8 @@ impl Execute for RepoIsi {
                 "repo counterparties must be distinct".into(),
             ));
         }
-        if cash_leg.quantity().is_zero() || collateral_leg.quantity().is_zero() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "repo legs must specify non-zero quantities".into(),
-            ));
-        }
+        ensure_positive_quantity(cash_leg.quantity(), "repo cash quantity")?;
+        ensure_positive_quantity(collateral_leg.quantity(), "repo collateral quantity")?;
 
         ensure_accounts(
             state_transaction,
@@ -360,11 +377,11 @@ impl Execute for ReverseRepoIsi {
                 "reverse repo counterparties must be distinct".into(),
             ));
         }
-        if cash_leg.quantity().is_zero() || collateral_leg.quantity().is_zero() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "reverse repo legs must specify non-zero quantities".into(),
-            ));
-        }
+        ensure_positive_quantity(cash_leg.quantity(), "reverse repo cash quantity")?;
+        ensure_positive_quantity(
+            collateral_leg.quantity(),
+            "reverse repo collateral quantity",
+        )?;
 
         let stored_agreement = state_transaction
             .world
@@ -376,6 +393,7 @@ impl Execute for ReverseRepoIsi {
                     format!("repo agreement {agreement_id} is not active").into(),
                 )
             })?;
+        ensure_agreement_quantities(&stored_agreement)?;
 
         if stored_agreement.initiator() != &initiator {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -559,6 +577,7 @@ impl Execute for RepoMarginCallIsi {
                     format!("repo agreement {agreement_id} is not active").into(),
                 )
             })?;
+        ensure_agreement_quantities(&agreement)?;
 
         let is_authorised = authority == agreement.initiator()
             || authority == agreement.counterparty()
@@ -869,6 +888,16 @@ mod tests {
     fn checked_account_id_preserves_default_algorithm() {
         let account_id = checked_account_id();
         assert_eq!(account_id.signatory().algorithm(), Algorithm::default());
+    }
+
+    #[test]
+    fn repo_quantity_guard_rejects_negative_values() {
+        let error = ensure_positive_quantity(&Numeric::new(-1_i32, 0), "repo cash quantity")
+            .expect_err("negative repo quantity must be rejected");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::Math(MathError::NegativeValue)
+        ));
     }
 
     fn setup_state() -> (State, RepoAgreementId, AssetDefinitionId, AssetDefinitionId) {

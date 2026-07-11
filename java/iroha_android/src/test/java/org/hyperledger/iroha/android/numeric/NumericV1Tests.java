@@ -155,23 +155,33 @@ public final class NumericV1Tests {
       final String id = (String) vector.get("id");
       final String kind = (String) vector.get("kind");
       final String canonical = (String) vector.get("canonical");
+      final byte[] fixtureFrame = unhex((String) vector.get("frame_hex"));
+      final byte[] fixtureEnvelope = unhex((String) vector.get("envelope_hex"));
       final byte[] frame;
       final byte[] envelope;
+      final String decodedFrame;
+      final String decodedEnvelope;
       switch (kind) {
         case "int":
           final NumericV1.IntValue integer = NumericV1.decodeIntJson(canonical);
           frame = NumericV1.encodeIntFrame(integer);
           envelope = NumericV1.encodeIntEnvelope(integer);
+          decodedFrame = NumericV1.decodeIntFrame(fixtureFrame).toString();
+          decodedEnvelope = NumericV1.decodeIntEnvelope(fixtureEnvelope).toString();
           break;
         case "decimal":
           final NumericV1.DecimalValue decimal = NumericV1.decodeDecimalJson(canonical);
           frame = NumericV1.encodeDecimalFrame(decimal);
           envelope = NumericV1.encodeDecimalEnvelope(decimal);
+          decodedFrame = NumericV1.decodeDecimalFrame(fixtureFrame).toString();
+          decodedEnvelope = NumericV1.decodeDecimalEnvelope(fixtureEnvelope).toString();
           break;
         case "quantity":
           final NumericV1.QuantityValue quantity = NumericV1.decodeQuantityJson(canonical);
           frame = NumericV1.encodeQuantityFrame(quantity);
           envelope = NumericV1.encodeQuantityEnvelope(quantity);
+          decodedFrame = NumericV1.decodeQuantityFrame(fixtureFrame).toString();
+          decodedEnvelope = NumericV1.decodeQuantityEnvelope(fixtureEnvelope).toString();
           break;
         default:
           throw new AssertionError("unknown fixture kind " + kind);
@@ -179,6 +189,8 @@ public final class NumericV1Tests {
       assertEquals(id + " body", vector.get("body_hex"), hex(java.util.Arrays.copyOfRange(frame, 40, frame.length)));
       assertEquals(id + " frame", vector.get("frame_hex"), hex(frame));
       assertEquals(id + " envelope", vector.get("envelope_hex"), hex(envelope));
+      assertEquals(id + " frame decode", canonical, decodedFrame);
+      assertEquals(id + " envelope decode", canonical, decodedEnvelope);
     }
 
     for (final Object raw : (List<Object>) fixture.get("invalid")) {

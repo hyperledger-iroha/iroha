@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -14,111 +14,72 @@ translator: machine-google-reviewed
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Гүүрний эцсийн баталгаа
+# Bridge finality нотолгоо
 
-Энэхүү баримт бичигт Iroha-ийн анхны гүүрний эцсийн чанарыг баталгаажуулсан гадаргууг тайлбарласан болно.
-Зорилго нь Iroha блок байгаа эсэхийг гадны сүлжээ эсвэл хөнгөн үйлчлүүлэгчдэд баталгаажуулах явдал юм.
-гинжин хэлхээнээс гадуурх тооцоолол эсвэл итгэмжлэгдсэн релегүйгээр эцэслэнэ.
+Энэ баримт бичиг анхны хувилбарын bridge finality форматыг тодорхойлно. Нотолгоо нь
+Sumeragi v2-ийн үүсгэж, тогтвортой хадгалсан яг таг finality evidence-ийг дамжуулна.
+Proof envelope-ийн schema version нь `1`, харин доторх consensus protocol version нь
+`2`. Sumeragi v1 certificate projection, decoder эсвэл fallback зам байхгүй.
 
-## Баталгаажуулах формат
+## Нотолгооны яг таг формат
 
-`BridgeFinalityProof` (Norito/JSON) дараахь зүйлийг агуулна.
+Norito эсвэл Norito JSON-оор кодлосон `BridgeFinalityProof` зөвхөн гурван талбартай:
 
-- `height`: блокны өндөр.
-- `chain_id`: Iroha гинжин хэлхээний давталтаас урьдчилан сэргийлэх гинжин танигч.
-- `block_header`: каноник `BlockHeader`.
-- `block_hash`: толгой хэсгийн хэш (үйлчлүүлэгчид баталгаажуулахын тулд дахин тооцоолдог).
-- `commit_certificate`: баталгаажуулагчийн багц + блокийг дуусгасан гарын үсэг.
-- `validator_set_pops`: Баталгаажуулагчийн багцтай нийцүүлсэн эзэмшлийн нотлох байт
-  захиалга (BLS нийлбэр баталгаажуулалтад шаардлагатай).
+```text
+{ version, block_header, finality_artifact }
+```
 
-Нотлох баримт нь бие даасан; ямар ч гадаад манифест эсвэл тунгалаг бус толбо шаардлагагүй.
-Хадгалах: Torii нь сүүлийн үеийн гэрчилгээ олгох цонхонд эцсийн баталгааг өгдөг.
-(тохируулсан түүхийн хязгаараар хязгаарлагдсан; анхдагчаар дамжуулан 512 оруулгатай
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). Үйлчлүүлэгчид
-Хэрэв тэдгээрт илүү урт зай шаардлагатай бол нотлох баримтуудыг кэшлэх эсвэл бэхлэх ёстой.
-Каноник залгуур нь `(block_header, block_hash, commit_certificate)`: the
-Толгой хэсгийн хэш нь амлалтын гэрчилгээний доторх хэштэй тохирч байх ёстой
-chain id нь нотлох баримтыг нэг дэвтэрт холбодог. Серверүүд татгалзаж, бүртгүүлэх a
-Сертификат өөр блок руу зааж өгөх үед `CommitCertificateHashMismatch`
-хэш.
+- `version` заавал `1` байна;
+- `block_header` нь хүссэн өндөр дэх canonical `BlockHeader`;
+- `finality_artifact` нь тухайн блокт хадгалсан яг таг `V2FinalityArtifact`. Энэ нь
+  height-context roster-ийн дарааллаар validator бүрийн BLS-normal PoP-ийг
+  (`validator_set_pops`) тогтвортой дотроо агуулна.
 
-## Амлалтын багц
+Artifact нь бүрэн, өөрчлөгдөшгүй `HeightContext`, яг таг `BlockSubject`, block hash,
+CommitQC болон roster-т таарсан PoP-уудыг агуулна. Height context нь chain, epoch,
+roster, `DualQuorum`, DA layout, leader seed болон бусад consensus өгөгдлийг царцаана.
+Epoch-ийг дуусгаж буй parent block-ийн context нь optional `next_epoch_snapshot`-ийг мөн
+агуулна; уг талбар context id-ийн хэсэг тул child roster-ийг зөвшөөрөхөөс өмнө parent
+CommitQC түүнийг баталгаажуулна. Finalized snapshot нь дараагийн epoch parameters-аас
+гадна `epoch_end_height` болон дараагийн roster-т таарсан `validator_set_pops`-ийг баталгаажуулна.
 
-`BridgeFinalityBundle` (Norito/JSON) нь үндсэн нотолгоог тодорхой нотолгоогоор өргөжүүлдэг.
-амлалт ба үндэслэл:
+## Тогтвортой хадгалалт ба шалгалт
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: амлалтад заасан эрх мэдлийн гарын үсэг
-  ачаалал (гэрчилгээний гарын үсгийг дахин ашигладаг).
-- `block_header`, `commit_certificate`: үндсэн нотолгоотой ижил.
+Sumeragi v2 apply path artifact-ийг шалгаад өөрчлөгдөшгүй Kura sidecar болгон хадгална.
+Proof builder canonical block болон sidecar-ийг уншиж, түүхэн PoP эсвэл certificate-ийг
+өөрчлөгдөж болох одоогийн world state-ээс дахин бүтээдэггүй. Байхгүй, эвдэрсэн,
+зөрчилтэй эсвэл баталгаажихгүй sidecar-ийг fail closed байдлаар татгалзана; хүртээмж нь
+сүүлийн үеийн in-memory history window-оор хязгаарлагдахгүй.
 
-Одоогийн орлуулагч: `mmr_root`/`mmr_peaks`-г дахин тооцоолох замаар гаргаж авсан.
-санах ой дахь блок-хэш MMR; оруулах нотлох баримтуудыг хараахан буцааж өгөөгүй байна. Үйлчлүүлэгчид боломжтой
-өнөөдрийг хүртэл үүргийн ачааллаар ижил хэшийг баталгаажуулсан хэвээр байна.
+Stateless verifier нь version, chain, height, header hash, header-ийн canonical predecessor
+ба view, context, subject, CommitQC-г яг тааруулж, artifact доторх бүх PoP-ийг шалгана.
+Signer index-үүд эрс өсөх дараалалтай,
+хязгаарт байх ёстой. CommitQC нь validator count болон voting power хоёр quorum-ыг
+зэрэг хангаж, яг таг Sumeragi v2 vote preimage дээрх BLS aggregate signature хүчинтэй
+байх ёстой.
 
-MMR оргилуудыг зүүнээс баруун тийш эрэмбэлсэн. Оргилуудыг уутлах замаар `mmr_root`-г дахин тооцоол
-баруунаас зүүн тийш: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+## Итгэлийн anchor ба successor шалгалт
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+Ганц нотолгоо зөвхөн өөрийн авч явсан roster дорх дотоод нийцлийг харуулна.
+`BridgeFinalityVerifier` эхний нотолгооноос өмнө илэрхий итгэмжлэгдсэн
+`HeightContextId` шаарддаг. Дараа нь зөвхөн шууд дараагийн өндрийг хүлээн авч, child
+context-ийн parent CommitQC-г өмнөх царцаасан roster ба PoP-оор шалгана. Epoch дотор child
+artifact нь өмнөх artifact-ийн PoP-ийг хуулна; boundary дээр epoch, roster, quorum, seed
+ба PoP нь parent CommitQC-ээр баталгаажсан `next_epoch_snapshot`-тай, түүний
+`epoch_end_height`-ийг оролцуулан, таарах ёстой. Хуучин, алгассан, холбоогүй өндрийг татгалзана.
 
-Баталгаажуулалт нь үндсэн нотолгоотой адил юм: `block_hash`-г дахин тооцоол.
-толгой, амлалт-гэрчилгээний гарын үсгийг шалгаж, амлалтаа шалгана уу
-талбарууд нь сертификат болон блок хэштэй таарч байна. Багц нь амлалт нэмдэг/
-тусгаарлахыг илүүд үздэг гүүр протоколуудын үндэслэлийн боодол.
+SCCP ижил `BridgeFinalityProof`-ийг ашиглана. Message-ийн өгсөн roster дорх гарын үсэгт
+дангаар нь итгэж болохгүй; governance-ээр тогтоосон checkpoint context/artifact-аас
+message artifact хүртэлх шууд successor бүрийг шалгана.
 
-## Баталгаажуулах алхамууд1. `block_header`-аас `block_hash`-г дахин тооцоолох; таарахгүй байгаа тохиолдолд татгалзах.
-2. `commit_certificate.block_hash` нь дахин тооцоолсон `block_hash`-тэй таарч байгаа эсэхийг шалгах;
-   тохирохгүй толгой/сертификат хосоос татгалзах.
-3. `chain_id` нь хүлээгдэж буй Iroha хэлхээтэй таарч байгаа эсэхийг шалгана уу.
-4. `commit_certificate.validator_set`-с `validator_set_hash` болон дахин тооцоол.
-   бүртгэгдсэн хэш/хувилбартай таарч байгаа эсэхийг шалгана уу.
-5. `validator_set_pops` урт нь баталгаажуулагчийн багцтай тохирч байгаа эсэхийг шалгаад баталгаажуулна уу
-   PoP бүр өөрийн BLS нийтийн түлхүүрийн эсрэг.
-6. Гарчигны хэшийн эсрэг амлалтын гэрчилгээнд гарын үсгийг баталгаажуулна уу
-   лавласан баталгаажуулагчийн нийтийн түлхүүрүүд болон индексүүд; чуулгыг хэрэгжүүлэх
-   (`2f+1` үед `n>3`, өөр `n`) ба давхардсан/хүрээний гадуурх индексийг татгалзана.
-7. Сонголтоор баталгаажуулагчийн багц хэшийг харьцуулж итгэмжлэгдсэн хяналтын цэг рүү холбоно уу
-   зангуу утга руу (сул субьектив зангуу).
-8. Сонголтоор хүлээгдэж буй эрин үеийн зангуугаар холбосноор хуучин/шинэ
-   зангууг зориудаар эргүүлэх хүртэл эрин үеийг үгүйсгэдэг.
+## Bundle ба API
 
-`BridgeFinalityVerifier` (`iroha_data_model::bridge` хэлээр) эдгээр шалгалтыг хэрэгжүүлдэг.
-гинжин хэлхээний дугаар/өндөрийн зөрүү, баталгаажуулагчийн багц хэш/хувилбар таарахгүй, алга
-эсвэл хүчингүй PoP, давхардсан/хүрээнээс гадуурх гарын үсэг, хүчингүй гарын үсэг, болон
-чуулгыг тоолохын өмнөх гэнэтийн эрин үе тул хөнгөн үйлчлүүлэгчид нэгийг дахин ашиглах боломжтой
-баталгаажуулагч.
+`BridgeFinalityBundle` яг `{ commitment, finality_proof }` байна. Commitment нь
+`{ chain_id, height_context_id, block_height, block_hash }`.
 
-## Лавлагаа баталгаажуулагч
+- `GET /v1/bridge/finality/{height}` нь `BridgeFinalityProof` буцаана;
+- `GET /v1/bridge/finality/bundle/{height}` нь `BridgeFinalityBundle` буцаана.
 
-`BridgeFinalityVerifier` нь хүлээгдэж буй `chain_id` болон нэмэлт итгэмжлэгдсэн хувилбаруудыг хүлээн авдаг.
-validator-set болон epoch anchors. Энэ нь толгой/блок-хэш/-ийг хэрэгжүүлдэг.
-commit-certificate tuple, validates validator-set hash/version, checks
-сурталчилсан баталгаажуулагчийн жагсаалтын эсрэг гарын үсэг/чуулга, хамгийн сүүлийн үеийн мэдээллийг хянадаг
-хуучирсан/алгасан нотлох баримтаас татгалзах өндөр. Зангуу нийлүүлэх үед энэ нь татгалздаг
-тодорхой `UnexpectedEpoch` бүхий эрин үе/жагсаалтууд/
-`UnexpectedValidatorSet` алдаа; зангуугүйгээр энэ нь эхний нотолгоог хүлээн авдаг
-Давхардсан/гасарсан-г үргэлжлүүлэн хэрэгжүүлэхээс өмнө баталгаажуулагчаар тохируулсан хэш болон эрин үеийг тохируулна уу.
-тодорхойлогч алдаатай хүрээ/хангалтгүй гарын үсэг.
-
-## API гадаргуу
-
-- `GET /v1/bridge/finality/{height}` – `BridgeFinalityProof`-г буцаана
-  хүссэн блокны өндөр. `Accept`-ээр дамжуулан контентын хэлэлцээр нь Norito эсвэл дэмждэг
-  JSON.
-- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle`-г буцаана
-  (амлалт + үндэслэл + толгой/сертификат) хүссэн өндрийн хувьд.
-
-## Тэмдэглэл болон дагаж мөрдөх
-
-- Нотлох баримтыг одоогоор хадгалсан баталгааны гэрчилгээнээс гаргаж авсан. Хязгаарлагдмал
-  түүх нь гэрчилгээ хадгалах цонхыг дагаж мөрддөг; үйлчлүүлэгчид кэш хийх ёстой
-  урт давхрага шаардлагатай бол зангуу баталгаа. Цонхны гаднах хүсэлтийг буцаана
-  `CommitCertificateNotFound(height)`; алдаагаа гаргаж, буцаад a
-  зангуутай хяналтын цэг.
-- `block_hash` (толгой vs.) таарахгүй байгаа дахин тоглуулсан эсвэл хуурамч нотолгоо.
-  гэрчилгээ) `CommitCertificateHashMismatch`-ээр татгалзсан; үйлчлүүлэгчид байх ёстой
-  гарын үсгийн баталгаажуулалтаас өмнө ижил tuple шалгалтыг хийж, устгана
-  таарахгүй ачаалал.
-- Цаашдын ажил нь нотлох баримтын хэмжээг багасгахын тулд MMR/эрх бүхий байгууллагаас тогтоосон амлалтын хэлхээг нэмж болно.
-  илүү баялаг амлалтын дугтуйн доторх амлалтын гэрчилгээ.
+Block эсвэл яг таг тогтвортой v2 artifact байхгүй буюу хүчингүй бол хоёр endpoint хоёулаа
+fail closed болно. Үл мэдэгдэх талбар, дэмжигдээгүй version, хуучирсан proof shape-ийг
+татгалзах ёстой.

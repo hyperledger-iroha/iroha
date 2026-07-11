@@ -2139,8 +2139,7 @@ mod tests {
     fn kagemusha_v2_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {
         let operation_id = [0x31; 32];
         let transaction_hash = submission_test_hash(0x73);
-        let anchor_transaction_hash = <[u8; 32]>::try_from(transaction_hash.as_ref())
-            .expect("transaction hashes are 32 bytes");
+        let anchor_transaction_hash = *transaction_hash.as_ref();
         ensure_kagemusha_v2_anchor_finality_binding(
             operation_id,
             anchor_transaction_hash,

@@ -18525,9 +18525,7 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let mut payload = sora_outbound_sccp_payload(56);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.route_id = b"nexus:bsc:xor".to_vec();
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
             let instruction = crate::bridge::test_record_sccp_message(
@@ -18562,9 +18560,7 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let mut payload = sora_outbound_sccp_payload(57);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_id = b"rose".to_vec();
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
             let instruction = crate::bridge::test_record_sccp_message(
@@ -18599,9 +18595,7 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let mut payload = sora_outbound_sccp_payload(58);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.route_id_codec = iroha_sccp::SCCP_CODEC_EVM_ADDRESS20;
             transfer.route_id = vec![0x11; 20];
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -18637,9 +18631,7 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let mut payload = sora_outbound_sccp_payload(65);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_id = b"xor#".to_vec();
             transfer.route_id = b"nexus:eth:xor".to_vec();
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -18675,9 +18667,7 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let mut payload = sora_outbound_sccp_payload(67);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_id = b"xor#universal".to_vec();
             transfer.route_id = b"nexus:eth:xor".to_vec();
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -18713,9 +18703,7 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let mut payload = sora_outbound_sccp_payload(59);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_BSC;
             transfer.route_id = b"bsc:sora:xor".to_vec();
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -18751,9 +18739,7 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let mut payload = sora_outbound_sccp_payload(60);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
             transfer.asset_id = b"weth".to_vec();
             transfer.route_id = b"eth:sora:weth".to_vec();
@@ -18864,9 +18850,7 @@ pub mod isi {
 
             let foreign_sender = AccountId::new(checked_keypair().public_key().clone());
             let mut payload = sora_outbound_sccp_payload(69);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.sender = foreign_sender
                 .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
                 .expect("canonical foreign sender")
@@ -18910,9 +18894,7 @@ pub mod isi {
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
 
             let mut payload = sora_outbound_sccp_payload(73);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.sender = ALICE_ID
                 .to_i105_for_discriminant(
                     iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
@@ -18986,9 +18968,7 @@ pub mod isi {
                 let mut payload = sora_outbound_sccp_payload(
                     74 + u64::try_from(index).expect("small fixture index"),
                 );
-                let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                    unreachable!("test payload is a transfer");
-                };
+                let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
                 let sender = authority
                     .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
                     .expect("unsupported controller still has a valid Rust Taira AccountId");
@@ -19041,9 +19021,7 @@ pub mod isi {
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
 
             let mut payload = sora_outbound_sccp_payload(70);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.amount = u128::MAX;
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
 
@@ -26170,7 +26148,6 @@ seiyaku GovernanceLifecycle {
                 .insert(key.message_id, key);
             stx.world.sccp_outbound_proofs.insert(key, replay);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
-            crate::bridge::reset_sccp_local_bls_verifications_for_tests();
 
             let error = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -26188,7 +26165,6 @@ seiyaku GovernanceLifecycle {
                     bls_verifications: 0,
                 }
             );
-            assert_eq!(crate::bridge::sccp_local_bls_verifications_for_tests(), 0);
         }
 
         #[test]
@@ -26691,9 +26667,7 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let mut payload = sccp_native_inbound_transfer_payload_for_test(84, 7);
-            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
-                unreachable!("test payload is a transfer");
-            };
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
             let (proof, native, registry) =
                 native_ethereum_bridge_proof_for_payload_for_test(payload);

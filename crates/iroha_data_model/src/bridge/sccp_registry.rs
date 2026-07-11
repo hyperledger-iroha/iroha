@@ -2441,7 +2441,7 @@ mod tests {
                 7,
             )
             .expect("valid exact TRON route"),
-            hex32("604815ec629f4d8438f44fccc63ff37ac3a96cd71e23495b86779fd0fe68295f")
+            hex32("1ac12d420c355f9dc77c5e891ccfa6db9e23a0c00153f27470720564d59d15f4")
         );
     }
 
@@ -3204,7 +3204,7 @@ mod tests {
         let mut changed_profile = baseline;
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
             changed_profile.outbound_proof_policy.semantic_profile;
-        circuit.circuit_commitment = [0x75; 32];
+        circuit.circuit_commitment = [0x76; 32];
         changed_profile
             .outbound_proof_policy
             .validate()
@@ -3232,10 +3232,99 @@ mod tests {
             .outbound_proof_policy
             .sora_finality_anchor
             .checkpoint_height += 1;
+        changed_anchor
+            .outbound_proof_policy
+            .validate()
+            .expect("changed anchor remains valid");
         assert_ne!(
             baseline_binding,
             sccp_evm_destination_binding_hash_v1(lane().source, &changed_anchor)
                 .expect("changed anchor binding")
+        );
+        assert_ne!(
+            baseline_route,
+            SccpDestinationDeploymentV1::Evm(changed_anchor)
+                .route_configuration_hash(
+                    lane(),
+                    "taira_eth_xor",
+                    "xor",
+                    1,
+                    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                )
+                .expect("changed anchor route hash")
+        );
+
+        let tron_lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::TronMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        };
+        let baseline_tron = tron_deployment();
+        let baseline_tron_binding =
+            sccp_tron_destination_binding_hash_v1(tron_lane.source, &baseline_tron)
+                .expect("TRON binding");
+        let baseline_tron_route = SccpDestinationDeploymentV1::Tron(baseline_tron)
+            .route_configuration_hash(
+                tron_lane,
+                "taira_tron_xor",
+                "xor",
+                1,
+                SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            )
+            .expect("TRON route hash");
+
+        let mut changed_tron_profile = baseline_tron;
+        let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
+            changed_tron_profile
+                .outbound_proof_policy
+                .semantic_profile;
+        circuit.circuit_commitment = [0x76; 32];
+        changed_tron_profile
+            .outbound_proof_policy
+            .validate()
+            .expect("changed TRON profile remains valid");
+        assert_ne!(
+            baseline_tron_binding,
+            sccp_tron_destination_binding_hash_v1(tron_lane.source, &changed_tron_profile)
+                .expect("changed TRON binding")
+        );
+        assert_ne!(
+            baseline_tron_route,
+            SccpDestinationDeploymentV1::Tron(changed_tron_profile)
+                .route_configuration_hash(
+                    tron_lane,
+                    "taira_tron_xor",
+                    "xor",
+                    1,
+                    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                )
+                .expect("changed TRON route hash")
+        );
+
+        let mut changed_tron_anchor = baseline_tron;
+        changed_tron_anchor
+            .outbound_proof_policy
+            .sora_finality_anchor
+            .checkpoint_height += 1;
+        changed_tron_anchor
+            .outbound_proof_policy
+            .validate()
+            .expect("changed TRON anchor remains valid");
+        assert_ne!(
+            baseline_tron_binding,
+            sccp_tron_destination_binding_hash_v1(tron_lane.source, &changed_tron_anchor)
+                .expect("changed TRON anchor binding")
+        );
+        assert_ne!(
+            baseline_tron_route,
+            SccpDestinationDeploymentV1::Tron(changed_tron_anchor)
+                .route_configuration_hash(
+                    tron_lane,
+                    "taira_tron_xor",
+                    "xor",
+                    1,
+                    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+                )
+                .expect("changed TRON anchor route hash")
         );
     }
 
