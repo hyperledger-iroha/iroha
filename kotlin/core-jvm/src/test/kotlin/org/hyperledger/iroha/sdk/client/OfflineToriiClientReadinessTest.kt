@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CompletableFuture
@@ -18,12 +19,12 @@ class OfflineToriiClientReadinessTest {
         val executor = CapturingExecutor(
             """
             {
-              "offline_telemetry": true,
-              "offline_kagemusha_recursive_compact_available": true,
-              "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
-              "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
-              "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-              "offline_kagemusha_recursive_compact_artifacts_available": false
+              "asset_definition_id": "xor#wonderland",
+              "evaluated_block_height": 18446744073709551615,
+              "ready": false,
+              "blockers": [
+                {"code": "offline_disabled", "message": "Offline transfers are disabled"}
+              ]
             }
             """.trimIndent(),
         )
@@ -32,39 +33,44 @@ class OfflineToriiClientReadinessTest {
             .baseUri(URI.create("https://example.com"))
             .build()
 
-        val readiness = client.getOfflineReadiness().join()
+        val readiness = client.getOfflineReadiness("xor#wonderland").join()
 
         assertEquals("GET", executor.lastRequest.method)
         assertEquals("/v1/offline/readiness", executor.lastRequest.uri.path)
+        assertEquals("asset_definition_id=xor%23wonderland", executor.lastRequest.uri.rawQuery)
         assertEquals("", executor.lastBody)
         assertEquals("application/json", firstHeader(executor.lastRequest, "Accept"))
-        assertEquals(false, readiness.offlineNote)
-        assertEquals(false, readiness.offlineOneUseKeys)
-        assertEquals(false, readiness.offlineRecursiveNoteProof)
-        assertEquals(false, readiness.offlineFountainQr)
-        assertEquals(false, readiness.offlineSyncOptional)
-        assertEquals(true, readiness.offlineTelemetry)
-        assertEquals(true, readiness.offlineKagemushaRecursiveCompactAvailable)
-        assertEquals("recursive_compact_v1", readiness.offlineKagemushaRecursiveCompactMode)
-        assertEquals(7, readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion)
-        assertEquals("kagemusha-recursive-compact-v1", readiness.offlineKagemushaRecursiveCompactCircuitId)
-        assertEquals(false, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
+        assertEquals("xor#wonderland", readiness.assetDefinitionId)
+        assertEquals(BigInteger("18446744073709551615"), readiness.evaluatedBlockHeight)
+        assertEquals(false, readiness.ready)
+        assertEquals(1, readiness.blockers.size)
+        assertEquals("offline_disabled", readiness.blockers.single().code)
+        assertEquals("Offline transfers are disabled", readiness.blockers.single().message)
     }
 
     @Test
-    fun readinessRejectsRemovedAbi7Aliases() {
-        for ((field, message) in removedAbi7ReadinessFieldCases()) {
-            assertReadinessFails(
-                canonicalReadinessBody(extra = "\"$field\": true,"),
-                message,
-            )
-        }
-    }
+    fun readinessRejectsNonCanonicalResponses() {
+        val cases = listOf(
+            canonicalReadinessBody(extra = "\"offline_telemetry\": true,") to
+                "root.offline_telemetry is not a supported field",
+            canonicalReadinessBody(height = "\"7\"") to
+                "evaluated_block_height must be a JSON integer number",
+            canonicalReadinessBody(height = "-1") to
+                "evaluated_block_height must fit in an unsigned 64-bit integer",
+            canonicalReadinessBody(height = "18446744073709551616") to
+                "evaluated_block_height must fit in an unsigned 64-bit integer",
+            canonicalReadinessBody(ready = "1") to "ready must be a boolean",
+            canonicalReadinessBody(asset = "\" xor#wonderland\"") to
+                "asset_definition_id must be an exact non-empty string",
+            canonicalReadinessBody(blockers = "[{\"code\":\"blocked\",\"message\":\"no\",\"extra\":1}]") to
+                "blockers[0].extra is not a supported field",
+        )
 
-    @Test
-    fun readinessRejectsMalformedCanonicalValues() {
-        for ((body, message) in malformedCanonicalBodies()) {
-            assertReadinessFails(body, message)
+        for ((body, message) in cases) {
+            val error = assertFailsWith<CompletionException> { readinessFromBody(body) }
+            val cause = error.cause
+            assertTrue(cause is OfflineToriiException)
+            assertTrue(cause.cause?.message?.contains(message) == true, cause.cause?.message)
         }
     }
 
@@ -72,68 +78,22 @@ class OfflineToriiClientReadinessTest {
         .executor(CapturingExecutor(responseBody))
         .baseUri(URI.create("https://example.com"))
         .build()
-        .getOfflineReadiness()
+        .getOfflineReadiness("xor#wonderland")
         .join()
-
-    private fun assertReadinessFails(responseBody: String, expectedMessage: String) {
-        val error = assertFailsWith<CompletionException> { readinessFromBody(responseBody) }
-        val cause = error.cause
-        assertTrue(cause is OfflineToriiException)
-        assertTrue(cause.cause?.message?.contains(expectedMessage) == true, cause.cause?.message)
-    }
-
-    private fun malformedCanonicalBodies(): List<Pair<String, String>> = listOf(
-        canonicalReadinessBody(compactAvailable = "\"true\"") to
-            "offline_kagemusha_recursive_compact_available must be a boolean",
-        canonicalReadinessBody(extra = "\"offline_note\": \"true\",") to
-            "offline_note must be a boolean",
-        canonicalReadinessBody(extra = "\"offline_sync_optional\": 1,") to
-            "offline_sync_optional must be a boolean",
-        canonicalReadinessBody(compactMode = "\" recursive_compact_v1\"") to
-            "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
-        canonicalReadinessBody(compactBridge = "\"007\"") to
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
-        canonicalReadinessBody(compactBridge = "-1") to
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
-        canonicalReadinessBody(compactBridge = "7.5") to
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
-        canonicalReadinessBody(compactBridge = "2147483648") to
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
-        canonicalReadinessBody(compactCircuit = "\"\"") to
-            "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string",
-        canonicalReadinessBody(compactArtifacts = "\"true\"") to
-            "offline_kagemusha_recursive_compact_artifacts_available must be a boolean",
-    )
-
-    private fun removedAbi7ReadinessFieldCases(): List<Pair<String, String>> = listOf(
-        "offline_kagemusha_abi7" to
-            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_mode" to
-            "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_bridge_abi_version" to
-            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_circuit_id" to
-            "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_artifacts" to
-            "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
-    )
 
     private fun canonicalReadinessBody(
         extra: String = "",
-        compactAvailable: String = "true",
-        compactMode: String = "\"recursive_compact_v1\"",
-        compactBridge: String = "7",
-        compactCircuit: String = "\"kagemusha-recursive-compact-v1\"",
-        compactArtifacts: String = "true",
+        asset: String = "\"xor#wonderland\"",
+        height: String = "7",
+        ready: String = "true",
+        blockers: String = "[]",
     ): String = """
         {
-          "offline_telemetry": true,
           $extra
-          "offline_kagemusha_recursive_compact_available": $compactAvailable,
-          "offline_kagemusha_recursive_compact_mode": $compactMode,
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": $compactBridge,
-          "offline_kagemusha_recursive_compact_circuit_id": $compactCircuit,
-          "offline_kagemusha_recursive_compact_artifacts_available": $compactArtifacts
+          "asset_definition_id": $asset,
+          "evaluated_block_height": $height,
+          "ready": $ready,
+          "blockers": $blockers
         }
     """.trimIndent()
 

@@ -46,6 +46,9 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
+/// Fail-closed boundary for a future circuit-authenticated Axiom IPA recursive verifier.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_recursion_adapter;
 /// Branch-safe fractional Kagemusha recursive-spend V2 circuits and artifacts.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_v2;
@@ -9314,24 +9317,17 @@ fn validate_required_kagemusha_confidential_v2_step_public_inputs(
                 .to_owned(),
         );
     }
-    let (proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
-        match envelope.circuit_id.as_str() {
-            confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
-                let (_inputs, nullifiers, outputs, root, asset_tag, chain_tag) =
-                    confidential_v2::parse_transfer_public_inputs(
-                        &step.attachment.proof.bytes,
-                    )?;
-                (nullifiers, outputs, root, asset_tag, chain_tag)
-            }
-            confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID => {
-                let (_inputs, nullifiers, change, root, _amount, asset_tag, chain_tag) =
-                    confidential_v2::parse_unshield_public_inputs_v3(
-                        &step.attachment.proof.bytes,
-                    )?;
-                (nullifiers, [change, [0; 32]], root, asset_tag, chain_tag)
-            }
-            _ => return Err("Kagemusha fold confidential-v2 circuit is unsupported".to_owned()),
-        };
+    if envelope.circuit_id == confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID {
+        return Err(
+            "Kagemusha fold confidential-unshield-v3 proofs are reserved for amount-bound redemption validation"
+                .to_owned(),
+        );
+    }
+    if envelope.circuit_id != confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID {
+        return Err("Kagemusha fold confidential-v2 circuit is unsupported".to_owned());
+    }
+    let (_inputs, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
+        confidential_v2::parse_transfer_public_inputs(&step.attachment.proof.bytes)?;
     if proof_root != step.root_before {
         return Err("Kagemusha fold confidential-v2 root mismatch".to_owned());
     }
@@ -9962,9 +9958,9 @@ fn kagemusha_pallas_open_envelope_metadata_for_step(
 
     Ok(iroha_zkp_halo2::PolyOpenTranscriptMetadata {
         vk_commitment: Some(actual_vk_commitment),
-        public_inputs_schema_hash: Some(
-            kagemusha_confidential_public_inputs_schema_hash_for_step(step)?,
-        ),
+        public_inputs_schema_hash: Some(kagemusha_confidential_public_inputs_schema_hash_for_step(
+            step,
+        )?),
         domain_tag: Some(domain_tag),
     })
 }
@@ -50902,6 +50898,23 @@ mod kagemusha_folded_real_prover_tests {
         assert!(
             err.contains("confidential-transfer-v2"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_verified_folded_public_inputs_rejects_unshield_hops() {
+        let (chain_id, asset, mut hop, _record) = sample_confidential_v2_verified_hop();
+        mutate_open_verify_envelope(&mut hop.attachment.proof, |envelope| {
+            envelope.circuit_id = confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID.to_owned();
+            envelope.public_inputs =
+                confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+        });
+
+        let error = kagemusha_verified_folded_public_inputs(&chain_id, &asset, &[hop.as_step()])
+            .expect_err("ordinary Kagemusha folds must reject unshield proofs");
+        assert!(
+            error.contains("reserved for amount-bound redemption validation"),
+            "unexpected error: {error}"
         );
     }
 

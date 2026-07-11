@@ -1,106 +1,77 @@
 package org.hyperledger.iroha.android.offline;
 
-/** Feature flags reported by Torii's Offline readiness endpoint. */
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
+
+/** Readiness of the requested asset definition for Offline operations. */
 public final class OfflineReadiness {
-  private final boolean offlineNote;
-  private final boolean offlineOneUseKeys;
-  private final boolean offlineRecursiveNoteProof;
-  private final boolean offlineFountainQr;
-  private final boolean offlineSyncOptional;
-  private final boolean offlineTelemetry;
-  private final boolean offlineKagemushaRecursiveCompactAvailable;
-  private final String offlineKagemushaRecursiveCompactMode;
-  private final Integer offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion;
-  private final String offlineKagemushaRecursiveCompactCircuitId;
-  private final boolean offlineKagemushaRecursiveCompactArtifactsAvailable;
+  private static final BigInteger U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+
+  private final String assetDefinitionId;
+  private final BigInteger evaluatedBlockHeight;
+  private final boolean ready;
+  private final List<OfflineReadinessBlocker> blockers;
 
   public OfflineReadiness(
-      final boolean offlineNote,
-      final boolean offlineOneUseKeys,
-      final boolean offlineRecursiveNoteProof,
-      final boolean offlineFountainQr,
-      final boolean offlineSyncOptional,
-      final boolean offlineTelemetry) {
-    this(
-        offlineNote,
-        offlineOneUseKeys,
-        offlineRecursiveNoteProof,
-        offlineFountainQr,
-        offlineSyncOptional,
-        offlineTelemetry,
-        false,
-        null,
-        null,
-        null,
-        false);
+      final String assetDefinitionId,
+      final BigInteger evaluatedBlockHeight,
+      final boolean ready,
+      final List<OfflineReadinessBlocker> blockers) {
+    this.assetDefinitionId = requireExactText(assetDefinitionId, "assetDefinitionId");
+    this.evaluatedBlockHeight =
+        Objects.requireNonNull(evaluatedBlockHeight, "evaluatedBlockHeight");
+    if (evaluatedBlockHeight.signum() < 0 || evaluatedBlockHeight.compareTo(U64_MAX) > 0) {
+      throw new IllegalArgumentException(
+          "evaluatedBlockHeight must fit in an unsigned 64-bit integer");
+    }
+    this.ready = ready;
+    this.blockers = Collections.unmodifiableList(new ArrayList<>(blockers));
   }
 
-  public OfflineReadiness(
-      final boolean offlineNote,
-      final boolean offlineOneUseKeys,
-      final boolean offlineRecursiveNoteProof,
-      final boolean offlineFountainQr,
-      final boolean offlineSyncOptional,
-      final boolean offlineTelemetry,
-      final boolean offlineKagemushaRecursiveCompactAvailable,
-      final String offlineKagemushaRecursiveCompactMode,
-      final Integer offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
-      final String offlineKagemushaRecursiveCompactCircuitId,
-      final boolean offlineKagemushaRecursiveCompactArtifactsAvailable) {
-    this.offlineNote = offlineNote;
-    this.offlineOneUseKeys = offlineOneUseKeys;
-    this.offlineRecursiveNoteProof = offlineRecursiveNoteProof;
-    this.offlineFountainQr = offlineFountainQr;
-    this.offlineSyncOptional = offlineSyncOptional;
-    this.offlineTelemetry = offlineTelemetry;
-    this.offlineKagemushaRecursiveCompactAvailable = offlineKagemushaRecursiveCompactAvailable;
-    this.offlineKagemushaRecursiveCompactMode = offlineKagemushaRecursiveCompactMode;
-    this.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion;
-    this.offlineKagemushaRecursiveCompactCircuitId = offlineKagemushaRecursiveCompactCircuitId;
-    this.offlineKagemushaRecursiveCompactArtifactsAvailable = offlineKagemushaRecursiveCompactArtifactsAvailable;
+  public String assetDefinitionId() {
+    return assetDefinitionId;
   }
 
-  public boolean offlineNote() {
-    return offlineNote;
+  public BigInteger evaluatedBlockHeight() {
+    return evaluatedBlockHeight;
   }
 
-  public boolean offlineOneUseKeys() {
-    return offlineOneUseKeys;
+  public boolean ready() {
+    return ready;
   }
 
-  public boolean offlineRecursiveNoteProof() {
-    return offlineRecursiveNoteProof;
+  public List<OfflineReadinessBlocker> blockers() {
+    return blockers;
   }
 
-  public boolean offlineFountainQr() {
-    return offlineFountainQr;
+  @Override
+  public boolean equals(final Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof OfflineReadiness)) {
+      return false;
+    }
+    final OfflineReadiness that = (OfflineReadiness) other;
+    return ready == that.ready
+        && assetDefinitionId.equals(that.assetDefinitionId)
+        && evaluatedBlockHeight.equals(that.evaluatedBlockHeight)
+        && blockers.equals(that.blockers);
   }
 
-  public boolean offlineSyncOptional() {
-    return offlineSyncOptional;
+  @Override
+  public int hashCode() {
+    return Objects.hash(assetDefinitionId, evaluatedBlockHeight, ready, blockers);
   }
 
-  public boolean offlineTelemetry() {
-    return offlineTelemetry;
-  }
-
-  public boolean offlineKagemushaRecursiveCompactAvailable() {
-    return offlineKagemushaRecursiveCompactAvailable;
-  }
-
-  public String offlineKagemushaRecursiveCompactMode() {
-    return offlineKagemushaRecursiveCompactMode;
-  }
-
-  public Integer offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion() {
-    return offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion;
-  }
-
-  public String offlineKagemushaRecursiveCompactCircuitId() {
-    return offlineKagemushaRecursiveCompactCircuitId;
-  }
-
-  public boolean offlineKagemushaRecursiveCompactArtifactsAvailable() {
-    return offlineKagemushaRecursiveCompactArtifactsAvailable;
+  private static String requireExactText(final String value, final String field) {
+    Objects.requireNonNull(value, field);
+    if (value.isEmpty() || !value.equals(value.trim())) {
+      throw new IllegalArgumentException(field + " must be exact non-empty text");
+    }
+    return value;
   }
 }

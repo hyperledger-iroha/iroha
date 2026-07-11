@@ -47,7 +47,6 @@ const MCP_JOB_NOT_FOUND: &str = "job_not_found";
 const HEADER_X_API_TOKEN: &str = "x-api-token";
 const HEADER_X_IROHA_ACCOUNT: &str = "x-iroha-account";
 const HEADER_X_IROHA_SIGNATURE: &str = "x-iroha-signature";
-const HEADER_X_IROHA_API_VERSION: &str = "x-iroha-api-version";
 const HEADER_X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 const DEFAULT_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TX_SUBMIT_WAIT_TIMEOUT_MS: u64 = 600_000;
@@ -289,7 +288,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_time_now_tool());
     tools.push(iroha_time_status_tool());
-    tools.push(iroha_api_versions_tool());
     tools.push(iroha_sumeragi_commit_certificates_tool());
     tools.push(iroha_sumeragi_validator_sets_list_tool());
     tools.push(iroha_sumeragi_validator_sets_get_tool());
@@ -1021,12 +1019,6 @@ async fn handle_tools_call(
         }
         "iroha.time.status" => {
             match dispatch_iroha_time_status(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.api.versions" => {
-            match dispatch_iroha_api_versions(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3443,27 +3435,6 @@ async fn dispatch_iroha_time_status(
         inbound_headers,
         Method::GET,
         "/v1/time/status",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_api_versions(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/api/versions",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -8725,7 +8696,6 @@ fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
         HeaderName::from_static(HEADER_X_API_TOKEN),
         HeaderName::from_static(HEADER_X_IROHA_ACCOUNT),
         HeaderName::from_static(HEADER_X_IROHA_SIGNATURE),
-        HeaderName::from_static(HEADER_X_IROHA_API_VERSION),
     ] {
         if let Some(value) = inbound.get(&header_name) {
             out.insert(header_name, value.clone());
@@ -9729,27 +9699,6 @@ fn iroha_time_status_tool() -> ToolSpec {
         description: "Get time synchronization status (`/v1/time/status`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/time/status".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_api_versions_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.api.versions".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.api.versions"),
-        description: "List supported Torii API versions (`/v1/api/versions`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/api/versions".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -15041,7 +14990,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_extra_headers_blocks_reserved_internal_headers_but_allows_api_version() {
+    fn apply_extra_headers_blocks_reserved_internal_headers() {
         let mut out = HeaderMap::new();
         let headers = norito::json!({
             "x-test": "1",
@@ -15051,7 +15000,6 @@ mod tests {
             "x-api-token": "injected",
             "x-iroha-account": "injected",
             "x-iroha-signature": "injected",
-            "x-iroha-api-version": "injected",
             "x-iroha-timestamp-ms": "injected",
             "x-iroha-nonce": "injected",
             "x-iroha-witness": "injected",
@@ -15063,11 +15011,6 @@ mod tests {
         assert_eq!(
             out.get("x-test").and_then(|value| value.to_str().ok()),
             Some("1")
-        );
-        assert_eq!(
-            out.get("x-iroha-api-version")
-                .and_then(|value| value.to_str().ok()),
-            Some("injected")
         );
         assert!(!out.contains_key("x-iroha-remote-addr"));
         assert!(!out.contains_key("x-forwarded-client-cert"));

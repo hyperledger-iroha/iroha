@@ -232,6 +232,17 @@ domain prefix followed by canonical schema bytes:
 - With `schema-structural`: `SHA-256("norito:v1:structural-schema\0" ||
   canonical JSON schema)`, where the schema is produced by
   `iroha_schema::IntoSchema` and serialized with Norito’s JSON writer.
+- A struct or enum derived with
+  `#[norito(schema_name = "stable.public.schema.id")]` uses
+  `SHA-256("norito:v1:type-name\0" || "stable.public.schema.id")` instead.
+  The explicit name takes precedence over both defaults for Encode and Decode,
+  including builds with `schema-structural`, so Rust module paths and private
+  implementation type names do not leak into a public wire header.
+
+An explicit schema name is a wire-compatibility promise. The same name must not
+be reused for different layouts or for generic instantiations whose layouts can
+differ. Renaming the Rust type or moving it between modules does not change a
+named schema hash; changing the explicit name does.
 
 Typed decoders must reject payloads whose header schema hash does not match the
 expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`

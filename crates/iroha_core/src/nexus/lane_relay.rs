@@ -201,7 +201,7 @@ mod tests {
             subject_block_hash: envelope.block_header.hash(),
             parent_state_root: UntypedHash::prehashed([0x11; UntypedHash::LENGTH]),
             post_state_root: UntypedHash::prehashed([0x12; UntypedHash::LENGTH]),
-            height: envelope.block_height,
+            height: envelope.block_header.height().get(),
             view: 0,
             epoch: 0,
             chain_order_hash: UntypedHash::prehashed([0x13; UntypedHash::LENGTH]),

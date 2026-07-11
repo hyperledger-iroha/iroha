@@ -97,7 +97,6 @@ Torii 轉送入站驗證相關標頭以進行工具調度：
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 客戶端還可以透過 `arguments.headers` 提供額外的每次呼叫標頭。
 `content-length`、`host` 和 `arguments.headers` 中的 `connection` 將被忽略。

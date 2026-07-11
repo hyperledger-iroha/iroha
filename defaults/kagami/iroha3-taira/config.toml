@@ -91,11 +91,11 @@ address = "addr:0.0.0.0:8080#B922"
 max_content_len = 1073741824
 
 [torii.cors]
-allowed_headers = ["accept", "authorization", "content-type"]
+allowed_headers = ["accept", "authorization", "content-type", "idempotency-key"]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
 allowed_origins = ["http://127.0.0.1:3000", "http://localhost:3000", "https://test.soraswap.org"]
 enabled = true
-exposed_headers = ["x-iroha-api-version", "x-iroha-api-supported", "x-iroha-api-min-proof-version"]
+exposed_headers = ["etag", "location", "retry-after"]
 
 [torii.faucet]
 amount = "25000"

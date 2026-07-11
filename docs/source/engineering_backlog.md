@@ -7462,21 +7462,22 @@ redistributable schemas, and official trust/revocation bundles.
   asset-holder, and contract-activity predicates need additional indexes or
   materialized views.
 
-## Offline V2 Torii follow-ups
+## Torii Offline API follow-ups
 
-- Completed 2026-06-06: Torii now mounts the versioned Offline V2 issuer
-  routes under `/v1/offline/v2/*`, including readiness, key refill, note issue,
-  note redeem, and audit. The redeem route submits `RedeemOfflineNoteV2` after
-  binding the redemption to the authenticated account/asset, validating the
-  chain-admissible key certificate, recomputing recursive public inputs, and
-  rejecting malformed nullifier/amount shapes.
+- Completed 2026-07-11: Torii now mounts only the first-release Offline API:
+  `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
+  `POST /v1/offline/redeem`, and
+  `GET /v1/offline/operations/{operation_id}`. Top-up and redemption accept
+  their typed JSON or Norito request directly and return an asynchronous typed
+  operation reference; there is no version-nested route or whole-payload
+  wrapper.
 - Completed 2026-06-06: removed the stale legacy Offline policy/revocation HTTP
   route registrations from Torii and the source/generated OpenAPI surfaces; the
   Offline readiness smokes now assert `/v1/offline/revocations*` is absent.
-- Completed 2026-06-06: removed the v1 Offline redeem/audit HTTP stubs that only
-  returned issuer-unavailable errors. The smokes now assert
-  `/v1/offline/notes/redeem` and `/v1/offline/audit` remain absent while the
-  production redemption/audit surface lives under `/v1/offline/v2/*`.
+- Completed 2026-07-11: deleted the classic issuer, key-refill, note-issue,
+  audit, V1 Kagemusha, and version-nested routes instead of preserving
+  rejection or compatibility shims. Router and catalog tests assert those
+  method/path pairs cannot resolve through aliases or parameter capture.
 - Completed 2026-06-06: removed the default governance council derive-vrf
   not-implemented fallback and aligned HTTP route registration, OpenAPI paths,
   and MCP tools behind `gov_vrf` for council persist/replace/derive-vrf

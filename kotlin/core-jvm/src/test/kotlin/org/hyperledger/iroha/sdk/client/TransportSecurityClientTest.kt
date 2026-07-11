@@ -55,7 +55,7 @@ class TransportSecurityClientTest {
             .build()
 
         assertFailsWith<IllegalArgumentException> {
-            client.getOfflineReadiness()
+            client.getOfflineReadiness("xor#wonderland")
         }
     }
 

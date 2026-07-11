@@ -41,11 +41,9 @@ fn main() {
             "cargo:rustc-env=CONNECT_NORITO_EMBEDDED_{label}_SIZE={}",
             bytes.len()
         );
-        println!(
-            "cargo:rustc-env=CONNECT_NORITO_EMBEDDED_{label}_SHA256={digest:x}"
-        );
+        println!("cargo:rustc-env=CONNECT_NORITO_EMBEDDED_{label}_SHA256={digest:x}");
     }
-    let revision = env::var("CONNECT_NORITO_SOURCE_REVISION")
-        .unwrap_or_else(|_| "unknown".to_owned());
+    let revision =
+        env::var("CONNECT_NORITO_SOURCE_REVISION").unwrap_or_else(|_| "unknown".to_owned());
     println!("cargo:rustc-env=CONNECT_NORITO_EMBEDDED_SOURCE_REVISION={revision}");
 }

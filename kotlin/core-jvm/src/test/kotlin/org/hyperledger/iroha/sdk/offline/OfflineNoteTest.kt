@@ -3015,7 +3015,7 @@ class OfflineNoteTest {
                 .get(5, TimeUnit.SECONDS)
         }
 
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
+        assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
         assertEquals(0, issuerClient.prepareLoadCount)
         assertNull(issuerClient.lastIssueRequest)
     }
@@ -3058,7 +3058,7 @@ class OfflineNoteTest {
             }
             val cause = failure.cause
             assertTrue(cause is IllegalStateException)
-            assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, cause.message)
+            assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, cause.message)
             assertEquals(0, issuerClient.prepareLoadCount)
             assertNull(issuerClient.lastIssueRequest)
             assertTrue(store.listNotes().isEmpty())
@@ -3099,7 +3099,7 @@ class OfflineNoteTest {
             loadWallet.load(assetDefinitionId, "001.2300").get(5, TimeUnit.SECONDS)
         }
 
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, retiredLoad.cause?.message)
+        assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, retiredLoad.cause?.message)
         assertEquals(0, issuerClient.prepareLoadCount)
         assertNull(issuerClient.lastIssueRequest)
 
@@ -3196,7 +3196,7 @@ class OfflineNoteTest {
 
         val load = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"))
         val failure = assertFailsWith<ExecutionException> { load.get(5, TimeUnit.SECONDS) }
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
+        assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
         assertFalse(issuerClient.issueRequested.await(100, TimeUnit.MILLISECONDS))
         store.release.countDown()
     }
@@ -3235,475 +3235,9 @@ class OfflineNoteTest {
                 .get(5, TimeUnit.SECONDS)
         }
         assertTrue(failure.cause is IllegalStateException)
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
+        assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
     }
 
-    @Test
-    fun toriiIssuerClientBodySignsRefillAndRetiresNoteIssue() {
-        val fixture = loadFixture()
-        val certificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
-        val accountId = string(certificateJson, "account_id")
-        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
-        val offlinePublicKey = "a5".repeat(32)
-        val deviceBinding = OfflineNoteIssuerDeviceBinding(
-            deviceId = "device-1",
-            offlinePublicKey = offlinePublicKey,
-            deviceBinding = linkedMapOf(
-                "device_id" to "device-1",
-                "attestation_key_id" to "attestation-key-1",
-                "offline_public_key" to offlinePublicKey,
-                "signature_base64" to "nested-device-signature-is-not-body-auth",
-            ),
-        )
-        val executor = OfflineIssuerExecutor(certificateJson, serverStateHash = " lineage-state-hash ")
-        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        var nowMs = 1_700_000_000_000L
-        val client = ToriiOfflineNoteIssuerClient(
-            canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
-            deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
-                override fun currentDeviceBinding(
-                    chainId: String,
-                    accountId: String,
-                    assetDefinitionId: String,
-                ): OfflineNoteIssuerDeviceBinding = deviceBinding
-            },
-            executor = executor,
-            baseUri = URI.create("https://torii.example"),
-            defaultHeaders = mapOf(
-                "X-Iroha-Account" to "retired-account",
-                "x-iroha-signature" to "retired-signature",
-                "X-IROHA-TIMESTAMP-MS" to "123",
-                "X-Iroha-Nonce" to "retired-nonce",
-                "X-Iroha-Witness" to "retired-witness",
-                "X-Client-Trace" to "trace-1",
-            ),
-            clock = java.util.function.LongSupplier { nowMs },
-            nonceGenerator = SequenceIdGenerator(
-                "operation-refill-1",
-                "auth-refill-1",
-                "operation-refill-2",
-                "auth-refill-2",
-            ),
-        )
-
-        val context = client.prepareLoad("chain-1", accountId, assetDefinitionId, "5").join()
-        assertEquals("operation-refill-1", context.operationId)
-        assertEquals("lineage-1", context.lineageId)
-        assertEquals(1L, context.localRevision)
-
-        val commitment = ByteArray(32) { (it + 1).toByte() }
-        val issueFailure = assertFailsWith<ExecutionException> {
-            client.issueNote(
-                OfflineNoteIssueRequest(
-                    chainId = "chain-1",
-                    accountId = accountId,
-                    assetDefinitionId = assetDefinitionId,
-                    assetId = "$assetDefinitionId#$accountId",
-                    amount = "5",
-                    loadContext = context,
-                    noteCommitment = commitment,
-                )
-            ).get(5, TimeUnit.SECONDS)
-        }
-        assertTrue(issueFailure.cause is IllegalStateException)
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, issueFailure.cause?.message)
-        assertEquals(1, executor.requests.size)
-        assertEquals("/v1/offline/v2/keys/refill", executor.requests[0].uri.path)
-        for (request in executor.requests) {
-            assertFalse(request.headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
-        }
-        assertEquals<List<String>?>(listOf("trace-1"), executor.requests[0].headers["X-Client-Trace"])
-
-        val refillBody = executor.requestBody(0)
-        assertEquals(accountId, string(refillBody, "account_id"))
-        assertEquals("operation-refill-1", string(refillBody, "operation_id"))
-        assertEquals(0L, long(refillBody, "local_revision"))
-        assertEquals("", string(refillBody, "local_state_hash"))
-        assertEquals("attestation-key-1", string(refillBody, "attestation_key_id"))
-        assertEquals("auth-refill-1", string(refillBody, "nonce"))
-        assertTrue(string(refillBody, "signature_base64").isNotBlank())
-        assertEquals(
-            "nested-device-signature-is-not-body-auth",
-            string(obj(refillBody, "device_binding"), "signature_base64"),
-        )
-
-        nowMs = 1_700_000_060_001L
-        val refillContext = client.prepareLoad("chain-1", accountId, assetDefinitionId, "7").join()
-        assertEquals("operation-refill-2", refillContext.operationId)
-        assertEquals(2, executor.requests.size)
-        val secondRefillBody = executor.requestBody(1)
-        assertEquals("", string(secondRefillBody, "local_state_hash"))
-    }
-
-    @Test
-    fun toriiIssuerClientSubmitsKagemushaTopUpArchive() {
-        val fixture = loadFixture()
-        val certificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
-        val accountId = string(certificateJson, "account_id")
-        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
-        val offlinePublicKey = "a5".repeat(32)
-        val deviceBinding = OfflineNoteIssuerDeviceBinding(
-            deviceId = "device-1",
-            offlinePublicKey = offlinePublicKey,
-            deviceBinding = linkedMapOf(
-                "device_id" to "device-1",
-                "attestation_key_id" to "attestation-key-1",
-                "offline_public_key" to offlinePublicKey,
-            ),
-        )
-        val executor = OfflineIssuerExecutor(certificateJson)
-        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val client = ToriiOfflineNoteIssuerClient(
-            canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
-            deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
-                override fun currentDeviceBinding(
-                    chainId: String,
-                    accountId: String,
-                    assetDefinitionId: String,
-                ): OfflineNoteIssuerDeviceBinding = deviceBinding
-            },
-            executor = executor,
-            baseUri = URI.create("https://torii.example"),
-            defaultHeaders = mapOf(
-                "X-Iroha-Account" to "retired-account",
-                "x-iroha-signature" to "retired-signature",
-                "X-Iroha-Nonce" to "retired-nonce",
-                "X-Client-Trace" to "trace-topup",
-            ),
-            clock = java.util.function.LongSupplier { 1_700_000_000_000L },
-            nonceGenerator = SequenceIdGenerator("operation-topup-1", "auth-topup-1"),
-        )
-        val archive = byteArrayOf(0x4b, 0x54)
-
-        val future = client.submitKagemushaTopUp("chain-1", accountId, assetDefinitionId, archive)
-        archive[0] = 0
-        val response = future.join()
-
-        assertEquals("operation-topup-1", response.operationId)
-        assertEquals("topup-chain-tx-hash", response.chainTxHash)
-        assertEquals(assetDefinitionId, response.assetDefinitionId)
-        assertEquals("5", response.amount)
-        assertEquals(listOf("hash-1", "hash-2"), response.topupAnchorNullifiers)
-        assertEquals(listOf("commitment-1"), response.outputCommitments)
-        assertEquals("root-hint", response.rootHint)
-        assertEquals(1, executor.requests.size)
-        assertEquals("/v1/offline/v2/kagemusha/topup", executor.requests[0].uri.path)
-        assertFalse(executor.requests[0].headers.keys.any { it.startsWith("X-Iroha-", ignoreCase = true) })
-        assertEquals<List<String>?>(listOf("trace-topup"), executor.requests[0].headers["X-Client-Trace"])
-        val body = executor.requestBody(0)
-        assertEquals(accountId, string(body, "account_id"))
-        assertEquals("operation-topup-1", string(body, "operation_id"))
-        assertEquals("device-1", string(body, "device_id"))
-        assertEquals(offlinePublicKey, string(body, "offline_public_key"))
-        assertEquals(assetDefinitionId, string(body, "asset_definition_id"))
-        assertEquals("auth-topup-1", string(body, "nonce"))
-        assertEquals("S1Q=", string(body, "topup_request_norito_base64"))
-        assertTrue(string(body, "signature_base64").isNotBlank())
-        assertEquals("device-1", string(obj(body, "device_binding"), "device_id"))
-        assertFalse(body.containsKey("amount"))
-        assertFalse(body.containsKey("init_request_norito_base64"))
-        assertFalse(body.containsKey("topup_init_request_norito_base64"))
-
-        val mismatchFailure = assertFailsWith<IllegalArgumentException> {
-            client.submitKagemushaTopUp("chain-1", "$accountId-other", assetDefinitionId, byteArrayOf(1))
-        }
-        assertEquals("canonical auth accountId must match top-up accountId", mismatchFailure.message)
-        val emptyFailure = assertFailsWith<IllegalArgumentException> {
-            client.submitKagemushaTopUp("chain-1", accountId, assetDefinitionId, ByteArray(0))
-        }
-        assertEquals("topUpRequestArchive must not be empty", emptyFailure.message)
-        assertEquals(1, executor.requests.size)
-    }
-
-    @Test
-    fun kagemushaTopUpResponseRejectsInvalidExactText() {
-        fun response(
-            operationId: String = "operation-topup-1",
-            chainTxHash: String = "topup-chain-tx-hash",
-            assetDefinitionId: String = "xor#wonderland",
-            amount: String = "5",
-            topupAnchorNullifiers: List<String> = listOf("hash-1"),
-            outputCommitments: List<String> = listOf("commitment-1"),
-            rootHint: String = "root-hint",
-        ) = KagemushaTopUpResponse(
-            operationId = operationId,
-            chainTxHash = chainTxHash,
-            assetDefinitionId = assetDefinitionId,
-            amount = amount,
-            topupAnchorNullifiers = topupAnchorNullifiers,
-            outputCommitments = outputCommitments,
-            rootHint = rootHint,
-        )
-
-        assertEquals(
-            "operationId must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> { response(operationId = "") }.message,
-        )
-        assertEquals(
-            "chainTxHash must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> { response(chainTxHash = " topup-chain-tx-hash") }.message,
-        )
-        assertEquals(
-            "assetDefinitionId must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> { response(assetDefinitionId = "xor#wonderland\n") }.message,
-        )
-        assertEquals(
-            "amount must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> { response(amount = " ") }.message,
-        )
-        assertEquals(
-            "rootHint must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> { response(rootHint = "root-hint ") }.message,
-        )
-        assertEquals(
-            "topupAnchorNullifiers[0] must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> { response(topupAnchorNullifiers = listOf(" hash-1")) }.message,
-        )
-        assertEquals(
-            "outputCommitments[0] must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> { response(outputCommitments = listOf("")) }.message,
-        )
-    }
-
-    @Test
-    fun toriiIssuerClientRejectsInvalidKagemushaTopUpResponseScalars() {
-        val fixture = loadFixture()
-        val certificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
-        val accountId = string(certificateJson, "account_id")
-        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
-        val offlinePublicKey = "a5".repeat(32)
-        val deviceBinding = OfflineNoteIssuerDeviceBinding(
-            deviceId = "device-1",
-            offlinePublicKey = offlinePublicKey,
-            deviceBinding = linkedMapOf(
-                "device_id" to "device-1",
-                "attestation_key_id" to "attestation-key-1",
-                "offline_public_key" to offlinePublicKey,
-            ),
-        )
-        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-
-        fun assertInvalidResponseField(field: String, value: String, expectedCause: String) {
-            val executor = OfflineIssuerExecutor(
-                certificateJson = certificateJson,
-                topUpResponseMutator = { response ->
-                    response[field] = value
-                    response
-                },
-            )
-            val client = ToriiOfflineNoteIssuerClient(
-                canonicalAuth = ToriiCanonicalRequestAuth(accountId, keyPair.private),
-                deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
-                    override fun currentDeviceBinding(
-                        chainId: String,
-                        accountId: String,
-                        assetDefinitionId: String,
-                    ): OfflineNoteIssuerDeviceBinding = deviceBinding
-                },
-                executor = executor,
-                baseUri = URI.create("https://torii.example"),
-                clock = java.util.function.LongSupplier { 1_700_000_000_000L },
-                nonceGenerator = SequenceIdGenerator("operation-topup-bad", "auth-topup-bad"),
-            )
-
-            val failure = assertFailsWith<CompletionException> {
-                client.submitKagemushaTopUp(
-                    "chain-1",
-                    accountId,
-                    assetDefinitionId,
-                    byteArrayOf(0x4b, 0x54),
-                ).join()
-            }
-            val error = assertNotNull(failure.cause as? OfflineToriiException)
-            assertTrue(error.message?.contains("Failed to parse Offline Note issuer response") == true)
-            assertTrue(
-                error.cause?.message?.contains(expectedCause) == true,
-                "expected cause to contain `$expectedCause`, got `${error.cause?.message}`",
-            )
-            assertEquals(1, executor.requests.size)
-        }
-
-        assertInvalidResponseField("chain_tx_hash", "", "chainTxHash must be exact non-empty text")
-        assertInvalidResponseField("amount", " 5", "amount must be exact non-empty text")
-        assertInvalidResponseField("root_hint", "root-hint ", "rootHint must be exact non-empty text")
-    }
-
-    @Test
-    fun toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() {
-        val offlinePublicKey = "a5".repeat(32)
-        for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64")) {
-            val bindingJson = linkedMapOf<String, Any?>(
-                "device_id" to "device-1",
-                "attestation_key_id" to "attestation-key-1",
-                "offline_public_key" to offlinePublicKey,
-                retiredKey to base64(ByteArray(65) { 2 }),
-            )
-            val failure = assertFailsWith<IllegalArgumentException> {
-                OfflineNoteIssuerDeviceBinding(
-                    deviceId = "device-1",
-                    offlinePublicKey = offlinePublicKey,
-                    deviceBinding = bindingJson,
-                )
-            }
-            assertEquals(
-                "device_binding.$retiredKey is retired; use assertion_public_key",
-                failure.message,
-            )
-        }
-    }
-
-    @Test
-    fun toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields() {
-        val offlinePublicKey = "a5".repeat(32)
-
-        fun binding(
-            deviceId: String = "device-1",
-            offlinePublicKeyValue: String = offlinePublicKey,
-            bindingDeviceId: Any? = "device-1",
-            bindingOfflinePublicKey: Any? = offlinePublicKey,
-            attestationKeyId: Any? = "attestation-key-1",
-        ): OfflineNoteIssuerDeviceBinding = OfflineNoteIssuerDeviceBinding(
-            deviceId = deviceId,
-            offlinePublicKey = offlinePublicKeyValue,
-            deviceBinding = linkedMapOf(
-                "device_id" to bindingDeviceId,
-                "attestation_key_id" to attestationKeyId,
-                "offline_public_key" to bindingOfflinePublicKey,
-            ),
-        )
-
-        assertEquals("attestation-key-1", binding().attestationKeyId())
-        assertEquals(
-            "deviceId must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> {
-                binding(deviceId = " device-1")
-            }.message,
-        )
-        assertEquals(
-            "offlinePublicKey must be exact non-empty text",
-            assertFailsWith<IllegalArgumentException> {
-                binding(offlinePublicKeyValue = "$offlinePublicKey ")
-            }.message,
-        )
-        assertEquals(
-            "device_binding.device_id must match deviceId",
-            assertFailsWith<IllegalArgumentException> {
-                binding(bindingDeviceId = "device-1 ")
-            }.message,
-        )
-        assertEquals(
-            "device_binding.offline_public_key must match offlinePublicKey",
-            assertFailsWith<IllegalArgumentException> {
-                binding(bindingOfflinePublicKey = " $offlinePublicKey")
-            }.message,
-        )
-
-        val paddedAttestation = binding(attestationKeyId = " attestation-key-1")
-        assertEquals(
-            "device_binding.attestation_key_id must be exact non-empty text",
-            assertFailsWith<IllegalStateException> {
-                paddedAttestation.attestationKeyId()
-            }.message,
-        )
-        val emptyAttestation = binding(attestationKeyId = "")
-        assertEquals(
-            "device_binding.attestation_key_id is required",
-            assertFailsWith<IllegalStateException> {
-                emptyAttestation.attestationKeyId()
-            }.message,
-        )
-    }
-
-    @Test
-    fun toriiIssuerClientRejectsMalformedCertificateUsageLimits() {
-        val fixture = loadFixture()
-        val baseCertificateJson = currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
-        val accountId = string(baseCertificateJson, "account_id")
-        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
-        val offlinePublicKey = "a5".repeat(32)
-        val deviceBinding = OfflineNoteIssuerDeviceBinding(
-            deviceId = "device-1",
-            offlinePublicKey = offlinePublicKey,
-            deviceBinding = linkedMapOf(
-                "device_id" to "device-1",
-                "attestation_key_id" to "attestation-key-1",
-                "offline_public_key" to offlinePublicKey,
-            ),
-        )
-
-        fun assertRejected(certificateJson: Map<String, Any?>) {
-            val client = ToriiOfflineNoteIssuerClient(
-                canonicalAuth = ToriiCanonicalRequestAuth(
-                    accountId,
-                    KeyPairGenerator.getInstance("Ed25519").generateKeyPair().private,
-                ),
-                deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
-                    override fun currentDeviceBinding(
-                        chainId: String,
-                        accountId: String,
-                        assetDefinitionId: String,
-                    ): OfflineNoteIssuerDeviceBinding = deviceBinding
-                },
-                executor = OfflineIssuerExecutor(certificateJson),
-                baseUri = URI.create("https://torii.example"),
-                clock = LongSupplier { 1_700_000_000_000L },
-                nonceGenerator = SequenceIdGenerator("operation-refill-malformed", "auth-refill-malformed"),
-            )
-
-            val failure = assertFailsWith<ExecutionException> {
-                client.prepareLoad("chain-1", accountId, assetDefinitionId, "5").get(5, TimeUnit.SECONDS)
-            }
-            var root = failure.cause
-            while (root is CompletionException && root.cause != null) {
-                root = root.cause
-            }
-            assertTrue(
-                root is OfflineToriiException ||
-                    root is IllegalStateException ||
-                    root is IllegalArgumentException,
-                "unexpected failure ${root?.javaClass?.name}: ${root?.message}",
-            )
-        }
-
-        for (invalidLimit in listOf<Any?>(0L, 2L, 4_294_967_297L, "1")) {
-            val certificateJson = LinkedHashMap(baseCertificateJson)
-            certificateJson["assertion_usage_count_limit"] = invalidLimit
-            assertRejected(certificateJson)
-        }
-        for (invalidVersion in listOf<Any?>(0L, 2L, 4_294_967_297L, "1")) {
-            val certificateJson = LinkedHashMap(baseCertificateJson)
-            certificateJson["version"] = invalidVersion
-            assertRejected(certificateJson)
-        }
-        for (invalidScheme in listOf("apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit")) {
-            val certificateJson = LinkedHashMap(baseCertificateJson)
-            certificateJson["assertion_scheme"] = invalidScheme
-            assertRejected(certificateJson)
-        }
-        for (invalidAlgorithm in listOf("ecdsa-p256-sha256", "ed25519")) {
-            val certificateJson = LinkedHashMap(baseCertificateJson)
-            certificateJson["assertion_key_algorithm"] = invalidAlgorithm
-            assertRejected(certificateJson)
-        }
-        for (invalidPlatform in listOf("android", "android-keymint ", "Android-keymint", "ios-appattest-android")) {
-            val certificateJson = LinkedHashMap(baseCertificateJson)
-            certificateJson["platform"] = invalidPlatform
-            certificateJson["assertion_scheme"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
-            certificateJson["assertion_key_algorithm"] = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
-            certificateJson["assertion_usage_count_limit"] = 1
-            assertRejected(certificateJson)
-        }
-        for ((field, invalidValue) in listOf(
-            "public_key" to hex(ByteArray(33) { 1 }),
-            "assertion_public_key" to base64(ByteArray(65) { 0xff.toByte() }).replace('/', '_'),
-            "issuer_signature_base64" to " ${base64(ByteArray(64) { 3 })}",
-            "issuer_signature_base64" to base64(ByteArray(64) { 3 }).replace("=", ""),
-        )) {
-            val certificateJson = LinkedHashMap(baseCertificateJson)
-            certificateJson[field] = invalidValue
-            assertRejected(certificateJson)
-        }
-    }
 
     @Test
     fun walletLifecycleBuildsAuditAcceptAndRedeemTransactions() {
@@ -4457,7 +3991,7 @@ class OfflineNoteTest {
                 .get(5, TimeUnit.SECONDS)
         }
 
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
+        assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
         assertTrue(store.listNotes().isEmpty())
     }
 
@@ -6164,16 +5698,6 @@ class OfflineNoteTest {
         override fun nextId(prefix: String): String = id
     }
 
-    private class SequenceIdGenerator(
-        private vararg val ids: String,
-    ) : OfflineNoteIdGenerator {
-        private var index = 0
-
-        override fun nextId(prefix: String): String {
-            require(index < ids.size) { "test id generator exhausted" }
-            return ids[index++]
-        }
-    }
 
     private class ExplorerOutcomeExecutor(
         private val encoded: String,
@@ -6209,86 +5733,6 @@ class OfflineNoteTest {
         }
     }
 
-    private inner class OfflineIssuerExecutor(
-        private val certificateJson: Map<String, Any?>,
-        private val serverStateHash: String? = null,
-        private val topUpResponseMutator: (MutableMap<String, Any?>) -> Map<String, Any?> = { it },
-    ) : HttpTransportExecutor {
-        val requests = ArrayList<TransportRequest>()
-
-        override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
-            requests.add(request)
-            val body = requestBody(request)
-            val response = when (request.uri.path) {
-                "/v1/offline/v2/keys/refill" -> linkedMapOf<String, Any?>(
-                    "operation_id" to string(body, "operation_id"),
-                    "lineage_state" to lineageState(0, "0"),
-                    "key_certificate" to certificateWithExpiry(),
-                    "key_certificates" to listOf(certificateWithExpiry()),
-                )
-                "/v1/offline/v2/notes/issue" -> linkedMapOf<String, Any?>(
-                    "operation_id" to string(body, "operation_id"),
-                    "settlement" to linkedMapOf("entry_hash" to "settlement-entry-hash"),
-                    "lineage_state" to lineageState(1, "5"),
-                    "local_balance" to "5",
-                    "locked_balance" to "0",
-                    "local_revision" to 1L,
-                    "local_state_hash" to "lineage-state-hash",
-                    "issued_note_commitment" to string(body, "note_commitment"),
-                    "key_certificate" to certificateWithExpiry(),
-                    "key_certificates" to listOf(certificateWithExpiry()),
-                )
-                "/v1/offline/v2/kagemusha/topup" -> topUpResponseMutator(
-                    linkedMapOf(
-                        "operation_id" to string(body, "operation_id"),
-                        "chain_tx_hash" to "topup-chain-tx-hash",
-                        "asset_definition_id" to string(body, "asset_definition_id"),
-                        "amount" to "5",
-                        "topup_anchor_nullifiers" to listOf("hash-1", "hash-2"),
-                        "output_commitments" to listOf("commitment-1"),
-                        "root_hint" to "root-hint",
-                    ),
-                )
-                else -> throw IllegalStateException("unexpected path ${request.uri.path}")
-            }
-            return CompletableFuture.completedFuture(
-                TransportResponse.builder()
-                    .setStatusCode(200)
-                    .setBody(JsonEncoder.encode(response).toByteArray(StandardCharsets.UTF_8))
-                    .build()
-            )
-        }
-
-        fun requestBody(index: Int): Map<String, Any?> = requestBody(requests[index])
-
-        private fun requestBody(request: TransportRequest): Map<String, Any?> {
-            @Suppress("UNCHECKED_CAST")
-            return JsonParser.parse(String(request.body, StandardCharsets.UTF_8)) as Map<String, Any?>
-        }
-
-        private fun certificateWithExpiry(): Map<String, Any?> {
-            val copy = LinkedHashMap(certificateJson)
-            copy["expires_at_ms"] = 1_700_000_060_000L
-            return copy
-        }
-
-        private fun lineageState(revision: Long, balance: String): Map<String, Any?> {
-            val state = linkedMapOf<String, Any?>(
-                "lineage_id" to "lineage-1",
-                "server_revision" to revision,
-                "pending_local_revision" to revision,
-                "balance" to balance,
-                "locked_balance" to "0",
-                "authorization" to linkedMapOf(
-                    "expires_at_ms" to 1_700_000_060_000L,
-                ),
-            )
-            if (serverStateHash != null) {
-                state["server_state_hash"] = serverStateHash
-            }
-            return state
-        }
-    }
 
     private object BindingProofProvider : OfflineNoteProofProvider {
         override fun proveAudit(audit: OfflineNote.AuditBundle): OfflineNote.RecursiveProof {

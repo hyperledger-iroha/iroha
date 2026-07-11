@@ -62,7 +62,7 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Default: 64 MiB.
 - `torii.attachments_allowed_mime_types` (list of strings)
   - Allowlisted MIME types for attachment payloads after magic‑byte sniffing.
-  - Default: `["application/x-norito", "application/json", "text/json", "application/x-zk1"]`.
+  - Default: `["application/x-norito", "application/json", "application/x-zk1"]`.
 - `torii.attachments_max_expanded_bytes` (u64)
   - Maximum expanded size for gzip/zstd payloads.
   - Default: 16 MiB.

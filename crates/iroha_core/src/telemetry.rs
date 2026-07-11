@@ -7696,16 +7696,6 @@ impl Telemetry {
         }
     }
 
-    /// Record Torii API version negotiation outcomes.
-    pub fn observe_torii_api_version(&self, result: &str, version: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .torii_api_version_negotiated_total
-                .with_label_values(&[result, version])
-                .inc();
-        }
-    }
-
     /// Record an API-token-gated Torii endpoint hit without exposing token material.
     pub fn inc_torii_api_token_hit(&self, endpoint: &str, token_state: &str) {
         if self.enabled.load(Ordering::Relaxed) {

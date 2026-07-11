@@ -46,7 +46,6 @@ const TENANT_KEY_HEX_LEN: usize = 64;
 const ZK1_MIME_TYPE: &str = "application/x-zk1";
 const OCTET_STREAM_MIME_TYPE: &str = "application/octet-stream";
 const JSON_MIME_TYPE: &str = "application/json";
-const TEXT_JSON_MIME_TYPE: &str = "text/json";
 const ATTACHMENT_SANITIZER_ENV: &str = "IROHA_ATTACHMENT_SANITIZER";
 const ATTACHMENT_SANITIZER_MAX_INPUT_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_MAX_INPUT_BYTES";
 const ATTACHMENT_SANITIZER_SANDBOXED_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_OS_SANDBOXED";
@@ -485,7 +484,7 @@ fn normalize_mime(raw: &str) -> Option<String> {
         return None;
     }
     let mut normalized = mime.to_ascii_lowercase();
-    if normalized == TEXT_JSON_MIME_TYPE || normalized.ends_with("+json") {
+    if normalized.starts_with("application/") && normalized.ends_with("+json") {
         normalized = JSON_MIME_TYPE.to_string();
     }
     Some(normalized)
@@ -2710,7 +2709,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("text/json"),
+            axum::http::HeaderValue::from_static("application/problem+json"),
         );
         let body = axum::body::Bytes::from_static(br#"{"hello":"world"}"#);
         let response =

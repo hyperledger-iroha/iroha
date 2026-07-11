@@ -88,7 +88,7 @@ fn tags_section() -> Value {
     offline.insert(
         "description".into(),
         Value::String(
-            "Offline readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers."
+            "Offline readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and Norito; whole-payload base64 wrapper objects are not part of the public API."
                 .to_owned(),
         ),
     );
@@ -677,48 +677,394 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/v2/kagemusha/readiness".to_owned(),
-        Value::Object(json_get_operation(
-            "Offline",
-            "Report recursive-spend Kagemusha V2 readiness.",
-            "Returns one fail-closed, asset-scale-aware snapshot for recursive_spend_v1. Availability requires the V2 branch-safe proving backend, active transfer/unshield/Reserved-lineage verifier records, witnessless Reserved redemption, and the complete content-addressed artifact set.",
-            "#/components/schemas/JsonValue",
-            vec![norito::json!({
-                "name": "asset_definition_id",
-                "in": "query",
-                "required": true,
-                "schema": { "type": "string" },
-                "description": "Canonical asset definition id whose live on-chain scale and verifier readiness are reported."
-            })],
-        )),
+        "/v1/offline/readiness".to_owned(),
+        Value::Object(offline_readiness_operation()),
     );
-    for (path, summary, description, request_schema) in [
+    for (path, operation_id, summary, description, request_schema, norito_schema) in [
         (
-            "/v1/offline/v2/kagemusha/topup",
-            "Top up recursive Kagemusha offline cash.",
-            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV2 archive in topup_request_norito_base64. The archive carries its signed payer/device authorization, exact atomic u128 amount and live asset scale. Unknown or retired Offline Note fields are rejected; no legacy issue fallback is mounted.",
-            "#/components/schemas/KagemushaTopUpRequestV2Body",
+            "/v1/offline/top-up",
+            "offlineTopUp",
+            "Submit an offline top-up.",
+            "Submit one directly encoded OfflineTopUpRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+            "#/components/schemas/OfflineTopUpRequest",
+            iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
         ),
         (
-            "/v1/offline/v2/notes/redeem",
-            "Redeem recursive Kagemusha offline cash.",
-            "Submit exactly one canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 archive in redeem_request_norito_base64. The archive carries its signed recipient/device authorization, exact atomic u128 credit amount, proof-bound optional offline change, and Reserved or verified semantic lineage data. Unknown, compact-projection, and retired Offline Note fields are rejected.",
-            "#/components/schemas/KagemushaRedeemRequestV2Body",
+            "/v1/offline/redeem",
+            "offlineRedeem",
+            "Submit an offline redemption.",
+            "Submit one directly encoded OfflineRedeemRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+            "#/components/schemas/OfflineRedeemRequest",
+            iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
         ),
     ] {
         paths.insert(
             path.to_owned(),
-            Value::Object(json_post_operation(
-                "Offline",
+            Value::Object(offline_async_operation(
+                operation_id,
                 summary,
                 description,
                 request_schema,
-                "#/components/schemas/JsonValue",
-                Vec::new(),
+                norito_schema,
             )),
         );
     }
+    paths.insert(
+        "/v1/offline/operations/{operation_id}".to_owned(),
+        Value::Object(offline_operation_status_operation()),
+    );
     paths
+}
+
+fn offline_readiness_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("offlineReadiness".to_owned()),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Report offline-payment readiness.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Evaluate offline-payment readiness for one asset definition at a specific committed block. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![
+            norito::json!({
+                "name": "asset_definition_id",
+                "in": "query",
+                "required": true,
+                "schema": { "type": "string" },
+                "description": "Canonical asset-definition address literal or currently live asset alias. The response always contains the resolved canonical asset definition id."
+            }),
+            norito::json!({
+                "name": "If-None-Match",
+                "in": "header",
+                "required": false,
+                "schema": { "type": "string" },
+                "description": "A strong or weak ETag returned by an earlier readiness evaluation, or *. A match for the selected representation returns 304."
+            }),
+        ]),
+    );
+    let mut responses = Map::new();
+    let mut ok = dual_format_response(
+        "Readiness was evaluated successfully.",
+        "#/components/schemas/OfflineReadiness",
+    );
+    if let Value::Object(response) = &mut ok {
+        response.insert(
+            "headers".into(),
+            Value::Object(offline_readiness_response_headers()),
+        );
+    }
+    responses.insert("200".to_owned(), ok);
+    responses.insert(
+        "304".to_owned(),
+        norito::json!({
+            "description": "The previously returned readiness representation is still current.",
+            "headers": {
+                "ETag": {
+                    "description": "Strong validator for the selected readiness representation.",
+                    "schema": { "type": "string" }
+                },
+                "Cache-Control": {
+                    "description": "Readiness revalidation policy.",
+                    "schema": { "type": "string", "example": "private, max-age=0, must-revalidate" }
+                },
+                "Vary": {
+                    "description": "Negotiated response dimension.",
+                    "schema": { "type": "string", "example": "Accept" }
+                }
+            }
+        }),
+    );
+    responses.insert(
+        "400".to_owned(),
+        dual_format_response(
+            "The asset selector is malformed.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        dual_format_response(
+            "The asset definition does not exist.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    responses.insert("406".to_owned(), offline_not_acceptable_response());
+    responses.insert(
+        "503".to_owned(),
+        dual_format_response(
+            "Torii could not evaluate readiness (readiness_unavailable).",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn offline_async_operation(
+    operation_id: &str,
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    norito_schema: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![norito::json!({
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^(?!0{64}$)[0-9a-f]{64}$" },
+            "description": "Non-zero lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is globally single-use across offline command routes and binds the complete signed authorization and canonical typed request. Identical replays return the original operation; any other reuse conflicts while the original queue, process-cache, or retained-block record is recoverable. Clients must never recycle an id after a 404."
+        })]),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(offline_typed_request_body(
+            request_schema_ref,
+            norito_schema,
+        )),
+    );
+    let mut responses = Map::new();
+    let mut accepted = dual_format_response(
+        "The command was accepted for asynchronous processing.",
+        "#/components/schemas/OfflineOperationReference",
+    );
+    if let Value::Object(response) = &mut accepted {
+        response.insert(
+            "headers".into(),
+            Value::Object(offline_operation_response_headers(true)),
+        );
+    }
+    responses.insert("202".to_owned(), accepted);
+    for (status, description) in [
+        ("400", "The typed request is malformed."),
+        (
+            "403",
+            "The request does not satisfy Torii's API-token or route access policy.",
+        ),
+        (
+            "409",
+            "The idempotency key or operation id conflicts with another request.",
+        ),
+        ("415", "The request content type is missing or unsupported."),
+        (
+            "429",
+            "The command was rejected by a Torii or transaction-queue rate limit.",
+        ),
+        (
+            "500",
+            "Torii could not read its process-local operation registry or encode the response.",
+        ),
+        ("503", "The operation cannot currently be accepted."),
+    ] {
+        responses.insert(
+            status.to_owned(),
+            dual_format_response(description, "#/components/schemas/ErrorEnvelope"),
+        );
+    }
+    responses.insert("406".to_owned(), offline_not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn offline_operation_status_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("offlineOperationStatus".to_owned()),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch an offline operation.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state remains readable while its block is retained; the auxiliary admission registry is process-local and eligible for pruning 24 hours after the signed authorization expires."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![norito::json!({
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^(?!0{64}$)[0-9a-f]{64}$" },
+            "description": "Canonical non-zero lowercase hexadecimal identifier from the global offline operation namespace."
+        })]),
+    );
+    let mut responses = Map::new();
+    let mut ok = dual_format_response(
+        "Current operation state.",
+        "#/components/schemas/OfflineOperationStatus",
+    );
+    if let Value::Object(response) = &mut ok {
+        response.insert(
+            "headers".into(),
+            Value::Object(offline_operation_response_headers(false)),
+        );
+    }
+    responses.insert("200".to_owned(), ok);
+    for (status, description) in [
+        ("400", "The operation id is malformed."),
+        (
+            "403",
+            "The request does not satisfy Torii's API-token or route access policy.",
+        ),
+        ("404", "No such operation exists."),
+        (
+            "429",
+            "The status request was rejected by the Torii rate limit.",
+        ),
+        (
+            "500",
+            "The process-local operation registry could not be read.",
+        ),
+    ] {
+        responses.insert(
+            status.to_owned(),
+            dual_format_response(description, "#/components/schemas/ErrorEnvelope"),
+        );
+    }
+    responses.insert("406".to_owned(), offline_not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn offline_typed_request_body(schema_ref: &str, norito_schema: &str) -> Map {
+    let mut body = Map::new();
+    body.insert("required".into(), Value::Bool(true));
+    body.insert(
+        "content".into(),
+        norito::json!({
+            "application/json": {
+                "schema": { "$ref": schema_ref }
+            },
+            "application/x-norito": {
+                "schema": {
+                    "type": "string",
+                    "format": "binary",
+                    "x-iroha-norito-schema": norito_schema
+                }
+            }
+        }),
+    );
+    body
+}
+
+fn offline_not_acceptable_response() -> Value {
+    norito::json!({
+        "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+        "headers": {
+            "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": { "type": "string", "example": "Accept" }
+            }
+        },
+        "content": {
+            "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+            }
+        }
+    })
+}
+
+fn offline_readiness_response_headers() -> Map {
+    let mut headers = Map::new();
+    headers.insert(
+        "ETag".into(),
+        norito::json!({
+            "description": "Strong readiness validator bound to the complete selected representation and evaluated block.",
+            "schema": { "type": "string" }
+        }),
+    );
+    headers.insert(
+        "Cache-Control".into(),
+        norito::json!({
+            "description": "Readiness responses require revalidation.",
+            "schema": { "type": "string", "example": "private, max-age=0, must-revalidate" }
+        }),
+    );
+    headers.insert(
+        "Vary".into(),
+        norito::json!({
+            "description": "Negotiated response dimension.",
+            "schema": { "type": "string", "example": "Accept" }
+        }),
+    );
+    headers
+}
+
+fn offline_operation_response_headers(include_location: bool) -> Map {
+    let mut headers = Map::new();
+    if include_location {
+        headers.insert(
+            "Location".into(),
+            norito::json!({
+                "description": "Canonical operation status resource.",
+                "schema": {
+                    "type": "string",
+                    "format": "uri-reference",
+                    "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$"
+                }
+            }),
+        );
+    }
+    headers.insert(
+        "Retry-After".into(),
+        norito::json!({
+            "description": "Recommended polling delay in seconds while the operation is pending.",
+            "schema": { "type": "integer", "minimum": 0 }
+        }),
+    );
+    headers.insert(
+        "Cache-Control".into(),
+        norito::json!({
+            "description": "Operation responses are not cacheable.",
+            "schema": { "type": "string", "example": "no-store" }
+        }),
+    );
+    headers.insert(
+        "Vary".into(),
+        norito::json!({
+            "description": "Negotiated response dimension.",
+            "schema": { "type": "string", "example": "Accept" }
+        }),
+    );
+    headers
 }
 
 fn list_filter_query_parameters() -> Vec<Value> {
@@ -1171,16 +1517,6 @@ fn system_paths() -> Map {
             "Fetch the active API version.",
             "Returns the block header version string. Responds with 503 if genesis is not committed.",
             None,
-        )),
-    );
-    paths.insert(
-        "/v1/api/versions".to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "List supported Torii API versions.",
-            "Return the supported Torii API versions and defaults.",
-            "#/components/schemas/ApiVersionInfo",
-            Vec::new(),
         )),
     );
     paths.insert(
@@ -10043,35 +10379,389 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "KagemushaTopUpRequestV2Body".to_owned(),
+        "OfflineTopUpRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Strict canonical Kagemusha V2 online-to-offline request envelope.",
-            "required": ["topup_request_norito_base64"],
-            "additionalProperties": false,
+            "description": "Direct structured JSON representation of OfflineTopUpRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. JSON decoding ignores unknown object members but rejects duplicate declared members.",
+            "x-iroha-norito-schema": iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            "required": ["asset", "amount", "current_note", "record_bundle", "pallas_open_envelopes_archive", "artifact_generation", "operation_id", "authorization"],
             "properties": {
-                "topup_request_norito_base64": {
+                "asset": {
                     "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected."
+                    "description": "Canonical online asset id charged by the top-up."
+                },
+                "amount": { "$ref": "#/components/schemas/OfflineScaledAmount" },
+                "current_note": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Typed first spendable note descriptor."
+                },
+                "record_bundle": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Typed checked confidential-transfer proof bundle."
+                },
+                "pallas_open_envelopes_archive": {
+                    "$ref": "#/components/schemas/OfflineByteArray",
+                    "description": "Typed Norito-JSON byte array inside the structured DTO; this is not a whole-payload wrapper."
+                },
+                "artifact_generation": { "type": "string", "minLength": 1 },
+                "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
+                "authorization": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Typed payer/device authorization covering the canonical request."
                 }
             }
         }),
     );
     schemas.insert(
-        "KagemushaRedeemRequestV2Body".to_owned(),
+        "OfflineRedeemRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Strict canonical Kagemusha V2 offline-to-online redemption envelope.",
-            "required": ["redeem_request_norito_base64"],
-            "additionalProperties": false,
+            "description": "Direct structured JSON representation of OfflineRedeemRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. JSON decoding ignores unknown object members but rejects duplicate declared members.",
+            "x-iroha-norito-schema": iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+            "required": ["bundle", "recipient", "amount", "redeem_proof", "redemption", "lineage_verifier_record", "block_height", "operation_id", "authorization"],
             "properties": {
-                "redeem_request_norito_base64": {
+                "bundle": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Typed scale-carrying recursive state being redeemed."
+                },
+                "recipient": {
                     "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV2 bytes; surrounding whitespace, trailing Norito bytes, and non-canonical re-encodings are rejected."
+                    "description": "Canonical domainless account id credited by redemption."
+                },
+                "amount": { "$ref": "#/components/schemas/OfflineScaledAmount" },
+                "redeem_proof": { "$ref": "#/components/schemas/JsonValue" },
+                "redemption": { "$ref": "#/components/schemas/JsonValue" },
+                "lineage_witness": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/JsonValue" },
+                        { "type": "null" }
+                    ]
+                },
+                "lineage_verifier_record": { "$ref": "#/components/schemas/JsonValue" },
+                "offline_change": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/JsonValue" },
+                        { "type": "null" }
+                    ]
+                },
+                "block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                },
+                "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
+                "authorization": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Typed recipient/device authorization covering the canonical request."
                 }
             }
+        }),
+    );
+    schemas.insert(
+        "OfflineScaledAmount".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["atomic_units", "scale"],
+            "properties": {
+                "atomic_units": {
+                    "type": "integer",
+                    "format": "uint128",
+                    "minimum": 1,
+                    "description": "Positive u128 emitted as an unquoted Norito-JSON integer."
+                },
+                "scale": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineByteArray".to_owned(),
+        norito::json!({
+            "type": "array",
+            "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "description": "Norito JSON representation of Vec<u8>."
+        }),
+    );
+    schemas.insert(
+        "OfflineFixed32Bytes".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "description": "Norito JSON representation of an internal 32-byte field."
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationIdBytes".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "not": {
+                "const": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            },
+            "description": "Norito JSON representation of the non-zero signed 32-byte operation id."
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationId".to_owned(),
+        norito::json!({
+            "type": "string",
+            "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+            "description": "Canonical non-zero lowercase hexadecimal 32-byte operation id."
+        }),
+    );
+    schemas.insert(
+        "OfflineTransactionHash".to_owned(),
+        norito::json!({
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Canonical lowercase hexadecimal Blake2b-256 signed transaction hash."
+        }),
+    );
+    schemas.insert(
+        "OfflineReadinessBlocker".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$",
+                    "description": "Stable machine-readable blocker code."
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Human-readable and non-stable explanation."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineReadiness".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["asset_definition_id", "evaluated_block_height", "ready", "blockers"],
+            "properties": {
+                "asset_definition_id": { "type": "string" },
+                "evaluated_block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Committed height used for the evaluation."
+                },
+                "ready": {
+                    "type": "boolean",
+                    "description": "True exactly when blockers is empty. False is a successfully evaluated domain state, not a service error."
+                },
+                "blockers": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/OfflineReadinessBlocker" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationKind".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+                "kind": { "type": "string", "enum": ["top_up", "redeem"] },
+                "value": { "type": "null" }
+            },
+            "description": "Norito tagged unit enum selecting top-up or redemption. Canonical output includes value=null; decoders also accept omitted value and ignore unknown object members."
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationState".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["state"],
+            "properties": {
+                "state": { "type": "string", "enum": ["pending"] },
+                "value": { "type": "null" }
+            },
+            "description": "Norito tagged initial operation state. Canonical output includes value=null; decoders also accept omitted value and ignore unknown object members."
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationReference".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["operation_id", "kind", "state", "transaction_hash", "status_uri", "submitted_at_ms"],
+            "properties": {
+                "operation_id": { "$ref": "#/components/schemas/OfflineOperationId" },
+                "kind": { "$ref": "#/components/schemas/OfflineOperationKind" },
+                "state": { "$ref": "#/components/schemas/OfflineOperationState" },
+                "transaction_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "status_uri": {
+                    "type": "string",
+                    "format": "uri-reference",
+                    "pattern": "^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "submitted_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineTopUpResult".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["transaction_hash", "finalized_block_height", "server_time_ms", "anchor"],
+            "properties": {
+                "transaction_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "finalized_block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                },
+                "server_time_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "anchor": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Direct typed top-up anchor representation; it is not a Norito-base64 wrapper."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineRedeemResult".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["transaction_hash", "finalized_block_height", "server_time_ms"],
+            "properties": {
+                "transaction_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "finalized_block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                },
+                "server_time_ms": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineTopUpOperationResult".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "result"],
+            "properties": {
+                "kind": { "type": "string", "enum": ["top_up"] },
+                "result": { "$ref": "#/components/schemas/OfflineTopUpResult" }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineRedeemOperationResult".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "result"],
+            "properties": {
+                "kind": { "type": "string", "enum": ["redeem"] },
+                "result": { "$ref": "#/components/schemas/OfflineRedeemResult" }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationResult".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/OfflineTopUpOperationResult" },
+                { "$ref": "#/components/schemas/OfflineRedeemOperationResult" }
+            ],
+            "discriminator": { "propertyName": "kind" }
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationPendingValue".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["operation_id", "kind", "transaction_hash", "submitted_at_ms"],
+            "properties": {
+                "operation_id": { "$ref": "#/components/schemas/OfflineOperationId" },
+                "kind": { "$ref": "#/components/schemas/OfflineOperationKind" },
+                "transaction_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "submitted_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationAppliedValue".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["operation_id", "result"],
+            "properties": {
+                "operation_id": { "$ref": "#/components/schemas/OfflineOperationId" },
+                "result": { "$ref": "#/components/schemas/OfflineOperationResult" }
+            }
+        }),
+    );
+    schemas.insert(
+        "OfflineOperationRejectedValue".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["operation_id", "kind", "transaction_hash", "error"],
+            "properties": {
+                "operation_id": { "$ref": "#/components/schemas/OfflineOperationId" },
+                "kind": { "$ref": "#/components/schemas/OfflineOperationKind" },
+                "transaction_hash": { "$ref": "#/components/schemas/OfflineTransactionHash" },
+                "error": { "$ref": "#/components/schemas/ErrorEnvelope" }
+            }
+        }),
+    );
+    for (schema_name, state, value_schema) in [
+        (
+            "OfflineOperationPending",
+            "pending",
+            "#/components/schemas/OfflineOperationPendingValue",
+        ),
+        (
+            "OfflineOperationApplied",
+            "applied",
+            "#/components/schemas/OfflineOperationAppliedValue",
+        ),
+        (
+            "OfflineOperationRejected",
+            "rejected",
+            "#/components/schemas/OfflineOperationRejectedValue",
+        ),
+    ] {
+        schemas.insert(
+            schema_name.to_owned(),
+            norito::json!({
+                "type": "object",
+                "required": ["state", "value"],
+                "properties": {
+                    "state": { "type": "string", "enum": [state] },
+                    "value": { "$ref": value_schema }
+                }
+            }),
+        );
+    }
+    schemas.insert(
+        "OfflineOperationStatus".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/OfflineOperationPending" },
+                { "$ref": "#/components/schemas/OfflineOperationApplied" },
+                { "$ref": "#/components/schemas/OfflineOperationRejected" }
+            ],
+            "discriminator": { "propertyName": "state" }
         }),
     );
     schemas.insert(
@@ -10395,31 +11085,6 @@ fn openapi_schemas() -> Map {
                     "type": "array",
                     "description": "Opaque identifiers currently mapped to the account UAID.",
                     "items": { "$ref": "#/components/schemas/JsonValue" }
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "ApiVersionInfo".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["default", "supported", "min_proof_version"],
-            "additionalProperties": false,
-            "properties": {
-                "default": { "type": "string", "description": "Default API version label." },
-                "supported": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "All supported API version labels."
-                },
-                "sunset_unix": {
-                    "type": ["integer", "null"],
-                    "format": "uint64",
-                    "description": "Optional unix timestamp when the oldest API version sunsets."
-                },
-                "min_proof_version": {
-                    "type": "string",
-                    "description": "Minimum API version required for proof/staking/fee endpoints."
                 }
             }
         }),
@@ -13375,7 +14040,6 @@ fn queue_error_snapshot_schema() -> Value {
     norito::json!({
         "type": "object",
         "required": ["state", "queued", "capacity", "saturated"],
-        "additionalProperties": false,
         "properties": {
             "state": {
                 "type": "string",
@@ -13402,7 +14066,6 @@ fn queue_error_snapshot_schema() -> Value {
 fn axt_error_details_schema() -> Value {
     norito::json!({
         "type": "object",
-        "additionalProperties": false,
         "properties": {
             "code": {
                 "type": "string",
@@ -13444,7 +14107,6 @@ fn axt_error_details_schema() -> Value {
 fn error_details_schema() -> Value {
     norito::json!({
         "type": "object",
-        "additionalProperties": false,
         "properties": {
             "layer": {
                 "type": "string",
@@ -13511,7 +14173,6 @@ fn shared_error_schema() -> Value {
     norito::json!({
         "type": "object",
         "required": ["code", "message"],
-        "additionalProperties": false,
         "properties": {
             "code": {
                 "type": "string",
@@ -13802,7 +14463,7 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/activity"));
         assert!(paths.contains_key("/v1/contracts/events"));
         assert!(paths.contains_key("/v1/contracts/events/sse"));
-        assert!(paths.contains_key("/v1/offline/v2/kagemusha/readiness"));
+        assert!(paths.contains_key("/v1/offline/readiness"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -13920,38 +14581,53 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
-        assert!(!paths.contains_key("/v1/offline/keys/refill"));
-        assert!(!paths.contains_key("/v1/offline/notes/issue"));
-        assert!(!paths.contains_key("/v1/offline/readiness"));
-        assert!(!paths.contains_key("/v1/offline/v2/readiness"));
-        assert!(!paths.contains_key("/v1/offline/v2/keys/refill"));
-        assert!(!paths.contains_key("/v1/offline/v2/notes/issue"));
-        assert!(paths.contains_key("/v1/offline/v2/kagemusha/readiness"));
-        assert!(paths.contains_key("/v1/offline/v2/kagemusha/topup"));
-        assert!(paths.contains_key("/v1/offline/v2/notes/redeem"));
-        assert!(!paths.contains_key("/v1/offline/v2/audit"));
-        assert!(!paths.contains_key("/v1/offline/notes/redeem"));
-        assert!(!paths.contains_key("/v1/offline/audit"));
-        assert!(!paths.contains_key("/v1/offline/policy"));
-        assert!(!paths.contains_key("/v1/offline/revocations"));
-        assert!(!paths.contains_key("/v1/offline/revocations/bundle"));
+        for path in [
+            "/v1/offline/readiness",
+            "/v1/offline/top-up",
+            "/v1/offline/redeem",
+            "/v1/offline/operations/{operation_id}",
+        ] {
+            assert!(
+                paths.contains_key(path),
+                "missing final offline route {path}"
+            );
+        }
+        for path in [
+            "/v1/offline/keys/refill",
+            "/v1/offline/notes/issue",
+            "/v1/offline/notes/redeem",
+            "/v1/offline/audit",
+            "/v1/offline/policy",
+            "/v1/offline/revocations",
+            "/v1/offline/revocations/bundle",
+            "/v1/offline/v2/readiness",
+            "/v1/offline/v2/keys/refill",
+            "/v1/offline/v2/notes/issue",
+            "/v1/offline/v2/notes/redeem",
+            "/v1/offline/v2/kagemusha/readiness",
+            "/v1/offline/v2/kagemusha/topup",
+            "/v1/offline/v2/audit",
+        ] {
+            assert!(
+                !paths.contains_key(path),
+                "retired offline route leaked: {path}"
+            );
+        }
         assert!(!paths.contains_key("/v1/attestation/issue"));
         let topup_post = paths
-            .get("/v1/offline/v2/kagemusha/topup")
+            .get("/v1/offline/top-up")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
-            .expect("offline Kagemusha top-up post operation");
+            .expect("offline top-up post operation");
         let topup_description = topup_post
             .get("description")
             .and_then(Value::as_str)
-            .expect("offline Kagemusha top-up description");
-        assert!(topup_description.contains("topup_request_norito_base64"));
-        assert!(!topup_description.contains("topup_init_request_norito_base64"));
-        assert!(topup_description.contains("KagemushaRecursiveSpendTopUpRequestV2"));
-        assert!(topup_description.contains("signed payer/device authorization"));
+            .expect("offline top-up description");
+        assert!(topup_description.contains("directly encoded OfflineTopUpRequest"));
+        assert!(topup_description.contains("whole-payload base64 wrappers are rejected"));
         let redeem_post = paths
-            .get("/v1/offline/v2/notes/redeem")
+            .get("/v1/offline/redeem")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -13960,9 +14636,8 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("offline redeem description");
-        assert!(redeem_description.contains("redeem_request_norito_base64"));
-        assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV2"));
-        assert!(redeem_description.contains("signed recipient/device authorization"));
+        assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));
+        assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));
         let topup_request_schema = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
@@ -13977,12 +14652,40 @@ mod tests {
             .expect("Kagemusha top-up request schema");
         assert_eq!(
             topup_request_schema,
-            "#/components/schemas/KagemushaTopUpRequestV2Body"
+            "#/components/schemas/OfflineTopUpRequest"
         );
+        let topup_norito_schema = topup_post
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/x-norito"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("x-iroha-norito-schema"))
+            .and_then(Value::as_str)
+            .expect("stable top-up Norito schema id");
+        assert_eq!(
+            topup_norito_schema,
+            iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
+        );
+        let accepted = topup_post
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("202"))
+            .and_then(Value::as_object)
+            .expect("offline top-up accepted response");
+        let accepted_headers = accepted
+            .get("headers")
+            .and_then(Value::as_object)
+            .expect("offline top-up accepted headers");
+        assert!(accepted_headers.contains_key("Location"));
+        assert!(accepted_headers.contains_key("Retry-After"));
     }
 
     #[test]
-    fn generated_spec_documents_strict_kagemusha_v2_body_schemas() {
+    fn generated_spec_documents_direct_offline_dtos_and_operation_states() {
         let doc = generate_spec();
         let schemas = doc
             .get("components")
@@ -13990,27 +14693,128 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("component schemas");
-        for (schema_name, field) in [
-            ("KagemushaTopUpRequestV2Body", "topup_request_norito_base64"),
+        for (schema_name, norito_schema_name) in [
             (
-                "KagemushaRedeemRequestV2Body",
-                "redeem_request_norito_base64",
+                "OfflineTopUpRequest",
+                iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            ),
+            (
+                "OfflineRedeemRequest",
+                iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
             ),
         ] {
             let schema = schemas
                 .get(schema_name)
                 .and_then(Value::as_object)
-                .expect("Kagemusha V2 body schema");
+                .expect("direct offline request schema");
+            assert!(!schema.contains_key("additionalProperties"));
+            assert!(!schema.contains_key("x-iroha-norito-type"));
             assert_eq!(
-                schema.get("additionalProperties"),
-                Some(&Value::Bool(false))
+                schema.get("x-iroha-norito-schema").and_then(Value::as_str),
+                Some(norito_schema_name)
             );
-            assert_eq!(
-                schema.get("required").and_then(Value::as_array),
-                Some(&vec![Value::String(field.to_owned())])
-            );
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("direct offline request properties");
+            assert!(!properties.contains_key("topup_request_norito_base64"));
+            assert!(!properties.contains_key("redeem_request_norito_base64"));
         }
+        assert!(schemas.contains_key("OfflineReadiness"));
+        assert!(schemas.contains_key("OfflineOperationReference"));
+        let status = schemas
+            .get("OfflineOperationStatus")
+            .and_then(Value::as_object)
+            .expect("offline operation status schema");
+        assert_eq!(
+            status.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(3)
+        );
+        assert!(!schemas.contains_key("KagemushaTopUpRequestV2Body"));
+        assert!(!schemas.contains_key("KagemushaRedeemRequestV2Body"));
         assert!(!schemas.contains_key("OfflineIssuerBodyAuthRequest"));
+    }
+
+    #[test]
+    fn generated_spec_matches_offline_negotiation_and_operation_lifecycle() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        for (path, method) in [
+            ("/v1/offline/readiness", "get"),
+            ("/v1/offline/top-up", "post"),
+            ("/v1/offline/redeem", "post"),
+            ("/v1/offline/operations/{operation_id}", "get"),
+        ] {
+            let responses = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get(method))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("responses"))
+                .and_then(Value::as_object)
+                .expect("offline operation responses");
+            assert!(!responses.contains_key("401"));
+            let not_acceptable = responses
+                .get("406")
+                .and_then(Value::as_object)
+                .expect("typed 406 response");
+            let schema_ref = not_acceptable
+                .get("content")
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str);
+            assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
+        }
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("component schemas");
+        let reference_properties = schemas
+            .get("OfflineOperationReference")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("offline operation reference properties");
+        assert_eq!(
+            reference_properties
+                .get("transaction_hash")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/OfflineTransactionHash")
+        );
+        assert_eq!(
+            reference_properties
+                .get("status_uri")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$")
+        );
+        assert_eq!(
+            schemas
+                .get("OfflineOperationId")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^(?!0{64}$)[0-9a-f]{64}$")
+        );
+        assert!(
+            schemas
+                .get("OfflineOperationIdBytes")
+                .and_then(Value::as_object)
+                .is_some_and(|schema| schema.contains_key("not"))
+        );
     }
 
     #[test]
@@ -14026,10 +14830,7 @@ mod tests {
             .get("ErrorEnvelope")
             .and_then(Value::as_object)
             .expect("ErrorEnvelope schema");
-        assert_eq!(
-            error_response.get("additionalProperties"),
-            Some(&Value::Bool(false))
-        );
+        assert!(!error_response.contains_key("additionalProperties"));
         let details = error_response
             .get("properties")
             .and_then(Value::as_object)
@@ -15034,7 +15835,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/v2/kagemusha/readiness",
+                expected: "/v1/offline/readiness",
             },
             PathCase {
                 label: "system",
@@ -15225,7 +16026,6 @@ mod tests {
             "NftQueryResponse",
             "RwaQueryResponse",
             "RepoAgreementListResponse",
-            "ApiVersionInfo",
             "PeerIdList",
             "SumeragiStatusResponse",
             "LaneSettlementCommitment",

@@ -1082,7 +1082,6 @@ impl DevDoctorArgs {
             "profile_known": true,
             "client_config": (client_config_path.map(|path| path.display().to_string())),
             "torii_url": (effective_config.torii_api_url.to_string()),
-            "torii_api_version": (effective_config.torii_api_version.clone()),
             "default_gas_limit": (default_gas_limit),
             "fee_asset_id": (profile.fee_asset_id.as_deref()),
             "signer_account": (effective_config.account.to_string()),
@@ -5676,9 +5675,6 @@ mod tests {
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
-                torii_api_version: iroha::config::default_torii_api_version(),
-                torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                    .to_string(),
                 torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,

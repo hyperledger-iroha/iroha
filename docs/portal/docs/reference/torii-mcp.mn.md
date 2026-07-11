@@ -97,7 +97,6 @@ Torii багажийн илгээлтийн дотогшоо баталгааж�
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Үйлчлүүлэгчид мөн `arguments.headers`-ээр дамжуулан дуудлага тус бүрийн нэмэлт гарчиг өгөх боломжтой.
 `content-length`, `host`, `arguments.headers`-аас `connection`, үл тоомсорлодог.

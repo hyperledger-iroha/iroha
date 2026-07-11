@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-09
+Last updated: 2026-07-11
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -632,19 +632,15 @@ hydration.
 The remaining multilane execution work is the broader independent-lane
 multi-peer rollout corridor.
 
-Kagemusha online-to-offline top-up now has a first-class
-`KagemushaRecursiveSpendTopUpRequestV1` producer path, a chain-side
-`TopUpKagemushaRecursive` instruction, and Torii
-`/v1/offline/v2/kagemusha/topup` submission that accepts only client-produced
-top-up request archives. SDKs now expose a mobile-facing top-up init encoder
-that emits the nested one-hop, lineage-free init request and a wrapper helper
-that derives the canonical top-up request from it; Kotlin/JVM and Java Android
-also expose `KagemushaTopUpClient.submitKagemushaTopUp` for the signed Torii
-submission route. Raw init-request submission helpers and compatibility aliases
-remain retired for the first release.
-Remaining launch work should focus on end-to-end operator/mobile rollout
-validation rather than reviving the retired Offline V2 `/notes/issue`
-construction path.
+Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
+requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no
+nested route version, archive-wrapper body, classic note issuer, or compatibility
+alias in the first-release surface. Accepted commands are idempotent asynchronous
+operations polled through `/v1/offline/operations/{operation_id}`. SDK work now
+targets this single contract. Remaining launch work is end-to-end
+operator/mobile validation plus the sound recursive-verifier and production
+artifact gates described below; no legacy offline HTTP surface should be
+revived.
 
 Kagemusha mobile offline transfer now has a practical first-release path that
 does not depend on packaged Reserved-lineage init artifacts: SDK init requests
@@ -24348,10 +24344,11 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
 	  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
   QR/stream payload limits, and Android one-use-key pool sizing. Torii no
-  longer publishes retired offline transfer/revocation HTTP routes or the v1
-  redeem/audit issuer-unavailable stubs, and the versioned Offline V2 route
-  surface now exposes readiness, key refill, note issue, note
-	  redeem, and audit handlers under `/v1/offline/v2/*`. Governance council
+  longer publishes retired offline transfer/revocation HTTP routes or issuer
+  rejection shims. The first-release HTTP surface contains only typed
+  readiness, top-up, redeem, and operation-status resources under
+  `/v1/offline`; it has no nested route version or whole-payload wrapper.
+  Governance council
 	  persist/replace/derive-vrf mutation helpers are no longer advertised in
 	  default Torii builds unless `gov_vrf` is compiled, avoiding mounted
 	  not-implemented fallbacks in the production route/tool surface. The shared

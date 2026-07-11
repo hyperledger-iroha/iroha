@@ -97,7 +97,6 @@ Torii ከውስጥ ከውት ጋር የተገናኙ ራስጌዎችን ለመሳ
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 ደንበኞች እንዲሁ ተጨማሪ የጥሪ ራስጌዎችን በ`arguments.headers` በኩል ማቅረብ ይችላሉ።
 `content-length`፣ `host`፣ እና `connection` ከ `arguments.headers` ችላ ተብለዋል።

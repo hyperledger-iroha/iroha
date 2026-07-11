@@ -435,9 +435,15 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 
 ## Offline readiness
 
-JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are retired;
-Kagemusha readiness fields advertise the active offline payment implementation.
+JavaScript integrations use the four first-release routes:
+`GET /v1/offline/readiness?asset_definition_id=...`,
+`POST /v1/offline/top-up`, `POST /v1/offline/redeem`, and
+`GET /v1/offline/operations/{operation_id}`. Top-up and redemption send the
+typed request directly as structured JSON or Norito, return `202 Accepted`, and
+are followed through the response `Location`; there is no whole-request base64
+wrapper or version-nested route. Readiness returns `200` with `ready: false`
+when evaluation succeeds but requirements are unmet, and reserves `503` for an
+evaluation failure.
 
 ## Torii Queries & Streaming
 

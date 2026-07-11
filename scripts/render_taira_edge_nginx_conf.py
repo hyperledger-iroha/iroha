@@ -29,9 +29,6 @@ PUBLIC_TORII_CORS_ORIGINS = [
 ]
 PUBLIC_TORII_CORS_METHODS = "GET, POST, DELETE, OPTIONS"
 PUBLIC_TORII_CORS_HEADERS = "accept, authorization, content-type"
-PUBLIC_TORII_CORS_EXPOSED_HEADERS = (
-    "x-iroha-api-version, x-iroha-api-supported, x-iroha-api-min-proof-version"
-)
 PUBLIC_TORII_CORS_MAX_AGE = "3600"
 SORACLOUD_ALIAS_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 
@@ -294,7 +291,6 @@ def _render_public_torii_cors_server_lines() -> list[str]:
         "  add_header Access-Control-Allow-Origin $taira_public_torii_cors_origin always;",
         f'  add_header Access-Control-Allow-Methods "{PUBLIC_TORII_CORS_METHODS}" always;',
         f'  add_header Access-Control-Allow-Headers "{PUBLIC_TORII_CORS_HEADERS}" always;',
-        f'  add_header Access-Control-Expose-Headers "{PUBLIC_TORII_CORS_EXPOSED_HEADERS}" always;',
         f'  add_header Access-Control-Max-Age "{PUBLIC_TORII_CORS_MAX_AGE}" always;',
         '  add_header Vary "Origin" always;',
         "",

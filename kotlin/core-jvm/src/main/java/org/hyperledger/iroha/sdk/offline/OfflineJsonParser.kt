@@ -6,80 +6,33 @@ import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 object OfflineJsonParser {
-    private val removedKagemushaAbi7ReadinessFields = setOf(
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_artifacts",
+    private val readinessFields = setOf(
+        "asset_definition_id",
+        "evaluated_block_height",
+        "ready",
+        "blockers",
     )
+    private val readinessBlockerFields = setOf("code", "message")
 
     @JvmStatic
     fun parseOfflineReadiness(payload: ByteArray): OfflineReadiness {
         val root = parse(payload)
         val obj = expectObject(root, "root")
-        rejectRemovedKagemushaAbi7ReadinessFields(obj)
+        rejectUnknownFields(obj, readinessFields, "root")
+        val blockers = asArray(obj["blockers"], "blockers").mapIndexed { index, value ->
+            val path = "blockers[$index]"
+            val blocker = expectObject(value, path)
+            rejectUnknownFields(blocker, readinessBlockerFields, path)
+            OfflineReadinessBlocker(
+                asExactReadinessString(blocker["code"], "$path.code"),
+                asExactReadinessString(blocker["message"], "$path.message"),
+            )
+        }
         return OfflineReadiness(
-            asOptionalBoolean(obj["offline_note"], "offline_note", false),
-            asOptionalBoolean(obj["offline_one_use_keys"], "offline_one_use_keys", false),
-            asOptionalBoolean(
-                obj["offline_recursive_note_proof"],
-                "offline_recursive_note_proof",
-                false,
-            ),
-            asOptionalBoolean(obj["offline_fountain_qr"], "offline_fountain_qr", false),
-            asOptionalBoolean(obj["offline_sync_optional"], "offline_sync_optional", false),
-            asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asBoolean(
-                obj["offline_kagemusha_recursive_compact_available"],
-                "offline_kagemusha_recursive_compact_available",
-            ),
-            asPresentReadinessString(
-                obj["offline_kagemusha_recursive_compact_mode"],
-                "offline_kagemusha_recursive_compact_mode",
-            ),
-            asPresentReadinessInt(
-                obj["offline_kagemusha_recursive_compact_required_native_bridge_abi_version"],
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            ),
-            asPresentReadinessString(
-                obj["offline_kagemusha_recursive_compact_circuit_id"],
-                "offline_kagemusha_recursive_compact_circuit_id",
-            ),
-            asBoolean(
-                obj["offline_kagemusha_recursive_compact_artifacts_available"],
-                "offline_kagemusha_recursive_compact_artifacts_available",
-            ),
-        )
-    }
-
-    @JvmStatic
-    fun parseOfflineV2Readiness(payload: ByteArray): OfflineV2Readiness {
-        val root = parse(payload)
-        val obj = expectObject(root, "root")
-        rejectRemovedKagemushaAbi7ReadinessFields(obj)
-        return OfflineV2Readiness(
-            asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asBoolean(
-                obj["offline_kagemusha_recursive_compact_available"],
-                "offline_kagemusha_recursive_compact_available",
-            ),
-            asPresentReadinessString(
-                obj["offline_kagemusha_recursive_compact_mode"],
-                "offline_kagemusha_recursive_compact_mode",
-            ),
-            asPresentReadinessInt(
-                obj["offline_kagemusha_recursive_compact_required_native_bridge_abi_version"],
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            ),
-            asPresentReadinessString(
-                obj["offline_kagemusha_recursive_compact_circuit_id"],
-                "offline_kagemusha_recursive_compact_circuit_id",
-            ),
-            asBoolean(
-                obj["offline_kagemusha_recursive_compact_artifacts_available"],
-                "offline_kagemusha_recursive_compact_artifacts_available",
-            ),
+            asExactReadinessString(obj["asset_definition_id"], "asset_definition_id"),
+            asReadinessU64(obj["evaluated_block_height"], "evaluated_block_height"),
+            asBoolean(obj["ready"], "ready"),
+            blockers,
         )
     }
 
@@ -432,31 +385,28 @@ object OfflineJsonParser {
         return if (value is String) value else value.toString()
     }
 
-    private fun asPresentReadinessString(value: Any?, path: String): String {
+    private fun asExactReadinessString(value: Any?, path: String): String {
         check(value is String) { "$path must be a string" }
         check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact non-empty string" }
         return value
     }
 
-    private fun asPresentReadinessInt(value: Any?, path: String): Int {
-        if (value is String) {
-            check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact integer string" }
-            check(value.matches(Regex("[1-9][0-9]*"))) { "$path must be an exact integer string" }
-            val parsed = try {
-                BigInteger(value)
-            } catch (ex: NumberFormatException) {
+    private fun asReadinessU64(value: Any?, path: String): BigInteger {
+        val parsed = when (value) {
+            is BigInteger -> value
+            is java.math.BigDecimal -> try {
+                value.toBigIntegerExact()
+            } catch (ex: ArithmeticException) {
                 throw IllegalStateException("$path must be an integer", ex)
             }
-            check(parsed > BigInteger.ZERO) { "$path must be a positive integer" }
-            check(parsed <= BigInteger.valueOf(Int.MAX_VALUE.toLong())) {
-                "$path must fit in signed 32-bit range"
-            }
-            return parsed.toInt()
+            is Byte, is Short, is Int, is Long -> BigInteger.valueOf((value as Number).toLong())
+            is Float, is Double -> error("$path must be an integer")
+            else -> error("$path must be a JSON integer number")
         }
-        val parsed = JsonNumbers.asLong(value, path)
-        check(parsed > 0) { "$path must be a positive integer" }
-        check(parsed <= Int.MAX_VALUE.toLong()) { "$path must fit in signed 32-bit range" }
-        return parsed.toInt()
+        check(parsed >= BigInteger.ZERO && parsed <= BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)) {
+            "$path must fit in an unsigned 64-bit integer"
+        }
+        return parsed
     }
 
     private fun asLong(value: Any?, path: String): Long {
@@ -468,17 +418,9 @@ object OfflineJsonParser {
         return value
     }
 
-    private fun asOptionalBoolean(value: Any?, path: String, default: Boolean): Boolean {
-        if (value == null) return default
-        check(value is Boolean) { "$path must be a boolean" }
-        return value
-    }
-
-    private fun rejectRemovedKagemushaAbi7ReadinessFields(obj: Map<String, Any>) {
-        for (field in removedKagemushaAbi7ReadinessFields) {
-            check(!obj.containsKey(field)) {
-                "$field is not supported; use offline_kagemusha_recursive_compact_*"
-            }
+    private fun rejectUnknownFields(obj: Map<String, Any>, allowed: Set<String>, path: String) {
+        for (field in obj.keys) {
+            check(field in allowed) { "$path.$field is not a supported field" }
         }
     }
 

@@ -48,7 +48,7 @@
 #![allow(dead_code, clippy::unused_async, unused_imports)]
 //!
 //! Crate features:
-//! - `telemetry` (off by default): Status, Metrics, and API Version endpoints
+//! - `telemetry` (off by default): Status and Metrics endpoints
 //! - `schema` (off by default): Data Model Schema endpoint
 //! - `app_api` (on by default): app-facing JSON endpoints (filters, webhooks)
 //! - `transparent_api` (on by default): forwards data-model transparent API
@@ -58,13 +58,10 @@
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
 #[cfg(feature = "app_api")]
 mod account_activity;
-mod api_version;
 #[cfg(feature = "app_api")]
 mod app_api;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
-#[cfg(feature = "app_api")]
-mod offline_issuer;
 #[cfg(feature = "app_api")]
 mod offline_v2_issuer;
 mod operator_auth;
@@ -174,7 +171,6 @@ pub mod openapi;
 
 mod content;
 mod proof_filters;
-use crate::api_version::ApiVersion;
 pub mod sorafs;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -1661,7 +1657,6 @@ struct AppState {
     tx_history_access_policy: Arc<TxHistoryAccessPolicy>,
     telemetry: routing::MaybeTelemetry,
     telemetry_profile: TelemetryProfile,
-    api_versions: api_version::ApiVersionPolicy,
     zk_prover_keys_dir: PathBuf,
     zk_ivm_prove_jobs: Arc<DashMap<String, ZkIvmProveJobState>>,
     soracloud_public_inflight: Arc<tokio::sync::Semaphore>,
@@ -1757,8 +1752,6 @@ struct AppState {
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
-    #[cfg(feature = "app_api")]
-    offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
     offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
     #[cfg(feature = "app_api")]
@@ -3019,69 +3012,6 @@ async fn enforce_api_token(
     Ok(next.run(req).await)
 }
 
-async fn enforce_api_version(
-    State(app): State<SharedAppState>,
-    mut req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<axum::response::Response, Infallible> {
-    let negotiated = match api_version::negotiate(req.headers(), &app.api_versions) {
-        Ok(version) => version,
-        Err(err) => {
-            let result_label = err.result_label();
-            let version_label = err.version_label();
-            app.telemetry.with_metrics(|metrics| {
-                metrics.observe_torii_api_version(result_label, version_label.as_str())
-            });
-            iroha_logger::warn!(
-                code = err.code(),
-                requested = version_label.as_str(),
-                supported = app.api_versions.supported_labels().as_str(),
-                "Torii API version negotiation failed"
-            );
-            return Ok(err.into_error().into_response());
-        }
-    };
-
-    req.extensions_mut().insert(negotiated);
-    let negotiated_label = negotiated.version.to_label();
-    let result_label = if negotiated.inferred { "default" } else { "ok" };
-    app.telemetry.with_metrics(|metrics| {
-        metrics.observe_torii_api_version(result_label, negotiated_label.as_str())
-    });
-
-    let mut response = next.run(req).await;
-    if let Ok(val) = HeaderValue::from_str(&negotiated_label) {
-        response
-            .headers_mut()
-            .insert(iroha_torii_shared::HEADER_API_VERSION, val);
-    }
-    let supported = app
-        .api_versions
-        .supported
-        .iter()
-        .copied()
-        .map(ApiVersion::to_label)
-        .collect::<Vec<_>>()
-        .join(", ");
-    if let Ok(val) = HeaderValue::from_str(&supported) {
-        response.headers_mut().insert("x-iroha-api-supported", val);
-    }
-    if let Ok(val) = HeaderValue::from_str(&app.api_versions.min_proof.to_label()) {
-        response
-            .headers_mut()
-            .insert("x-iroha-api-min-proof-version", val);
-    }
-    if let Some(sunset) = app.api_versions.sunset_unix {
-        if let Ok(val) = HeaderValue::from_str(&sunset.to_string()) {
-            response
-                .headers_mut()
-                .insert("x-iroha-api-sunset-unix", val);
-        }
-    }
-
-    Ok(response)
-}
-
 #[cfg(feature = "app_api")]
 async fn enforce_soracloud_signed_mutation_request(
     State(app): State<SharedAppState>,
@@ -3243,10 +3173,11 @@ fn is_json_content_type(raw: &str) -> bool {
     if base.is_empty() {
         return false;
     }
-    if base.eq_ignore_ascii_case("application/json") || base.eq_ignore_ascii_case("text/json") {
+    if base.eq_ignore_ascii_case("application/json") {
         return true;
     }
-    base.to_ascii_lowercase().ends_with("+json")
+    let lower = base.to_ascii_lowercase();
+    lower.starts_with("application/") && lower.ends_with("+json")
 }
 
 fn normalize_json_content_type(raw: &str) -> Option<String> {
@@ -3309,9 +3240,40 @@ async fn capture_response_format(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    let format = utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT))
-        .unwrap_or(utils::ResponseFormat::Norito);
-    Ok(utils::with_current_response_format(format, next.run(req)).await)
+    let format =
+        match utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT)) {
+            Ok(format) => format,
+            Err(mut response) => {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::VARY, HeaderValue::from_static("Accept"));
+                return Ok(response);
+            }
+        };
+    let mut response = utils::with_current_response_format(format, next.run(req)).await;
+    response
+        .headers_mut()
+        .append(axum::http::header::VARY, HeaderValue::from_static("Accept"));
+    Ok(response)
+}
+
+async fn handler_route_not_found() -> Response {
+    utils::respond_with_status_and_format(
+        StatusCode::NOT_FOUND,
+        ErrorEnvelope::new("route_not_found", "The requested route does not exist."),
+        utils::current_response_format(),
+    )
+}
+
+async fn handler_method_not_allowed() -> Response {
+    utils::respond_with_status_and_format(
+        StatusCode::METHOD_NOT_ALLOWED,
+        ErrorEnvelope::new(
+            "method_not_allowed",
+            "The requested HTTP method is not allowed for this route.",
+        ),
+        utils::current_response_format(),
+    )
 }
 
 fn route_timeout_for_path(path: &str) -> Duration {
@@ -3920,42 +3882,14 @@ fn push_auth_error_response(error: Error) -> AxResponse {
     )
 }
 
-fn ensure_proof_api_version(
-    app: &AppState,
-    negotiated: api_version::NegotiatedVersion,
-    endpoint: &'static str,
-) -> Result<(), Error> {
-    if let Err(err) = api_version::enforce_minimum(
-        negotiated.version,
-        app.api_versions.min_proof,
-        &app.api_versions,
-    ) {
-        let label = err.version_label();
-        app.telemetry.with_metrics(|metrics| {
-            metrics.observe_torii_api_version(err.result_label(), label.as_str())
-        });
-        iroha_logger::warn!(
-            endpoint,
-            requested = label.as_str(),
-            minimum = app.api_versions.min_proof.to_label().as_str(),
-            inferred = negotiated.inferred,
-            "rejecting request below proof API minimum version"
-        );
-        return Err(err.into_error());
-    }
-    Ok(())
-}
-
 async fn check_proof_access(
     app: &AppState,
-    negotiated: api_version::NegotiatedVersion,
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
     hint: &'static str,
     cost: u64,
     enforce_rate: bool,
 ) -> Result<(), Error> {
-    ensure_proof_api_version(app, negotiated, hint)?;
     check_access_enforced(app, headers, remote, hint, enforce_rate).await?;
     let key = rate_limit_key(headers, remote, hint, app.api_token_enforced());
     if limits::allow_cost_conditionally(&app.proof_rate_limiter, &key, cost, enforce_rate).await {
@@ -5398,7 +5332,6 @@ async fn handler_contracts_rollups_dlmm_hooks_get(
 #[cfg(feature = "app_api")]
 async fn handler_proofs_query(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -5413,7 +5346,6 @@ async fn handler_proofs_query(
             Err(resp) => return Ok(resp),
         };
 
-    ensure_proof_api_version(&app, negotiated, "v1/proofs/query")?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
         return routing::handle_queries_with_opts(
@@ -5446,13 +5378,11 @@ async fn handler_proofs_query(
 #[cfg(all(feature = "app_api", feature = "zk-proof-tags"))]
 async fn handler_proof_tags(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath((backend, hash)): AxPath<(String, String)>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    ensure_proof_api_version(&app, negotiated, "v1/zk/proof-tags/{backend}/{hash}")?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_get_proof_tags(app.state.clone(), AxPath((backend, hash))).await;
     }
@@ -6337,40 +6267,6 @@ async fn handler_repo_agreements_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_note_readiness(
-    State(app): State<SharedAppState>,
-) -> Result<impl IntoResponse, Error> {
-    let offline = &app.state.settlement.offline;
-    let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_recursive_compact_artifacts =
-        offline_kagemusha_recursive_compact_available;
-    json_ok(json_object([
-        json_entry("offline_telemetry", true),
-        json_entry(
-            "offline_kagemusha_recursive_compact_available",
-            offline_kagemusha_recursive_compact_available,
-        ),
-        json_entry(
-            "offline_kagemusha_recursive_compact_mode",
-            "recursive_compact_v1",
-        ),
-        json_entry(
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            7_u64,
-        ),
-        json_entry(
-            "offline_kagemusha_recursive_compact_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry(
-            "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_recursive_compact_artifacts,
-        ),
-    ]))
-}
-
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 struct OfflineKagemushaReadinessQuery {
     asset_definition_id: String,
@@ -6378,19 +6274,19 @@ struct OfflineKagemushaReadinessQuery {
 
 #[cfg(feature = "app_api")]
 fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
-    ))
+    Error::AppServiceUnavailable {
+        code: "readiness_unavailable",
+        message: message.into(),
+    }
 }
 
 #[cfg(feature = "app_api")]
-fn offline_kagemusha_readiness_verifier_entry(
+fn offline_kagemusha_readiness_verifier_available(
     world: &impl WorldReadOnly,
     block_height: u64,
     circuit_id: &str,
     role: &str,
-    purpose: &str,
-) -> Result<Option<norito::json::Value>, Error> {
+) -> Result<bool, Error> {
     let selected = world
         .verifying_keys_by_circuit()
         .iter()
@@ -6403,8 +6299,8 @@ fn offline_kagemusha_readiness_verifier_entry(
                 .map(|record| (*version, id.clone(), record.clone()))
         })
         .max_by_key(|(version, _, _)| *version);
-    let Some((_, id, record)) = selected else {
-        return Ok(None);
+    let Some((_, _, record)) = selected else {
+        return Ok(false);
     };
     if record.circuit_id != circuit_id {
         return Err(offline_kagemusha_readiness_error(format!(
@@ -6412,365 +6308,259 @@ fn offline_kagemusha_readiness_verifier_entry(
             record.circuit_id
         )));
     }
-    let record_archive = norito::to_bytes(&record).map_err(|error| {
-        offline_kagemusha_readiness_error(format!(
-            "failed to encode active {role} verifier record: {error}"
-        ))
-    })?;
-    let record_sha256 = hex::encode(sha2::Sha256::digest(&record_archive));
-    Ok(Some(json_object([
-        json_entry("role", role),
-        json_entry("purpose", purpose),
-        (
-            "id",
-            json_object([
-                json_entry("backend", id.backend.clone()),
-                json_entry("name", id.name.clone()),
-            ]),
-        ),
-        json_entry("circuit_id", record.circuit_id),
-        json_entry(
-            "record_norito_base64",
-            BASE64_STANDARD.encode(record_archive),
-        ),
-        json_entry(
-            "public_inputs_schema_hash",
-            hex::encode(record.public_inputs_schema_hash),
-        ),
-        json_entry("record_sha256", record_sha256),
-        json_entry("activation_height", record.activation_height),
-        json_entry("withdraw_height", record.withdraw_height),
-        json_entry("active_at_snapshot", record.is_active_at(block_height)),
-    ])))
+    Ok(true)
+}
+
+#[cfg(feature = "app_api")]
+fn offline_readiness_blocker(
+    code: &'static str,
+    message: &'static str,
+) -> iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+    iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+        code: code.to_owned(),
+        message: message.to_owned(),
+    }
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_v2_note_readiness(
+async fn handler_offline_readiness(
     State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
     crate::NoritoQuery(query): crate::NoritoQuery<OfflineKagemushaReadinessQuery>,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<AxResponse, Error> {
     let asset_definition_id = parse_asset_definition_id(&app, &query.asset_definition_id)?;
     let world = app.state.world_view();
-    let asset_definition = world.asset_definition(&asset_definition_id).map_err(|_| {
-        offline_kagemusha_readiness_error(format!(
-            "asset definition `{asset_definition_id}` is not registered"
-        ))
-    })?;
-    let asset_scale = asset_definition.spec().scale().ok_or_else(|| {
-        offline_kagemusha_readiness_error(format!(
-            "asset definition `{asset_definition_id}` has no authoritative numeric scale"
-        ))
-    })?;
-    if asset_scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
-        return Err(offline_kagemusha_readiness_error(format!(
-            "asset definition `{asset_definition_id}` scale {asset_scale} exceeds the Kagemusha V2 maximum"
-        )));
-    }
+    let asset_definition =
+        world
+            .asset_definition(&asset_definition_id)
+            .map_err(|_| Error::AppNotFound {
+                code: "asset_definition_not_found",
+                message: format!("Asset definition `{asset_definition_id}` is not registered."),
+            })?;
+    let asset_scale = asset_definition.spec().scale();
     let block_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
-    let transfer = offline_kagemusha_readiness_verifier_entry(
+    let transfer = offline_kagemusha_readiness_verifier_available(
         &world,
         block_height,
         iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2,
     )?;
-    let unshield = offline_kagemusha_readiness_verifier_entry(
+    let unshield = offline_kagemusha_readiness_verifier_available(
         &world,
         block_height,
         iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2,
     )?;
-    let lineage_init = offline_kagemusha_readiness_verifier_entry(
+    let lineage_init = offline_kagemusha_readiness_verifier_available(
         &world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_INIT_V2,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_INIT_V2,
     )?;
-    let lineage_append = offline_kagemusha_readiness_verifier_entry(
+    let lineage_append = offline_kagemusha_readiness_verifier_available(
         &world,
         block_height,
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
         iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_APPEND_V2,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_APPEND_V2,
     )?;
-    let records_ready = transfer.is_some()
-        && unshield.is_some()
-        && lineage_init.is_some()
-        && lineage_append.is_some();
-    // V1 proofs do not bind public split amounts/branch coordinates and V1
-    // redemption consumes a shared top-up anchor. Never advertise V2 merely
-    // because those older verifier records exist.
+    let redeem_change = offline_kagemusha_readiness_verifier_available(
+        &world,
+        block_height,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_REDEEM_CHANGE_PROOF_CIRCUIT_ID_V2,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_REDEEM_CHANGE_V2,
+    )?;
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE;
     let witnessless_reserved_lineage_supported = false;
     let artifacts_ready = false;
-    let supports_multi_input = false;
-    let available = app.state.settlement.offline.kagemusha_enabled
-        && records_ready
-        && proof_backend_available
-        && witnessless_reserved_lineage_supported
-        && artifacts_ready
-        && supports_multi_input;
-    json_ok(json_object([
-        json_entry("version", 2_u64),
-        json_entry("chain_id", app.chain_id.to_string()),
-        json_entry("block_height", block_height),
-        json_entry("mode", "recursive_spend_v1"),
-        json_entry("available", available),
-        json_entry("required_bridge_abi", 17_u64),
-        json_entry("artifact_set", "kagemusha_recursive_spend_v2"),
-        ("artifact_generation", norito::json::Value::Null),
-        json_entry("artifacts_ready", artifacts_ready),
-        json_entry("supports_multi_input", supports_multi_input),
-        json_entry("v2_proof_backend_available", proof_backend_available),
-        json_entry(
-            "reserved_lineage_witnessless_redemption_available",
-            witnessless_reserved_lineage_supported,
-        ),
-        json_entry("asset_definition_id", asset_definition_id.to_string()),
-        json_entry("asset_scale", asset_scale),
-        json_entry(
-            "max_hops",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+    let mut blockers = Vec::new();
+    if app.offline_v2_issuer.is_none() {
+        blockers.push(offline_readiness_blocker(
+            "issuer_unavailable",
+            "The offline command issuer is not configured on this node.",
+        ));
+    }
+    if !app.state.settlement.offline.kagemusha_enabled {
+        blockers.push(offline_readiness_blocker(
+            "offline_payments_disabled",
+            "Offline settlement is disabled by the active chain parameters.",
+        ));
+    }
+    if asset_scale.is_none() {
+        blockers.push(offline_readiness_blocker(
+            "asset_scale_unavailable",
+            "The asset definition has no authoritative numeric scale.",
+        ));
+    } else if asset_scale.is_some_and(|scale| {
+        scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+    }) {
+        blockers.push(offline_readiness_blocker(
+            "asset_scale_unsupported",
+            "The asset scale exceeds the offline payment limit.",
+        ));
+    }
+    for (available, code, message) in [
+        (
+            transfer,
+            "transfer_verifier_unavailable",
+            "The transfer verifier is not active at the evaluated block.",
         ),
         (
-            "verifiers",
-            json_object([
-                json_entry("transfer", transfer),
-                json_entry("unshield", unshield),
-                json_entry("lineage_init", lineage_init),
-                json_entry("lineage_append", lineage_append),
-            ]),
+            unshield,
+            "unshield_verifier_unavailable",
+            "The unshield verifier is not active at the evaluated block.",
         ),
         (
-            "artifacts",
-            json_object([
-                (
-                    "transfer_prover",
-                    json_object([
-                        json_entry(
-                            "role",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-                        ),
-                        json_entry("delivery", "bridge_embedded"),
-                        json_entry(
-                            "purpose",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2,
-                        ),
-                        json_entry(
-                            "circuit_id",
-                            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-                        ),
-                        json_entry("artifact_type", "halo2_ipa_proving_key"),
-                        json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
-                        json_entry("ready", false),
-                    ]),
-                ),
-                (
-                    "unshield_prover",
-                    json_object([
-                        json_entry(
-                            "role",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-                        ),
-                        json_entry("delivery", "bridge_embedded"),
-                        json_entry(
-                            "purpose",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2,
-                        ),
-                        json_entry(
-                            "circuit_id",
-                            iroha_core::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-                        ),
-                        json_entry("artifact_type", "halo2_ipa_proving_key"),
-                        json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
-                        json_entry("ready", false),
-                    ]),
-                ),
-                (
-                    "lineage_init_prover",
-                    json_object([
-                        json_entry(
-                            "role",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_INIT_V2,
-                        ),
-                        json_entry("delivery", "torii_stream"),
-                        json_entry(
-                            "purpose",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_INIT_V2,
-                        ),
-                        json_entry(
-                            "circuit_id",
-                            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-                        ),
-                        json_entry(
-                            "artifact_type",
-                            "KagemushaRecursiveSpendLineageKeyArtifactsV2",
-                        ),
-                        json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
-                        json_entry("ready", false),
-                    ]),
-                ),
-                (
-                    "lineage_append_prover",
-                    json_object([
-                        json_entry(
-                            "role",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_LINEAGE_APPEND_V2,
-                        ),
-                        json_entry("delivery", "torii_stream"),
-                        json_entry(
-                            "purpose",
-                            iroha_data_model::offline::KAGEMUSHA_VERIFIER_PURPOSE_LINEAGE_APPEND_V2,
-                        ),
-                        json_entry(
-                            "circuit_id",
-                            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
-                        ),
-                        json_entry(
-                            "artifact_type",
-                            "KagemushaRecursiveSpendLineageKeyArtifactsV2",
-                        ),
-                        json_entry("size_bytes", 0_u64),
-                        ("sha256_hex", norito::json::Value::Null),
-                        ("url", norito::json::Value::Null),
-                        json_entry("ready", false),
-                    ]),
-                ),
-            ]),
+            lineage_init,
+            "lineage_init_verifier_unavailable",
+            "The lineage initialization verifier is not active at the evaluated block.",
         ),
-    ]))
+        (
+            lineage_append,
+            "lineage_append_verifier_unavailable",
+            "The lineage append verifier is not active at the evaluated block.",
+        ),
+        (
+            redeem_change,
+            "redeem_change_verifier_unavailable",
+            "The redemption change verifier is not active at the evaluated block.",
+        ),
+    ] {
+        if !available {
+            blockers.push(offline_readiness_blocker(code, message));
+        }
+    }
+    if !proof_backend_available {
+        blockers.push(offline_readiness_blocker(
+            "proof_backend_unavailable",
+            "The offline proof backend is unavailable in this build.",
+        ));
+    }
+    if !witnessless_reserved_lineage_supported {
+        blockers.push(offline_readiness_blocker(
+            "lineage_redemption_unavailable",
+            "Reserved-lineage redemption is not available.",
+        ));
+    }
+    if !artifacts_ready {
+        blockers.push(offline_readiness_blocker(
+            "prover_artifacts_unavailable",
+            "Required prover artifacts are not available.",
+        ));
+    }
+    let payload = iroha_torii_shared::offline_api::OfflineReadiness {
+        asset_definition_id: asset_definition_id.to_string(),
+        evaluated_block_height: block_height,
+        ready: blockers.is_empty(),
+        blockers,
+    };
+    let response_format = crate::utils::current_response_format();
+    let etag_payload = norito::to_bytes(&payload).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to encode offline readiness validator: {error}"
+        )))
+    })?;
+    let mut etag_hasher = sha2::Sha256::new();
+    etag_hasher.update(match response_format {
+        crate::utils::ResponseFormat::Json => b"application/json".as_slice(),
+        crate::utils::ResponseFormat::Norito => b"application/x-norito".as_slice(),
+    });
+    etag_hasher.update(etag_payload);
+    let etag = format!("\"{}\"", hex::encode(etag_hasher.finalize()));
+    let cache_control = axum::http::HeaderValue::from_static("private, max-age=0, must-revalidate");
+    if headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|candidate| {
+                let candidate = candidate.trim();
+                candidate == "*"
+                    || candidate == etag
+                    || candidate.strip_prefix("W/").is_some_and(|tag| tag == etag)
+            })
+        })
+    {
+        let mut response = axum::http::Response::new(axum::body::Body::empty());
+        *response.status_mut() = axum::http::StatusCode::NOT_MODIFIED;
+        response
+            .headers_mut()
+            .insert(axum::http::header::CACHE_CONTROL, cache_control);
+        if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::ETAG, value);
+        }
+        return Ok(response);
+    }
+    let mut response = crate::utils::respond_with_format(payload, response_format);
+    response
+        .headers_mut()
+        .insert(axum::http::header::CACHE_CONTROL, cache_control);
+    if let Ok(value) = axum::http::HeaderValue::from_str(&etag) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::ETAG, value);
+    }
+    Ok(response)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod offline_kagemusha_readiness_tests {
+    use super::offline_readiness_blocker;
+
+    #[test]
+    fn readiness_blockers_have_stable_codes() {
+        let blocker = offline_readiness_blocker("proof_backend_unavailable", "unavailable");
+        assert_eq!(blocker.code, "proof_backend_unavailable");
+        assert_eq!(blocker.message, "unavailable");
+    }
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_keys_refill(
+async fn handler_offline_redeem(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
+        iroha_torii_shared::offline_api::OfflineRedeemRequest,
+    >,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/keys/refill").await?;
-    offline_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/redeem").await?;
+    offline_v2_issuer::handle_notes_redeem(app, &headers, request).await
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_v2_note_keys_refill(
+async fn handler_offline_top_up(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
+    crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
+        iroha_torii_shared::offline_api::OfflineTopUpRequest,
+    >,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/top-up").await?;
+    offline_v2_issuer::handle_kagemusha_topup(app, &headers, request).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_operation_status(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(operation_id): axum::extract::Path<String>,
 ) -> Result<AxResponse, Error> {
     check_access(
         &app,
         &headers,
         Some(remote.ip()),
-        "v1/offline/v2/keys/refill",
+        "v1/offline/operations/{operation_id}",
     )
     .await?;
-    offline_v2_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_note_notes_issue(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/notes/issue").await?;
-    offline_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_v2_note_notes_issue(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/notes/issue",
-    )
-    .await?;
-    offline_v2_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_v2_note_notes_redeem(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/notes/redeem",
-    )
-    .await?;
-    offline_v2_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_v2_kagemusha_topup(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/v2/kagemusha/topup",
-    )
-    .await?;
-    offline_v2_issuer::handle_kagemusha_topup(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_v2_note_audit(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/v2/audit").await?;
-    offline_v2_issuer::handle_audit(app, &method, &uri, &headers, body).await
+    offline_v2_issuer::handle_operation_status(&app, &operation_id)
 }
 
 #[cfg(feature = "app_api")]
@@ -9838,10 +9628,6 @@ async fn handler_version(State(app): State<SharedAppState>) -> impl IntoResponse
     routing::handle_version(app.state.clone()).await
 }
 
-async fn handler_api_versions(State(app): State<SharedAppState>) -> impl IntoResponse {
-    routing::handle_api_versions(&app.api_versions)
-}
-
 /// GET /v1/time/now — wrapper that enforces Torii access policy, then delegates.
 async fn handler_time_now(
     State(app): State<SharedAppState>,
@@ -10257,7 +10043,6 @@ async fn handler_zk_merkle_path(
 
 async fn handler_zk_verify(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -10266,25 +10051,14 @@ async fn handler_zk_verify(
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
-    ensure_proof_api_version(&app, negotiated, "v1/zk/verify")?;
     enforce_proof_body_limit(&app, body.len(), "v1/zk/verify")?;
-    check_proof_access(
-        &app,
-        negotiated,
-        &headers,
-        Some(remote_ip),
-        "v1/zk/verify",
-        cost,
-        true,
-    )
-    .await?;
+    check_proof_access(&app, &headers, Some(remote_ip), "v1/zk/verify", cost, true).await?;
     routing::handle_v1_zk_verify(headers, body).await
 }
 
 #[cfg(feature = "zk-verify-batch")]
 async fn handler_zk_verify_batch(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -10293,11 +10067,9 @@ async fn handler_zk_verify_batch(
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
-    ensure_proof_api_version(&app, negotiated, "v1/zk/verify-batch")?;
     enforce_proof_body_limit(&app, body.len(), "v1/zk/verify-batch")?;
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/verify-batch",
@@ -10322,7 +10094,6 @@ async fn handler_zk_verify_batch(
 
 async fn handler_zk_submit_proof(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -10331,11 +10102,9 @@ async fn handler_zk_submit_proof(
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
-    ensure_proof_api_version(&app, negotiated, "v1/zk/submit-proof")?;
     enforce_proof_body_limit(&app, body.len(), "v1/zk/submit-proof")?;
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/submit-proof",
@@ -10689,7 +10458,6 @@ fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyI
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_derive(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -10698,11 +10466,9 @@ async fn handler_zk_ivm_derive(
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
-    ensure_proof_api_version(&app, negotiated, "v1/zk/ivm/derive")?;
     enforce_proof_body_limit(&app, body.len(), "v1/zk/ivm/derive")?;
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/ivm/derive",
@@ -10855,7 +10621,6 @@ async fn handler_zk_ivm_derive(
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -10865,11 +10630,9 @@ async fn handler_zk_ivm_prove(
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
-    ensure_proof_api_version(&app, negotiated, "v1/zk/ivm/prove")?;
     enforce_proof_body_limit(&app, body.len(), "v1/zk/ivm/prove")?;
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/ivm/prove",
@@ -11244,7 +11007,6 @@ async fn handler_zk_ivm_prove(
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_get(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     job_id: axum::extract::Path<String>,
@@ -11253,7 +11015,6 @@ async fn handler_zk_ivm_prove_get(
     zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/ivm/prove/{job_id}",
@@ -11291,7 +11052,6 @@ async fn handler_zk_ivm_prove_get(
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_delete(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     job_id: axum::extract::Path<String>,
@@ -11300,7 +11060,6 @@ async fn handler_zk_ivm_prove_delete(
     zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/ivm/prove/{job_id}",
@@ -27126,17 +26885,14 @@ async fn handler_get_vk_by_backend_name(
 #[cfg(feature = "app_api")]
 async fn handler_get_proof_by_backend_hash(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path((backend, hash)): axum::extract::Path<(String, String)>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    ensure_proof_api_version(&app, negotiated, "v1/zk/proof/{backend}/{hash}")?;
     let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/proof/{backend}/{hash}",
@@ -27213,13 +26969,11 @@ async fn handler_list_vk(
 #[cfg(feature = "app_api")]
 async fn handler_list_proofs(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::ProofListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    ensure_proof_api_version(&app, negotiated, "v1/zk/proofs")?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_list_proofs(
             app.state.clone(),
@@ -27243,7 +26997,6 @@ async fn handler_list_proofs(
     let cost = u64::from(requested_limit).div_ceil(50);
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/proofs",
@@ -27263,13 +27016,11 @@ async fn handler_list_proofs(
 #[cfg(feature = "app_api")]
 async fn handler_count_proofs(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::ProofListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    ensure_proof_api_version(&app, negotiated, "v1/zk/proofs/count")?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_count_proofs(
             app.state.clone(),
@@ -27281,7 +27032,6 @@ async fn handler_count_proofs(
     }
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "v1/zk/proofs/count",
@@ -34272,18 +34022,15 @@ async fn handler_post_transactions_batch(
 #[cfg(feature = "app_api")]
 async fn handler_proof_record_get(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(id): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    ensure_proof_api_version(&app, negotiated, "/v1/proofs/{id}")?;
     let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let start = std::time::Instant::now();
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         "/v1/proofs/{id}",
@@ -34376,7 +34123,6 @@ async fn handler_proof_record_get(
 
 async fn handler_proof_retention_status(
     State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -34388,15 +34134,9 @@ async fn handler_proof_retention_status(
             Ok(fmt) => fmt,
             Err(resp) => return Ok(resp),
         };
-    ensure_proof_api_version(
-        &app,
-        negotiated,
-        iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
-    )?;
     let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     check_proof_access(
         &app,
-        negotiated,
         &headers,
         Some(remote_ip),
         iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
@@ -38285,7 +38025,6 @@ pub struct Torii {
     state: Arc<CoreState>,
     telemetry: routing::MaybeTelemetry,
     telemetry_profile: TelemetryProfile,
-    api_versions: api_version::ApiVersionPolicy,
     online_peers: OnlinePeersProvider,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_telemetry_urls: Vec<telemetry::peers::ToriiUrl>,
@@ -38425,8 +38164,6 @@ pub struct Torii {
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
-    #[cfg(feature = "app_api")]
-    offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
     offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
     #[cfg(feature = "app_api")]
@@ -38865,7 +38602,6 @@ impl Torii {
             );
             let public_router = Router::new()
                 .route(uri::API_VERSION, get(handler_version))
-                .route(uri::API_VERSIONS, get(handler_api_versions))
                 .route(uri::PEERS, get(handler_peers))
                 .route(uri::HEALTH, get(handler_health))
                 .route(
@@ -40024,17 +39760,12 @@ impl Torii {
                     "/v1/repo/agreements/query",
                     post(handler_repo_agreements_query),
                 )
+                .route(uri::OFFLINE_READINESS, get(handler_offline_readiness))
+                .route(uri::OFFLINE_REDEEM, post(handler_offline_redeem))
+                .route(uri::OFFLINE_TOP_UP, post(handler_offline_top_up))
                 .route(
-                    "/v1/offline/v2/kagemusha/readiness",
-                    get(handler_offline_v2_note_readiness),
-                )
-                .route(
-                    "/v1/offline/v2/notes/redeem",
-                    post(handler_offline_v2_note_notes_redeem),
-                )
-                .route(
-                    "/v1/offline/v2/kagemusha/topup",
-                    post(handler_offline_v2_kagemusha_topup),
+                    uri::OFFLINE_OPERATION,
+                    get(handler_offline_operation_status),
                 );
             #[cfg(feature = "push")]
             let router = router.route(
@@ -41382,13 +41113,6 @@ impl Torii {
                 "torii.require_api_token is true but no api_tokens were configured"
             );
         }
-        let api_versions = api_version::ApiVersionPolicy::from_labels(
-            config.api_versions.clone(),
-            config.api_version_default.clone(),
-            config.api_min_proof_version.clone(),
-            config.api_version_sunset_unix,
-        )
-        .unwrap_or_else(|err| panic!("invalid Torii API version config: {err}"));
         let rl = limits::RateLimiter::new(
             config
                 .query_rate_per_authority_per_sec
@@ -41723,12 +41447,6 @@ impl Torii {
         let sorafs_appeal_settlement_submitter =
             SoraFsAppealSettlementSubmitter::from_config(&config.sorafs_appeal_finance_settlement);
         #[cfg(feature = "app_api")]
-        let offline_issuer = config
-            .offline_issuer
-            .clone()
-            .map(offline_issuer::OfflineIssuerRuntime::from_config)
-            .map(Arc::new);
-        #[cfg(feature = "app_api")]
         let offline_v2_issuer = config
             .offline_issuer
             .clone()
@@ -41784,7 +41502,6 @@ impl Torii {
             sumeragi,
             telemetry,
             telemetry_profile,
-            api_versions,
             content_config: content_snapshot,
             address: config.address,
             transaction_max_content_len: config.max_content_len,
@@ -41925,8 +41642,6 @@ impl Torii {
             account_faucet,
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter,
-            #[cfg(feature = "app_api")]
-            offline_issuer,
             #[cfg(feature = "app_api")]
             offline_v2_issuer,
             #[cfg(feature = "app_api")]
@@ -42277,7 +41992,6 @@ impl Torii {
             tx_history_access_policy: self.tx_history_access_policy.clone(),
             telemetry: self.telemetry.clone(),
             telemetry_profile: self.telemetry_profile,
-            api_versions: self.api_versions.clone(),
             zk_prover_keys_dir: self.zk_prover_keys_dir.clone(),
             zk_ivm_prove_jobs,
             soracloud_public_inflight,
@@ -42383,8 +42097,6 @@ impl Torii {
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
-            #[cfg(feature = "app_api")]
-            offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
             offline_v2_issuer: self.offline_v2_issuer.clone(),
             #[cfg(feature = "app_api")]
@@ -42538,6 +42250,8 @@ impl Torii {
 
         let mut router = builder
             .finish()
+            .fallback(handler_route_not_found)
+            .method_not_allowed_fallback(handler_method_not_allowed)
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
             .layer(axum::middleware::from_fn(enforce_route_timeout))
             .layer(axum::middleware::from_fn_with_state(
@@ -42547,10 +42261,6 @@ impl Torii {
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 enforce_api_token,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                enforce_api_version,
             ))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
@@ -44387,8 +44097,6 @@ pub enum Error {
         /// Retry hint in whole seconds.
         retry_after_secs: u64,
     },
-    /// API version negotiation or gating failed.
-    ApiVersion(api_version::ApiVersionError),
     /// Failed to accept transaction
     AcceptTransaction(#[from] iroha_core::tx::AcceptTransactionFail),
     /// Failed to get or set configuration
@@ -44819,13 +44527,6 @@ pub(crate) mod tests_runtime_handlers {
         routing::{DeployContractDto, handle_v1_sumeragi_commit_qcs},
         utils::extractors::NoritoJson,
     };
-
-    pub fn negotiated(app: &SharedAppState) -> Extension<api_version::NegotiatedVersion> {
-        Extension(api_version::NegotiatedVersion {
-            version: app.api_versions.default,
-            inferred: true,
-        })
-    }
 
     fn query_conversion_message(err: &Error) -> Option<&str> {
         match err {
@@ -46522,7 +46223,6 @@ pub(crate) mod tests_runtime_handlers {
             tx_history_access_policy: Arc::new(TxHistoryAccessPolicy::default()),
             telemetry,
             telemetry_profile,
-            api_versions: api_version::ApiVersionPolicy::default(),
             zk_prover_keys_dir: defaults::torii::zk_prover_keys_dir(),
             zk_ivm_prove_jobs,
             soracloud_public_inflight,
@@ -46602,8 +46302,6 @@ pub(crate) mod tests_runtime_handlers {
             account_faucet: None,
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: None,
-            #[cfg(feature = "app_api")]
-            offline_issuer: None,
             #[cfg(feature = "app_api")]
             offline_v2_issuer: None,
             #[cfg(feature = "app_api")]
@@ -63622,7 +63320,6 @@ pub(crate) mod tests_runtime_handlers {
 
         let first = super::handler_list_proofs(
             State(app.clone()),
-            negotiated(&app),
             headers.clone(),
             crate::loopback_connect_info(),
             q.clone(),
@@ -63634,7 +63331,6 @@ pub(crate) mod tests_runtime_handlers {
 
         let resp = match super::handler_list_proofs(
             State(app.clone()),
-            negotiated(&app),
             headers,
             crate::loopback_connect_info(),
             q,
@@ -64032,7 +63728,6 @@ pub(crate) mod tests_runtime_handlers {
         // List proofs
         let resp = super::handler_list_proofs(
             State(app.clone()),
-            negotiated(&app),
             headers.clone(),
             crate::loopback_connect_info(),
             AxQuery(crate::routing::ProofListQuery::default()),
@@ -64045,7 +63740,6 @@ pub(crate) mod tests_runtime_handlers {
         // Count proofs
         let resp = super::handler_count_proofs(
             State(app.clone()),
-            negotiated(&app),
             headers,
             crate::loopback_connect_info(),
             AxQuery(crate::routing::ProofListQuery::default()),
@@ -64090,7 +63784,6 @@ pub(crate) mod tests_runtime_handlers {
         // Proof by backend/hash (non-existent)
         let resp = super::handler_get_proof_by_backend_hash(
             State(app.clone()),
-            negotiated(&app),
             headers,
             crate::loopback_connect_info(),
             axum::extract::Path((
@@ -64822,7 +64515,6 @@ impl Error {
                 );
                 ErrorEnvelope::new("query_error", validation_fail_message(&err))
             }
-            Self::ApiVersion(err) => ErrorEnvelope::new(err.code(), err.message()),
             Self::AcceptTransaction(err) => {
                 iroha_logger::warn!(?err, "Transaction rejected during admission");
                 let (code, detail) = accept_transaction_metadata(&err);
@@ -64917,7 +64609,6 @@ impl Error {
 
         match self {
             Query(e) => Self::query_status_code(e),
-            ApiVersion(err) => err.status(),
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
             #[cfg(feature = "app_api")]
@@ -65341,7 +65032,7 @@ mod tests {
         tests_runtime_handlers::{
             app_auth_test_guard, checked_torii_test_account_id, checked_torii_test_ed25519_keypair,
             mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
-            mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world, negotiated,
+            mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world,
             record_latest_committed_header_for_test, signed_app_headers, world_with_account,
         },
     };
@@ -70278,7 +69969,6 @@ mod tests {
 
         let first = handler_proof_record_get(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(id.clone()),
@@ -70313,7 +70003,6 @@ mod tests {
         conditional_headers.insert(axum::http::header::IF_NONE_MATCH, etag);
         let not_modified = handler_proof_record_get(
             State(app.clone()),
-            negotiated(&app),
             conditional_headers,
             crate::loopback_connect_info(),
             axum::extract::Path(id),
@@ -70337,7 +70026,6 @@ mod tests {
 
         let response = handler_proof_record_get(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(id.clone()),
@@ -70389,7 +70077,6 @@ mod tests {
 
         let response = handler_proof_record_get(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(missing_id),
@@ -70475,7 +70162,6 @@ mod tests {
 
         let response = handler_proof_retention_status(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
@@ -70667,7 +70353,6 @@ mod tests {
 
         let resp = handler_get_proof_by_backend_hash(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(("debug-proof".to_string(), hex::encode([0xBB; 32]))),
@@ -70693,7 +70378,6 @@ mod tests {
         }
         let err = match handler_zk_submit_proof(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from_static(&[0x11; 16]),
@@ -70794,7 +70478,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let response = handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -70815,7 +70498,6 @@ mod tests {
         for _ in 0..4000 {
             let response = handler_zk_ivm_prove_get(
                 State(app.clone()),
-                negotiated(&app),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
@@ -70853,7 +70535,6 @@ mod tests {
 
         let response = handler_zk_ivm_prove_delete(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(job_id.clone()),
@@ -70936,7 +70617,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let response = handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -70957,7 +70637,6 @@ mod tests {
         for _ in 0..4000 {
             let response = handler_zk_ivm_prove_get(
                 State(app.clone()),
-                negotiated(&app),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
@@ -71079,7 +70758,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let response = handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -71100,7 +70778,6 @@ mod tests {
         for _ in 0..4000 {
             let response = handler_zk_ivm_prove_get(
                 State(app.clone()),
-                negotiated(&app),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
@@ -71212,7 +70889,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let response = handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -71233,7 +70909,6 @@ mod tests {
         for _ in 0..4000 {
             let response = handler_zk_ivm_prove_get(
                 State(app.clone()),
-                negotiated(&app),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
@@ -71352,7 +71027,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let response = handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -71373,7 +71047,6 @@ mod tests {
         for _ in 0..4000 {
             let response = handler_zk_ivm_prove_get(
                 State(app.clone()),
-                negotiated(&app),
                 HeaderMap::new(),
                 crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
@@ -71497,7 +71170,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let response = handler_zk_ivm_derive(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -71633,7 +71305,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let err = match handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -71734,7 +71405,6 @@ mod tests {
         let body = norito::json::to_vec(&req).expect("json encode request");
         let err = match handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
@@ -71828,7 +71498,6 @@ mod tests {
 
         let response = handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(req_body.clone()),
@@ -71847,7 +71516,6 @@ mod tests {
 
         let err = match handler_zk_ivm_prove(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(req_body.clone()),
@@ -71863,7 +71531,6 @@ mod tests {
 
         let response = handler_zk_ivm_prove_delete(
             State(app.clone()),
-            negotiated(&app),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::extract::Path(job_id),

@@ -1350,8 +1350,6 @@ fn try_fallback_config() -> Result<Config> {
         transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
         transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
-        torii_api_version: defaults::torii::API_DEFAULT_VERSION.to_string(),
-        torii_api_min_proof_version: defaults::torii::API_MIN_PROOF_VERSION.to_string(),
         connect_queue_root: iroha::config::default_connect_queue_root(),
         soracloud_http_witness_file: None,
         sorafs_alias_cache: alias_cache,
@@ -9253,9 +9251,6 @@ transaction_status_timeout = "77s"
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
-                torii_api_version: iroha::config::default_torii_api_version(),
-                torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                    .to_string(),
                 torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
                 transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,

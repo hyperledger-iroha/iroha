@@ -671,6 +671,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return unsafeBitCast(address, to: KagemushaRecursiveSpendArchiveFn.self)
     }
 
+    static func bridgeHandleForStaticFallback(
+        currentHandle: UnsafeMutableRawPointer?,
+        processHandle: UnsafeMutableRawPointer?
+    ) -> UnsafeMutableRawPointer? {
+        processHandle ?? currentHandle
+    }
+
     func resolveKagemushaV2Symbol<T>(_ symbol: String, as type: T.Type) -> T? {
         #if canImport(Darwin)
         guard let bridgeHandle, let address = dlsym(bridgeHandle, symbol) else { return nil }
@@ -2465,6 +2472,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeTransferWithFeeSponsorWithAlgFn =
             connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        self.bridgeHandle = Self.bridgeHandleForStaticFallback(
+            currentHandle: self.bridgeHandle,
+            processHandle: staticHandle
+        )
         if let encodeValidationFeeSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_validation_fee_transfer_signed_transaction") }) {
             self.encodeValidationFeeTransferFn = unsafeBitCast(
                 encodeValidationFeeSymbol,

@@ -1394,8 +1394,7 @@ impl TransactionBuilder {
     /// Returns a Norito error when `bytes` is malformed, non-canonical for the
     /// default v1 layout, or contains trailing bytes.
     pub fn decode_payload(bytes: &[u8]) -> Result<Self, norito::core::Error> {
-        let _guard =
-            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let (payload, used) = TransactionPayload::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -1732,7 +1731,10 @@ mod tests {
         assert!(TransactionBuilder::decode_payload(&[]).is_err());
 
         let canonical = builder.encode_payload();
-        assert!(canonical[0] < 0x80, "fixture starts with a compact field length");
+        assert!(
+            canonical[0] < 0x80,
+            "fixture starts with a compact field length"
+        );
         let mut overlong = Vec::with_capacity(canonical.len() + 1);
         overlong.push(canonical[0] | 0x80);
         overlong.push(0);

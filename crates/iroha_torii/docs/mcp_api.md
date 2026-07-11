@@ -88,7 +88,6 @@ For route dispatch, MCP forwards inbound auth headers automatically:
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Per-call additional headers can also be passed via `arguments.headers`.
 `content-length`, `host`, and `connection` from `arguments.headers` are ignored.

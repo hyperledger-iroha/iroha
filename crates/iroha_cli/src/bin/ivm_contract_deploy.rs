@@ -148,8 +148,6 @@ fn make_client(
         key_pair,
         basic_auth: None,
         torii_api_url: Url::parse(torii_url).wrap_err("invalid --torii-url")?,
-        torii_api_version: config::default_torii_api_version(),
-        torii_api_min_proof_version: config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
         torii_request_timeout: Duration::from_millis(torii_request_timeout_ms),
         transaction_ttl: transaction_ttl_ms.map_or(
             config::DEFAULT_TRANSACTION_TIME_TO_LIVE,

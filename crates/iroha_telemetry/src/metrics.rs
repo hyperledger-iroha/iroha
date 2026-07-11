@@ -8220,8 +8220,6 @@ pub struct Metrics {
     pub torii_http_request_duration_seconds: HistogramVec,
     /// Torii HTTP response payload size (bytes) grouped by content type, method, and status.
     pub torii_http_response_bytes_total: IntCounterVec,
-    /// Torii API version negotiation grouped by outcome and requested version.
-    pub torii_api_version_negotiated_total: IntCounterVec,
     /// Torii API-token-gated endpoint hits grouped by endpoint and bounded token state.
     pub torii_api_token_hits_total: IntCounterVec,
     /// Content gateway requests grouped by outcome label.
@@ -14317,14 +14315,6 @@ impl Default for Metrics {
             &["content_type", "method", "status"],
         )
         .expect("Infallible");
-        let torii_api_version_negotiated_total = IntCounterVec::new(
-            Opts::new(
-                "torii_api_version_negotiated_total",
-                "Torii API version negotiation outcomes grouped by result and version",
-            ),
-            &["result", "version"],
-        )
-        .expect("Infallible");
         let torii_api_token_hits_total = IntCounterVec::new(
             Opts::new(
                 "torii_api_token_hits_total",
@@ -14484,7 +14474,6 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_http_requests_total);
         register_guarded(&registry, &torii_http_request_duration_seconds);
         register_guarded(&registry, &torii_http_response_bytes_total);
-        register_guarded(&registry, &torii_api_version_negotiated_total);
         register_guarded(&registry, &torii_api_token_hits_total);
         register_guarded(&registry, &torii_content_requests_total);
         register_guarded(&registry, &torii_content_request_duration_seconds);
@@ -16123,7 +16112,6 @@ impl Default for Metrics {
             torii_http_requests_total,
             torii_http_request_duration_seconds,
             torii_http_response_bytes_total,
-            torii_api_version_negotiated_total,
             torii_api_token_hits_total,
             torii_content_requests_total,
             torii_content_request_duration_seconds,

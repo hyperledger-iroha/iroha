@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
@@ -9,11 +10,7 @@ public final class OfflineJsonParserTest {
 
   public static void main(final String[] args) {
     parsesOfflineReadiness();
-    rejectsOfflineReadinessRemovedAbi7Aliases();
-    rejectsOfflineReadinessMalformedCanonicalValues();
-    parsesOfflineV2Readiness();
-    rejectsOfflineV2ReadinessRemovedAbi7Aliases();
-    rejectsOfflineV2ReadinessMalformedCanonicalValues();
+    rejectsNonCanonicalOfflineReadiness();
     parsesOfflineTransfers();
     rejectsOfflineTransferMalformedIntegerFields();
     canonicalizesJson();
@@ -24,83 +21,30 @@ public final class OfflineJsonParserTest {
     final String json =
         """
         {
-          "offline_telemetry": true,
-          "offline_kagemusha_recursive_compact_available": true,
-          "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
-          "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_recursive_compact_artifacts_available": false
+          "asset_definition_id": "xor#wonderland",
+          "evaluated_block_height": 18446744073709551615,
+          "ready": false,
+          "blockers": [
+            {"code": "offline_disabled", "message": "Offline transfers are disabled"}
+          ]
         }
         """;
     final OfflineReadiness readiness =
         OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
-    assert !readiness.offlineNote();
-    assert !readiness.offlineOneUseKeys();
-    assert !readiness.offlineRecursiveNoteProof();
-    assert !readiness.offlineFountainQr();
-    assert !readiness.offlineSyncOptional();
-    assert readiness.offlineTelemetry();
-    assert readiness.offlineKagemushaRecursiveCompactAvailable();
-    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
-    assert Integer.valueOf(7).equals(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
-    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId());
-    assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
+    assert "xor#wonderland".equals(readiness.assetDefinitionId());
+    assert new BigInteger("18446744073709551615").equals(readiness.evaluatedBlockHeight());
+    assert !readiness.ready();
+    assert readiness.blockers().size() == 1;
+    assert "offline_disabled".equals(readiness.blockers().get(0).code());
+    assert "Offline transfers are disabled".equals(readiness.blockers().get(0).message());
   }
 
-  private static void rejectsOfflineReadinessRemovedAbi7Aliases() {
-    for (final RemovedAbi7ReadinessCase item : REMOVED_ABI7_READINESS_CASES) {
-      expectIllegalState(
-          () -> parseOfflineReadiness(canonicalReadinessBody("\"" + item.field + "\": true,")),
-          item.message);
-    }
-  }
-
-  private static void rejectsOfflineReadinessMalformedCanonicalValues() {
-    for (final MalformedReadinessCase item : malformedCanonicalReadinessCases()) {
-      expectIllegalState(() -> parseOfflineReadiness(item.body), item.message);
-    }
-    for (final MalformedReadinessCase item : malformedOptionalReadinessCases()) {
+  private static void rejectsNonCanonicalOfflineReadiness() {
+    for (final MalformedReadinessCase item : malformedReadinessCases()) {
       expectIllegalState(() -> parseOfflineReadiness(item.body), item.message);
     }
   }
 
-  private static void parsesOfflineV2Readiness() {
-    final String json =
-        """
-        {
-          "offline_telemetry": true,
-          "offline_kagemusha_recursive_compact_available": true,
-          "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
-          "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_recursive_compact_artifacts_available": false
-        }
-        """;
-    final OfflineV2Readiness readiness =
-        OfflineJsonParser.parseOfflineV2Readiness(json.getBytes(StandardCharsets.UTF_8));
-    assert readiness.offlineTelemetry();
-    assert readiness.offlineKagemushaRecursiveCompactAvailable();
-    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
-    assert Integer.valueOf(7).equals(
-        readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
-    assert "kagemusha-recursive-compact-v1".equals(
-        readiness.offlineKagemushaRecursiveCompactCircuitId());
-    assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
-  }
-
-  private static void rejectsOfflineV2ReadinessRemovedAbi7Aliases() {
-    for (final RemovedAbi7ReadinessCase item : REMOVED_ABI7_READINESS_CASES) {
-      expectIllegalState(
-          () -> parseOfflineV2Readiness(canonicalReadinessBody("\"" + item.field + "\": true,")),
-          item.message);
-    }
-  }
-
-  private static void rejectsOfflineV2ReadinessMalformedCanonicalValues() {
-    for (final MalformedReadinessCase item : malformedCanonicalReadinessCases()) {
-      expectIllegalState(() -> parseOfflineV2Readiness(item.body), item.message);
-    }
-  }
 
   private static void parsesOfflineTransfers() {
     final String json =
@@ -166,83 +110,39 @@ public final class OfflineJsonParserTest {
     return OfflineJsonParser.parseOfflineReadiness(json.getBytes(StandardCharsets.UTF_8));
   }
 
-  private static OfflineV2Readiness parseOfflineV2Readiness(final String json) {
-    return OfflineJsonParser.parseOfflineV2Readiness(json.getBytes(StandardCharsets.UTF_8));
-  }
 
   private static OfflineTransferList parseOfflineTransfers(final String json) {
     return OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
   }
 
-  private record RemovedAbi7ReadinessCase(String field, String message) {}
-
-  private static final RemovedAbi7ReadinessCase[] REMOVED_ABI7_READINESS_CASES = {
-    new RemovedAbi7ReadinessCase(
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
-    new RemovedAbi7ReadinessCase(
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*"),
-    new RemovedAbi7ReadinessCase(
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
-    new RemovedAbi7ReadinessCase(
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*"),
-    new RemovedAbi7ReadinessCase(
-        "offline_kagemusha_abi7_artifacts",
-        "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*")
-  };
-
   private record MalformedReadinessCase(String body, String message) {}
 
   private record MalformedTransferIntegerCase(String body, String message) {}
 
-  private static MalformedReadinessCase[] malformedCanonicalReadinessCases() {
+  private static MalformedReadinessCase[] malformedReadinessCases() {
     return new MalformedReadinessCase[] {
       new MalformedReadinessCase(
-          canonicalReadinessBody("", "\"true\"", "\"recursive_compact_v1\"", "7",
-              "\"kagemusha-recursive-compact-v1\"", "false"),
-          "offline_kagemusha_recursive_compact_available must be a boolean"),
+          readinessBody("\"offline_telemetry\": true,", "\"xor#wonderland\"", "7", "true", "[]"),
+          "root.offline_telemetry is not a supported field"),
       new MalformedReadinessCase(
-          canonicalReadinessBody("", "true", "\" recursive_compact_v1\"", "7",
-              "\"kagemusha-recursive-compact-v1\"", "false"),
-          "offline_kagemusha_recursive_compact_mode must be an exact non-empty string"),
+          readinessBody("", "\"xor#wonderland\"", "\"7\"", "true", "[]"),
+          "evaluated_block_height must be a JSON integer number"),
       new MalformedReadinessCase(
-          canonicalReadinessBody("", "true", "\"recursive_compact_v1\"", "\"007\"",
-              "\"kagemusha-recursive-compact-v1\"", "false"),
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string"),
+          readinessBody("", "\"xor#wonderland\"", "-1", "true", "[]"),
+          "evaluated_block_height must fit in an unsigned 64-bit integer"),
       new MalformedReadinessCase(
-          canonicalReadinessBody("", "true", "\"recursive_compact_v1\"", "-1",
-              "\"kagemusha-recursive-compact-v1\"", "false"),
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer"),
+          readinessBody("", "\"xor#wonderland\"", "18446744073709551616", "true", "[]"),
+          "evaluated_block_height must fit in an unsigned 64-bit integer"),
       new MalformedReadinessCase(
-          canonicalReadinessBody("", "true", "\"recursive_compact_v1\"", "7.5",
-              "\"kagemusha-recursive-compact-v1\"", "false"),
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer"),
+          readinessBody("", "\"xor#wonderland\"", "7", "1", "[]"),
+          "ready must be a boolean"),
       new MalformedReadinessCase(
-          canonicalReadinessBody("", "true", "\"recursive_compact_v1\"", "2147483648",
-              "\"kagemusha-recursive-compact-v1\"", "false"),
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range"),
+          readinessBody("", "\" xor#wonderland\"", "7", "true", "[]"),
+          "asset_definition_id must be an exact non-empty string"),
       new MalformedReadinessCase(
-          canonicalReadinessBody("", "true", "\"recursive_compact_v1\"", "7",
-              "\"\"", "false"),
-          "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string"),
-      new MalformedReadinessCase(
-          canonicalReadinessBody("", "true", "\"recursive_compact_v1\"", "7",
-              "\"kagemusha-recursive-compact-v1\"", "\"true\""),
-          "offline_kagemusha_recursive_compact_artifacts_available must be a boolean")
-    };
-  }
-
-  private static MalformedReadinessCase[] malformedOptionalReadinessCases() {
-    return new MalformedReadinessCase[] {
-      new MalformedReadinessCase(
-          canonicalReadinessBody("\"offline_note\": \"true\","),
-          "offline_note must be a boolean"),
-      new MalformedReadinessCase(
-          canonicalReadinessBody("\"offline_sync_optional\": 1,"),
-          "offline_sync_optional must be a boolean")
+          readinessBody("", "\"xor#wonderland\"", "7", "true",
+              "[{\"code\":\"blocked\",\"message\":\"no\",\"extra\":1}]"),
+          "blockers[0].extra is not a supported field")
     };
   }
 
@@ -297,42 +197,28 @@ public final class OfflineJsonParserTest {
         total);
   }
 
-  private static String canonicalReadinessBody(final String extra) {
-    return canonicalReadinessBody(
-        extra,
-        "true",
-        "\"recursive_compact_v1\"",
-        "7",
-        "\"kagemusha-recursive-compact-v1\"",
-        "false");
-  }
-
-  private static String canonicalReadinessBody(
+  private static String readinessBody(
       final String extra,
-      final String compactAvailable,
-      final String compactMode,
-      final String compactBridge,
-      final String compactCircuit,
-      final String compactArtifacts) {
+      final String assetDefinitionId,
+      final String evaluatedBlockHeight,
+      final String ready,
+      final String blockers) {
     return String.format(
         Locale.ROOT,
         """
         {
-          "offline_telemetry": true,
           %s
-          "offline_kagemusha_recursive_compact_available": %s,
-          "offline_kagemusha_recursive_compact_mode": %s,
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": %s,
-          "offline_kagemusha_recursive_compact_circuit_id": %s,
-          "offline_kagemusha_recursive_compact_artifacts_available": %s
+          "asset_definition_id": %s,
+          "evaluated_block_height": %s,
+          "ready": %s,
+          "blockers": %s
         }
         """,
-            extra,
-            compactAvailable,
-            compactMode,
-            compactBridge,
-            compactCircuit,
-            compactArtifacts);
+        extra,
+        assetDefinitionId,
+        evaluatedBlockHeight,
+        ready,
+        blockers);
   }
 
   private static void expectIllegalState(

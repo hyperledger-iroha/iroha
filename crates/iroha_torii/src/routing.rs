@@ -115,7 +115,6 @@ use iroha_data_model::{
     },
 };
 
-use crate::api_version::{self, ApiVersion};
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
@@ -5816,7 +5815,7 @@ pub async fn handle_v1_zk_verify(
         // For Norito, treat non-empty body as accepted. We avoid binding to a
         // specific envelope type in this app-facing convenience endpoint.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -16037,7 +16036,7 @@ pub async fn handle_v1_zk_submit_proof(
     let ok = if ct.contains(super::utils::NORITO_MIME_TYPE) {
         // For Norito, any non-empty payload is considered accepted by the demo handler.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -16206,7 +16205,7 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
             statuses_json = bools_to_json_array(&statuses);
             ok = true;
         }
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         // JSON: accept array of base64-encoded Norito envelopes.
         if let Ok(v) = norito::json::from_slice::<norito::json::Value>(&body) {
             if let Some(arr) = v.as_array() {
@@ -91822,22 +91821,6 @@ mod version_tests {
 }
 
 /// List supported Torii API versions and defaults.
-pub fn handle_api_versions(
-    policy: &api_version::ApiVersionPolicy,
-) -> crate::utils::NoritoBody<iroha_torii_shared::ApiVersionInfo> {
-    let supported = policy
-        .supported
-        .iter()
-        .copied()
-        .map(ApiVersion::to_label)
-        .collect();
-    crate::utils::NoritoBody(iroha_torii_shared::ApiVersionInfo {
-        default: policy.default.to_label(),
-        supported,
-        sunset_unix: policy.sunset_unix,
-        min_proof_version: policy.min_proof.to_label(),
-    })
-}
 
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]

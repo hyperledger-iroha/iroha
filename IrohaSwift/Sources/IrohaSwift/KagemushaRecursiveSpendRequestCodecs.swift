@@ -48,6 +48,7 @@ public struct KagemushaRecursiveSpendableNoteDescriptor: Equatable, Sendable {
 public struct KagemushaRecursiveSpendVerifierRecordRef: Equatable, Sendable {
     public let verifierKeyId: String
     public let recordBytes: Data
+    public let metadata: KagemushaRecursiveSpendVerifierRecordMetadata
 
     public init(verifierKeyId: String, recordBytes: Data) throws {
         _ = try KagemushaRecursiveSpendRequestCodecs.parseVerifierKeyId(
@@ -62,6 +63,27 @@ public struct KagemushaRecursiveSpendVerifierRecordRef: Equatable, Sendable {
         )
         self.verifierKeyId = verifierKeyId
         self.recordBytes = recordBytes
+        self.metadata = try KagemushaRecursiveSpendRequestCodecs.verifierRecordMetadata(
+            recordBytes,
+            verifierKeyId: verifierKeyId
+        )
+    }
+}
+
+public struct KagemushaRecursiveSpendVerifierRecordMetadata: Equatable, Sendable {
+    public let verifierKeyId: String
+    public let circuitId: String
+    public let namespace: String
+    public let commitment: Data
+    public let maxProofBytes: UInt32
+    public let activationHeight: UInt64?
+    public let withdrawHeight: UInt64?
+    public let isActiveStatus: Bool
+
+    public func isActive(at blockHeight: UInt64) -> Bool {
+        isActiveStatus
+            && (activationHeight.map { blockHeight >= $0 } ?? true)
+            && (withdrawHeight.map { blockHeight < $0 } ?? true)
     }
 }
 
@@ -732,6 +754,113 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         _ initRequestArchive: Data
     ) throws -> KagemushaRecursiveSpendTopUpInitRequestSummary {
         try readTopUpInitRequestSummary(initRequestArchive)
+    }
+
+    public static func decodeInitRequest(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendInitRequest {
+        let payload = try compactPayloadForRequest(
+            archive,
+            schema: initRequestWireName,
+            field: "initRequest"
+        )
+        var reader = CompactReader(data: payload)
+        let recordPayload = try reader.readField()
+        let pallasOpenEnvelopes = try readField(&reader, field: "initRequest.pallasOpenEnvelopes") {
+            try $0.readByteVec()
+        }
+        let currentNote = try readField(&reader, field: "initRequest.currentNote") {
+            try readSpendableNote(&$0, field: "initRequest.currentNote")
+        }
+        let lineageVerifierKey: Data? = try readField(
+            &reader,
+            field: "initRequest.lineageVerifierKey"
+        ) { (fieldReader: inout CompactReader) throws -> Data? in
+            guard let payload = try readOptionRawPayload(
+                &fieldReader,
+                field: "initRequest.lineageVerifierKey"
+            ) else {
+                return nil
+            }
+            let key = try readVerifyingKeyBoxPayload(
+                payload,
+                label: "initRequest.lineageVerifierKey"
+            )
+            guard key.backend == KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                  !key.bytes.isEmpty else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "initRequest.lineageVerifierKey"
+                )
+            }
+            return key.bytes
+        }
+        let lineageProvingKey = try readField(
+            &reader,
+            field: "initRequest.lineageProvingKeyArchive"
+        ) { (fieldReader: inout CompactReader) throws -> Data? in
+            guard let payload = try readOptionRawPayload(
+                &fieldReader,
+                field: "initRequest.lineageProvingKeyArchive"
+            ) else {
+                return nil
+            }
+            var bytes = CompactReader(data: payload)
+            let archive = try bytes.readByteVec()
+            guard bytes.remaining == 0, !archive.isEmpty else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "initRequest.lineageProvingKeyArchive"
+                )
+            }
+            return archive
+        }
+        let blockHeight = try readField(&reader, field: "initRequest.blockHeight") {
+            try readOptionUInt64Payload(&$0)
+        }
+        guard reader.remaining == 0,
+              (lineageVerifierKey == nil) == (lineageProvingKey == nil) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("initRequest")
+        }
+        return try KagemushaRecursiveSpendInitRequest(
+            recordBundle: noritoEncode(
+                typeName: recordBundleWireName,
+                payload: recordPayload,
+                flags: requestFlags
+            ),
+            pallasOpenEnvelopes: pallasOpenEnvelopes,
+            currentNote: currentNote,
+            lineageVerifierKey: lineageVerifierKey,
+            lineageProvingKeyArchive: lineageProvingKey,
+            blockHeight: blockHeight
+        )
+    }
+
+    public static func verifierRecordMetadata(
+        _ recordArchive: Data,
+        verifierKeyId: String
+    ) throws -> KagemushaRecursiveSpendVerifierRecordMetadata {
+        _ = try parseVerifierKeyId(verifierKeyId, field: "verifierKeyId")
+        let payload = try compactPayloadForRequest(
+            recordArchive,
+            schema: verifyingKeyRecordWireName,
+            field: "verifierRecord"
+        )
+        let record = try decodeVerifierRecordPayload(payload, label: "verifierRecord")
+        try validateVerifierRecordLifecycle(
+            record,
+            blockHeight: nil,
+            requireResolvedWindow: false,
+            label: "verifierRecord"
+        )
+        return KagemushaRecursiveSpendVerifierRecordMetadata(
+            verifierKeyId: verifierKeyId,
+            circuitId: record.circuitId,
+            namespace: record.namespace,
+            commitment: record.commitment,
+            maxProofBytes: record.maxProofBytes,
+            activationHeight: record.activationHeight,
+            withdrawHeight: record.withdrawHeight,
+            isActiveStatus: record.status == confidentialStatusActive
+        )
     }
 
     public static func encodeAppendRequest(_ request: KagemushaRecursiveSpendAppendRequest) throws -> Data {

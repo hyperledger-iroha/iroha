@@ -5,6 +5,7 @@ import Darwin
 #endif
 
 extension NoritoNativeBridge {
+    private typealias KagemushaV2SymbolProbeFn = @convention(c) () -> Void
     private typealias KagemushaV2FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias KagemushaV2ArchiveOutFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -49,6 +50,17 @@ extension NoritoNativeBridge {
         UInt64, UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
     private typealias KagemushaV2ArtifactHandleFn = @convention(c) (UInt64) -> Int32
+
+    func hasKagemushaRecursiveSpendV2Symbols(_ symbols: [String]) -> Bool {
+        #if canImport(Darwin)
+        symbols.allSatisfy {
+            resolveKagemushaV2Symbol($0, as: KagemushaV2SymbolProbeFn.self) != nil
+        }
+        #else
+        _ = symbols
+        return false
+        #endif
+    }
 
     private func copyKagemushaV2Output(
         status: Int32,
@@ -105,6 +117,17 @@ extension NoritoNativeBridge {
         #endif
     }
 
+    func kagemushaRecipientOutputDeriveV2(
+        requestArchive: Data,
+        receiverSpendSecret: Data
+    ) throws -> Data? {
+        try callKagemushaV2TwoArchives(
+            symbol: "connect_norito_kagemusha_recipient_output_derive_v2",
+            first: requestArchive,
+            second: receiverSpendSecret
+        )
+    }
+
     func kagemushaRecipientPaymentRequestSigningBytesV2(payloadArchive: Data) throws -> Data? {
         try callKagemushaV2Archive(
             symbol: "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
@@ -154,13 +177,13 @@ extension NoritoNativeBridge {
 
     func kagemushaReceiverAcknowledgementPayloadV2(
         requestArchive: Data,
-        recipientBundleArchive: Data,
+        peerPaymentArchive: Data,
         acceptedAtMilliseconds: UInt64
     ) throws -> Data? {
         try callKagemushaV2TwoArchivesAtTime(
             symbol: "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
             first: requestArchive,
-            second: recipientBundleArchive,
+            second: peerPaymentArchive,
             milliseconds: acceptedAtMilliseconds
         )
     }
@@ -176,27 +199,45 @@ extension NoritoNativeBridge {
         payloadArchive: Data,
         signature: Data,
         requestArchive: Data,
-        recipientBundleArchive: Data
+        peerPaymentArchive: Data
     ) throws -> Data? {
         try callKagemushaV2FourArchives(
             symbol: "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
             first: payloadArchive,
             second: signature,
             third: requestArchive,
-            fourth: recipientBundleArchive
+            fourth: peerPaymentArchive
         )
     }
 
     func kagemushaReceiverAcknowledgementVerifyV2(
         acknowledgementArchive: Data,
         requestArchive: Data,
-        recipientBundleArchive: Data
+        peerPaymentArchive: Data
     ) throws -> Data? {
         try callKagemushaV2ThreeArchives(
             symbol: "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
             first: acknowledgementArchive,
             second: requestArchive,
-            third: recipientBundleArchive
+            third: peerPaymentArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendPeerPaymentFromSplitV2(
+        splitResultArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
+            archive: splitResultArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendPeerPaymentValidateV2(
+        paymentArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
+            archive: paymentArchive
         )
     }
 
@@ -207,14 +248,21 @@ extension NoritoNativeBridge {
         )
     }
 
-    func kagemushaRecursiveSpendInitV2(
-        requestArchive: Data,
-        topUpAnchorArchive: Data
+    func kagemushaRecursiveSpendBuildSplitIntentV2(
+        requestArchive: Data
     ) throws -> Data? {
-        try callKagemushaV2TwoArchives(
-            symbol: "connect_norito_kagemusha_recursive_spend_init_v2",
-            first: requestArchive,
-            second: topUpAnchorArchive
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
+            archive: requestArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendBuildRedemptionIntentV2(
+        requestArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
+            archive: requestArchive
         )
     }
 
@@ -228,6 +276,46 @@ extension NoritoNativeBridge {
             first: requestArchive,
             second: recipientRequestArchive,
             milliseconds: verifiedAtMilliseconds
+        )
+    }
+
+    func kagemushaRecursiveSpendTopUpUnsignedPayloadDigestV2(
+        unsignedArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
+            archive: unsignedArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendTopUpFinalizeRequestV2(
+        unsignedArchive: Data,
+        authorizationArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2TwoArchives(
+            symbol: "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
+            first: unsignedArchive,
+            second: authorizationArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendRedeemUnsignedPayloadDigestV2(
+        unsignedArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
+            archive: unsignedArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendRedeemFinalizeRequestV2(
+        unsignedArchive: Data,
+        authorizationArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2TwoArchives(
+            symbol: "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
+            first: unsignedArchive,
+            second: authorizationArchive
         )
     }
 

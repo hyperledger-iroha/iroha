@@ -21,6 +21,33 @@ const REQUIRED_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
 ]);
 
+const ADDITIVE_ABI17_V2_C_SYMBOLS = Object.freeze([
+  "connect_norito_kagemusha_recursive_spend_init_v2",
+  "connect_norito_kagemusha_recursive_spend_append_v2",
+  "connect_norito_kagemusha_recursive_spend_verify_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
+  "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
+  "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
+  "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
+  "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
+  "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
+  "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
+  "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
+  "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+]);
+
+const CURRENT_C_SYMBOLS = Object.freeze([
+  ...REQUIRED_C_SYMBOLS,
+  ...ADDITIVE_ABI17_V2_C_SYMBOLS,
+]);
+
 const REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
   "connect_norito_kagemusha_verify_recursive_compact_payment_token",
@@ -504,7 +531,7 @@ function assertSameSet(actual, expected, label) {
   );
 }
 
-test("recursive Kagemusha ABI-6 C exports and shipped headers stay in parity", () => {
+test("recursive Kagemusha ABI-17 C exports and shipped headers stay in parity", () => {
   const rustBridge = source("crates/connect_norito_bridge/src/lib.rs");
   const header = source("crates/connect_norito_bridge/include/connect_norito_bridge.h");
   const headerGuard = source("ci/check_connect_norito_bridge_header.sh");
@@ -523,8 +550,8 @@ test("recursive Kagemusha ABI-6 C exports and shipped headers stay in parity", (
     ),
   );
 
-  assertSameSet(rustExports, REQUIRED_C_SYMBOLS, "Rust recursive Kagemusha C exports");
-  assertSameSet(headerDeclarations, REQUIRED_C_SYMBOLS, "C header recursive Kagemusha declarations");
+  assertSameSet(rustExports, CURRENT_C_SYMBOLS, "Rust recursive Kagemusha C exports");
+  assertSameSet(headerDeclarations, CURRENT_C_SYMBOLS, "C header recursive Kagemusha declarations");
   assert.match(
     umbrella,
     /#include\s+"connect_norito_bridge\.h"/u,
@@ -17894,7 +17921,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*16\\s\*;[\s\S]*?C native bridge ABI version/u,
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*17\\s\*;[\s\S]*?C native bridge ABI version/u,
     "SDK parity guard must pin the native C bridge ABI-17 advertisement",
   );
   assert.match(

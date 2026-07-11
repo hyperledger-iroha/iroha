@@ -365,6 +365,7 @@ fn known_lane_block_tips_for_proposal(
             .into_iter()
             .filter(|relay| {
                 relay.is_merge_admissible()
+                    && relay.block_header.height().get() <= proposal_height
                     && relay.lane_block_descriptor_hash.is_some()
                     && (!nexus.enabled
                         || (crate::state::nexus_active_lane_dataspace_at_height(

@@ -85,7 +85,6 @@ Torii forwards inbound auth-related headers for tool dispatch:
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Clients can also supply additional per-call headers via `arguments.headers`.
 `content-length`, `host`, and `connection` from `arguments.headers` are ignored.

@@ -174,9 +174,101 @@ Production availability requires all of the following in one release:
 6. The bounded multi-input aggregate contract above, or an explicitly reduced
    product contract that does not advertise fragmented balances as spendable.
 
-The only public HTTP lifecycle routes are
-`GET /v1/offline/v2/kagemusha/readiness?asset_definition_id=...`,
-`POST /v1/offline/v2/kagemusha/topup`, and
-`POST /v1/offline/v2/notes/redeem`. The POST bodies contain exactly
-`topup_request_norito_base64` or `redeem_request_norito_base64`; retired issue,
-audit, compact-projection, and outer body-auth fields are rejected.
+The first-release public HTTP lifecycle is deliberately small:
+
+- `GET /v1/offline/readiness?asset_definition_id=...`
+- `POST /v1/offline/top-up`
+- `POST /v1/offline/redeem`
+- `GET /v1/offline/operations/{operation_id}`
+
+The POST body is the typed `OfflineTopUpRequest` or `OfflineRedeemRequest`
+itself. With `Content-Type: application/json`, clients send its structured JSON
+representation. With `Content-Type: application/x-norito`, clients send the
+canonical typed Norito value directly. There is no object whose purpose is to
+wrap the entire request in a `*_norito_base64` field.
+
+The public Norito headers use stable schema names rather than Rust module or
+implementation-type names:
+
+- `OfflineTopUpRequest`: `iroha.torii.v1.offline.top_up.request`
+- `OfflineRedeemRequest`: `iroha.torii.v1.offline.redeem.request`
+
+Each header carries the first 16 bytes of the domain-separated Norito schema
+hash for that name. Moving or renaming the private Rust implementation does not
+change the public request schema.
+
+### Representation and evolution rules
+
+The JSON form is the Norito JSON mapping of the same DTO, not an independently
+shaped compatibility payload. Struct fields use their declared snake-case
+names; tagged enums use the documented `tag` and `content` fields. Fixed byte
+arrays and ordinary byte vectors are arrays of JSON integers from 0 through
+255 unless a field explicitly declares another representation. Hashes, keys,
+signatures, account identifiers, and numeric values use the textual or numeric
+mapping declared by their data-model type. In particular, wide integers are
+lossless JSON integers; clients must not round them through an IEEE-754
+`double`. An `Option` is emitted as its typed value or `null` unless its field
+explicitly omits `None`; decoders also treat an omitted optional field as
+`None`. Duplicate declared fields, unknown enum discriminator values,
+non-finite numbers, and out-of-range integers are invalid. Decoders ignore
+unknown object members. Unit enum content is emitted as explicit `null`, while
+decoders also accept an omitted content member as the same unit value.
+Signatures and payload digests cover canonical typed Norito bytes, never the
+lexical spelling, member order, or ignored members of input JSON.
+
+The `/v1` Norito layouts and their JSON mappings are frozen once this first
+release ships. Adding or reordering a field, changing a field mapping, removing
+a field, or adding an enum variant to a closed public DTO requires `/v2` unless
+the type already defines an explicit extensibility mechanism. Adding a new
+route or a new stable error-code string is additive; clients must treat unknown
+error codes as non-exhaustive while preserving the HTTP status. Required
+request fields cannot be added within `/v1`. Internal consensus/proof type
+names may retain implementation version suffixes, but those suffixes never
+appear as nested HTTP path versions or response-level negotiation.
+
+Top-up and redemption are asynchronous. Acceptance returns `202 Accepted`, a
+typed `OfflineOperationReference`, and a `Location` header pointing to the
+operation status resource. Polling returns a tagged `pending`,
+`applied { result }`, or `rejected { error }` state; a successful top-up result
+contains its typed finalized anchor, while redemption does not carry an
+irrelevant nullable anchor. Identical retries use the signed operation id and
+idempotency key to resolve to the same operation.
+
+`Idempotency-Key` is required on both commands and is exactly the lowercase
+hexadecimal form of the request authorization's 32-byte `operation_id`. The
+operation id is globally unique across the offline command namespace and binds
+the command route plus the complete signed authorization and canonical typed
+request. Reusing the key with the identical signed request returns `202` with
+the original operation URI and transaction hash, including after the operation
+has reached a terminal state. A header that does not match the embedded signed
+identifier returns `409 idempotency_key_conflict`; reusing an operation id for
+another route, authorization, or payload returns `409 operation_id_conflict`
+while the original queue, admission-cache, or committed-block record is
+retained. Clients must treat the identifier as globally single-use and must not
+recycle it after a status lookup returns `404`.
+Torii derives the submitted transaction's creation time and lifetime from the
+signed authorization, so an identical replay produces the same transaction
+hash. Pending operations are recovered from the transaction queue and committed
+applied or rejected operations from retained blocks. The auxiliary admission
+registry is a process-local optimization, is not restart-persistent, and is
+pruned opportunistically during reservation after the signed authorization's
+expiry plus 24 hours. Committed results remain discoverable while the
+corresponding block is retained.
+
+Accepted operation references and pending status responses include
+`Retry-After: 1`. Accepted operation references and successful status responses
+use `Cache-Control: no-store`. The status resource is subject to the same Torii
+access policy as submission and is not projected as an MCP tool.
+
+Readiness is a domain-state read. The selector may be a canonical
+asset-definition address literal or a currently live asset alias; the response
+always contains the resolved canonical id. When Torii evaluates the requested
+asset but offline payments are not ready, it returns `200 OK` with
+`ready: false`, typed blockers, the evaluated block height, and
+representation-specific `ETag`, the header
+`Cache-Control: private, max-age=0, must-revalidate`, and `Vary: Accept`.
+`If-None-Match` supports a matching strong or weak validator and `*`;
+a match returns `304 Not Modified` without a body. A
+`503 readiness_unavailable` error means Torii could not perform the evaluation.
+No alternate `/offline/v2`, note-issuer, audit, or wrapper-body HTTP surface is
+mounted in this first release.

@@ -3758,6 +3758,8 @@ pub fn validate_lane_block_proposal(
             != descriptor.accepted_transaction_hashes.len()
         || descriptor.previous_lane_block_height == 0
             && descriptor.previous_lane_block_descriptor_hash.is_some()
+        || descriptor.previous_lane_block_height > 0
+            && descriptor.previous_lane_block_descriptor_hash.is_none()
         || descriptor.previous_lane_block_height.checked_add(1)
             != Some(descriptor.lane_block_height)
         || descriptor.min_quorum == 0
@@ -4250,7 +4252,7 @@ mod tests {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
             lane_incarnation: Hash::new(b"lane-consensus-fixture-incarnation"),
-            proposal_height: 12,
+            proposal_height: 13,
             lane_block_height: 13,
             lane_block_view: 2,
             proposal_hash: Hash::prehashed([0x31; Hash::LENGTH]),
@@ -4276,7 +4278,7 @@ mod tests {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
             lane_incarnation: Hash::new(b"lane-consensus-fixture-incarnation"),
-            proposal_height: 12,
+            proposal_height: 13,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x20; Hash::LENGTH])),
             lane_block_height: 13,
@@ -4322,7 +4324,7 @@ mod tests {
             lane_id: LaneId::new(7),
             dataspace_id: DataSpaceId::new(11),
             lane_incarnation: Hash::new(b"lane-autonomous-checkpoint-incarnation"),
-            proposal_height: 12,
+            proposal_height: 13,
             previous_lane_block_height: 12,
             previous_lane_block_descriptor_hash: Some(Hash::new(b"lane-autonomous-predecessor")),
             lane_block_height: 13,
@@ -4345,7 +4347,7 @@ mod tests {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
             payload_block_hint: Some(LaneBlockProposalPayloadHintV1 {
-                proposal_height: 12,
+                proposal_height: 13,
                 proposal_view: 3,
                 proposal_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                     b"lane-autonomous-anchor",
@@ -4550,6 +4552,12 @@ mod tests {
             validate_lane_payload_availability_body_shape(&oversized_domain),
             Err(LaneAutonomousArtifactError::InvalidAvailabilityBody)
         );
+        let mut lane_height_above_proposal = availability_body.clone();
+        lane_height_above_proposal.proposal_height = lane_height_above_proposal
+            .lane_block_height
+            .saturating_sub(1);
+        validate_lane_payload_availability_body_shape(&lane_height_above_proposal)
+            .expect("availability coordinates use independent global and lane-local heights");
 
         assert_eq!(
             aggregate_lane_payload_availability_votes(
@@ -4617,6 +4625,12 @@ mod tests {
         let target = retarget_lane_block_proposal_view(&source, 1).expect("next-view proposal");
         let new_view =
             durable_new_view_certificate(&source, &payload, &keypairs, chain_id_hash, epoch);
+        let mut lane_height_above_proposal = new_view.certificate.body.clone();
+        lane_height_above_proposal.proposal_height = lane_height_above_proposal
+            .lane_block_height
+            .saturating_sub(1);
+        validate_lane_block_new_view_body(&lane_height_above_proposal)
+            .expect("NewView coordinates use independent global and lane-local heights");
         validate_lane_block_new_view_transition(
             &source,
             &target,
@@ -5126,6 +5140,26 @@ mod tests {
             Err(LaneBlockProposalIngressError::InvalidBody)
         );
 
+        let mut missing_predecessor_hash = proposal.clone();
+        assert!(
+            missing_predecessor_hash
+                .descriptor
+                .previous_lane_block_height
+                > 0
+        );
+        missing_predecessor_hash
+            .descriptor
+            .previous_lane_block_descriptor_hash = None;
+        missing_predecessor_hash.descriptor.descriptor_hash = missing_predecessor_hash
+            .descriptor
+            .computed_descriptor_hash();
+        missing_predecessor_hash.proposal_hash = missing_predecessor_hash.computed_proposal_hash();
+        assert_eq!(
+            validate_lane_block_proposal(&missing_predecessor_hash),
+            Err(LaneBlockProposalIngressError::InvalidBody),
+            "a non-genesis lane block must bind its exact predecessor descriptor"
+        );
+
         let mut overflowing_predecessor = proposal.clone();
         overflowing_predecessor.descriptor.proposal_height = u64::MAX;
         overflowing_predecessor
@@ -5312,7 +5346,7 @@ mod tests {
             aggregate_lane_block_votes_to_qc(highest_body, validator_set, &highest_votes)
                 .expect("maximal lane-height QC");
         validate_lane_block_qc(&highest_qc)
-            .expect("maximal lane-height QC is valid at nonzero proposal height");
+            .expect("maximal lane-height QC is valid at non-zero proposal height");
 
         let mut zero_proposal_body = vote_body(&highest_qc.validator_set);
         zero_proposal_body.proposal_height = 0;

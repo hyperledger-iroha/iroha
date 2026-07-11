@@ -470,40 +470,6 @@
         ],
         "type": "object"
       },
-      "ApiVersionInfo": {
-        "additionalProperties": false,
-        "properties": {
-          "default": {
-            "description": "Default API version label.",
-            "type": "string"
-          },
-          "min_proof_version": {
-            "description": "Minimum API version required for proof/staking/fee endpoints.",
-            "type": "string"
-          },
-          "sunset_unix": {
-            "description": "Optional unix timestamp when the oldest API version sunsets.",
-            "format": "uint64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "supported": {
-            "description": "All supported API version labels.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "default",
-          "supported",
-          "min_proof_version"
-        ],
-        "type": "object"
-      },
       "AppPageMetadata": {
         "additionalProperties": true,
         "properties": {
@@ -1627,8 +1593,8 @@
         "type": "object"
       },
       "Hash": {
-        "description": "Norito JSON hash string with checksum.",
-        "pattern": "^hash:[0-9a-fA-F]{64}#[0-9a-fA-F]{4}$",
+        "description": "Canonical Norito JSON hash literal. Consumers must also verify the CRC16 checksum and Iroha marker bit.",
+        "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
         "type": "string"
       },
       "IdentifierClaimLookupResponse": {
@@ -2085,8 +2051,79 @@
         ],
         "type": "object"
       },
+      "LaneRelayEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "commit_qc": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "da_commitment_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "rbc_bytes_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settlement_commitment": {
+            "$ref": "#/components/schemas/LaneSettlementCommitment"
+          },
+          "settlement_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "lane_id",
+          "lane_incarnation",
+          "dataspace_id",
+          "block_height",
+          "block_hash",
+          "da_commitment_hash",
+          "commit_qc",
+          "settlement_commitment",
+          "settlement_hash",
+          "rbc_bytes_total"
+        ],
+        "type": "object"
+      },
       "LaneSettlementCommitment": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "block_height": {
             "format": "uint64",
@@ -2099,22 +2136,28 @@
             "type": "integer"
           },
           "lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
           },
           "native_amx_receipts": {
             "items": {
               "$ref": "#/components/schemas/NativeAmxReceipt"
             },
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "nexus_fee_receipts": {
-            "description": "Versioned Nexus fee receipts encoded with their canonical Norito JSON shape.",
+            "description": "Versioned Nexus fee receipts with exact recomputation inputs.",
             "items": {
-              "$ref": "#/components/schemas/JsonValue"
+              "$ref": "#/components/schemas/NexusFeeReceipt"
             },
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "receipts": {
             "items": {
@@ -2157,6 +2200,7 @@
         "required": [
           "block_height",
           "lane_id",
+          "lane_incarnation",
           "dataspace_id",
           "tx_count",
           "total_local_micro",
@@ -2171,7 +2215,7 @@
         "type": "object"
       },
       "LaneSettlementReceipt": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "local_amount_micro": {
             "pattern": "^[0-9]+$",
@@ -2211,7 +2255,7 @@
         "type": "object"
       },
       "LaneSwapMetadata": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "epsilon_bps": {
             "format": "uint16",
@@ -2818,7 +2862,7 @@
         "type": "object"
       },
       "NativeAmxAttestationBody": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "coordinator_dataspace_id": {
             "format": "uint64",
@@ -2826,6 +2870,12 @@
             "type": "integer"
           },
           "coordinator_lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "epoch": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -2836,7 +2886,8 @@
             "type": "integer"
           },
           "participant_lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
@@ -2853,8 +2904,32 @@
           },
           "planned_coordinator_block_height": {
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
+          },
+          "round": {
+            "additionalProperties": false,
+            "properties": {
+              "context_id": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "height": {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "view": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "context_id",
+              "height",
+              "view"
+            ],
+            "type": "object"
           },
           "source_id": {
             "description": "Source transaction hash/id as 32-byte hex.",
@@ -2866,6 +2941,8 @@
           }
         },
         "required": [
+          "round",
+          "epoch",
           "source_id",
           "tx_entrypoint_hash",
           "plan_digest",
@@ -2879,11 +2956,11 @@
         "type": "object"
       },
       "NativeAmxAttestationQc": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "bls_aggregate_signature": {
-            "description": "BLS aggregate signature bytes encoded as hex.",
-            "pattern": "^[0-9a-fA-F]*$",
+            "description": "Compressed 96-byte BLS12-381 aggregate signature encoded as hex.",
+            "pattern": "^[0-9a-fA-F]{192}$",
             "type": "string"
           },
           "body": {
@@ -2895,6 +2972,7 @@
               "minimum": 0,
               "type": "integer"
             },
+            "minItems": 1,
             "type": "array"
           },
           "validator_set": {
@@ -2902,14 +2980,18 @@
             "items": {
               "type": "string"
             },
-            "type": "array"
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           },
           "validator_set_hash": {
             "$ref": "#/components/schemas/Hash"
           },
           "validator_set_hash_version": {
+            "enum": [
+              1
+            ],
             "format": "uint16",
-            "minimum": 0,
             "type": "integer"
           }
         },
@@ -2924,7 +3006,7 @@
         "type": "object"
       },
       "NativeAmxLegRecord": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
           "commit_qc": {
             "$ref": "#/components/schemas/NativeAmxAttestationQc"
@@ -2935,7 +3017,8 @@
             "type": "integer"
           },
           "lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
@@ -2952,7 +3035,85 @@
         "type": "object"
       },
       "NativeAmxReceipt": {
-        "additionalProperties": true,
+        "additionalProperties": false,
+        "properties": {
+          "authority_context_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "chain_id_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "coordinator_proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/NativeAmxLegRecord"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "plan_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "source_id": {
+            "description": "Source transaction hash/id as 32-byte hex.",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "enum": [
+              2
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "source_id",
+          "chain_id_hash",
+          "plan_digest",
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "authority_context_height",
+          "lane_block_height",
+          "lane_block_view",
+          "coordinator_proposal_hash",
+          "legs"
+        ],
+        "type": "object"
+      },
+      "NexusFeeReceipt": {
+        "additionalProperties": false,
         "properties": {
           "block_height": {
             "format": "uint64",
@@ -2964,104 +3125,172 @@
             "minimum": 0,
             "type": "integer"
           },
+          "fee_amount": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "fee_asset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
           "lane_id": {
-            "format": "uint64",
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
-          "legs": {
-            "items": {
-              "$ref": "#/components/schemas/NativeAmxLegRecord"
-            },
-            "type": "array"
+          "payer_account_id": {
+            "minLength": 1,
+            "type": "string"
           },
-          "plan_digest": {
-            "$ref": "#/components/schemas/Hash"
+          "schedule": {
+            "$ref": "#/components/schemas/NexusFeeScheduleInputs"
           },
           "source_id": {
-            "description": "Source transaction hash/id as 32-byte hex.",
             "pattern": "^[0-9a-fA-F]{64}$",
             "type": "string"
           },
           "version": {
+            "enum": [
+              1
+            ],
             "format": "uint16",
-            "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
           "version",
           "source_id",
-          "plan_digest",
-          "lane_id",
           "dataspace_id",
+          "lane_id",
           "block_height",
-          "legs"
+          "payer_account_id",
+          "fee_asset_id",
+          "fee_amount",
+          "schedule"
         ],
         "type": "object"
       },
-      "NexusLaneLifecycleResponse": {
+      "NexusFeeScheduleInputs": {
         "additionalProperties": false,
         "properties": {
-          "active_lane_count": {
-            "description": "Number of lanes active at the committed lane-authority height.",
+          "base_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "gas_used": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "active_lane_ids": {
-            "description": "Lane ids active at the committed lane-authority height.",
-            "items": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "autoscale_capacity_lane_count": {
-            "description": "Number of active autoscale-managed elastic lanes that currently count as horizontal capacity.",
+          "instruction_count": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "autoscale_capacity_lane_ids": {
-            "description": "Active autoscale-managed elastic lane ids that currently count as horizontal capacity.",
-            "items": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": "array"
+          "per_byte_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
           },
-          "configured_lane_count": {
-            "description": "Configured lane namespace size after the lifecycle plan.",
+          "per_gas_unit_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "per_instruction_fee": {
+            "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+            "type": "string"
+          },
+          "tx_bytes_len": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "lane_count": {
-            "deprecated": true,
-            "description": "Legacy alias for `configured_lane_count`.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "ok": {
-            "description": "True when the signed lane lifecycle plan was accepted and applied.",
-            "enum": [
-              true
-            ],
-            "type": "boolean"
           }
         },
         "required": [
-          "ok",
-          "configured_lane_count",
+          "tx_bytes_len",
+          "instruction_count",
+          "gas_used",
+          "base_fee",
+          "per_byte_fee",
+          "per_instruction_fee",
+          "per_gas_unit_fee"
+        ],
+        "type": "object"
+      },
+      "NexusLaneLifecycleIncarnationEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "incarnation": {
+            "description": "Non-zero commitment identifying this exact active lane incarnation.",
+            "type": "string"
+          },
+          "lane_id": {
+            "description": "Active lane identifier.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "incarnation"
+        ],
+        "type": "object"
+      },
+      "NexusLaneLifecycleStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_hash": {
+            "description": "Domain-separated hash to place in `expected_catalog_hash` of `nexus_lane_lifecycle_v1`.",
+            "type": "string"
+          },
+          "incarnation_root": {
+            "description": "Domain-separated root to place in `expected_incarnation_root` of `nexus_lane_lifecycle_v1`.",
+            "type": "string"
+          },
+          "incarnations": {
+            "description": "Canonical active lane-id/incarnation commitments, exactly matching `lanes`.",
+            "items": {
+              "$ref": "#/components/schemas/NexusLaneLifecycleIncarnationEntry"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "lane_count": {
+            "description": "Exclusive lane-id bound for the current catalog namespace.",
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lanes": {
+            "description": "Exact canonical active lane metadata ordered by lane id.",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "nexus_enabled": {
+            "description": "Whether Nexus lane routing is enabled on this node.",
+            "type": "boolean"
+          },
+          "version": {
+            "description": "Lifecycle status layout version.",
+            "enum": [
+              1
+            ],
+            "format": "uint8",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "nexus_enabled",
           "lane_count",
-          "active_lane_count",
-          "active_lane_ids",
-          "autoscale_capacity_lane_count",
-          "autoscale_capacity_lane_ids"
+          "lanes",
+          "catalog_hash",
+          "incarnations",
+          "incarnation_root"
         ],
         "type": "object"
       },
@@ -3121,60 +3350,547 @@
           }
         ]
       },
-      "OfflineIssuerBodyAuthRequest": {
-        "additionalProperties": true,
-        "description": "Offline issuer POST body. Top-level account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field authenticate the request body. The canonical signed body removes only top-level signature_base64 and witness_base64, so nested fields with those names remain signed business data.",
-        "oneOf": [
-          {
-            "not": {
-              "required": [
-                "witness_base64"
-              ]
-            },
-            "required": [
-              "signature_base64"
-            ]
-          },
-          {
-            "not": {
-              "required": [
-                "signature_base64"
-              ]
-            },
-            "required": [
-              "witness_base64"
-            ]
-          }
-        ],
+      "OfflineByteArray": {
+        "description": "Norito JSON representation of Vec<u8>.",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "OfflineFixed32Bytes": {
+        "description": "Norito JSON representation of an internal 32-byte field.",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 32,
+        "minItems": 32,
+        "type": "array"
+      },
+      "OfflineOperationApplied": {
+        "additionalProperties": false,
         "properties": {
-          "account_id": {
-            "description": "Canonical Iroha account id authorizing the issuer request.",
+          "state": {
+            "enum": [
+              "applied"
+            ],
             "type": "string"
           },
-          "nonce": {
-            "description": "Caller-chosen replay nonce included in the canonical signing envelope.",
+          "value": {
+            "$ref": "#/components/schemas/OfflineOperationAppliedValue"
+          }
+        },
+        "required": [
+          "state",
+          "value"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationAppliedValue": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OfflineOperationId"
+          },
+          "result": {
+            "$ref": "#/components/schemas/OfflineOperationResult"
+          }
+        },
+        "required": [
+          "operation_id",
+          "result"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationId": {
+        "description": "Canonical lowercase hexadecimal 32-byte operation id.",
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "OfflineOperationKind": {
+        "additionalProperties": false,
+        "description": "Norito tagged unit enum selecting top-up or redemption.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "top_up",
+              "redeem"
+            ],
             "type": "string"
           },
-          "signature_base64": {
-            "description": "Non-empty exact base64 single-account signature over the body-auth canonical request; leading or trailing whitespace is rejected.",
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationPending": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "enum": [
+              "pending"
+            ],
             "type": "string"
           },
-          "timestamp_ms": {
-            "description": "Unix timestamp in milliseconds included in the canonical signing envelope.",
+          "value": {
+            "$ref": "#/components/schemas/OfflineOperationPendingValue"
+          }
+        },
+        "required": [
+          "state",
+          "value"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationPendingValue": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/OfflineOperationKind"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OfflineOperationId"
+          },
+          "submitted_at_ms": {
+            "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
             "format": "uint64",
+            "minimum": 0,
             "type": "integer"
           },
-          "witness_base64": {
-            "description": "Non-empty exact base64 Norito CanonicalRequestWitnessV1 for multisig accounts; leading or trailing whitespace is rejected.",
+          "transaction_hash": {
+            "$ref": "#/components/schemas/OfflineTransactionHash"
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "transaction_hash",
+          "submitted_at_ms"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationReference": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/OfflineOperationKind"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OfflineOperationId"
+          },
+          "state": {
+            "$ref": "#/components/schemas/OfflineOperationState"
+          },
+          "status_uri": {
+            "format": "uri-reference",
+            "pattern": "^/v1/offline/operations/[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "submitted_at_ms": {
+            "description": "Signed request issuance time in Unix epoch milliseconds, emitted as a lossless unquoted JSON integer.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transaction_hash": {
+            "$ref": "#/components/schemas/OfflineTransactionHash"
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "state",
+          "transaction_hash",
+          "status_uri",
+          "submitted_at_ms"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationRejected": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "enum": [
+              "rejected"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/OfflineOperationRejectedValue"
+          }
+        },
+        "required": [
+          "state",
+          "value"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationRejectedValue": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorEnvelope"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OfflineOperationKind"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OfflineOperationId"
+          },
+          "transaction_hash": {
+            "$ref": "#/components/schemas/OfflineTransactionHash"
+          }
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "transaction_hash",
+          "error"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationResult": {
+        "discriminator": {
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OfflineTopUpOperationResult"
+          },
+          {
+            "$ref": "#/components/schemas/OfflineRedeemOperationResult"
+          }
+        ]
+      },
+      "OfflineOperationState": {
+        "additionalProperties": false,
+        "description": "Norito tagged initial operation state.",
+        "properties": {
+          "state": {
+            "enum": [
+              "pending"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "state",
+          "value"
+        ],
+        "type": "object"
+      },
+      "OfflineOperationStatus": {
+        "discriminator": {
+          "propertyName": "state"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OfflineOperationPending"
+          },
+          {
+            "$ref": "#/components/schemas/OfflineOperationApplied"
+          },
+          {
+            "$ref": "#/components/schemas/OfflineOperationRejected"
+          }
+        ]
+      },
+      "OfflineReadiness": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_definition_id": {
+            "type": "string"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineReadinessBlocker"
+            },
+            "type": "array"
+          },
+          "evaluated_block_height": {
+            "description": "Committed height used for the evaluation.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready": {
+            "description": "False is a successfully evaluated domain state, not a service error.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asset_definition_id",
+          "evaluated_block_height",
+          "ready",
+          "blockers"
+        ],
+        "type": "object"
+      },
+      "OfflineReadinessBlocker": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Stable machine-readable blocker code.",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human-readable and non-stable explanation.",
             "type": "string"
           }
         },
         "required": [
-          "account_id",
-          "timestamp_ms",
-          "nonce"
+          "code",
+          "message"
         ],
         "type": "object"
+      },
+      "OfflineRedeemOperationResult": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "redeem"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/OfflineRedeemResult"
+          }
+        },
+        "required": [
+          "kind",
+          "result"
+        ],
+        "type": "object"
+      },
+      "OfflineRedeemRequest": {
+        "additionalProperties": false,
+        "description": "Direct structured JSON representation of the offline redemption request. application/x-norito carries the corresponding KagemushaRecursiveSpendRedeemRequestV2 value directly, not a wrapper containing encoded bytes.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/OfflineScaledAmount"
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Typed recipient/device authorization covering the canonical request."
+          },
+          "block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bundle": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Typed scale-carrying recursive state being redeemed."
+          },
+          "lineage_verifier_record": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "lineage_witness": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "offline_change": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "recipient": {
+            "description": "Canonical domainless account id credited by redemption.",
+            "type": "string"
+          },
+          "redeem_proof": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "redemption": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "bundle",
+          "recipient",
+          "amount",
+          "redeem_proof",
+          "redemption",
+          "lineage_verifier_record",
+          "block_height",
+          "operation_id",
+          "authorization"
+        ],
+        "type": "object",
+        "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2"
+      },
+      "OfflineRedeemResult": {
+        "additionalProperties": false,
+        "properties": {
+          "finalized_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "server_time_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transaction_hash": {
+            "$ref": "#/components/schemas/OfflineTransactionHash"
+          }
+        },
+        "required": [
+          "transaction_hash",
+          "finalized_block_height",
+          "server_time_ms"
+        ],
+        "type": "object"
+      },
+      "OfflineScaledAmount": {
+        "additionalProperties": false,
+        "properties": {
+          "atomic_units": {
+            "description": "Positive u128 emitted as an unquoted Norito-JSON integer.",
+            "format": "uint128",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scale": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "atomic_units",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "OfflineTopUpOperationResult": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "top_up"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/OfflineTopUpResult"
+          }
+        },
+        "required": [
+          "kind",
+          "result"
+        ],
+        "type": "object"
+      },
+      "OfflineTopUpRequest": {
+        "additionalProperties": false,
+        "description": "Direct structured JSON representation of the offline top-up request. application/x-norito carries the corresponding KagemushaRecursiveSpendTopUpRequestV2 value directly, not a wrapper containing encoded bytes.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/OfflineScaledAmount"
+          },
+          "artifact_generation": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "asset": {
+            "description": "Canonical online asset id charged by the top-up.",
+            "type": "string"
+          },
+          "authorization": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Typed payer/device authorization covering the canonical request."
+          },
+          "current_note": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Typed first spendable note descriptor."
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "pallas_open_envelopes_archive": {
+            "$ref": "#/components/schemas/OfflineByteArray",
+            "description": "Typed Norito-JSON byte array inside the structured DTO; this is not a whole-payload wrapper."
+          },
+          "record_bundle": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Typed checked confidential-transfer proof bundle."
+          }
+        },
+        "required": [
+          "asset",
+          "amount",
+          "current_note",
+          "record_bundle",
+          "pallas_open_envelopes_archive",
+          "artifact_generation",
+          "operation_id",
+          "authorization"
+        ],
+        "type": "object",
+        "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2"
+      },
+      "OfflineTopUpResult": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Direct typed top-up anchor representation; it is not a Norito-base64 wrapper."
+          },
+          "finalized_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "server_time_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transaction_hash": {
+            "$ref": "#/components/schemas/OfflineTransactionHash"
+          }
+        },
+        "required": [
+          "transaction_hash",
+          "finalized_block_height",
+          "server_time_ms",
+          "anchor"
+        ],
+        "type": "object"
+      },
+      "OfflineTransactionHash": {
+        "description": "Canonical lowercase hexadecimal Blake2b-256 signed transaction hash.",
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
       },
       "OperatorWebAuthnLoginResponse": {
         "additionalProperties": false,
@@ -5245,18 +5961,103 @@
         "type": "object"
       },
       "SumeragiStatusResponse": {
-        "additionalProperties": true,
+        "additionalProperties": false,
         "properties": {
+          "body_state": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "build_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "config_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "height": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "height_context_id": {
+            "description": "Single-field HeightContextId tuple containing the frozen context hash.",
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "highest_prepare_qc": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "lane_relay_envelopes": {
+            "description": "Relay envelopes that preserve and hash the exact settlement commitment.",
+            "items": {
+              "$ref": "#/components/schemas/LaneRelayEnvelope"
+            },
+            "type": "array"
+          },
           "lane_settlement_commitments": {
             "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers.",
             "items": {
               "$ref": "#/components/schemas/LaneSettlementCommitment"
             },
             "type": "array"
+          },
+          "last_committed_height": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_committed_subject": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "last_timeout_certificate": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "leader": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "locked_prepare_qc": {
+            "$ref": "#/components/schemas/JsonValue",
+            "nullable": true
+          },
+          "node_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "pending_persistence_id": {
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "protocol_version": {
+            "maximum": 2,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "view": {
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
-          "lane_settlement_commitments"
+          "protocol_version",
+          "node_fingerprint",
+          "build_fingerprint",
+          "config_fingerprint",
+          "height_context_id",
+          "height",
+          "view",
+          "phase",
+          "leader",
+          "body_state",
+          "last_committed_height",
+          "lane_settlement_commitments",
+          "lane_relay_envelopes"
         ],
         "type": "object"
       },
@@ -6735,28 +7536,6 @@
           }
         },
         "summary": "Fetch the active API version.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/api/versions": {
-      "get": {
-        "description": "Return the supported Torii API versions and defaults.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiVersionInfo"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List supported Torii API versions.",
         "tags": [
           "System"
         ],
@@ -11945,16 +12724,6 @@
       "post": {
         "description": "Accepts JSON-RPC payloads for MCP tool discovery and invocation.",
         "operationId": "mcpJsonRpc",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
@@ -12674,41 +13443,26 @@
       }
     },
     "/v1/nexus/lifecycle": {
-      "post": {
-        "description": "Apply a Nexus lane lifecycle plan. Accepted responses report configured lane namespace size, active lane ids/count, and live autoscale-capacity lane ids/count separately.",
-        "operationId": "nexusLaneLifecycle",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
+      "get": {
+        "description": "Return the exact canonical lane catalog, active lane incarnations, and their domain-separated commitments. Use both commitments in a signed `SetParameter(nexus_lane_lifecycle_v1)` transaction. Responses support JSON and native Norito.",
+        "operationId": "getNexusLaneLifecycleStatus",
         "responses": {
-          "202": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/NexusLaneLifecycleResponse"
+                  "$ref": "#/components/schemas/NexusLaneLifecycleStatusV1"
                 }
-              }
-            },
-            "description": "Lane lifecycle plan accepted."
-          },
-          "400": {
-            "content": {
-              "application/json": {
+              },
+              "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/NexusLaneLifecycleStatusV1"
                 }
               }
             },
-            "description": "Lane lifecycle plan failed validation."
+            "description": "Exact current lane catalog and optimistic concurrency commitment."
           },
-          "401": {
+          "406": {
             "content": {
               "application/json": {
                 "schema": {
@@ -12716,8 +13470,20 @@
                 }
               }
             },
-            "description": "Operator authentication is required or invalid."
-          },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito."
+          }
+        },
+        "summary": "Fetch the lane lifecycle catalog commitment.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "deprecated": true,
+        "description": "This route never mutates state and always rejects valid request bodies. Submit a signed transaction containing `SetParameter` with custom id `nexus_lane_lifecycle_v1` instead.",
+        "operationId": "deprecatedPostNexusLaneLifecycle",
+        "responses": {
           "403": {
             "content": {
               "application/json": {
@@ -12726,10 +13492,10 @@
                 }
               }
             },
-            "description": "Operator is not authorized to apply lane lifecycle plans."
+            "description": "Node-local lane lifecycle mutation is disabled."
           }
         },
-        "summary": "Apply a lane lifecycle plan.",
+        "summary": "Retired node-local lifecycle mutation route.",
         "tags": [
           "Nexus"
         ],
@@ -13386,208 +14152,742 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/offline/operations/{operation_id}": {
+      "get": {
+        "description": "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state remains readable while its block is retained; the auxiliary admission registry is process-local and eligible for pruning 24 hours after the signed authorization expires.",
+        "operationId": "offlineOperationStatus",
+        "parameters": [
+          {
+            "description": "Canonical lowercase hexadecimal offline operation id.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineOperationStatus"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineOperationStatus"
+                }
+              }
+            },
+            "description": "Current operation state.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Recommended polling delay in seconds while the operation is pending.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The operation id is malformed."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request does not satisfy Torii's API-token or route access policy."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such operation exists."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The status request was rejected by the Torii rate limit."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The process-local operation registry could not be read."
+          }
+        },
+        "summary": "Fetch an offline operation.",
+        "tags": [
+          "Offline"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
+        "description": "Evaluate offline-payment readiness for one asset definition at a specific committed block. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
+        "operationId": "offlineReadiness",
+        "parameters": [
+          {
+            "description": "Canonical asset definition id whose live on-chain scale and verifier readiness are evaluated.",
+            "in": "query",
+            "name": "asset_definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ETag returned by an earlier readiness evaluation.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/OfflineReadiness"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineReadiness"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Readiness was evaluated successfully.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Readiness responses require revalidation.",
+                "schema": {
+                  "example": "private, max-age=0, must-revalidate",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Readiness representation validator bound to the evaluated block.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The previously returned readiness representation is still current.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Readiness revalidation policy.",
+                "schema": {
+                  "example": "private, max-age=0, must-revalidate",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Readiness representation validator.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The asset selector is malformed."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The asset definition does not exist."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Torii could not evaluate readiness (readiness_unavailable)."
           }
         },
-        "summary": "Report Offline feature readiness.",
+        "summary": "Report offline-payment readiness.",
         "tags": [
           "Offline"
         ],
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/offline/v2/audit": {
+    "/v1/offline/redeem": {
       "post": {
-        "description": "Classic Offline V2 audit is retired and this retired route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+        "description": "Submit one directly encoded OfflineRedeemRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "operationId": "offlineRedeem",
+        "parameters": [
+          {
+            "description": "Lowercase hexadecimal form of the request's signed 32-byte operation id. Identical replays return the original operation; reuse for different canonical request bytes returns 409.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
+                "$ref": "#/components/schemas/OfflineRedeemRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string",
+                "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/OfflineOperationReference"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineOperationReference"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "The command was accepted for asynchronous processing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Canonical operation status resource.",
+                "schema": {
+                  "format": "uri-reference",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Recommended polling delay in seconds while the operation is pending.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The typed request is malformed."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request does not satisfy Torii's API-token or route access policy."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The idempotency key or operation id conflicts with another request."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request content type is missing or unsupported."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The command was rejected by a Torii or transaction-queue rate limit."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Torii could not read its process-local operation registry or encode the response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The operation cannot currently be accepted."
           }
         },
-        "summary": "Retired Offline V2 audit route.",
+        "summary": "Submit an offline redemption.",
         "tags": [
           "Offline"
         ],
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/v2/kagemusha/topup": {
+    "/v1/offline/top-up": {
       "post": {
-        "description": "POST a recursive Kagemusha online-to-offline top-up request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Production top-up requires topup_request_norito_base64 as canonical standard-base64 KagemushaRecursiveSpendTopUpRequestV1 bytes with no surrounding whitespace. The authenticated account_id is charged for the archive-bound asset_definition_id, and retired Offline Note issue fields plus raw init-request top-up fields are rejected.",
+        "description": "Submit one directly encoded OfflineTopUpRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "operationId": "offlineTopUp",
+        "parameters": [
+          {
+            "description": "Lowercase hexadecimal form of the request's signed 32-byte operation id. Identical replays return the original operation; reuse for different canonical request bytes returns 409.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
+                "$ref": "#/components/schemas/OfflineTopUpRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string",
+                "x-iroha-norito-type": "iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/OfflineOperationReference"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineOperationReference"
                 }
               }
             },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Top up recursive Kagemusha offline cash.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/offline/v2/keys/refill": {
-      "post": {
-        "description": "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
+            "description": "The command was accepted for asynchronous processing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Canonical operation status resource.",
+                "schema": {
+                  "format": "uri-reference",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Recommended polling delay in seconds while the operation is pending.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
               }
             }
           },
-          "required": true
-        },
-        "responses": {
-          "200": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Refill Offline V2 issuer keys.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/offline/v2/notes/issue": {
-      "post": {
-        "description": "Classic Offline V2 note issuance is retired and this retired route fails closed. Use /v1/offline/v2/kagemusha/topup for Kagemusha online-to-offline top-up. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
+            "description": "The typed request is malformed."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request does not satisfy Torii's API-token or route access policy."
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
               }
             }
           },
-          "required": true
-        },
-        "responses": {
-          "200": {
+          "409": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Retired Offline V2 note issue route.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/offline/v2/notes/redeem": {
-      "post": {
-        "description": "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineIssuerBodyAuthRequest"
-              }
-            }
+            "description": "The idempotency key or operation id conflicts with another request."
           },
-          "required": true
-        },
-        "responses": {
-          "200": {
+          "415": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "The request content type is missing or unsupported."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The command was rejected by a Torii or transaction-queue rate limit."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Torii could not read its process-local operation registry or encode the response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The operation cannot currently be accepted."
           }
         },
-        "summary": "Redeem an Offline V2 note.",
+        "summary": "Submit an offline top-up.",
         "tags": [
           "Offline"
         ],
         "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/offline/v2/readiness": {
-      "get": {
-        "description": "Returns readiness signals for the SDK-backed recursive compact Kagemusha native bridge runtime.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Report Offline V2 feature readiness.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/operator/auth/login/options": {
@@ -16749,7 +18049,7 @@
     },
     "/v1/sorafs/capacity/por": {
       "post": {
-        "description": "Submit PoR capacity report.",
+        "description": "Return 410 Gone; PoR metering is derived from authenticated proof and verdict lifecycle transitions.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -16772,7 +18072,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Submit PoR capacity report.",
+        "summary": "Manual PoR observation retired.",
         "tags": [
           "SoraFS"
         ],
@@ -16781,7 +18081,7 @@
     },
     "/v1/sorafs/capacity/por-challenge": {
       "post": {
-        "description": "Submit proof-of-replication challenge.",
+        "description": "Return 410 Gone after operator authentication. The verified coordinator scheduler is the only permitted future production authority; automation enablement fails closed until authenticated external drand/VRF feeds are configured.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -16804,7 +18104,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Submit PoR challenge.",
+        "summary": "External PoR challenge submission retired.",
         "tags": [
           "SoraFS"
         ],
@@ -16813,7 +18113,7 @@
     },
     "/v1/sorafs/capacity/por-proof": {
       "post": {
-        "description": "Submit proof-of-replication proof.",
+        "description": "Submit a domain-separated provider-signed proof whose request key and current admitted advert key match the proof signer.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -16845,7 +18145,7 @@
     },
     "/v1/sorafs/capacity/por-verdict": {
       "post": {
-        "description": "Submit proof-of-replication verdict.",
+        "description": "Submit a fully signed verdict whose unique signers belong to the configured operator/auditor trust set and meet the PoR auditor threshold.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -18320,7 +19620,7 @@
     },
     "/v1/sorafs/por/trigger": {
       "post": {
-        "description": "Return a fail-closed retirement response for the legacy manual PoR trigger route. Submit governed PorChallengeV1 payloads through `/v1/sorafs/capacity/por-challenge` or the scheduler runtime instead.",
+        "description": "Return a fail-closed retirement response for the legacy manual PoR trigger route. The verified scheduler is the only permitted future challenge authority, and is not enabled without authenticated external drand/VRF feeds.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -22008,7 +23308,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline readiness and issuer endpoints. Issuer POSTs carry canonical auth in the JSON body instead of X-Iroha-* headers.",
+      "description": "Offline readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and Norito; whole-payload base64 wrapper objects are not part of the public API.",
       "name": "Offline"
     },
     {

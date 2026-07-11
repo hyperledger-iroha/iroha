@@ -258,10 +258,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            api_versions: iroha_config::parameters::defaults::torii::api_supported_versions(),
-            api_version_default: iroha_config::parameters::defaults::torii::api_default_version(),
-            api_min_proof_version: iroha_config::parameters::defaults::torii::api_min_proof_version(),
-            api_version_sunset_unix: iroha_config::parameters::defaults::torii::API_SUNSET_UNIX,
             max_content_len: (1_048_576u64).into(),
             data_dir: iroha_config::parameters::defaults::torii::data_dir(),
             receipt_signer: None,

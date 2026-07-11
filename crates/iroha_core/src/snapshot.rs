@@ -46,8 +46,9 @@ use crate::{
     nexus::space_directory::SpaceDirectoryManifestRecord,
     query::store::LiveQueryStoreHandle,
     state::{
-        SnapshotNexusRuntime, SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim,
-        SnapshotSpaceDirectoryManifestSet, State, deserialize::KuraSeed,
+        LaneIncarnationLineage, SnapshotNexusRuntime, SnapshotNoritoBlob,
+        SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State,
+        deserialize::KuraSeed, lane_incarnation_lineage_root,
         public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
         public_lane_validator_record_matches_key, storage_transactions::TransactionsBlockError,
     },
@@ -66,6 +67,7 @@ fn serialize_state_snapshot(
         &view.nexus,
         &view.lane_incarnations,
         &view.lane_incarnation_activation_heights,
+        &view.lane_incarnation_lineage,
     );
     let sccp_route_manifests = view.zk.sccp_route_manifests.clone();
     let public_lane_validators: Vec<_> = view
@@ -1671,10 +1673,11 @@ fn try_write_snapshot(
     sync_dir(store_dir.as_ref())?;
     match state
         .kura()
-        .checkpoint_lane_geometry_after_durable_snapshot(
+        .checkpoint_lane_geometry_after_durable_snapshot_with_lineage_root(
             &geometry_checkpoint.lane_config,
             &geometry_checkpoint.incarnations,
             &geometry_checkpoint.activation_heights,
+            geometry_checkpoint.lineage_root,
             geometry_checkpoint.height,
             geometry_checkpoint.block_hash,
             geometry_checkpoint.state_hash,
@@ -1703,6 +1706,7 @@ struct DurableSnapshotGeometryCheckpoint {
     lane_config: iroha_config::parameters::actual::LaneConfig,
     incarnations: BTreeMap<LaneId, Hash>,
     activation_heights: BTreeMap<LaneId, u64>,
+    lineage_root: Hash,
     height: u64,
     block_hash: Option<HashOf<BlockHeader>>,
     state_hash: Hash,
@@ -1741,6 +1745,12 @@ fn geometry_checkpoint_from_snapshot_bytes(
             "snapshot block height exceeds u64".to_owned(),
         ))
     })?;
+    let chain_id_value = root
+        .get("chain_id")
+        .cloned()
+        .ok_or_else(|| TryWriteError::Serialization(json::Error::missing_field("chain_id")))?;
+    let chain_id: ChainId =
+        json::from_value(chain_id_value).map_err(TryWriteError::Serialization)?;
 
     let lane_count = NonZeroU32::new(runtime.lane_count).ok_or_else(|| {
         TryWriteError::Serialization(json::Error::Message(
@@ -1753,21 +1763,41 @@ fn geometry_checkpoint_from_snapshot_bytes(
         )))
     })?;
     let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
-    let mut incarnations = BTreeMap::new();
-    let mut activation_heights = BTreeMap::new();
-    for entry in runtime.lane_incarnations {
-        if incarnations
-            .insert(entry.lane_id, entry.incarnation)
-            .is_some()
-            || activation_heights
-                .insert(entry.lane_id, entry.activation_height)
-                .is_some()
+    let mut lineage = BTreeMap::new();
+    let mut latest_hashes = BTreeSet::new();
+    for entry in runtime.lane_incarnation_lineage {
+        let lineage_entry = LaneIncarnationLineage {
+            generation: entry.generation,
+            incarnation: entry.incarnation,
+            activation_height: entry.activation_height,
+        };
+        if lineage_entry
+            .incarnation
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+            || lineage_entry.activation_height > height
+            || !latest_hashes.insert(lineage_entry.incarnation)
+            || lineage.insert(entry.lane_id, lineage_entry).is_some()
         {
             return Err(TryWriteError::Serialization(json::Error::Message(
-                "snapshot Nexus runtime contains duplicate lane incarnations".to_owned(),
+                "snapshot Nexus runtime contains invalid lane incarnation lineage".to_owned(),
             )));
         }
     }
+    let mut incarnations = BTreeMap::new();
+    let mut activation_heights = BTreeMap::new();
+    for lane in lane_catalog.lanes() {
+        let entry = lineage.get(&lane.id).ok_or_else(|| {
+            TryWriteError::Serialization(json::Error::Message(format!(
+                "snapshot Nexus runtime is missing active lane {} lineage",
+                lane.id
+            )))
+        })?;
+        incarnations.insert(lane.id, entry.incarnation);
+        activation_heights.insert(lane.id, entry.activation_height);
+    }
+    let lineage_root = lane_incarnation_lineage_root(&chain_id, &lineage);
 
     let smart_contract_state_value = root
         .get("world")
@@ -1794,6 +1824,7 @@ fn geometry_checkpoint_from_snapshot_bytes(
         lane_config,
         incarnations,
         activation_heights,
+        lineage_root,
         height,
         block_hash: block_hashes.last().copied(),
         state_hash: Hash::new(canonical_json.as_bytes()),

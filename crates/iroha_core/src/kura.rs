@@ -2683,25 +2683,50 @@ impl Kura {
         Ok(())
     }
 
-    /// Restore snapshot lane storage through the durable geometry journal.
+    /// Reject legacy snapshot lane restore without retained-lineage evidence.
     ///
-    /// Unlike [`Self::restore_lane_segments`], this recovery path never creates
-    /// an empty active dynamic-lane segment. It first rolls retained filesystem
-    /// transitions forward or backward to the snapshot-authoritative catalog,
-    /// then verifies the incarnation marker for every active segment.
+    /// This entry point is retained for source compatibility, but its arguments
+    /// identify only active lanes. They cannot authenticate retired incarnation
+    /// history, so production recovery must use the exact-lineage restore path.
     ///
     /// # Errors
-    /// Returns an [`Error`] if the journal is corrupt, its transition history
-    /// cannot reach the authoritative catalog, an active dynamic segment is
-    /// missing, or a path/marker does not match the restored incarnation.
+    /// Always returns an [`Error`] because the exact retained-lineage commitment
+    /// is absent from this legacy signature.
     pub fn restore_lane_segments_with_geometry(
         &self,
         lane_config: &LaneConfig,
         incarnations: &BTreeMap<LaneId, Hash>,
         activation_heights: &BTreeMap<LaneId, u64>,
     ) -> Result<()> {
-        self.recover_lane_geometry_journal(lane_config, incarnations, activation_heights)?;
+        let _ = (lane_config, incarnations, activation_heights);
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "exact retained lane-incarnation lineage is required for geometry restore",
+            ),
+            self.lane_geometry_journal_path(),
+        ))
+    }
 
+    /// Restore snapshot lane storage against an exact retained-lineage commitment.
+    pub(crate) fn restore_lane_segments_with_geometry_and_lineage_root(
+        &self,
+        lane_config: &LaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activation_heights: &BTreeMap<LaneId, u64>,
+        lineage_root: Hash,
+    ) -> Result<()> {
+        self.recover_lane_geometry_journal_with_lineage_root(
+            lane_config,
+            incarnations,
+            activation_heights,
+            lineage_root,
+        )?;
+
+        self.finish_restored_lane_segments_with_geometry(lane_config)
+    }
+
+    fn finish_restored_lane_segments_with_geometry(&self, lane_config: &LaneConfig) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
@@ -12208,20 +12233,30 @@ impl Kura {
     ) -> bool {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;
-        if previous_height == 0 {
-            return true;
+        if descriptor.lane_block_height == 1 {
+            return previous_height == 0
+                && descriptor.previous_lane_block_descriptor_hash.is_none();
+        }
+        if previous_height == 0
+            || previous_height.checked_add(1) != Some(descriptor.lane_block_height)
+        {
+            return false;
         }
         let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
-            return true;
+            return false;
         };
         let Some(receipt) =
             self.read_lane_block_application_receipt(descriptor.lane_id, previous_height)
         else {
             return false;
         };
-        receipt.proposal.descriptor.dataspace_id == descriptor.dataspace_id
-            && receipt.proposal.descriptor.lane_block_height == previous_height
-            && receipt.proposal.descriptor.descriptor_hash == previous_descriptor_hash
+        let predecessor = &receipt.proposal.descriptor;
+        predecessor.lane_id == descriptor.lane_id
+            && predecessor.dataspace_id == descriptor.dataspace_id
+            && predecessor.lane_incarnation == descriptor.lane_incarnation
+            && predecessor.lane_block_height == previous_height
+            && predecessor.proposal_height < descriptor.proposal_height
+            && predecessor.descriptor_hash == previous_descriptor_hash
             && self.lane_block_application_receipt_available(&receipt.proposal)
     }
 
@@ -24340,7 +24375,41 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_predecessor_receipt_allows_compatibility_anchor_without_descriptor() {
+    fn first_lane_block_requires_the_canonical_zero_predecessor() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1);
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+
+        assert!(
+            kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "lane-local height one must use the canonical zero/None predecessor"
+        );
+
+        let mut malformed = proposal;
+        malformed.descriptor.previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"unexpected height-one predecessor"));
+        malformed.descriptor.descriptor_hash = malformed.descriptor.computed_descriptor_hash();
+        malformed.proposal_hash = malformed.computed_proposal_hash();
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&malformed),
+            "lane-local height one must reject any predecessor descriptor"
+        );
+    }
+
+    #[test]
+    fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -24352,30 +24421,22 @@ mod tests {
             lane_entry.dataspace_id,
             lane_block_height,
         );
-        let mut ownership = block
+        let ownership = block
             .execution_context()
             .expect("execution context")
             .lane_payload_ownerships
             .first()
             .expect("lane ownership")
             .clone();
-        ownership.previous_lane_block_descriptor_hash = None;
-        let replay_hashes = ownership
-            .compute_replay_hashes()
-            .expect("compatibility anchor replay hashes compute");
-        ownership.subject_hash = replay_hashes.subject_hash;
-        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
-        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
-        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
-        ownership
-            .validate_replay_material()
-            .expect("compatibility anchor ownership remains replayable");
-        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let mut proposal = lane_block_proposal_from_ownership(&ownership);
+        proposal.descriptor.previous_lane_block_descriptor_hash = None;
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
 
         let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
         assert!(
-            kura.lane_block_predecessor_application_receipt_available(&proposal),
-            "a missing predecessor descriptor marks the first executable segment for a lane incarnation"
+            !kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "a missing non-genesis predecessor descriptor must never bypass lane continuity"
         );
     }
 
@@ -24479,6 +24540,53 @@ mod tests {
             )
             .is_some(),
             "clean successor preflight should be exposed after canonical predecessor application"
+        );
+
+        let canonical_proposal_for = |mut ownership: SumeragiLanePayloadOwnership| {
+            let replay_hashes = ownership
+                .compute_replay_hashes()
+                .expect("adversarial successor fixture remains internally canonical");
+            ownership.subject_hash = replay_hashes.subject_hash;
+            ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+            ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+            ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+            lane_block_proposal_from_ownership(&ownership)
+        };
+
+        let mut wrong_hash = successor_ownership.clone();
+        wrong_hash.previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"wrong predecessor descriptor"));
+        let wrong_hash_proposal = canonical_proposal_for(wrong_hash);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_hash_proposal),
+            "a different declared predecessor descriptor must not authorize a successor"
+        );
+
+        let mut non_increasing_global_height = successor_ownership.clone();
+        non_increasing_global_height.proposal_height = predecessor_ownership.proposal_height;
+        let non_increasing_global_height_proposal =
+            canonical_proposal_for(non_increasing_global_height);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(
+                &non_increasing_global_height_proposal
+            ),
+            "a predecessor must be anchored at an earlier global proposal height"
+        );
+
+        let mut wrong_dataspace = successor_ownership.clone();
+        wrong_dataspace.dataspace_id = DataSpaceId::new(dataspace_id.as_u64().saturating_add(1));
+        let wrong_dataspace_proposal = canonical_proposal_for(wrong_dataspace);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_dataspace_proposal),
+            "a predecessor receipt from another dataspace must not authorize a successor"
+        );
+
+        let mut wrong_incarnation = successor_ownership;
+        wrong_incarnation.lane_incarnation = Hash::new(b"different successor lane incarnation");
+        let wrong_incarnation_proposal = canonical_proposal_for(wrong_incarnation);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_incarnation_proposal),
+            "a predecessor receipt from another lane incarnation must not authorize a successor"
         );
     }
 

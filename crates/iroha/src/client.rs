@@ -115,7 +115,6 @@ const APPLICATION_JSON: &str = "application/json";
 const ACCEPT_NORITO_PREFERRED: &str = "application/x-norito, application/json;q=0.8";
 const ACCEPT_JSON_PREFERRED: &str = "application/json, application/x-norito;q=0.8";
 const SORAFS_STORAGE_PIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const HEADER_API_VERSION: &str = iroha_torii_shared::HEADER_API_VERSION;
 const HEADER_ACCOUNT: &str = "x-iroha-account";
 const HEADER_SIGNATURE: &str = "x-iroha-signature";
 const HEADER_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
@@ -5070,9 +5069,9 @@ impl Client {
             .next()
             .map(str::trim)
             .unwrap_or_default();
+        let media_type_lower = media_type.to_ascii_lowercase();
         media_type.eq_ignore_ascii_case(APPLICATION_JSON)
-            || media_type.eq_ignore_ascii_case("text/json")
-            || media_type.to_ascii_lowercase().ends_with("+json")
+            || (media_type_lower.starts_with("application/") && media_type_lower.ends_with("+json"))
     }
 
     fn parse_typed_json_ok_response<T>(
@@ -6188,9 +6187,6 @@ mod evidence_http_tests {
             account_chain_discriminant:
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: url,
-            torii_api_version: crate::config::default_torii_api_version(),
-            torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                .to_string(),
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
             transaction_add_nonce: false,
@@ -9415,9 +9411,10 @@ fn decode_json_error_body(response: &Response<Vec<u8>>) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .is_some_and(|ct| {
             let media_type = ct.split(';').next().map(str::trim).unwrap_or_default();
+            let media_type_lower = media_type.to_ascii_lowercase();
             media_type.eq_ignore_ascii_case(APPLICATION_JSON)
-                || media_type.eq_ignore_ascii_case("text/json")
-                || media_type.to_ascii_lowercase().ends_with("+json")
+                || (media_type_lower.starts_with("application/")
+                    && media_type_lower.ends_with("+json"))
         });
     if !is_json {
         return None;
@@ -9868,8 +9865,6 @@ impl Client {
             account,
             account_chain_discriminant: _account_chain_discriminant,
             torii_api_url,
-            torii_api_version,
-            torii_api_min_proof_version: _torii_api_min_proof_version,
             torii_request_timeout,
             key_pair,
             basic_auth,
@@ -9884,9 +9879,6 @@ impl Client {
         }: Config,
         mut headers: HashMap<String, String>,
     ) -> Self {
-        headers
-            .entry(HEADER_API_VERSION.to_string())
-            .or_insert_with(|| torii_api_version.clone());
         if let Some(basic_auth) = basic_auth {
             let credentials = format!(
                 "{}:{}",
@@ -20097,9 +20089,6 @@ mod tests {
             account_chain_discriminant:
                 iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: "http://127.0.0.1:8080".parse().unwrap(),
-            torii_api_version: crate::config::default_torii_api_version(),
-            torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
-                .to_string(),
             torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             basic_auth: None,
             transaction_add_nonce: false,
@@ -30399,6 +30388,35 @@ mod tests {
 #[cfg(test)]
 mod response_report {
     use super::*;
+
+    #[test]
+    fn json_media_types_are_limited_to_application_types() {
+        assert!(Client::is_json_content_type("application/json"));
+        assert!(Client::is_json_content_type(
+            "application/problem+json; charset=utf-8"
+        ));
+        assert!(!Client::is_json_content_type("text/json"));
+        assert!(!Client::is_json_content_type("text/problem+json"));
+    }
+
+    #[test]
+    fn json_error_decoder_rejects_retired_text_json_alias() {
+        let envelope = ErrorEnvelope::new("request_invalid", "invalid request");
+        let body = norito::json::to_vec(&envelope).expect("encode JSON error envelope");
+        let supported = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(http::header::CONTENT_TYPE, "application/problem+json")
+            .body(body.clone())
+            .expect("supported response");
+        let retired = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(http::header::CONTENT_TYPE, "text/json")
+            .body(body)
+            .expect("retired response");
+
+        assert!(decode_json_error_body(&supported).is_some());
+        assert!(decode_json_error_body(&retired).is_none());
+    }
 
     #[test]
     fn with_msg_returns_err_on_non_utf8_body() {

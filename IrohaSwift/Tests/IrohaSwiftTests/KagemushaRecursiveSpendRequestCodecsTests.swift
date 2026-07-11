@@ -923,6 +923,14 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertEqual(lineageVerifierKey, try Self.readBytesVecPayload(lineageKeyFields[1]))
         XCTAssertEqual(lineageProvingKeyArchive, try Self.readBytesVecPayload(Self.optionSomePayload(initFields[4])))
         XCTAssertEqual(UInt64(7), try Self.readUInt64Payload(Self.optionSomePayload(initFields[5])))
+        let decodedInit = try KagemushaRecursiveSpendRequestCodecs.decodeInitRequest(initArchive)
+        XCTAssertEqual(decodedInit.lineageVerifierKey, lineageVerifierKey)
+        XCTAssertEqual(decodedInit.lineageProvingKeyArchive, lineageProvingKeyArchive)
+        XCTAssertEqual(decodedInit.blockHeight, 7)
+        XCTAssertEqual(
+            try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(decodedInit),
+            initArchive
+        )
 
         let initWithoutBlockHeightArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
             KagemushaRecursiveSpendInitRequest(
@@ -952,6 +960,16 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         let semanticInitFields = try Self.requestFields(
             semanticInitArchive,
             schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName
+        )
+        let decodedSemanticInit = try KagemushaRecursiveSpendRequestCodecs.decodeInitRequest(
+            semanticInitArchive
+        )
+        XCTAssertNil(decodedSemanticInit.lineageVerifierKey)
+        XCTAssertNil(decodedSemanticInit.lineageProvingKeyArchive)
+        XCTAssertEqual(decodedSemanticInit.blockHeight, 9)
+        XCTAssertEqual(
+            try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(decodedSemanticInit),
+            semanticInitArchive
         )
         XCTAssertEqual(semanticInitFields.count, 6)
         try Self.assertOptionNone(semanticInitFields[3])

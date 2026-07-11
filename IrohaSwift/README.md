@@ -659,11 +659,16 @@ apps can decide how to remediate.
 
 ### Offline APIs
 
-Torii exposes `/v1/offline/readiness` for offline HTTP discovery and accepts
-body-signed key refill on the maintained Offline V2 API. Retired note issue,
-redemption, audit, and defund submission paths are retired; the Swift SDK
-surfaces their historical fixture models while default builders and submitters
-fail closed. Production offline payments use Kagemusha transaction builders.
+`ToriiClient` exposes the first-release Offline API: readiness for a required
+asset definition, direct-Norito top-up and redeem submissions, and operation
+status. Use `getOfflineReadiness(assetDefinitionId:)`, `submitOfflineTopUp`,
+`submitOfflineRedeem`, and `getOfflineOperationStatus(operationId:)`.
+Construct `OfflineTopUpRequest(noritoArchive:)` and
+`OfflineRedeemRequest(noritoArchive:)` from their canonical Kagemusha request
+archives. The SDK derives the lowercase idempotency key from the embedded
+nonzero 32-byte operation ID; callers cannot supply or override it.
+Classic note issue, redemption, audit, and defund models are fixture-only;
+production offline payments use Kagemusha transaction builders.
 Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBundle`
 models plus retired `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
 `buildAuditOfflineNote`, and `buildDefundOfflineNote` methods on `IrohaSDK`.

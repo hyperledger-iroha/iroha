@@ -31,7 +31,7 @@ test("ToriiBrowserClient strips API suffixes and calls current explorer block ro
   const fetchImpl = async (url, init) => {
     assert.equal(String(url), "https://localhost:8080/v1/explorer/blocks?page=2&per_page=5");
     assert.equal(init.method, "GET");
-    assert.equal(init.headers["x-iroha-api-version"], "1.1");
+    assert.equal(init.headers["x-test-client"], "browser-sdk");
     return jsonResponse({
       pagination: { page: 2, per_page: 5, total_pages: 3, total_items: 11 },
       items: [],
@@ -39,7 +39,7 @@ test("ToriiBrowserClient strips API suffixes and calls current explorer block ro
   };
   const client = new ToriiBrowserClient(BASE_URL, {
     fetchImpl,
-    defaultHeaders: { "x-iroha-api-version": "1.1" },
+    defaultHeaders: { "x-test-client": "browser-sdk" },
   });
   const payload = await client.listExplorerBlocks({ page: 2, perPage: 5 });
   assert.equal(payload.pagination.page, 2);

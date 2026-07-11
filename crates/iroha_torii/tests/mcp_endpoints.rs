@@ -1102,7 +1102,7 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_requires_token_when_enabled(
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_openapi_healthcheck_respects_forwarded_headers() {
+async fn mcp_jsonrpc_tools_call_openapi_healthcheck_ignores_retired_version_header() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1132,7 +1132,7 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_respects_forwarded_headers()
         .and_then(|value| value.get("structuredContent"))
         .and_then(Value::as_object)
         .expect("structured content");
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(400));
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 
 #[tokio::test]

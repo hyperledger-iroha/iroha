@@ -10022,20 +10022,21 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessParsesKagemushaRecursiveCompactMetadata() async throws {
+    func testGetOfflineReadinessParsesExactContract() async throws {
         let payload = """
         {
-          "offline_kagemusha_recursive_compact_available": true,
-          "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
-          "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_recursive_compact_artifacts_available": false,
-          "offline_telemetry": true
+          "asset_definition_id": "xor#wonderland",
+          "evaluated_block_height": 18446744073709551615,
+          "ready": false,
+          "blockers": [
+            {"code": "offline_disabled", "message": "Offline transfers are disabled"}
+          ]
         }
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+            XCTAssertEqual(request.url?.query, "asset_definition_id=xor%23wonderland")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -10044,59 +10045,52 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let readiness = try await makeClient().getOfflineReadiness()
-        XCTAssertTrue(readiness.offlineKagemushaRecursiveCompactAvailable)
-        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactMode, "recursive_compact_v1")
-        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion, 7)
-        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactCircuitId, "kagemusha-recursive-compact-v1")
-        XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
-        XCTAssertTrue(readiness.offlineTelemetry)
-        XCTAssertFalse(readiness.offlineNote)
-        XCTAssertFalse(readiness.hasCanonicalRecursiveVerifierMetadata)
-        XCTAssertTrue(readiness.hasKagemushaRecursiveCompactMetadata)
+        let readiness = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertEqual(readiness.assetDefinitionId, "xor#wonderland")
+        XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
+        XCTAssertFalse(readiness.ready)
+        XCTAssertEqual(readiness.blockers.count, 1)
+        XCTAssertEqual(readiness.blockers[0].code, "offline_disabled")
+        XCTAssertEqual(readiness.blockers[0].message, "Offline transfers are disabled")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions() async throws {
+    func testGetOfflineReadinessRejectsNonCanonicalFields() async throws {
         func payload(extra: String = "",
-                     compactAvailable: String = "true",
-                     compactMode: String = "\"recursive_compact_v1\"",
-                     compact: String = "7",
-                     compactCircuit: String = "\"kagemusha-recursive-compact-v1\"",
-                     compactArtifacts: String = "false") -> Data {
+                     assetDefinitionId: String = "\"xor#wonderland\"",
+                     blockers: String = "[]") -> Data {
             """
             {
               \(extra)
-              "offline_kagemusha_recursive_compact_available": \(compactAvailable),
-              "offline_kagemusha_recursive_compact_mode": \(compactMode),
-              "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": \(compact),
-              "offline_kagemusha_recursive_compact_circuit_id": \(compactCircuit),
-              "offline_kagemusha_recursive_compact_artifacts_available": \(compactArtifacts),
-              "offline_telemetry": true
+              "asset_definition_id": \(assetDefinitionId),
+              "evaluated_block_height": 7,
+              "ready": true,
+              "blockers": \(blockers)
             }
             """.data(using: .utf8)!
         }
 
         let cases: [(Data, String)] = [
-            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(compact: "0"), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer"),
-            (payload(compact: "\" 7\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
-            (payload(compact: "\"007\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
-            (payload(compact: "\"2147483648\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range"),
-            (payload(compactAvailable: "1"), "Expected to decode Bool"),
-            (payload(compactCircuit: "\"kagemusha-recursive-compact-v1 \""), "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace"),
-            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_mode\": \"recursive_compact_v1\","), "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_circuit_id\": \"kagemusha-recursive-compact-v1\","), "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"offline_kagemusha_abi7_artifacts\": false,"), "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*"),
-            (payload(extra: "\"unexpected_offline_readiness_field\": true,"), "unexpected_offline_readiness_field is not a supported offline readiness field")
+            (
+                payload(extra: "\"offline_telemetry\": true,"),
+                "offline_telemetry is not a supported offline readiness field"
+            ),
+            (
+                payload(assetDefinitionId: "\" xor#wonderland\""),
+                "asset_definition_id must be exact non-empty text"
+            ),
+            (
+                payload(blockers: "[{\"code\":\"blocked\",\"message\":\"no\",\"extra\":1}]"),
+                "extra is not a supported readiness blocker field"
+            )
         ]
 
         for (body, expectedMessage) in cases {
             StubURLProtocol.handler = { request in
                 XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+                XCTAssertEqual(request.url?.query, "asset_definition_id=xor%23wonderland")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -10105,7 +10099,9 @@ final class ToriiClientTests: XCTestCase {
             }
 
             do {
-                _ = try await makeClient().getOfflineReadiness()
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
                 XCTFail("expected malformed offline readiness response to fail")
             } catch {
                 XCTAssertTrue(
@@ -10114,6 +10110,111 @@ final class ToriiClientTests: XCTestCase {
                 )
             }
         }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testOfflineOperationsUseCanonicalPathsAndDirectNoritoBodies() async throws {
+        let operationId = String(repeating: "11", count: 32)
+        let operationIdBytes = Data(repeating: 0x11, count: 32)
+        func requestArchive(
+            schema: String,
+            fieldCount: Int,
+            operationIdFieldIndex: Int
+        ) -> Data {
+            var payload = OfflineCompactNoritoWriter()
+            for index in 0..<fieldCount {
+                payload.writeField(
+                    index == operationIdFieldIndex
+                        ? operationIdBytes
+                        : Data([UInt8(index + 1)])
+                )
+            }
+            return noritoEncode(
+                typeName: schema,
+                payload: payload.data,
+                flags: NoritoHeader.compactLen
+            )
+        }
+        func reference(_ kind: OfflineOperationKind) throws -> OfflineOperationReference {
+            try OfflineOperationReference(
+                operationId: operationId,
+                kind: kind,
+                state: .pending,
+                transactionHash: "transaction-hash",
+                statusUri: "/v1/offline/operations/\(operationId)",
+                submittedAtMs: 1_700_000_000_000
+            )
+        }
+        let topUpResponseArchive = OfflineOperationCodec.encodeReference(try reference(.topUp))
+        let redeemResponseArchive = OfflineOperationCodec.encodeReference(try reference(.redeem))
+        let topUpRequestArchive = requestArchive(
+            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            fieldCount: 8,
+            operationIdFieldIndex: 6
+        )
+        let redeemRequestArchive = requestArchive(
+            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            fieldCount: 11,
+            operationIdFieldIndex: 9
+        )
+        let pendingStatusArchive = try XCTUnwrap(Data(hexString:
+            "4e5254300000fb04214104df1bdcd39249bddd4db23a006600000000000000b3fae818809b7b8e02000000000000000000000000414031313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131040000000011107472616e73616374696f6e2d6861736808ffffffffffffffff"
+        ))
+
+        StubURLProtocol.handler = { request in
+            let path = request.url?.path
+            let responseBody: Data
+            let status: Int
+            switch path {
+            case "/v1/offline/top-up":
+                status = 202
+                responseBody = topUpResponseArchive
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(self.bodyData(from: request), topUpRequestArchive)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+            case "/v1/offline/redeem":
+                status = 202
+                responseBody = redeemResponseArchive
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(self.bodyData(from: request), redeemRequestArchive)
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), operationId)
+            case "/v1/offline/operations/\(operationId)":
+                status = 200
+                responseBody = pendingStatusArchive
+                XCTAssertEqual(request.httpMethod, "GET")
+            default:
+                throw ToriiClientError.invalidURL(path ?? "")
+            }
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/x-norito"]
+            )!
+            return (response, responseBody)
+        }
+
+        let client = makeClient()
+        let acceptedTopUp = try await client.submitOfflineTopUp(
+            OfflineTopUpRequest(noritoArchive: topUpRequestArchive)
+        )
+        XCTAssertEqual(acceptedTopUp, try reference(.topUp))
+        let acceptedRedeem = try await client.submitOfflineRedeem(
+            OfflineRedeemRequest(noritoArchive: redeemRequestArchive)
+        )
+        XCTAssertEqual(acceptedRedeem, try reference(.redeem))
+        let operationStatus = try await client.getOfflineOperationStatus(operationId: operationId)
+        XCTAssertEqual(
+            operationStatus,
+            .pending(
+                operationId: operationId,
+                kind: .topUp,
+                transactionHash: "transaction-hash",
+                submittedAtMs: UInt64.max
+            )
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)

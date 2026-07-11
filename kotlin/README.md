@@ -81,13 +81,15 @@ val transports = OfflineNoteTransferCapabilities.current(
 Do not render NFC controls when `supportedModalities()` omits NFC; non-NFC
 devices and app builds without HCE should use QR or Nearby only.
 
-JVM core includes an in-memory store and `ToriiOfflineNoteIssuerClient` for
-Torii key-refill. Retired note issue and
-`IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
-fail-closed historical APIs; `NativeOfflineNoteProver` and chain-VK proof
-providers also fail closed for retired proof generation. Production offline
-payments use Kagemusha flows. Apps provide canonical auth and a device-binding provider;
-Android secure storage remains in the platform wallet layer. The
+The public `OfflineToriiClient` exposes only readiness for a required asset
+definition, direct-Norito top-up and redeem submissions, and operation status.
+`OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
+schema-bound request archive; they derive the lowercase idempotency key from
+its nonzero 32-byte `operation_id` field, so callers cannot supply a mismatched
+operation ID.
+The fixture-only `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund
+submissions and classic proof providers fail closed. Android secure storage
+remains in the platform wallet layer. The
 Android `AndroidOfflineNoteSecureStore` rotates a non-exportable Android
 Keystore key on every committed wallet-state revision and rejects app-data
 rollback or cloned preference snapshots when the old revision key is no longer

@@ -95,7 +95,6 @@ Torii-ն ուղարկում է ներգնա հեղինակության հետ կ
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Հաճախորդները կարող են նաև տրամադրել լրացուցիչ մեկ զանգի վերնագրեր `arguments.headers`-ի միջոցով:
 `content-length`, `host` և `connection` `arguments.headers`-ից անտեսվում են:

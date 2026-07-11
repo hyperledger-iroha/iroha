@@ -17,6 +17,7 @@ public enum OfflineNoteWalletNoteState: String, Sendable {
 }
 
 public enum OfflineNoteWalletError: Error, LocalizedError, Equatable {
+    case retiredOfflineNoteIssue
     case missingIssuerClient
     case missingTransactionSubmitter
     case issuerCommitmentMismatch
@@ -35,6 +36,8 @@ public enum OfflineNoteWalletError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
+        case .retiredOfflineNoteIssue:
+            return "Classic Offline Note issue transactions are retired; use Offline top-up."
         case .missingIssuerClient:
             return "Offline Note issuer client is required for load."
         case .missingTransactionSubmitter:
@@ -1630,7 +1633,7 @@ public final class OfflineNoteWallet {
     }
 
     public func load(assetDefinitionId: String, amount: String) async throws -> OfflineNoteWalletNote {
-        throw ToriiOfflineNoteIssuerClientError.retiredOfflineNoteIssue
+        throw OfflineNoteWalletError.retiredOfflineNoteIssue
     }
 
     public func prepareReceive(assetDefinitionId: String, amount: String) throws -> OfflineNoteReceiveRequest {

@@ -75,7 +75,7 @@ class OfflineCashLifecycleTest {
             runSuspend { controller.load("pkr#sbp", "10") }
         }
 
-        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, error.message)
+        assertEquals(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, error.message)
         assertEquals(listOf("hasPending", "sync"), events)
     }
 

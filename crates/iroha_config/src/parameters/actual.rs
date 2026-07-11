@@ -7237,14 +7237,6 @@ impl Default for Push {
 pub struct Torii {
     /// API listening address.
     pub address: WithOrigin<SocketAddr>,
-    /// Supported Torii API versions (semantic `major.minor`, oldest → newest).
-    pub api_versions: Vec<String>,
-    /// Default API version assumed when the client omits the header.
-    pub api_version_default: String,
-    /// Minimum API version required for proof/staking/fee endpoints.
-    pub api_min_proof_version: String,
-    /// Optional unix timestamp when the oldest supported version sunsets.
-    pub api_version_sunset_unix: Option<u64>,
     /// Maximum request body size.
     pub max_content_len: Bytes<u64>,
     /// Base directory for Torii persistence (attachments, webhooks, DA queues).

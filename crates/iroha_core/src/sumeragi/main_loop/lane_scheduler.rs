@@ -2272,6 +2272,7 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
             .into_iter()
             .filter(|relay| {
                 relay.is_merge_admissible()
+                    && relay.block_header.height().get() <= proposal_height
                     && relay.lane_block_descriptor_hash.is_some()
                     && (!nexus.enabled
                         || crate::state::nexus_active_lane_dataspace_at_height(
@@ -2284,7 +2285,9 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
                             == Some(relay.lane_incarnation))
                     && reset_heights
                         .get(&relay.lane_id)
-                        .is_none_or(|reset_height| relay.block_height > *reset_height)
+                        .is_none_or(|reset_height| {
+                            relay.block_header.height().get() > *reset_height
+                        })
             })
             .map(|relay| LaneBlockTip {
                 lane_id: relay.lane_id,
@@ -2429,6 +2432,10 @@ fn build_lane_payload_plan_entries(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let is_consistent = tip.dataspace_id == domain.dataspace_id
+            && ((tip.latest_lane_block_height == 0
+                && tip.latest_lane_block_descriptor_hash.is_none())
+                || (tip.latest_lane_block_height > 0
+                    && tip.latest_lane_block_descriptor_hash.is_some()))
             && slot.dataspace_id == domain.dataspace_id
             && slot.lane_block_height == expected_next_height
             && subject.dataspace_id == domain.dataspace_id
@@ -4761,10 +4768,45 @@ mod tests {
     }
 
     #[test]
+    fn lane_payload_plan_rejects_non_genesis_tip_without_descriptor_hash() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(1), test_peer(2), test_peer(3)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+
+        let err = plan_lane_payload(
+            &domains,
+            &[lane_tip(1, 11, 3)],
+            &[tx_hash(0xA9)],
+            99,
+            &BTreeMap::new(),
+            100,
+            2,
+        )
+        .expect_err("a non-genesis tip without its descriptor hash must fail closed");
+
+        assert_eq!(
+            err,
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: LaneId::new(1),
+            }
+        );
+    }
+
+    #[test]
     fn lane_block_descriptor_binds_committee_without_changing_payload_identity() {
         let routing = routing_for_lane_dataspaces(&[(1, 11)]);
         let candidate_hashes = vec![tx_hash(0xA9)];
-        let known_tips = vec![lane_tip(1, 11, 3)];
+        let known_tips = vec![lane_tip_with_descriptor(1, 11, 3, 0xA0)];
         let domains_a = plan_lane_consensus_domains(
             &routing,
             &accepted_schedule(&[0]),

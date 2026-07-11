@@ -629,10 +629,17 @@ struct LaneSettlementBuilder {
     total_xor_variance_micro: u128,
     swap_evidence: Option<SwapEvidence>,
     receipts: Vec<LaneSettlementReceipt>,
-    nexus_fee_receipts: Vec<iroha_data_model::block::consensus::NexusFeeReceipt>,
+    nexus_fee_receipts: Vec<crate::settlement::PendingNexusFeeReceipt>,
     native_amx_receipts: Vec<NativeAmxReceipt>,
     buffer_snapshot: Option<SettlementBufferSnapshot>,
     source_counts: BTreeMap<AssetDefinitionId, u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LanePayloadCoordinate {
+    lane_incarnation: Hash,
+    lane_block_height: u64,
+    lane_block_descriptor_hash: Hash,
 }
 
 /// Consensus-critical authority surface used by native AMX validation.
@@ -1117,7 +1124,8 @@ fn lane_relay_envelopes_for_block(
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     lane_settlement_commitments: &[LaneBlockCommitment],
     lane_summaries: &BTreeMap<LaneId, LaneSummary>,
-) -> Vec<LaneRelayEnvelope> {
+    lane_payload_coordinates: &BTreeMap<(LaneId, DataSpaceId), LanePayloadCoordinate>,
+) -> Result<Vec<LaneRelayEnvelope>, BlockValidationError> {
     lane_settlement_commitments
         .iter()
         .map(|commitment| {
@@ -1125,6 +1133,15 @@ fn lane_relay_envelopes_for_block(
                 .get(&commitment.lane_id)
                 .map_or(0, |summary| summary.rbc_bytes_total);
 
+            let coordinate = lane_payload_coordinates
+                .get(&(commitment.lane_id, commitment.dataspace_id))
+                .ok_or_else(|| {
+                    BlockValidationError::ExecutionContextInvalid(format!(
+                        "settled lane {} dataspace {} has no exact lane payload ownership",
+                        commitment.lane_id.as_u32(),
+                        commitment.dataspace_id.as_u64()
+                    ))
+                })?;
             LaneRelayEnvelope::new(
                 *block_header,
                 None,
@@ -1132,7 +1149,15 @@ fn lane_relay_envelopes_for_block(
                 commitment.clone(),
                 rbc_bytes_total,
             )
-            .expect("construct lane relay envelope from settlement commitment")
+            .map_err(|err| {
+                BlockValidationError::ExecutionContextInvalid(format!(
+                    "settled lane relay envelope is invalid: {err}"
+                ))
+            })
+            .map(|envelope| {
+                envelope
+                    .with_lane_block_descriptor_hash(Some(coordinate.lane_block_descriptor_hash))
+            })
         })
         .collect()
 }
@@ -7498,13 +7523,10 @@ pub(crate) mod valid {
             state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
         ) -> Result<(), BlockValidationError> {
-            if bundle.lane_payload_ownerships.is_empty() {
-                return Ok(());
-            }
-
             let proposal_height = block.header().height().get();
             let proposal_view = block.header().view_change_index();
             let mut covered_indices = BTreeSet::new();
+            let mut seen_lane_payloads = BTreeSet::new();
             let mut seen_slots = BTreeSet::new();
             let mut seen_descriptor_hashes = BTreeSet::new();
             let mut seen_payload_ownership_hashes = BTreeSet::new();
@@ -7523,6 +7545,31 @@ pub(crate) mod valid {
                         ownership.proposal_view
                     )));
                 }
+                if ownership.lane_block_height == 0 {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} has zero lane-local height",
+                    )));
+                }
+                let expected_dataspace = crate::state::nexus_active_lane_dataspace_at_height(
+                    ownership.lane_id,
+                    state.nexus(),
+                    proposal_height,
+                );
+                if expected_dataspace != Some(ownership.dataspace_id) {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} does not target the active proposal-height lane route"
+                    )));
+                }
+                let expected_incarnation = StateReadOnly::lane_incarnation_at_height(
+                    state,
+                    ownership.lane_id,
+                    proposal_height,
+                );
+                if expected_incarnation != Some(ownership.lane_incarnation) {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} does not bind the active proposal-height lane incarnation"
+                    )));
+                }
                 if ownership.accepted_candidate_indices.is_empty() {
                     return Err(Self::execution_context_error(format!(
                         "lane payload ownership {ownership_idx} has no accepted entrypoint indices"
@@ -7538,6 +7585,13 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} has no lane block descriptor hash"
                     )));
                 };
+                if !seen_lane_payloads.insert((ownership.lane_id, ownership.dataspace_id)) {
+                    return Err(Self::execution_context_error(format!(
+                        "duplicate lane payload ownership for lane {} dataspace {}",
+                        ownership.lane_id.as_u32(),
+                        ownership.dataspace_id.as_u64()
+                    )));
+                }
 
                 let slot = (
                     ownership.lane_id,
@@ -7665,6 +7719,17 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} previous lane block height mismatch"
                     )));
                 }
+                if previous_lane_block_height == 0 {
+                    if ownership.previous_lane_block_descriptor_hash.is_some() {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} height-one predecessor descriptor must be absent"
+                        )));
+                    }
+                } else if ownership.previous_lane_block_descriptor_hash.is_none() {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} is missing its non-genesis predecessor descriptor hash"
+                    )));
+                }
                 if ownership.lane_block_descriptor_validator_set != validator_set {
                     return Err(Self::execution_context_error(format!(
                         "lane payload ownership {ownership_idx} lane block descriptor validator set mismatch"
@@ -7744,34 +7809,80 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} lane block height must be non-zero"
                     )));
                 }
-                let Some(existing) = state
+                if let Some(existing) = state
                     .kura()
                     .read_lane_block_artifact(ownership.lane_id, ownership.lane_block_height)
-                else {
-                    continue;
-                };
-                if existing.ownership.dataspace_id != ownership.dataspace_id {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} conflicts with stored lane artifact dataspace: expected {}, got {}",
-                        existing.ownership.dataspace_id.as_u64(),
-                        ownership.dataspace_id.as_u64()
-                    )));
+                {
+                    if existing.ownership.dataspace_id != ownership.dataspace_id {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} conflicts with stored lane artifact dataspace: expected {}, got {}",
+                            existing.ownership.dataspace_id.as_u64(),
+                            ownership.dataspace_id.as_u64()
+                        )));
+                    }
+                    if existing.ownership.proposal_height < proposal_height
+                        && existing.proposal_block_hash != proposal_hash
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} reuses committed lane artifact for lane {} dataspace {} lane-height {} from proposal height {}",
+                            ownership.lane_id.as_u32(),
+                            ownership.dataspace_id.as_u64(),
+                            ownership.lane_block_height,
+                            existing.ownership.proposal_height,
+                        )));
+                    }
+                    if existing.proposal_block_hash == proposal_hash
+                        && existing.ownership != *ownership
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} does not match stored lane artifact for this proposal"
+                        )));
+                    }
                 }
-                if existing.ownership.proposal_height < proposal_height
-                    && existing.proposal_block_hash != proposal_hash
+
+                if ownership.lane_block_height == 1 {
+                    if ownership.previous_lane_block_height != 0
+                        || ownership.previous_lane_block_descriptor_hash.is_some()
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} has a non-canonical height-one predecessor"
+                        )));
+                    }
+                    continue;
+                }
+
+                let previous_height = ownership.lane_block_height - 1;
+                let Some(declared_predecessor_hash) = ownership.previous_lane_block_descriptor_hash
+                else {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} is missing its non-genesis predecessor descriptor hash"
+                    )));
+                };
+                let Some(predecessor_receipt) = state
+                    .kura()
+                    .read_lane_block_application_receipt(ownership.lane_id, previous_height)
+                else {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} has no canonical predecessor application receipt for lane {} lane-height {previous_height}",
+                        ownership.lane_id.as_u32()
+                    )));
+                };
+                let predecessor = &predecessor_receipt.proposal.descriptor;
+                if predecessor.lane_id != ownership.lane_id
+                    || predecessor.dataspace_id != ownership.dataspace_id
+                    || predecessor.lane_incarnation != ownership.lane_incarnation
+                    || predecessor.lane_block_height != previous_height
+                    || predecessor.proposal_height >= proposal_height
+                    || predecessor.descriptor_hash != declared_predecessor_hash
+                    || !state
+                        .kura()
+                        .lane_block_application_receipt_available(&predecessor_receipt.proposal)
                 {
                     return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} reuses committed lane artifact for lane {} dataspace {} lane-height {} from proposal height {}",
+                        "lane payload ownership {ownership_idx} does not extend the exact applied canonical predecessor for lane {} dataspace {} incarnation {} lane-height {previous_height}",
                         ownership.lane_id.as_u32(),
                         ownership.dataspace_id.as_u64(),
-                        ownership.lane_block_height,
-                        existing.ownership.proposal_height,
-                    )));
-                }
-                if existing.proposal_block_hash == proposal_hash && existing.ownership != *ownership
-                {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} does not match stored lane artifact for this proposal"
+                        ownership.lane_incarnation,
                     )));
                 }
             }
@@ -8868,6 +8979,332 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        /// Drain transaction-scoped settlement evidence, bind every record to the
+        /// transaction's exact route and lane-payload coordinate, and publish the
+        /// resulting commitments. Both the DAG and live-sequential execution paths
+        /// must pass through this function so neither path can silently strand
+        /// consensus evidence in `StateBlock`.
+        #[allow(clippy::too_many_lines)]
+        fn finalize_lane_settlement_evidence(
+            block: &SignedBlock,
+            state_block: &mut StateBlock<'_>,
+            routed_transactions: &[(HashOf<SignedTransaction>, crate::queue::RoutingDecision)],
+            lane_summaries: &BTreeMap<LaneId, LaneSummary>,
+        ) -> Result<Vec<LaneBlockCommitment>, BlockValidationError> {
+            let mut native_amx_receipts_by_hash = BTreeMap::new();
+            if let Some(bundle) = block.execution_context() {
+                for (entrypoint, context) in block
+                    .external_entrypoints_cloned()
+                    .zip(bundle.external.iter())
+                {
+                    let Some(receipt) = context.native_amx_receipt.clone() else {
+                        continue;
+                    };
+                    let Some(signed) = Self::signed_transaction_from_entrypoint(&entrypoint) else {
+                        return Err(Self::execution_context_error(
+                            "native AMX receipt is attached to an entrypoint without a signed transaction",
+                        ));
+                    };
+                    let tx_hash = signed.hash();
+                    if native_amx_receipts_by_hash
+                        .insert(tx_hash, receipt)
+                        .is_some()
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "duplicate native AMX receipt for routed transaction {tx_hash}"
+                        )));
+                    }
+                }
+            }
+
+            let mut lane_payload_coordinates = BTreeMap::new();
+            if let Some(bundle) = block.execution_context() {
+                for (ownership_idx, ownership) in bundle.lane_payload_ownerships.iter().enumerate()
+                {
+                    let lane_block_descriptor_hash = ownership
+                        .lane_block_descriptor_hash
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "lane payload ownership {ownership_idx} has no descriptor hash during settlement finalization"
+                            ))
+                        })?;
+                    let previous = lane_payload_coordinates.insert(
+                        (ownership.lane_id, ownership.dataspace_id),
+                        LanePayloadCoordinate {
+                            lane_incarnation: ownership.lane_incarnation,
+                            lane_block_height: ownership.lane_block_height,
+                            lane_block_descriptor_hash,
+                        },
+                    );
+                    if previous.is_some() {
+                        return Err(Self::execution_context_error(format!(
+                            "duplicate exact lane payload ownership for lane {} dataspace {} during settlement finalization",
+                            ownership.lane_id.as_u32(),
+                            ownership.dataspace_id.as_u64()
+                        )));
+                    }
+                }
+            }
+
+            let mut seen_transactions = BTreeSet::new();
+            for (tx_hash, _) in routed_transactions {
+                if !seen_transactions.insert(*tx_hash) {
+                    return Err(Self::execution_context_error(format!(
+                        "duplicate transaction {tx_hash} during settlement evidence routing"
+                    )));
+                }
+            }
+
+            let mut pending_settlements = state_block.drain_settlement_records();
+            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
+            let nexus_fee_receipts_active = state_block
+                .nexus
+                .fees
+                .lane_relay_burn_receipts_active_at(block.header().height().get());
+            let mut lane_settlement_builders: BTreeMap<
+                (LaneId, DataSpaceId),
+                LaneSettlementBuilder,
+            > = BTreeMap::new();
+            for (tx_hash, decision) in routed_transactions {
+                let mut counted_settlement_tx = false;
+                if let Some(record) = pending_settlements.remove(tx_hash) {
+                    lane_payload_coordinates
+                        .get(&(decision.lane_id, decision.dataspace_id))
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "settled lane {} dataspace {} has no exact lane payload ownership",
+                                decision.lane_id.as_u32(),
+                                decision.dataspace_id.as_u64()
+                            ))
+                        })?;
+                    let builder = lane_settlement_builders
+                        .entry((decision.lane_id, decision.dataspace_id))
+                        .or_default();
+                    builder.tx_count = builder.tx_count.saturating_add(1);
+                    counted_settlement_tx = true;
+                    builder.total_local_micro = builder
+                        .total_local_micro
+                        .saturating_add(record.local_amount_micro);
+                    builder.total_xor_due_micro = builder
+                        .total_xor_due_micro
+                        .saturating_add(record.xor_due_micro);
+                    builder.total_xor_after_haircut_micro = builder
+                        .total_xor_after_haircut_micro
+                        .saturating_add(record.xor_after_haircut_micro);
+                    builder.total_xor_variance_micro = builder
+                        .total_xor_variance_micro
+                        .saturating_add(record.xor_variance_micro);
+                    builder
+                        .source_counts
+                        .entry(record.asset_definition_id.clone())
+                        .and_modify(|count| *count = count.saturating_add(1))
+                        .or_insert(1);
+                    let evidence = SwapEvidence {
+                        epsilon_bps: record.epsilon_bps,
+                        twap_window_seconds: record.twap_window_seconds,
+                        liquidity_profile: record.liquidity_profile,
+                        twap_local_per_xor: record.twap_local_per_xor,
+                        volatility_bucket: record.volatility_bucket,
+                    };
+                    if builder
+                        .swap_evidence
+                        .as_ref()
+                        .is_some_and(|existing| existing != &evidence)
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "lane {} dataspace {} produced inconsistent settlement swap metadata",
+                            decision.lane_id.as_u32(),
+                            decision.dataspace_id.as_u64()
+                        )));
+                    }
+                    builder.swap_evidence.get_or_insert(evidence);
+                    builder.receipts.push(record.into_lane_receipt());
+                }
+
+                if let Some(record) = pending_nexus_fee_receipts.remove(tx_hash) {
+                    if !nexus_fee_receipts_active {
+                        iroha_logger::warn!(
+                            height = block.header().height().get(),
+                            tx = %tx_hash,
+                            "dropping staged Nexus fee receipt before fee receipt activation height"
+                        );
+                    } else {
+                        lane_payload_coordinates
+                            .get(&(decision.lane_id, decision.dataspace_id))
+                            .ok_or_else(|| {
+                                Self::execution_context_error(format!(
+                                    "fee-settled lane {} dataspace {} has no exact lane payload ownership",
+                                    decision.lane_id.as_u32(),
+                                    decision.dataspace_id.as_u64()
+                                ))
+                            })?;
+                        let builder = lane_settlement_builders
+                            .entry((decision.lane_id, decision.dataspace_id))
+                            .or_default();
+                        if !counted_settlement_tx {
+                            builder.tx_count = builder.tx_count.saturating_add(1);
+                            counted_settlement_tx = true;
+                        }
+                        builder.nexus_fee_receipts.push(record);
+                    }
+                }
+
+                if let Some(receipt) = native_amx_receipts_by_hash.remove(tx_hash) {
+                    let coordinate = lane_payload_coordinates
+                        .get(&(decision.lane_id, decision.dataspace_id))
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "native AMX lane {} dataspace {} has no exact lane payload ownership",
+                                decision.lane_id.as_u32(),
+                                decision.dataspace_id.as_u64()
+                            ))
+                        })?;
+                    if receipt.lane_incarnation != coordinate.lane_incarnation
+                        || receipt.lane_block_height != coordinate.lane_block_height
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "native AMX receipt coordinates do not match exact lane payload ownership for lane {} dataspace {}",
+                            decision.lane_id.as_u32(),
+                            decision.dataspace_id.as_u64()
+                        )));
+                    }
+                    let builder = lane_settlement_builders
+                        .entry((decision.lane_id, decision.dataspace_id))
+                        .or_default();
+                    if !counted_settlement_tx {
+                        builder.tx_count = builder.tx_count.saturating_add(1);
+                    }
+                    builder.native_amx_receipts.push(receipt);
+                }
+            }
+
+            if !pending_settlements.is_empty()
+                || !pending_nexus_fee_receipts.is_empty()
+                || !native_amx_receipts_by_hash.is_empty()
+            {
+                return Err(Self::execution_context_error(format!(
+                    "unbound settlement evidence remains after lane routing (settlement={}, nexus_fee={}, native_amx={})",
+                    pending_settlements.len(),
+                    pending_nexus_fee_receipts.len(),
+                    native_amx_receipts_by_hash.len()
+                )));
+            }
+
+            for ((lane_id, _), builder) in &mut lane_settlement_builders {
+                if builder.buffer_snapshot.is_none() {
+                    builder.buffer_snapshot =
+                        compute_settlement_buffer_snapshot(state_block, *lane_id);
+                }
+                if let Some(snapshot) = &builder.buffer_snapshot
+                    && let Some(metadata) = lane_metadata_by_id(state_block, *lane_id)
+                {
+                    match snapshot.status {
+                        BufferStatus::Normal => {}
+                        BufferStatus::Alert => iroha_logger::warn!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} dipped below the alert threshold (<{}%)",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().alert
+                        ),
+                        BufferStatus::Throttle => iroha_logger::warn!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} entered throttle state (<{}%); reduce subsidised inclusion",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().throttle
+                        ),
+                        BufferStatus::XorOnly => iroha_logger::warn!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} entered XOR-only state (<{}%); force XOR-denominated inclusion",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().xor_only
+                        ),
+                        BufferStatus::Halt => iroha_logger::error!(
+                            lane = %metadata.alias,
+                            "settlement buffer for lane {} hit the halt threshold (<{}%); pause settlement until refilled",
+                            metadata.alias,
+                            state_block.settlement_engine().buffer_policy().halt
+                        ),
+                    }
+                }
+            }
+
+            let lane_settlement_commitments = lane_settlement_builders
+                .into_iter()
+                .map(|((lane_id, dataspace_id), builder)| {
+                    #[cfg(feature = "telemetry")]
+                    record_lane_settlement_metrics(
+                        state_block.metrics(),
+                        lane_id,
+                        dataspace_id,
+                        &builder,
+                    );
+                    let coordinate = lane_payload_coordinates
+                        .get(&(lane_id, dataspace_id))
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "settled lane {} dataspace {} has no exact lane payload ownership during commitment finalization",
+                                lane_id.as_u32(),
+                                dataspace_id.as_u64()
+                            ))
+                        })?;
+                    Ok(LaneBlockCommitment {
+                        block_height: coordinate.lane_block_height,
+                        lane_id,
+                        lane_incarnation: coordinate.lane_incarnation,
+                        dataspace_id,
+                        tx_count: builder.tx_count,
+                        total_local_micro: builder.total_local_micro,
+                        total_xor_due_micro: builder.total_xor_due_micro,
+                        total_xor_after_haircut_micro: builder.total_xor_after_haircut_micro,
+                        total_xor_variance_micro: builder.total_xor_variance_micro,
+                        swap_metadata: builder
+                            .swap_evidence
+                            .map(SwapEvidence::into_lane_metadata),
+                        receipts: builder.receipts,
+                        nexus_fee_receipts: builder
+                            .nexus_fee_receipts
+                            .into_iter()
+                            .map(|receipt| {
+                                receipt.into_lane_receipt(
+                                    coordinate.lane_block_height,
+                                    lane_id,
+                                    dataspace_id,
+                                )
+                            })
+                            .collect(),
+                        native_amx_receipts: builder.native_amx_receipts,
+                    })
+                })
+                .collect::<Result<Vec<_>, BlockValidationError>>()?;
+
+            if !lane_settlement_commitments.is_empty() {
+                crate::sumeragi::status::set_lane_settlement_commitments(
+                    lane_settlement_commitments.clone(),
+                );
+                let block_header = block.header();
+                let manifest_roots = state_block
+                    .axt_policy_snapshot()
+                    .entries
+                    .iter()
+                    .filter_map(|entry| {
+                        (!entry.policy.manifest_root.iter().all(|byte| *byte == 0))
+                            .then_some((entry.dsid, entry.policy.manifest_root))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let mut lane_relay_envelopes = lane_relay_envelopes_for_block(
+                    &block_header,
+                    block_header.da_commitments_hash(),
+                    &lane_settlement_commitments,
+                    lane_summaries,
+                    &lane_payload_coordinates,
+                )?;
+                attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
+                crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
+            }
+
+            Ok(lane_settlement_commitments)
+        }
+
         fn validate_and_record_entrypoints_sequential(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
@@ -8995,6 +9432,35 @@ pub(crate) mod valid {
                     ))
                 }));
             }
+
+            let mut lane_summaries = BTreeMap::new();
+            let mut routed_transactions = Vec::new();
+            for (entrypoint, decision) in entrypoints.iter().zip(&routing_decisions) {
+                let summary = lane_summaries.entry(decision.lane_id).or_default();
+                summary.tx_vertices = summary.tx_vertices.saturating_add(1);
+                if let Some(tx) = Self::signed_transaction_from_entrypoint(entrypoint) {
+                    let metadata = crate::tx::AcceptedTransaction::prepare_signed_metadata(tx);
+                    summary.rbc_bytes_total = summary
+                        .rbc_bytes_total
+                        .saturating_add(metadata.encoded_len as u64);
+                    routed_transactions.push((tx.hash(), *decision));
+                }
+            }
+            let chunk_size =
+                (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES.max(1)) as u64;
+            for summary in lane_summaries.values_mut() {
+                summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
+                    0
+                } else {
+                    summary.rbc_bytes_total.div_ceil(chunk_size)
+                };
+            }
+            Self::finalize_lane_settlement_evidence(
+                block,
+                state_block,
+                &routed_transactions,
+                &lane_summaries,
+            )?;
 
             Self::execute_deterministic_pipeline_triggers(
                 block,
@@ -10693,34 +11159,6 @@ pub(crate) mod valid {
             let mut apply_results_ms = 0u64;
             let mut lane_summaries: BTreeMap<LaneId, LaneSummary> = BTreeMap::new();
             let mut dataspace_summaries: BTreeMap<(LaneId, DataSpaceId), u64> = BTreeMap::new();
-            let mut pending_settlements = state_block.drain_settlement_records();
-            let mut pending_nexus_fee_receipts = state_block.drain_nexus_fee_records();
-            let nexus_fee_receipts_active = state_block
-                .nexus
-                .fees
-                .lane_relay_burn_receipts_active_at(block.header().height().get());
-            let mut native_amx_receipts_by_hash: BTreeMap<
-                HashOf<SignedTransaction>,
-                NativeAmxReceipt,
-            > = block
-                .execution_context()
-                .map(|bundle| {
-                    block
-                        .external_entrypoints_cloned()
-                        .zip(bundle.external.iter())
-                        .filter_map(|(entrypoint, context)| {
-                            let receipt = context.native_amx_receipt.clone()?;
-                            let signed = Self::signed_transaction_from_entrypoint(&entrypoint)?;
-                            Some((signed.hash(), receipt))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let mut lane_settlement_builders: BTreeMap<
-                (LaneId, DataSpaceId),
-                LaneSettlementBuilder,
-            > = BTreeMap::new();
 
             #[cfg(feature = "telemetry")]
             let record_amx_abort =
@@ -10749,87 +11187,6 @@ pub(crate) mod valid {
                     summary.rbc_bytes_total = summary
                         .rbc_bytes_total
                         .saturating_add(prepared_txs[idx].metadata.encoded_len as u64);
-
-                    let mut counted_settlement_tx = false;
-                    if let Some(record) =
-                        pending_settlements.remove(&prepared_txs[idx].metadata.signed_hash)
-                    {
-                        let builder = lane_settlement_builders
-                            .entry((decision.lane_id, decision.dataspace_id))
-                            .or_default();
-                        builder.tx_count = builder.tx_count.saturating_add(1);
-                        counted_settlement_tx = true;
-                        builder.total_local_micro = builder
-                            .total_local_micro
-                            .saturating_add(record.local_amount_micro);
-                        builder.total_xor_due_micro = builder
-                            .total_xor_due_micro
-                            .saturating_add(record.xor_due_micro);
-                        builder.total_xor_after_haircut_micro = builder
-                            .total_xor_after_haircut_micro
-                            .saturating_add(record.xor_after_haircut_micro);
-                        builder.total_xor_variance_micro = builder
-                            .total_xor_variance_micro
-                            .saturating_add(record.xor_variance_micro);
-                        builder
-                            .source_counts
-                            .entry(record.asset_definition_id.clone())
-                            .and_modify(|count| *count = count.saturating_add(1))
-                            .or_insert(1);
-                        let evidence = SwapEvidence {
-                            epsilon_bps: record.epsilon_bps,
-                            twap_window_seconds: record.twap_window_seconds,
-                            liquidity_profile: record.liquidity_profile,
-                            twap_local_per_xor: record.twap_local_per_xor,
-                            volatility_bucket: record.volatility_bucket,
-                        };
-                        match &mut builder.swap_evidence {
-                            Some(existing) => {
-                                debug_assert_eq!(
-                                    existing, &evidence,
-                                    "lane/dataspace conversions must share swap metadata"
-                                );
-                            }
-                            None => {
-                                builder.swap_evidence = Some(evidence);
-                            }
-                        }
-                        builder.receipts.push(record.into_lane_receipt());
-                    }
-                    if let Some(record) =
-                        pending_nexus_fee_receipts.remove(&prepared_txs[idx].metadata.signed_hash)
-                    {
-                        if !nexus_fee_receipts_active {
-                            iroha_logger::warn!(
-                                height = block.header().height().get(),
-                                tx = %prepared_txs[idx].metadata.signed_hash,
-                                "dropping staged Nexus fee receipt before fee receipt activation height"
-                            );
-                            continue;
-                        }
-                        let builder = lane_settlement_builders
-                            .entry((decision.lane_id, decision.dataspace_id))
-                            .or_default();
-                        if !counted_settlement_tx {
-                            builder.tx_count = builder.tx_count.saturating_add(1);
-                        }
-                        builder.nexus_fee_receipts.push(record.into_lane_receipt(
-                            block.header().height().get(),
-                            decision.lane_id,
-                            decision.dataspace_id,
-                        ));
-                    }
-                    if let Some(receipt) =
-                        native_amx_receipts_by_hash.remove(&prepared_txs[idx].metadata.signed_hash)
-                    {
-                        let builder = lane_settlement_builders
-                            .entry((decision.lane_id, decision.dataspace_id))
-                            .or_default();
-                        if !counted_settlement_tx {
-                            builder.tx_count = builder.tx_count.saturating_add(1);
-                        }
-                        builder.native_amx_receipts.push(receipt);
-                    }
                 }
 
                 for (src, decision) in routing_decisions.iter().enumerate() {
@@ -11006,131 +11363,17 @@ pub(crate) mod valid {
                 status::set_dataspace_activity_snapshot(dataspace_activity_snapshot);
             }
 
-            for ((lane_id, _), builder) in lane_settlement_builders.iter_mut() {
-                if builder.buffer_snapshot.is_none() {
-                    builder.buffer_snapshot =
-                        compute_settlement_buffer_snapshot(state_block, *lane_id);
-                }
-                if let Some(snapshot) = &builder.buffer_snapshot {
-                    if let Some(metadata) = lane_metadata_by_id(state_block, *lane_id) {
-                        match snapshot.status {
-                            BufferStatus::Normal => {}
-                            BufferStatus::Alert => {
-                                iroha_logger::warn!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} dipped below the alert threshold (<{}%)",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .alert
-                                );
-                            }
-                            BufferStatus::Throttle => {
-                                iroha_logger::warn!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} entered throttle state (<{}%); reduce subsidised inclusion",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .throttle
-                                );
-                            }
-                            BufferStatus::XorOnly => {
-                                iroha_logger::warn!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} entered XOR-only state (<{}%); force XOR-denominated inclusion",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .xor_only
-                                );
-                            }
-                            BufferStatus::Halt => {
-                                iroha_logger::error!(
-                                    lane = %metadata.alias,
-                                    "settlement buffer for lane {} hit the halt threshold (<{}%); pause settlement until refilled",
-                                    metadata.alias,
-                                    state_block
-                                        .settlement_engine()
-                                        .buffer_policy()
-                                        .halt
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            let lane_settlement_commitments: Vec<LaneBlockCommitment> = {
-                let block_height = block.header().height().get();
-                lane_settlement_builders
-                    .into_iter()
-                    .map(|((lane_id, dataspace_id), builder)| {
-                        #[cfg(feature = "telemetry")]
-                        {
-                            record_lane_settlement_metrics(
-                                state_block.metrics(),
-                                lane_id,
-                                dataspace_id,
-                                &builder,
-                            );
-                        }
-                        LaneBlockCommitment {
-                            block_height,
-                            lane_id,
-                            lane_incarnation: StateReadOnly::lane_incarnation_at_height(
-                                state_block,
-                                lane_id,
-                                block_height,
-                            )
-                            .expect("settlement lane must have an active incarnation"),
-                            dataspace_id,
-                            tx_count: builder.tx_count,
-                            total_local_micro: builder.total_local_micro,
-                            total_xor_due_micro: builder.total_xor_due_micro,
-                            total_xor_after_haircut_micro: builder.total_xor_after_haircut_micro,
-                            total_xor_variance_micro: builder.total_xor_variance_micro,
-                            swap_metadata: builder
-                                .swap_evidence
-                                .map(SwapEvidence::into_lane_metadata),
-                            receipts: builder.receipts,
-                            nexus_fee_receipts: builder.nexus_fee_receipts,
-                            native_amx_receipts: builder.native_amx_receipts,
-                        }
-                    })
-                    .collect()
-            };
-
-            if !lane_settlement_commitments.is_empty() {
-                crate::sumeragi::status::set_lane_settlement_commitments(
-                    lane_settlement_commitments.clone(),
-                );
-                let block_header = block.header();
-                let da_commitment_hash = block_header.da_commitments_hash();
-                let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> = state_block
-                    .axt_policy_snapshot()
-                    .entries
-                    .iter()
-                    .filter_map(|entry| {
-                        if entry.policy.manifest_root.iter().all(|byte| *byte == 0) {
-                            None
-                        } else {
-                            Some((entry.dsid, entry.policy.manifest_root))
-                        }
-                    })
-                    .collect();
-                let mut lane_relay_envelopes = lane_relay_envelopes_for_block(
-                    &block_header,
-                    da_commitment_hash,
-                    &lane_settlement_commitments,
-                    &lane_summaries,
-                );
-                attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
-                crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
-            }
+            let routed_transactions = prepared_txs
+                .iter()
+                .zip(&routing_decisions)
+                .map(|(prepared, decision)| (prepared.metadata.signed_hash, *decision))
+                .collect::<Vec<_>>();
+            Self::finalize_lane_settlement_evidence(
+                block,
+                state_block,
+                &routed_transactions,
+                &lane_summaries,
+            )?;
 
             let mut tx_results: Vec<Option<TransactionResultInner>> = vec![None; n];
             let mut record_result = |idx: usize, result: TransactionResultInner| {
@@ -13600,7 +13843,7 @@ pub(crate) mod valid {
     mod tests {
         use std::{
             borrow::Cow,
-            collections::BTreeSet,
+            collections::{BTreeMap, BTreeSet},
             num::{NonZeroU16, NonZeroU32, NonZeroU64},
             path::PathBuf,
             str::FromStr,
@@ -14815,6 +15058,7 @@ pub(crate) mod valid {
             proposal_view: u64,
             lane_id: LaneId,
             dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
             accepted_candidate_indices: Vec<u64>,
             candidate_hashes: Vec<Hash>,
             validator_set: &[PeerId],
@@ -14824,6 +15068,7 @@ pub(crate) mod valid {
                 proposal_view,
                 lane_id,
                 dataspace_id,
+                lane_incarnation,
                 proposal_height,
                 proposal_view,
                 accepted_candidate_indices,
@@ -14837,6 +15082,7 @@ pub(crate) mod valid {
             proposal_view: u64,
             lane_id: LaneId,
             dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
             lane_block_height: u64,
             lane_block_view: u64,
             accepted_candidate_indices: Vec<u64>,
@@ -14863,14 +15109,7 @@ pub(crate) mod valid {
                 proposal_view,
                 lane_id,
                 dataspace_id,
-                lane_incarnation: Hash::new(
-                    format!(
-                        "block-test-lane-incarnation:{}:{}",
-                        lane_id.as_u32(),
-                        dataspace_id.as_u64()
-                    )
-                    .as_bytes(),
-                ),
+                lane_incarnation,
                 lane_block_height,
                 lane_block_view,
                 subject_hash: Hash::new(b"block-test lane subject placeholder"),
@@ -14902,6 +15141,61 @@ pub(crate) mod valid {
             ownership
         }
 
+        #[test]
+        fn settlement_finalization_rejects_unbound_evidence() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let state = State::new_for_testing(
+                World::new(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = ValidBlock::new_dummy(leader.private_key());
+            let mut state_block = state.block(block.as_ref().header());
+            let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+                b"unbound sequential settlement transaction",
+            ));
+            let mut source_id = [0; Hash::LENGTH];
+            source_id.copy_from_slice(tx_hash.as_ref());
+            state_block.record_settlement_receipt(
+                tx_hash,
+                crate::settlement::PendingSettlement {
+                    source_id,
+                    asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                        DomainId::try_new("wonderland", "universal").expect("domain id"),
+                        "settlement".parse().expect("asset name"),
+                    ),
+                    local_amount_micro: 11,
+                    xor_due_micro: 7,
+                    xor_after_haircut_micro: 6,
+                    xor_variance_micro: 1,
+                    timestamp_ms: 1,
+                    liquidity_profile: settlement_router::LiquidityProfile::Tier1,
+                    volatility_bucket: crate::settlement::VolatilityBucket::Stable,
+                    twap_local_per_xor: rust_decimal::Decimal::ONE,
+                    epsilon_bps: 25,
+                    twap_window_seconds: 60,
+                    oracle_timestamp_ms: 1,
+                },
+            );
+
+            let error = ValidBlock::finalize_lane_settlement_evidence(
+                block.as_ref(),
+                &mut state_block,
+                &[],
+                &BTreeMap::new(),
+            )
+            .expect_err("settlement evidence without a routed transaction must fail closed");
+            assert!(
+                matches!(
+                    error,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("unbound settlement evidence")
+                            && message.contains("settlement=1")
+                ),
+                "unexpected unbound settlement rejection: {error}"
+            );
+        }
+
         fn lane_payload_context_fixture() -> (State, Arc<Kura>, Topology, TimeSource, KeyPair) {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -14931,6 +15225,7 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             label: &str,
             lane_block_height: u64,
+            predecessor_descriptor_hash: Option<Hash>,
         ) -> SignedBlock {
             let (authority, signer) = gen_account_in(label);
             let tx = TransactionBuilder::new_with_time_source(
@@ -14943,25 +15238,38 @@ pub(crate) mod valid {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             let proposal_height = u64::try_from(state.block_hashes.view().len().saturating_add(1))
                 .expect("test block height fits u64");
+            let mut ownership = sample_lane_payload_ownership_for_context_at_slot(
+                proposal_height,
+                0,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                state
+                    .lane_incarnation(LaneId::SINGLE)
+                    .expect("default lane incarnation"),
+                lane_block_height,
+                0,
+                vec![0],
+                vec![Hash::from(tx.hash_as_entrypoint())],
+                topology.as_ref(),
+            );
+            if let Some(predecessor_descriptor_hash) = predecessor_descriptor_hash {
+                ownership.previous_lane_block_descriptor_hash = Some(predecessor_descriptor_hash);
+                let replay_hashes = ownership
+                    .compute_replay_hashes()
+                    .expect("exact predecessor fixture replay hashes compute");
+                ownership.subject_hash = replay_hashes.subject_hash;
+                ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+                ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+                ownership.lane_block_descriptor_hash =
+                    Some(replay_hashes.lane_block_descriptor_hash);
+            }
             let execution_context =
                 BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                     tx.hash_as_entrypoint(),
                     LaneId::SINGLE,
                     DataSpaceId::UNIVERSAL,
                 )])
-                .with_lane_payload_ownerships(vec![
-                    sample_lane_payload_ownership_for_context_at_slot(
-                        proposal_height,
-                        0,
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                        lane_block_height,
-                        0,
-                        vec![0],
-                        vec![Hash::from(tx.hash_as_entrypoint())],
-                        topology.as_ref(),
-                    ),
-                ]);
+                .with_lane_payload_ownerships(vec![ownership]);
             let mut builder =
                 BlockBuilder::new_with_time_source(vec![accepted], time_source.clone())
                     .chain(0, state.view().latest_block().as_deref())
@@ -15001,7 +15309,11 @@ pub(crate) mod valid {
         fn signed_default_lane_block_with_execution_context(
             label: &str,
             transaction_count: usize,
-            context_for: impl FnOnce(&[SignedTransaction], &[PeerId]) -> BlockExecutionContextBundle,
+            context_for: impl FnOnce(
+                &[SignedTransaction],
+                &[PeerId],
+                Hash,
+            ) -> BlockExecutionContextBundle,
         ) -> (State, Topology, TimeSource, SignedBlock) {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -15056,7 +15368,11 @@ pub(crate) mod valid {
                 .into_iter()
                 .map(|(_, _, tx)| tx)
                 .collect::<Vec<_>>();
-            let execution_context = context_for(&canonical_transactions, topology.as_ref());
+            let lane_incarnation = state
+                .lane_incarnation(LaneId::SINGLE)
+                .expect("default lane incarnation");
+            let execution_context =
+                context_for(&canonical_transactions, topology.as_ref(), lane_incarnation);
             let builder = BlockBuilder::new_with_time_source(accepted, time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_execution_context(Some(execution_context));
@@ -16499,18 +16815,21 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-valid",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
                             DataSpaceId::UNIVERSAL,
                         )])
                         .with_lane_payload_ownerships(vec![
-                            sample_lane_payload_ownership_for_context(
+                            sample_lane_payload_ownership_for_context_at_slot(
                                 2,
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
+                                1,
+                                0,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -16544,6 +16863,7 @@ pub(crate) mod valid {
                 &time_source,
                 "lane-payload-artifact-first",
                 2,
+                None,
             );
             let committed_first = ValidBlock::new_unverified_for_tests(first.clone())
                 .commit_unchecked()
@@ -16570,6 +16890,7 @@ pub(crate) mod valid {
                 &time_source,
                 "lane-payload-artifact-reuse",
                 2,
+                None,
             );
             let view = state.query_view();
             let err = ValidBlock::validate_static_state_dependent(
@@ -16594,6 +16915,159 @@ pub(crate) mod valid {
             );
         }
 
+        #[test]
+        fn validate_execution_context_requires_exact_canonical_lane_predecessor() {
+            let (state, kura, topology, time_source, leader) = lane_payload_context_fixture();
+            let mut first = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-first",
+                1,
+                None,
+            );
+            let predecessor_descriptor_hash = first
+                .execution_context()
+                .expect("first execution context")
+                .lane_payload_ownerships
+                .first()
+                .and_then(|ownership| ownership.lane_block_descriptor_hash)
+                .expect("first lane descriptor hash");
+            let predecessor_ownership = first
+                .execution_context()
+                .expect("first execution context")
+                .lane_payload_ownerships[0]
+                .clone();
+            let predecessor_proposal =
+                native_amx_coordinator_proposal_from_ownership(&predecessor_ownership)
+                    .expect("first lane proposal reconstructs");
+            let entrypoint_hashes = first
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect::<Vec<_>>();
+            first
+                .set_transaction_results(
+                    Vec::new(),
+                    &entrypoint_hashes,
+                    vec![Ok(DataTriggerSequence::default())],
+                )
+                .expect("attach canonical predecessor results");
+            let committed_first = ValidBlock::new_unverified_for_tests(first.clone())
+                .commit_unchecked()
+                .unpack(|_| {});
+            {
+                let mut state_block = state.block(committed_first.as_ref().header());
+                let _ = state_block
+                    .apply_without_execution(&committed_first, topology.as_ref().to_owned());
+                state_block
+                    .commit()
+                    .expect("commit first lane predecessor block");
+            }
+            kura.store_block(Arc::new(first))
+                .expect("store first lane predecessor artifact");
+
+            let exact_predecessor = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-exact",
+                2,
+                Some(predecessor_descriptor_hash),
+            );
+            let view = state.query_view();
+            let err = ValidBlock::validate_execution_context_with_state(
+                &exact_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("a predecessor ownership artifact without application must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("has no canonical predecessor application receipt")
+                ),
+                "unexpected unapplied-predecessor validation error: {err:?}"
+            );
+
+            kura.persist_lane_block_application_receipt(&predecessor_proposal)
+                .expect("persist first lane predecessor application receipt");
+            assert!(
+                kura.lane_block_application_receipt_available(&predecessor_proposal),
+                "test setup must expose an applied canonical predecessor"
+            );
+
+            let wrong_predecessor = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-wrong",
+                2,
+                None,
+            );
+            let err = ValidBlock::validate_execution_context_with_state(
+                &wrong_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("a self-consistent but wrong predecessor hash must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("does not extend the exact applied canonical predecessor")
+                ),
+                "unexpected wrong-predecessor validation error: {err:?}"
+            );
+
+            ValidBlock::validate_execution_context_with_state(
+                &exact_predecessor,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect("the exact same-incarnation canonical predecessor must validate");
+        }
+
+        #[test]
+        fn validate_execution_context_rejects_missing_canonical_lane_predecessor() {
+            let (state, _kura, topology, time_source, leader) = lane_payload_context_fixture();
+            let signed = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "lane-payload-predecessor-missing",
+                2,
+                None,
+            );
+            let view = state.query_view();
+            let err = ValidBlock::validate_execution_context_with_state(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &view,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("lane-local height two without height one must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("has no canonical predecessor application receipt")
+                ),
+                "unexpected missing-predecessor validation error: {err:?}"
+            );
+        }
+
         fn assert_lane_payload_ownership_context_rejected(
             label: &str,
             mutate: impl FnOnce(&mut SumeragiLanePayloadOwnership),
@@ -16603,12 +17077,13 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     label,
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         let mut ownership = sample_lane_payload_ownership_for_context(
                             2,
                             0,
                             LaneId::SINGLE,
                             DataSpaceId::UNIVERSAL,
+                            lane_incarnation,
                             vec![0],
                             vec![Hash::from(transactions[0].hash_as_entrypoint())],
                             validators,
@@ -16665,6 +17140,15 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_state_dependent_rejects_missing_lane_predecessor_descriptor_hash() {
+            assert_lane_payload_ownership_context_rejected(
+                "lane-payload-context-missing-predecessor-descriptor",
+                |ownership| ownership.previous_lane_block_descriptor_hash = None,
+                "missing its non-genesis predecessor descriptor hash",
+            );
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_reused_lane_block_descriptor_hash() {
             assert_lane_payload_ownership_context_rejected(
                 "lane-payload-context-reused-descriptor",
@@ -16691,7 +17175,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-descriptor-validator-drift",
                     1,
-                    |transactions, _validators| {
+                    |transactions, _validators, lane_incarnation| {
                         let wrong_validator =
                             crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
                         let wrong_validators =
@@ -16707,6 +17191,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 &wrong_validators,
@@ -16811,12 +17296,15 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-pk2-subject-compat",
                     1,
-                    |transactions, validators| {
-                        let mut ownership = sample_lane_payload_ownership_for_context(
+                    |transactions, validators, lane_incarnation| {
+                        let mut ownership = sample_lane_payload_ownership_for_context_at_slot(
                             2,
                             0,
                             LaneId::SINGLE,
                             DataSpaceId::UNIVERSAL,
+                            lane_incarnation,
+                            1,
+                            0,
                             vec![0],
                             vec![Hash::from(transactions[0].hash_as_entrypoint())],
                             validators,
@@ -16867,7 +17355,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-candidate-hash-drift",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -16879,6 +17367,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::new(b"wrong lane candidate hash")],
                                 validators,
@@ -16934,7 +17423,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-route-mismatch",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -16946,6 +17435,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::new(3),
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -16981,7 +17471,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-partial",
                     2,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![
                             ExternalExecutionContext::new(
                                 transactions[0].hash_as_entrypoint(),
@@ -17000,6 +17490,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![0],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -17037,7 +17528,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-out-of-range",
                     1,
-                    |transactions, validators| {
+                    |transactions, validators, lane_incarnation| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -17049,6 +17540,7 @@ pub(crate) mod valid {
                                 0,
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
+                                lane_incarnation,
                                 vec![1],
                                 vec![Hash::from(transactions[0].hash_as_entrypoint())],
                                 validators,
@@ -25163,7 +25655,7 @@ mod tests {
             timestamp_ms: 1_700_000_100,
         };
         let settlement = LaneBlockCommitment {
-            block_height: block_header.height().get(),
+            block_height: 3,
             lane_id,
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
@@ -25187,12 +25679,37 @@ mod tests {
             },
         );
 
+        let descriptor_hash = Hash::new(b"lane-relay-helper-descriptor");
+        let lane_payload_coordinates = BTreeMap::from([(
+            (lane_id, dataspace_id),
+            LanePayloadCoordinate {
+                lane_incarnation: settlement.lane_incarnation,
+                lane_block_height: settlement.block_height,
+                lane_block_descriptor_hash: descriptor_hash,
+            },
+        )]);
+
+        let missing_coordinate = lane_relay_envelopes_for_block(
+            &block_header,
+            da_hash,
+            std::slice::from_ref(&settlement),
+            &lane_summaries,
+            &BTreeMap::new(),
+        )
+        .expect_err("settled lanes must have exact payload ownership coordinates");
+        assert!(matches!(
+            missing_coordinate,
+            BlockValidationError::ExecutionContextInvalid(_)
+        ));
+
         let relays = lane_relay_envelopes_for_block(
             &block_header,
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-        );
+            &lane_payload_coordinates,
+        )
+        .expect("exact lane payload coordinates build a relay");
         assert_eq!(relays.len(), 1);
         let envelope = &relays[0];
         assert!(
@@ -25200,6 +25717,9 @@ mod tests {
             "block-level commit QC must not be copied into lane relay QC"
         );
         assert_eq!(envelope.rbc_bytes_total, 2048);
+        assert_eq!(envelope.block_height, 3);
+        assert_eq!(envelope.block_header.height().get(), 5);
+        assert_eq!(envelope.lane_block_descriptor_hash, Some(descriptor_hash));
         envelope.verify().expect("envelope should validate");
     }
 
@@ -25236,7 +25756,7 @@ mod tests {
             timestamp_ms: 1_700_000_100,
         };
         let settlement = LaneBlockCommitment {
-            block_height: block_header.height().get(),
+            block_height: 3,
             lane_id,
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id,
@@ -25260,12 +25780,23 @@ mod tests {
             },
         );
 
+        let lane_payload_coordinates = BTreeMap::from([(
+            (lane_id, dataspace_id),
+            LanePayloadCoordinate {
+                lane_incarnation: settlement.lane_incarnation,
+                lane_block_height: settlement.block_height,
+                lane_block_descriptor_hash: Hash::new(b"manifest-relay-descriptor"),
+            },
+        )]);
+
         let mut envelopes = lane_relay_envelopes_for_block(
             &block_header,
             da_hash,
             std::slice::from_ref(&settlement),
             &lane_summaries,
-        );
+            &lane_payload_coordinates,
+        )
+        .expect("exact lane payload coordinates build a relay");
         let manifest_root = [0x44; 32];
         let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =
             core::iter::once((dataspace_id, manifest_root)).collect();
@@ -25274,7 +25805,7 @@ mod tests {
         assert_eq!(envelopes.len(), 1);
         envelopes[0].fastpq_proof = Some(iroha_data_model::nexus::LaneFastpqProofMaterial {
             proof_digest: Hash::new(b"test-fastpq-proof"),
-            verified_at_height: envelopes[0].block_height,
+            verified_at_height: envelopes[0].block_header.height().get(),
         });
         assert_eq!(envelopes[0].manifest_root, Some(manifest_root));
         assert!(envelopes[0].fastpq_proof.is_some());
@@ -25586,10 +26117,16 @@ mod tests {
 
     #[test]
     fn block_validation_sequential_entrypoints_execute_pipeline_triggers() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus status test lock");
+        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+
         let chain_id = ChainId::from("sequential-pipeline-triggers");
         let (authority, keypair) = gen_account_in("wonderland");
         let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
-        let domain = Domain::new(domain_id).build(&authority);
+        let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let mut world = World::with([domain], [account], []);
         let block_key = Name::from_str("sequential_block_pipeline_trigger").expect("metadata key");
@@ -25622,15 +26159,92 @@ mod tests {
         let metadata_key = Name::from_str("sequential_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(&chain_id, &authority, &keypair, 2, 4, metadata_key);
+        let commitment_entrypoint_hash = commitment_entrypoint.hash();
+        let external_entrypoint_hash = external_signed.hash_as_entrypoint();
+
+        let lane_incarnation = Hash::new(b"sequential-settlement-lane-incarnation");
+        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
+        let mut ownership = iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
+            proposal_height: 1,
+            proposal_view: 0,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"sequential settlement subject placeholder"),
+            qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                chain_id.as_str(),
+            ),
+            accepted_candidate_indices: vec![0, 1],
+            accepted_transaction_hashes: vec![
+                Hash::from(external_entrypoint_hash),
+                Hash::from(commitment_entrypoint_hash),
+            ],
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: None,
+            lane_block_descriptor_validator_set: validator_set,
+            lane_block_descriptor_validator_count: 1,
+            lane_block_descriptor_min_quorum: 1,
+            payload_ownership_hash: Hash::new(b"sequential settlement ownership placeholder"),
+            rbc_instance_hash: Hash::new(b"sequential settlement rbc placeholder"),
+        };
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("sequential settlement ownership replay hashes");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let execution_context = BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::new(
+                external_entrypoint_hash,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ),
+            ExternalExecutionContext::new(
+                commitment_entrypoint_hash,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ),
+        ])
+        .with_lane_payload_ownerships(vec![ownership]);
 
         let accepted_external = AcceptedTransaction::new_unchecked(Cow::Owned(external_signed));
         let accepted_commitment =
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(commitment_entrypoint));
         let block = BlockBuilder::new(vec![accepted_external, accepted_commitment])
             .chain(0, state.view().latest_block().as_deref())
+            .with_execution_context(Some(execution_context))
             .sign(keypair.private_key())
             .unpack(|_| {});
         let mut state_block = state.block(block.header());
+        let mut source_id = [0; Hash::LENGTH];
+        source_id.copy_from_slice(external_hash.as_ref());
+        state_block.record_settlement_receipt(
+            external_hash,
+            crate::settlement::PendingSettlement {
+                source_id,
+                asset_definition_id: AssetDefinitionId::new(
+                    domain_id,
+                    "settlement".parse().expect("asset name"),
+                ),
+                local_amount_micro: 11,
+                xor_due_micro: 7,
+                xor_after_haircut_micro: 6,
+                xor_variance_micro: 1,
+                timestamp_ms: 1,
+                liquidity_profile: settlement_router::LiquidityProfile::Tier1,
+                volatility_bucket: crate::settlement::VolatilityBucket::Stable,
+                twap_local_per_xor: Decimal::ONE,
+                epsilon_bps: 25,
+                twap_window_seconds: 60,
+                oracle_timestamp_ms: 1,
+            },
+        );
 
         let valid_block = block
             .validate_and_record_transactions(&mut state_block)
@@ -25653,6 +26267,20 @@ mod tests {
             .expect("authority account exists");
         assert_eq!(block_value, Some(Json::new("ok")));
         assert_eq!(tx_value, Some(Json::new("ok")));
+
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.lane_settlement_commitments.len(), 1);
+        let settlement = &snapshot.lane_settlement_commitments[0];
+        assert_eq!(settlement.lane_id, LaneId::SINGLE);
+        assert_eq!(settlement.dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(settlement.lane_incarnation, lane_incarnation);
+        assert_eq!(settlement.block_height, 1);
+        assert_eq!(settlement.tx_count, 1);
+        assert_eq!(settlement.receipts.len(), 1);
+        assert_eq!(settlement.receipts[0].source_id, source_id);
+
+        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
     }
 
     #[test]

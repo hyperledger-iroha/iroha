@@ -853,7 +853,7 @@ fn decode_proof_attachments(
             Err(err) => Err(err),
         };
     }
-    if content_type.contains("application/json") || content_type.contains("text/json") {
+    if content_type.contains("application/json") {
         return decode_json_attachments(body).map_err(|err| format!("json decode error: {err}"));
     }
     let json_attempt = decode_json_attachments(body);

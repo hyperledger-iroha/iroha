@@ -8,26 +8,26 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
+/// Public Torii DTOs for the offline cash lifecycle.
+pub mod offline_api;
 /// Shared QR Code encoder used by Torii and CLI offline flows.
 pub mod qr;
-
-/// First-release Torii API version advertised by default (`major.minor`).
-pub const API_VERSION_DEFAULT: &str = "1.0";
-/// Supported Torii API versions in ascending order (`major.minor`).
-pub const API_VERSION_SUPPORTED: &[&str] = &[API_VERSION_DEFAULT];
-/// Minimum Torii API version required for proof/staking/fee endpoints.
-pub const API_MIN_PROOF_VERSION: &str = API_VERSION_DEFAULT;
-/// Optional unix timestamp when the oldest supported Torii API version sunsets.
-pub const API_VERSION_SUNSET_UNIX: Option<u64> = None;
-
-/// Header carrying the requested Torii API version (semantic `major.minor`).
-pub const HEADER_API_VERSION: &str = "x-iroha-api-version";
+/// Canonical Torii route metadata and projection helpers.
+pub mod route_catalog;
 
 pub mod uri {
     //! URI that Torii uses to route incoming requests.
 
     /// Query URI is used to handle incoming Query requests.
     pub const QUERY: &str = "/v1/query";
+    /// URI used to evaluate offline-payment readiness.
+    pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
+    /// URI used to submit an online-to-offline top-up operation.
+    pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
+    /// URI used to submit an offline redemption operation.
+    pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
+    /// URI used to fetch an offline operation by ID.
+    pub const OFFLINE_OPERATION: &str = crate::route_catalog::offline::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.
     pub const TRANSACTION: &str = "/v1/pipeline/transactions";
     /// Transaction entrypoint URI is used to handle sealed and non-external submissions.
@@ -78,8 +78,6 @@ pub mod uri {
     pub const SCHEMA: &str = "/v1/schema";
     /// URI for getting the API version currently used
     pub const API_VERSION: &str = "/v1/api/version";
-    /// URI for listing supported Torii API versions and the default.
-    pub const API_VERSIONS: &str = "/v1/api/versions";
     /// URI for getting cpu profile
     pub const PROFILE: &str = "/debug/pprof/profile";
     /// Base path for governance API endpoints
@@ -390,19 +388,6 @@ impl ErrorEnvelope {
     pub fn message(&self) -> &str {
         &self.message
     }
-}
-
-/// Supported Torii API versions and defaults exposed over `/v1/api/versions`.
-#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
-pub struct ApiVersionInfo {
-    /// Default API version the node will assume when no header is present.
-    pub default: String,
-    /// All supported API versions (sorted ascending).
-    pub supported: Vec<String>,
-    /// Optional unix timestamp when the lowest supported version sunsets.
-    pub sunset_unix: Option<u64>,
-    /// Minimum API version required for proof/staking/fee endpoints.
-    pub min_proof_version: String,
 }
 
 /// Per-backend proof retention snapshot.

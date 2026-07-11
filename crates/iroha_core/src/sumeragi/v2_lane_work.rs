@@ -831,7 +831,7 @@ impl V2LaneWorkAdapter {
                 .state
                 .da_shard_canonical_reset_heights_snapshot_cached()
                 .get(&lane_id)
-                .is_none_or(|reset| lane_block_height > *reset)
+                .is_none_or(|reset| proposal_height > *reset)
     }
 
     fn nexus_route_active(

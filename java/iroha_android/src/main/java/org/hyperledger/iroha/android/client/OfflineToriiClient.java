@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -11,20 +13,28 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
+import org.hyperledger.iroha.android.offline.OfflineOperationCodec;
+import org.hyperledger.iroha.android.offline.OfflineOperationReference;
+import org.hyperledger.iroha.android.offline.OfflineOperationStatus;
 import org.hyperledger.iroha.android.offline.OfflineReadiness;
+import org.hyperledger.iroha.android.offline.OfflineRedeemRequest;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
-import org.hyperledger.iroha.android.offline.OfflineV2Readiness;
+import org.hyperledger.iroha.android.offline.OfflineTopUpRequest;
 
 /**
  * Lightweight HTTP client for the maintained Torii Offline endpoint.
  *
  * <p>The retired offline HTTP routes have been
- * removed from Torii. This client exposes the maintained offline readiness endpoints.
+ * removed from Torii. This client exposes the first-release Offline readiness,
+ * top-up, redemption, and operation resources.
  */
 public final class OfflineToriiClient {
 
   private static final String OFFLINE_READINESS_PATH = "/v1/offline/readiness";
-  private static final String OFFLINE_V2_READINESS_PATH = "/v1/offline/v2/readiness";
+  private static final String OFFLINE_TOP_UP_PATH = "/v1/offline/top-up";
+  private static final String OFFLINE_REDEEM_PATH = "/v1/offline/redeem";
+  private static final String OFFLINE_OPERATIONS_PATH = "/v1/offline/operations";
+  private static final String NORITO_MEDIA_TYPE = "application/x-norito";
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
@@ -46,13 +56,39 @@ public final class OfflineToriiClient {
   }
 
   /** Fetch Torii's Offline readiness flags. */
-  public CompletableFuture<OfflineReadiness> getOfflineReadiness() {
-    return executeGet(OFFLINE_READINESS_PATH, OfflineJsonParser::parseOfflineReadiness);
+  public CompletableFuture<OfflineReadiness> getOfflineReadiness(
+      final String assetDefinitionId) {
+    requireExactNonEmptyText(assetDefinitionId, "assetDefinitionId");
+    return executeGet(
+        OFFLINE_READINESS_PATH
+            + "?asset_definition_id="
+            + urlEncode(assetDefinitionId),
+        OfflineJsonParser::parseOfflineReadiness);
   }
 
-  /** Fetch Torii's Offline V2 readiness flags. */
-  public CompletableFuture<OfflineV2Readiness> getOfflineV2Readiness() {
-    return executeGet(OFFLINE_V2_READINESS_PATH, OfflineJsonParser::parseOfflineV2Readiness);
+  /** Submit a canonical top-up archive. */
+  public CompletableFuture<OfflineOperationReference> submitTopUp(
+      final OfflineTopUpRequest request) {
+    Objects.requireNonNull(request, "request");
+    return executeNoritoPost(
+        OFFLINE_TOP_UP_PATH, request.operationId(), request.noritoArchive());
+  }
+
+  /** Submit a canonical redemption archive. */
+  public CompletableFuture<OfflineOperationReference> submitRedeem(
+      final OfflineRedeemRequest request) {
+    Objects.requireNonNull(request, "request");
+    return executeNoritoPost(
+        OFFLINE_REDEEM_PATH, request.operationId(), request.noritoArchive());
+  }
+
+  /** Fetch the canonical status archive for an Offline operation. */
+  public CompletableFuture<OfflineOperationStatus> getOperationStatus(
+      final String operationId) {
+    final String canonicalId =
+        org.hyperledger.iroha.android.offline.OfflineOperationCodec.requireOperationId(
+            operationId);
+    return executeNoritoGet(OFFLINE_OPERATIONS_PATH + "/" + canonicalId);
   }
 
   /** Exposes the underlying executor so auxiliary clients can share the same HTTP transport. */
@@ -63,7 +99,7 @@ public final class OfflineToriiClient {
   private <T> CompletableFuture<T> executeGet(final String path, final ResponseParser<T> parser) {
     final TransportRequest request = buildGetRequest(path);
     notifyRequest(request);
-    return executeHttpRequest(request, parser);
+    return executeHttpRequest(request, 200, parser);
   }
 
   private TransportRequest buildGetRequest(final String path) {
@@ -76,6 +112,45 @@ public final class OfflineToriiClient {
             .setUri(target)
             .setMethod("GET")
             .setTimeout(timeout);
+    headers.forEach(builder::addHeader);
+    return builder.build();
+  }
+
+  private CompletableFuture<OfflineOperationReference> executeNoritoPost(
+      final String path, final String idempotencyKey, final byte[] body) {
+    final TransportRequest request =
+        buildNoritoRequest(path, "POST", body, idempotencyKey);
+    notifyRequest(request);
+    return executeHttpRequest(request, 202, OfflineOperationCodec::decodeReference);
+  }
+
+  private CompletableFuture<OfflineOperationStatus> executeNoritoGet(final String path) {
+    final TransportRequest request = buildNoritoRequest(path, "GET", null, null);
+    notifyRequest(request);
+    return executeHttpRequest(request, 200, OfflineOperationCodec::decodeStatus);
+  }
+
+  private TransportRequest buildNoritoRequest(
+      final String path,
+      final String method,
+      final byte[] body,
+      final String idempotencyKey) {
+    final URI target = resolvePath(path);
+    final Map<String, String> headers = new LinkedHashMap<>(defaultHeaders);
+    ensureHeader(headers, "Accept", NORITO_MEDIA_TYPE);
+    if (body != null) {
+      ensureHeader(headers, "Content-Type", NORITO_MEDIA_TYPE);
+    }
+    if (idempotencyKey != null) {
+      ensureHeader(headers, "Idempotency-Key", idempotencyKey);
+    }
+    TransportSecurity.requireHttpRequestAllowed(
+        "OfflineToriiClient", baseUri, target, headers, body);
+    final TransportRequest.Builder builder =
+        TransportRequest.builder().setUri(target).setMethod(method).setTimeout(timeout);
+    if (body != null) {
+      builder.setBody(java.util.Arrays.copyOf(body, body.length));
+    }
     headers.forEach(builder::addHeader);
     return builder.build();
   }
@@ -118,6 +193,21 @@ public final class OfflineToriiClient {
     return URI.create(joined);
   }
 
+  private static void requireExactNonEmptyText(final String value, final String field) {
+    Objects.requireNonNull(value, field);
+    if (value.isEmpty() || !value.equals(value.trim())) {
+      throw new IllegalArgumentException(field + " must be exact non-empty text");
+    }
+  }
+
+  private static String urlEncode(final String value) {
+    try {
+      return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
+    } catch (final java.io.UnsupportedEncodingException ex) {
+      throw new IllegalStateException("UTF-8 unavailable", ex);
+    }
+  }
+
   private void notifyRequest(final TransportRequest request) {
     for (final ClientObserver observer : observers) {
       observer.onRequest(request);
@@ -137,7 +227,9 @@ public final class OfflineToriiClient {
   }
 
   private <T> CompletableFuture<T> executeHttpRequest(
-      final TransportRequest request, final ResponseParser<T> parser) {
+      final TransportRequest request,
+      final int expectedStatus,
+      final ResponseParser<T> parser) {
     final CompletableFuture<T> future = new CompletableFuture<>();
     executor
         .execute(request)
@@ -168,7 +260,7 @@ public final class OfflineToriiClient {
                       response.message(),
                       null,
                       rejectCode);
-              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+              if (response.statusCode() != expectedStatus) {
                 final OfflineToriiException error =
                     new OfflineToriiException(
                         buildHttpFailureMessage(

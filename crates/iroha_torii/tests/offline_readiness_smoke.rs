@@ -1,10 +1,14 @@
+//! Router smoke tests for the first-release offline API.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Smoke test for the Offline app route.
+#![cfg(feature = "app_api")]
 
 use std::sync::Arc;
 
 use axum::extract::connect_info::ConnectInfo;
-use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
+use axum::http::{
+    HeaderValue, Method, Request, StatusCode,
+    header::{ACCEPT, CONTENT_TYPE},
+};
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
@@ -19,8 +23,12 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
 
+fn connect_info() -> ConnectInfo<std::net::SocketAddr> {
+    ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+}
+
 #[tokio::test]
-async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
+async fn offline_router_exposes_only_the_final_first_release_contract() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -30,10 +38,9 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
+        iroha_config::parameters::actual::Queue::default(),
         events_sender,
     ));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
@@ -92,105 +99,167 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     };
 
     let app = torii.api_router_for_tests();
-    let connect_info = ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)));
 
-    let readiness = app
+    let missing_readiness_query = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v1/offline/cash/readiness"))
-                .extension(connect_info)
+                .uri("/v1/offline/readiness")
+                .header(ACCEPT, "application/json")
+                .extension(connect_info())
                 .body(axum::body::Body::empty())
-                .unwrap(),
+                .expect("readiness request"),
         )
         .await
-        .unwrap();
-    assert_eq!(readiness.status(), StatusCode::NOT_FOUND);
-
-    let readiness = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(Uri::from_static("/v1/offline/readiness"))
-                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(readiness.status(), StatusCode::OK);
-    let body = readiness.into_body().collect().await.unwrap().to_bytes();
-    let body = String::from_utf8(body.to_vec()).unwrap();
-    assert!(body.contains("\"offline_telemetry\":true"));
-    assert!(body.contains("\"offline_kagemusha_recursive_compact_available\":true"));
-    assert!(body.contains("\"offline_kagemusha_recursive_compact_mode\":\"recursive_compact_v1\""));
-    assert!(
-        body.contains(
-            "\"offline_kagemusha_recursive_compact_required_native_bridge_abi_version\":7"
-        )
+        .expect("readiness response");
+    assert_eq!(missing_readiness_query.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        missing_readiness_query.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/json"))
     );
-    assert!(body.contains(
-        "\"offline_kagemusha_recursive_compact_circuit_id\":\"kagemusha-recursive-compact-v1\""
-    ));
-    assert!(body.contains("\"offline_kagemusha_recursive_compact_artifacts_available\":true"));
-    for field in [
-        "offline_note",
-        "offline_bearer_cash_v1",
-        "offline_one_use_keys",
-        "offline_recursive_note_proof",
-        "offline_recursive_note_proof_backend",
-        "offline_recursive_note_proof_circuit_id",
-        "offline_recursive_note_proof_public_inputs_schema_hash",
-        "offline_recursive_note_proof_public_instance_columns",
-        "offline_recursive_note_proof_verifier_key_id",
-        "offline_fountain_qr",
-        "offline_sync_optional",
-        "offline_kagemusha_enabled",
-        "offline_kagemusha_force_legacy",
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_artifacts",
-    ] {
-        assert!(
-            !body.contains(&format!("\"{field}\"")),
-            "legacy readiness field must be absent: {field}"
+    let missing_query_body = missing_readiness_query
+        .into_body()
+        .collect()
+        .await
+        .expect("collect missing-query error")
+        .to_bytes();
+    let missing_query_error: iroha_torii_shared::ErrorEnvelope =
+        norito::json::from_slice(&missing_query_body).expect("decode missing-query error");
+    assert_eq!(missing_query_error.code(), "request_query_invalid");
+
+    let readiness = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/offline/readiness?asset_definition_id=xor%23wonderland")
+                .header(ACCEPT, "application/json")
+                .extension(connect_info())
+                .body(axum::body::Body::empty())
+                .expect("readiness request"),
+        )
+        .await
+        .expect("readiness response");
+    assert_eq!(
+        readiness.status(),
+        StatusCode::NOT_FOUND,
+        "the route is mounted and rejects an unregistered requested asset"
+    );
+
+    for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+        let json = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(axum::body::Body::from("{}"))
+                    .expect("typed JSON request"),
+            )
+            .await
+            .expect("typed JSON response");
+        assert_eq!(
+            json.status(),
+            StatusCode::BAD_REQUEST,
+            "{path} must decode the body directly as its typed request"
+        );
+
+        let norito = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/x-norito")
+                    .header(ACCEPT, "application/x-norito")
+                    .extension(connect_info())
+                    .body(axum::body::Body::from("not-a-norito-archive"))
+                    .expect("typed Norito request"),
+            )
+            .await
+            .expect("typed Norito response");
+        assert_eq!(
+            norito.status(),
+            StatusCode::BAD_REQUEST,
+            "{path} must decode a direct typed Norito archive"
+        );
+
+        let missing_content_type = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .extension(connect_info())
+                    .body(axum::body::Body::from("{}"))
+                    .expect("request without content type"),
+            )
+            .await
+            .expect("missing content type response");
+        assert_eq!(
+            missing_content_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
     }
 
-    for path in [
-        "/v1/offline/keys/refill",
-        "/v1/offline/notes/issue",
-        "/v1/offline/cash/setup",
-        "/v1/offline/cash/load",
-        "/v1/offline/cash/refresh",
-        "/v1/offline/cash/sync",
-        "/v1/offline/cash/redeem",
-        "/v1/offline/transfers",
-        "/v1/offline/transfers/query",
-        "/v1/offline/notes/redeem",
-        "/v1/offline/audit",
-        "/v1/offline/revocations",
-        "/v1/offline/revocations/bundle",
+    let invalid_operation_id = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/offline/operations/not-hex")
+                .header(ACCEPT, "application/json")
+                .extension(connect_info())
+                .body(axum::body::Body::empty())
+                .expect("operation request"),
+        )
+        .await
+        .expect("operation response");
+    assert_eq!(invalid_operation_id.status(), StatusCode::BAD_REQUEST);
+
+    let missing_operation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/offline/operations/{}", "11".repeat(32)))
+                .header(ACCEPT, "application/json")
+                .extension(connect_info())
+                .body(axum::body::Body::empty())
+                .expect("operation request"),
+        )
+        .await
+        .expect("operation response");
+    assert_eq!(missing_operation.status(), StatusCode::NOT_FOUND);
+
+    for (method, path) in [
+        (Method::GET, "/v1/offline/v2/readiness"),
+        (Method::POST, "/v1/offline/v2/kagemusha/topup"),
+        (Method::POST, "/v1/offline/v2/notes/redeem"),
+        (Method::POST, "/v1/offline/keys/refill"),
+        (Method::POST, "/v1/offline/notes/issue"),
+        (Method::POST, "/v1/offline/notes/redeem"),
+        (Method::POST, "/v1/offline/cash/load"),
+        (Method::POST, "/v1/offline/cash/redeem"),
+        (Method::POST, "/v1/offline/audit"),
     ] {
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method(method.clone())
                     .uri(path)
                     .header(CONTENT_TYPE, "application/json")
-                    .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
+                    .extension(connect_info())
                     .body(axum::body::Body::from("{}"))
-                    .unwrap(),
+                    .expect("retired route request"),
             )
             .await
-            .unwrap();
+            .expect("retired route response");
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND,
-            "offline app route should be absent from readiness-only router: {path}"
+            "retired method/path pair must be unregistered: {method} {path}"
         );
     }
 }

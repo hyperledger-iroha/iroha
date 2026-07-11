@@ -1086,7 +1086,6 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         private_key: &client_config.private_key,
         gas_asset_id: None,
         alias_inputs: None,
-        api_version_hint: None,
     };
     let registration = if errors.is_empty() {
         submit_pin_register_with_fallback(
@@ -1618,11 +1617,6 @@ fn submit_pin_register_with_fallback(
         .send()
         .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
     let status = response.status();
-    let api_version_hint = response
-        .headers()
-        .get("x-iroha-api-version")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
     let response_bytes = response
         .bytes()
         .map_err(|err| format!("failed to read Torii response: {err}"))?
@@ -1651,7 +1645,6 @@ fn submit_pin_register_with_fallback(
                 private_key: request.private_key,
                 gas_asset_id: request.gas_asset_id,
                 alias_inputs: request.alias_inputs,
-                api_version_hint: api_version_hint.as_deref(),
             },
             manifest,
             chunk_digest_sha3,
@@ -12201,7 +12194,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
             private_key: &private_key,
             gas_asset_id: gas_asset_id.as_deref(),
             alias_inputs: alias_inputs.as_ref(),
-            api_version_hint: None,
         },
         &authority_literal,
         &manifest,
@@ -12654,7 +12646,6 @@ struct ManifestSubmitRequest<'a> {
     private_key: &'a PrivateKey,
     gas_asset_id: Option<&'a str>,
     alias_inputs: Option<&'a AliasInputs>,
-    api_version_hint: Option<&'a str>,
 }
 
 fn sign_manifest_submit_fallback_transaction(
@@ -12723,17 +12714,10 @@ fn submit_manifest_via_transaction_endpoint(
         .torii_base_url
         .join("transaction")
         .map_err(|err| format!("failed to build Torii transaction endpoint URL: {err}"))?;
-    let mut request_builder = request
+    let request_builder = request
         .client
         .post(tx_endpoint.as_str())
         .header(CONTENT_TYPE, "application/x-norito");
-    if let Some(version) = request
-        .api_version_hint
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        request_builder = request_builder.header("x-iroha-api-version", version);
-    }
     let response = request_builder
         .body(transaction.encode_versioned())
         .send()

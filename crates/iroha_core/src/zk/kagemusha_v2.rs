@@ -125,8 +125,7 @@ const I_UNSHIELD_PUBLIC_INPUTS_DIGEST: usize = I_REDEMPTION_RECIPIENT_DIGEST + 4
 const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGEST + 4;
 
 /// Number of rows in the V2 transition public-instance column.
-pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS: usize =
-    I_UNSHIELD_PUBLIC_AMOUNT + 1;
+pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS: usize = I_UNSHIELD_PUBLIC_AMOUNT + 1;
 
 const PATH_SELECTOR_COUNT: usize = 64;
 
@@ -208,7 +207,7 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
 }
 
 /// Constraint-system columns for the V2 transition relation.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct KagemushaRecursiveSpendTransitionConfigV2 {
     public_advice: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     public_instance: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
@@ -318,9 +317,8 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
             constraints.push(enabled.clone() * branch.clone() * (one.clone() - has_change.clone()));
             constraints.push(enabled.clone() * append.clone() * redemption.clone());
             constraints.push(enabled.clone() * redemption.clone() * (one.clone() - branch.clone()));
-            constraints.push(
-                enabled.clone() * redemption.clone() * (one.clone() - has_change.clone()),
-            );
+            constraints
+                .push(enabled.clone() * redemption.clone() * (one.clone() - has_change.clone()));
             constraints.push(enabled.clone() * redemption.clone() * record_swap.clone());
             constraints.push(enabled.clone() * redemption.clone() * transfer_swap.clone());
             constraints.push(
@@ -487,12 +485,8 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 enabled.clone()
                     * append.clone()
                     * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone() - has_change.clone()),
-                enabled.clone()
-                    * redemption.clone()
-                    * (p(I_RECORD_OUTPUT_COUNT) - one.clone()),
-                enabled.clone()
-                    * redemption.clone()
-                    * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone()),
+                enabled.clone() * redemption.clone() * (p(I_RECORD_OUTPUT_COUNT) - one.clone()),
+                enabled.clone() * redemption.clone() * (p(I_TRANSFER_OUTPUT_COUNT) - one.clone()),
                 enabled.clone()
                     * redemption.clone()
                     * (p(I_RECORD_OUTPUT_0) - p(I_CHANGE_COMMITMENT)),
@@ -812,14 +806,28 @@ fn fill_common_statement_values(
     statement
         .validate_context()
         .map_err(|err| err.to_string())?;
+    let [branch_claim] = statement.branch_claims.as_slice() else {
+        return Err(
+            "current Kagemusha V2 transition layout cannot represent joined branch claims"
+                .to_owned(),
+        );
+    };
+    let [topup_anchor] = statement.topup_anchors.as_slice() else {
+        return Err(
+            "current Kagemusha V2 transition layout cannot represent multiple top-up origins"
+                .to_owned(),
+        );
+    };
+    let branch_path = &branch_claim.path;
     public[I_LAYOUT_VERSION] = Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION);
     public[I_PROOF_STEP_COUNT] = Scalar::from(u64::from(statement.proof_step_count));
     public[I_PEER_HOP_COUNT] = Scalar::from(u64::from(statement.peer_hop_count));
-    public[I_BRANCH_DEPTH] = Scalar::from(u64::from(statement.branch_path.depth));
+    public[I_BRANCH_DEPTH] = Scalar::from(u64::from(branch_path.depth));
     public[I_ASSET_SCALE] = Scalar::from(u64::from(statement.asset_scale));
     public[I_CURRENT_SCALE] = Scalar::from(u64::from(statement.current_note.amount.scale));
-    public[I_BRANCH_PATH_BITS] = Scalar::from(path_bits_as_u64(statement.branch_path.path_bits));
-    public[I_INITIAL_ROOT] = scalar_from_canonical_bytes(&statement.initial_root, "initial root")?;
+    public[I_BRANCH_PATH_BITS] = Scalar::from(path_bits_as_u64(branch_path.path_bits));
+    public[I_INITIAL_ROOT] =
+        scalar_from_canonical_bytes(&topup_anchor.initial_root, "initial root")?;
     public[I_FINAL_ROOT] = scalar_from_canonical_bytes(&statement.final_root, "final root")?;
     public[I_CURRENT_COMMITMENT] = scalar_from_canonical_bytes(
         &statement.current_note.note_commitment,
@@ -839,11 +847,7 @@ fn fill_common_statement_values(
         I_STATEMENT_DIGEST,
         &statement.digest().map_err(|err| err.to_string())?,
     );
-    write_limb_group(
-        public,
-        I_BRANCH_LINEAGE_ROOT,
-        &statement.branch_path.lineage_root,
-    );
+    write_limb_group(public, I_BRANCH_LINEAGE_ROOT, &branch_path.lineage_root);
     write_limb_group(
         public,
         I_CHAIN_ID_DIGEST,
@@ -854,7 +858,11 @@ fn fill_common_statement_values(
         I_ASSET_ID_DIGEST,
         &canonical_poseidon_digest(&statement.asset)?,
     );
-    write_limb_group(public, I_TOPUP_OPERATION_ID, &statement.topup_operation_id);
+    write_limb_group(
+        public,
+        I_TOPUP_OPERATION_ID,
+        &topup_anchor.topup_operation_id,
+    );
     write_limb_group(
         public,
         I_ARTIFACT_GENERATION_DIGEST,
@@ -865,10 +873,10 @@ fn fill_common_statement_values(
     write_limb_group(
         public,
         I_TOPUP_ANCHOR_DIGEST,
-        &canonical_poseidon_digest(&statement.topup_anchor_nullifiers)?,
+        &canonical_poseidon_digest(&topup_anchor.topup_anchor_nullifiers)?,
     );
     public[I_TOPUP_ANCHOR_COUNT] = Scalar::from(
-        u64::try_from(statement.topup_anchor_nullifiers.len())
+        u64::try_from(topup_anchor.topup_anchor_nullifiers.len())
             .map_err(|_| "Kagemusha V2 top-up anchor count does not fit u64".to_owned())?,
     );
     write_limb_group(
@@ -979,10 +987,8 @@ pub fn kagemusha_recursive_spend_init_transition_values_v2(
         || anchor.asset_scale != statement.asset_scale
         || anchor.amount != statement.current_note.amount
         || anchor.current_note != statement.current_note
-        || anchor.initial_root != statement.initial_root
         || anchor.finalized_root != statement.final_root
-        || anchor.topup_anchor_nullifiers != statement.topup_anchor_nullifiers
-        || anchor.topup_operation_id != statement.topup_operation_id
+        || statement.topup_anchors.as_slice() != std::slice::from_ref(anchor)
         || anchor.artifact_generation != statement.artifact_generation
         || anchor.transfer_verifier_id != step.attachment.vk_ref
         || step.attachment.vk_commitment != Some(anchor.transfer_verifier_commitment)
@@ -1058,13 +1064,40 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
     else {
         return Err("Kagemusha V2 append statement must carry a peer-split transition".to_owned());
     };
-    if transition.intent != *split || transition.branch != branch {
+    let split_binding_digest = split.binding_digest().map_err(|err| err.to_string())?;
+    if transition.branch != branch
+        || transition.binding_digest != split_binding_digest
+        || transition.recipient_request_digest != split.recipient_request_digest
+        || transition.operation_id != split.operation_id
+        || transition.parent_max_proof_step_count != previous.proof_step_count
+        || transition.parent_max_peer_hop_count != previous.peer_hop_count
+        || statement.topup_anchors != split.topup_anchors
+        || statement.lineage_mode != split.lineage_mode
+        || statement.artifact_generation != split.output_artifact_generation
+        || statement.branch_claims
+            != split
+                .output_branch_claims(branch)
+                .map_err(|err| err.to_string())?
+    {
         return Err("Kagemusha V2 output statement split/branch mismatch".to_owned());
     }
-    if transition.binding_digest != split.binding_digest().map_err(|err| err.to_string())? {
-        return Err("Kagemusha V2 output statement split digest mismatch".to_owned());
-    }
-    if split.parent_lineage_digest != parent_bundle_digest {
+    let [input] = split.inputs.as_slice() else {
+        return Err(
+            "current Kagemusha V2 transition layout cannot represent a two-input join".to_owned(),
+        );
+    };
+    let [input_branch_claim] = input.branch_claims.as_slice() else {
+        return Err(
+            "current Kagemusha V2 transition layout cannot represent joined input claims"
+                .to_owned(),
+        );
+    };
+    let input_branch_path = &input_branch_claim.path;
+    if input.bundle_digest != parent_bundle_digest
+        || input.input_note != previous.current_note
+        || input.branch_claims != previous.branch_claims
+        || input.input_root != previous.final_root
+    {
         return Err("Kagemusha V2 split parent bundle digest mismatch".to_owned());
     }
     let transfer =
@@ -1083,15 +1116,15 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
     values.public[I_HAS_CHANGE] = Scalar::from(u64::from(split.change_output.is_some()));
     values.public[I_PREVIOUS_PROOF_STEP_COUNT] = Scalar::from(u64::from(previous.proof_step_count));
     values.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(u64::from(previous.peer_hop_count));
-    values.public[I_PARENT_BRANCH_DEPTH] = Scalar::from(u64::from(split.parent_branch_path.depth));
+    values.public[I_PARENT_BRANCH_DEPTH] = Scalar::from(u64::from(input_branch_path.depth));
     values.public[I_PARENT_BRANCH_PATH_BITS] =
-        Scalar::from(path_bits_as_u64(split.parent_branch_path.path_bits));
+        Scalar::from(path_bits_as_u64(input_branch_path.path_bits));
     values.public[I_PARENT_FINAL_ROOT] =
         scalar_from_canonical_bytes(&previous.final_root, "parent final root")?;
     write_limb_group(
         &mut values.public,
         I_PARENT_BRANCH_LINEAGE_ROOT,
-        &split.parent_branch_path.lineage_root,
+        &input_branch_path.lineage_root,
     );
     write_limb_group(
         &mut values.public,
@@ -1114,7 +1147,7 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
         I_PARENT_TOPUP_RECEIPT_DIGEST,
         &parent_topup_receipt_digest,
     );
-    values.public[I_INPUT_SCALE] = Scalar::from(u64::from(split.input_note.amount.scale));
+    values.public[I_INPUT_SCALE] = Scalar::from(u64::from(input.input_note.amount.scale));
     values.public[I_TRANSFER_SCALE] = Scalar::from(u64::from(split.transfer_amount.scale));
     values.public[I_RECIPIENT_SCALE] = Scalar::from(u64::from(split.recipient_output.amount.scale));
     values.public[I_CHANGE_SCALE] = split
@@ -1126,7 +1159,7 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
     write_amount(
         &mut values.public,
         I_INPUT_AMOUNT_LO,
-        split.input_note.amount.atomic_units,
+        input.input_note.amount.atomic_units,
     );
     write_amount(
         &mut values.public,
@@ -1147,9 +1180,9 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
             .map_or(0, |change| change.amount.atomic_units),
     );
     values.public[I_INPUT_COMMITMENT] =
-        scalar_from_canonical_bytes(&split.input_note.note_commitment, "split input commitment")?;
+        scalar_from_canonical_bytes(&input.input_note.note_commitment, "split input commitment")?;
     values.public[I_INPUT_NULLIFIER] =
-        scalar_from_canonical_bytes(&split.input_note.spend_nullifier, "split input nullifier")?;
+        scalar_from_canonical_bytes(&input.input_note.spend_nullifier, "split input nullifier")?;
     values.public[I_RECIPIENT_COMMITMENT] = scalar_from_canonical_bytes(
         &split.recipient_output.note_commitment,
         "recipient output commitment",
@@ -1175,7 +1208,7 @@ pub fn kagemusha_recursive_spend_append_transition_values_v2(
     values.public[I_RECORD_OUTPUT_SWAP] = Scalar::from(u64::from(record_swap));
     values.public[I_TRANSFER_OUTPUT_SWAP] = Scalar::from(u64::from(transfer_swap));
     set_amount_carry(&mut values, split);
-    set_path_selector(&mut values, split.parent_branch_path.depth)?;
+    set_path_selector(&mut values, input_branch_path.depth)?;
     values.validate_host_relation()?;
     Ok(values)
 }
@@ -1205,22 +1238,33 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
         );
     };
     let binding_digest = redemption.binding_digest().map_err(|err| err.to_string())?;
-    if transition.intent != *redemption || transition.binding_digest != binding_digest {
+    if transition.binding_digest != binding_digest
+        || transition.parent_bundle_digest != redemption.parent_bundle_digest
+        || transition.operation_id != redemption.operation_id
+        || transition.parent_proof_step_count != redemption.parent_proof_step_count
+        || transition.parent_peer_hop_count != redemption.parent_peer_hop_count
+    {
         return Err("Kagemusha V2 redeem-change statement transition mismatch".to_owned());
     }
     if redemption.parent_bundle_digest != parent_bundle_digest {
         return Err("Kagemusha V2 redemption parent bundle digest mismatch".to_owned());
     }
+    let [parent_branch_claim] = redemption.parent_branch_claims.as_slice() else {
+        return Err(
+            "current Kagemusha V2 redeem-change layout cannot represent joined branch claims"
+                .to_owned(),
+        );
+    };
+    let parent_branch_path = &parent_branch_claim.path;
     let change = redemption
         .change_output
         .as_ref()
         .ok_or_else(|| "Kagemusha V2 redeem-change requires a change output".to_owned())?;
+    let expected_change_claim = parent_branch_claim
+        .child(KagemushaRecursiveSpendBranchV2::Change, binding_digest)
+        .map_err(|err| err.to_string())?;
     if statement.current_note != *change
-        || statement.branch_path
-            != redemption
-                .parent_branch_path
-                .child(KagemushaRecursiveSpendBranchV2::Change)
-                .map_err(|err| err.to_string())?
+        || statement.branch_claims.as_slice() != std::slice::from_ref(&expected_change_claim)
     {
         return Err("Kagemusha V2 redeem-change output branch mismatch".to_owned());
     }
@@ -1235,8 +1279,7 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
     let unshield =
         KagemushaConfidentialUnshieldPublicInputsV3::from_proof(&step.attachment.proof.bytes)?;
     let binding = redemption.unshield_public_inputs;
-    if unshield.input_commitments
-        != [binding.input_commitment_0, binding.input_commitment_1]
+    if unshield.input_commitments != [binding.input_commitment_0, binding.input_commitment_1]
         || unshield.nullifiers != [binding.nullifier_0, binding.nullifier_1]
         || unshield.change_commitment != binding.change_output_commitment
         || unshield.root != binding.root
@@ -1260,23 +1303,18 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
     values.public[I_HAS_CHANGE] = Scalar::from(1);
     values.public[I_PREVIOUS_PROOF_STEP_COUNT] = Scalar::from(u64::from(previous.proof_step_count));
     values.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(u64::from(previous.peer_hop_count));
-    values.public[I_PARENT_BRANCH_DEPTH] =
-        Scalar::from(u64::from(redemption.parent_branch_path.depth));
+    values.public[I_PARENT_BRANCH_DEPTH] = Scalar::from(u64::from(parent_branch_path.depth));
     values.public[I_PARENT_BRANCH_PATH_BITS] =
-        Scalar::from(path_bits_as_u64(redemption.parent_branch_path.path_bits));
+        Scalar::from(path_bits_as_u64(parent_branch_path.path_bits));
     values.public[I_PARENT_FINAL_ROOT] =
         scalar_from_canonical_bytes(&previous.final_root, "parent final root")?;
     write_limb_group(
         &mut values.public,
         I_PARENT_BRANCH_LINEAGE_ROOT,
-        &redemption.parent_branch_path.lineage_root,
+        &parent_branch_path.lineage_root,
     );
     write_limb_group(&mut values.public, I_SPLIT_DIGEST, &binding_digest);
-    write_limb_group(
-        &mut values.public,
-        I_OPERATION_ID,
-        &redemption.operation_id,
-    );
+    write_limb_group(&mut values.public, I_OPERATION_ID, &redemption.operation_id);
     write_limb_group(
         &mut values.public,
         I_PARENT_BUNDLE_DIGEST,
@@ -1359,7 +1397,7 @@ pub fn kagemusha_recursive_spend_redeem_change_transition_values_v2(
     let public_low = redemption.public_amount.atomic_units as u64;
     let change_low = change.amount.atomic_units as u64;
     values.amount_low_carry = Scalar::from(u64::from(public_low.checked_add(change_low).is_none()));
-    set_path_selector(&mut values, redemption.parent_branch_path.depth)?;
+    set_path_selector(&mut values, parent_branch_path.depth)?;
     values.validate_host_relation()?;
     Ok(values)
 }
@@ -1396,6 +1434,16 @@ type AppendLineageKeygenShape<const LEN: usize> =
         { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS },
         { super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS },
     >;
+
+// TODO(kagemusha-v2-release):
+// `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE` must remain false
+// until this verifier-slice composition is replaced by a compact profile. The
+// current outer rectangularization pads every lineage instance column to the
+// transition-column height, exceeding the peer archive budget before proof
+// bytes are included. Moreover, the lineage and V2 transition subcircuits are
+// only juxtaposed here: no circuit-side equality gate links the verified
+// parent opening/semantic boundary to the V2 parent bundle, root, counters, or
+// statement digest. Host checks cannot substitute for those proof constraints.
 
 /// Composite configuration for a V2 init proof.
 #[derive(Clone)]
@@ -1607,9 +1655,7 @@ impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendAppendKeygenSh
     }
 }
 
-impl<const LEN: usize> Circuit<Scalar>
-    for KagemushaRecursiveSpendRedeemChangeKeygenShapeV2<LEN>
-{
+impl<const LEN: usize> Circuit<Scalar> for KagemushaRecursiveSpendRedeemChangeKeygenShapeV2<LEN> {
     type Config = KagemushaRecursiveSpendRedeemChangeConfigV2;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
@@ -2211,6 +2257,7 @@ mod tests {
         write_amount(p, I_CHANGE_AMOUNT_LO, 60);
         p[I_INITIAL_ROOT] = Scalar::from(11);
         p[I_FINAL_ROOT] = Scalar::from(12);
+        p[I_PARENT_FINAL_ROOT] = Scalar::from(11);
         p[I_RECORD_ROOT_BEFORE] = Scalar::from(11);
         p[I_RECORD_ROOT_AFTER] = Scalar::from(12);
         p[I_TRANSFER_ROOT] = Scalar::from(12);
@@ -2236,6 +2283,65 @@ mod tests {
             p[I_PARENT_BRANCH_LINEAGE_ROOT + limb] = Scalar::from(u64::try_from(limb + 1).unwrap());
         }
         values.path_depth_selectors[0] = Scalar::from(1);
+        values
+    }
+
+    fn valid_redeem_change_values() -> KagemushaRecursiveSpendTransitionValuesV2 {
+        let mut values = KagemushaRecursiveSpendTransitionValuesV2::default();
+        let p = &mut values.public;
+        p[I_LAYOUT_VERSION] = Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION);
+        p[I_REDEMPTION_PROFILE] = Scalar::from(1);
+        p[I_BRANCH_CHANGE] = Scalar::from(1);
+        p[I_HAS_CHANGE] = Scalar::from(1);
+        p[I_PROOF_STEP_COUNT] = Scalar::from(2);
+        p[I_PEER_HOP_COUNT] = Scalar::from(3);
+        p[I_PREVIOUS_PROOF_STEP_COUNT] = Scalar::from(1);
+        p[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(3);
+        p[I_BRANCH_DEPTH] = Scalar::from(4);
+        p[I_PARENT_BRANCH_DEPTH] = Scalar::from(3);
+        p[I_BRANCH_PATH_BITS] = Scalar::from(1u64 << 60);
+        p[I_PARENT_BRANCH_PATH_BITS] = Scalar::from(0);
+        p[I_ASSET_SCALE] = Scalar::from(2);
+        p[I_INPUT_SCALE] = Scalar::from(2);
+        p[I_TRANSFER_SCALE] = Scalar::from(2);
+        p[I_RECIPIENT_SCALE] = Scalar::from(2);
+        p[I_CHANGE_SCALE] = Scalar::from(2);
+        p[I_CURRENT_SCALE] = Scalar::from(2);
+        p[I_RECORD_INPUT_COUNT] = Scalar::from(1);
+        p[I_TRANSFER_INPUT_COUNT] = Scalar::from(1);
+        p[I_RECORD_OUTPUT_COUNT] = Scalar::from(1);
+        p[I_TRANSFER_OUTPUT_COUNT] = Scalar::from(1);
+        write_amount(p, I_CURRENT_AMOUNT_LO, 60);
+        write_amount(p, I_INPUT_AMOUNT_LO, 100);
+        write_amount(p, I_TRANSFER_AMOUNT_LO, 40);
+        write_amount(p, I_RECIPIENT_AMOUNT_LO, 40);
+        write_amount(p, I_CHANGE_AMOUNT_LO, 60);
+        p[I_UNSHIELD_PUBLIC_AMOUNT] = Scalar::from(40);
+        p[I_INITIAL_ROOT] = Scalar::from(7);
+        p[I_PARENT_FINAL_ROOT] = Scalar::from(11);
+        p[I_FINAL_ROOT] = Scalar::from(12);
+        p[I_RECORD_ROOT_BEFORE] = Scalar::from(11);
+        p[I_RECORD_ROOT_AFTER] = Scalar::from(12);
+        p[I_TRANSFER_ROOT] = Scalar::from(11);
+        p[I_CURRENT_COMMITMENT] = Scalar::from(41);
+        p[I_CURRENT_NULLIFIER] = Scalar::from(42);
+        p[I_INPUT_COMMITMENT] = Scalar::from(21);
+        p[I_INPUT_NULLIFIER] = Scalar::from(22);
+        p[I_CHANGE_COMMITMENT] = Scalar::from(41);
+        p[I_CHANGE_NULLIFIER] = Scalar::from(42);
+        p[I_RECORD_INPUT_NULLIFIER_0] = Scalar::from(22);
+        p[I_RECORD_OUTPUT_0] = Scalar::from(41);
+        p[I_TRANSFER_INPUT_COMMITMENT_0] = Scalar::from(21);
+        p[I_TRANSFER_NULLIFIER_0] = Scalar::from(22);
+        p[I_TRANSFER_OUTPUT_0] = Scalar::from(41);
+        for limb in 0..4 {
+            p[I_BRANCH_LINEAGE_ROOT + limb] = Scalar::from(u64::try_from(limb + 1).unwrap());
+            p[I_PARENT_BRANCH_LINEAGE_ROOT + limb] = Scalar::from(u64::try_from(limb + 1).unwrap());
+            p[I_TOPUP_RECEIPT_DIGEST + limb] = Scalar::from(u64::try_from(limb + 5).unwrap());
+            p[I_PARENT_TOPUP_RECEIPT_DIGEST + limb] =
+                Scalar::from(u64::try_from(limb + 5).unwrap());
+        }
+        values.path_depth_selectors[3] = Scalar::from(1);
         values
     }
 
@@ -2267,6 +2373,37 @@ mod tests {
     }
 
     #[test]
+    fn transition_relation_accepts_low_limb_carry() {
+        let mut values = valid_append_values();
+        write_amount(
+            &mut values.public,
+            I_CURRENT_AMOUNT_LO,
+            u128::from(u64::MAX),
+        );
+        write_amount(&mut values.public, I_INPUT_AMOUNT_LO, 1u128 << 64);
+        write_amount(
+            &mut values.public,
+            I_TRANSFER_AMOUNT_LO,
+            u128::from(u64::MAX),
+        );
+        write_amount(
+            &mut values.public,
+            I_RECIPIENT_AMOUNT_LO,
+            u128::from(u64::MAX),
+        );
+        write_amount(&mut values.public, I_CHANGE_AMOUNT_LO, 1);
+        values.amount_low_carry = Scalar::from(1);
+        let instances = vec![values.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendTransitionCircuitV2 { values },
+            instances,
+        )
+        .expect("mock prover");
+        prover.assert_satisfied();
+    }
+
+    #[test]
     fn transition_relation_binds_sibling_branch_and_path() {
         let mut values = valid_append_values();
         values.public[I_BRANCH_CHANGE] = Scalar::from(1);
@@ -2282,5 +2419,74 @@ mod tests {
         )
         .expect("mock prover");
         prover.assert_satisfied();
+    }
+
+    #[test]
+    fn transition_relation_accepts_partial_redemption_change() {
+        let values = valid_redeem_change_values();
+        let instances = vec![values.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendTransitionCircuitV2 { values },
+            instances,
+        )
+        .expect("mock prover");
+        prover.assert_satisfied();
+    }
+
+    #[test]
+    fn transition_relation_rejects_unbound_redemption_credit() {
+        let mut values = valid_redeem_change_values();
+        values.public[I_UNSHIELD_PUBLIC_AMOUNT] = Scalar::from(41);
+        let instances = vec![values.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendTransitionCircuitV2 { values },
+            instances,
+        )
+        .expect("mock prover");
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn transition_relation_rejects_second_redemption_input() {
+        let mut values = valid_redeem_change_values();
+        values.public[I_TRANSFER_INPUT_COMMITMENT_1] = Scalar::from(99);
+        values.public[I_TRANSFER_NULLIFIER_1] = Scalar::from(100);
+        let instances = vec![values.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendTransitionCircuitV2 { values },
+            instances,
+        )
+        .expect("mock prover");
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn composed_append_shape_exceeds_peer_archive_budget_and_stays_disabled() {
+        const PASTA_SCALAR_BYTES: usize = 32;
+
+        let peer_archive_budget =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2;
+        assert_eq!(peer_archive_budget, 9_211);
+
+        // This deliberately ignores every public column of both non-native
+        // IPA verifiers and all proof/envelope bytes. The 59 semantic columns
+        // plus the V2 transition column are already rectangularly padded to
+        // the transition height by `append_instance_columns`.
+        let minimum_composed_instance_bytes =
+            (super::super::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + 1)
+                .checked_mul(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)
+                .and_then(|words| words.checked_mul(PASTA_SCALAR_BYTES))
+                .expect("composed public-instance byte lower bound fits usize");
+        assert!(
+            minimum_composed_instance_bytes > peer_archive_budget,
+            "even the strict lower bound must exceed the peer archive budget"
+        );
+        assert!(
+            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+            "the oversized, incompletely linked composition must remain unavailable"
+        );
     }
 }

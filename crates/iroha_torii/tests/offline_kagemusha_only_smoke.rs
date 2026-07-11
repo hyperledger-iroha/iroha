@@ -1,46 +1,59 @@
-//! Source-level guards for the Kagemusha-first offline payment surface.
+//! Wire-contract guards for the first-release offline operation resource.
 
-const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_issuer.rs");
-const OFFLINE_V2_ISSUER_SOURCE: &str = include_str!("../src/offline_v2_issuer.rs");
+use iroha_torii_shared::offline_api::{
+    OfflineOperationKind, OfflineOperationReference, OfflineOperationState,
+};
 
-#[test]
-fn torii_legacy_offline_payment_handlers_are_retired() {
-    assert!(OFFLINE_ISSUER_SOURCE.contains("OFFLINE_NOTE_ISSUE_RETIRED"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_V2_REDEEM_RETIRED"));
+const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_v2_issuer.rs");
+const TORII_SOURCE: &str = include_str!("../src/lib.rs");
 
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_V2_ISSUE_RETIRED"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("handle_kagemusha_topup"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("TopUpKagemushaRecursive::new"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("topup_request_norito_base64"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("accepted_audit_receipt_ids"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("accepted_receipt_ids"));
-
-    for v1_retired_symbol in ["IssueOfflineNote,", "IssueOfflineNote::new"] {
-        assert!(
-            !OFFLINE_ISSUER_SOURCE.contains(v1_retired_symbol),
-            "Torii v1 offline issuer must not expose retired payment symbol {v1_retired_symbol}"
-        );
-    }
-
-    for retired_symbol in [
-        "IssueOfflineNote::new",
-        "IssueOfflineNoteV2",
-        "RedeemOfflineNoteV2",
-        "AuditOfflineNoteV2",
-        "IssueOfflineNoteV2::new",
-        "RedeemOfflineNoteV2::new",
-        "AuditOfflineNoteV2::new",
-    ] {
-        assert!(
-            !OFFLINE_V2_ISSUER_SOURCE.contains(retired_symbol),
-            "Torii v2 offline issuer must not expose retired classic payment symbol {retired_symbol}"
-        );
+fn operation_reference() -> OfflineOperationReference {
+    OfflineOperationReference {
+        operation_id: "11".repeat(32),
+        kind: OfflineOperationKind::TopUp,
+        state: OfflineOperationState::Pending,
+        transaction_hash: "22".repeat(32),
+        status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
+        submitted_at_ms: 1_725_000_000_123,
     }
 }
 
+fn assert_operation_reference(decoded: &OfflineOperationReference) {
+    assert_eq!(decoded.operation_id, "11".repeat(32));
+    assert_eq!(decoded.kind, OfflineOperationKind::TopUp);
+    assert_eq!(decoded.state, OfflineOperationState::Pending);
+    assert_eq!(decoded.transaction_hash, "22".repeat(32));
+    assert_eq!(
+        decoded.status_uri,
+        format!("/v1/offline/operations/{}", "11".repeat(32))
+    );
+    assert_eq!(decoded.submitted_at_ms, 1_725_000_000_123);
+}
+
 #[test]
-fn torii_keeps_kagemusha_recursive_redeem_path() {
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("RedeemKagemushaRecursive"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("new_with_lineage_witness_and_change"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("handle_kagemusha_recursive_notes_redeem"));
+fn operation_reference_has_direct_json_and_norito_representations() {
+    let reference = operation_reference();
+
+    let json = norito::json::to_vec(&reference).expect("encode operation reference as JSON");
+    let json_text = std::str::from_utf8(&json).expect("JSON is UTF-8");
+    assert!(!json_text.contains("base64"));
+    let decoded_json: OfflineOperationReference =
+        norito::json::from_slice(&json).expect("decode operation reference JSON");
+    assert_operation_reference(&decoded_json);
+
+    let archive = norito::to_bytes(&reference).expect("encode operation reference as Norito");
+    let decoded_norito: OfflineOperationReference =
+        norito::decode_from_bytes(&archive).expect("decode operation reference Norito");
+    assert_operation_reference(&decoded_norito);
+}
+
+#[test]
+fn operation_status_is_a_pollable_final_route() {
+    assert!(TORII_SOURCE.contains("uri::OFFLINE_OPERATION"));
+    assert!(TORII_SOURCE.contains("get(handler_offline_operation_status)"));
+    assert!(OFFLINE_ISSUER_SOURCE.contains("handle_operation_status"));
+    assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Pending"));
+    assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Applied"));
+    assert!(OFFLINE_ISSUER_SOURCE.contains("OfflineOperationStatus::Rejected"));
+    assert!(OFFLINE_ISSUER_SOURCE.contains("header::CACHE_CONTROL"));
 }

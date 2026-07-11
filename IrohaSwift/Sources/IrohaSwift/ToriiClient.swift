@@ -9401,68 +9401,16 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
     }
 }
 
-public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
-    public let offlineKagemushaRecursiveCompactAvailable: Bool
-    public let offlineKagemushaRecursiveCompactMode: String
-    public let offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion: UInt32
-    public let offlineKagemushaRecursiveCompactCircuitId: String
-    public let offlineKagemushaRecursiveCompactArtifactsAvailable: Bool
-    public let offlineTelemetry: Bool
-    public let offlineNote: Bool
-    public let offlineOneUseKeys: Bool
-    public let offlineRecursiveNoteProof: Bool
-    public let offlineRecursiveNoteProofBackend: String?
-    public let offlineRecursiveNoteProofCircuitId: String?
-    public let offlineRecursiveNoteProofPublicInputsSchemaHash: String?
-    public let offlineRecursiveNoteProofPublicInstanceColumns: UInt64?
-    public let offlineRecursiveNoteProofVerifierKeyId: ToriiVerifyingKeyId?
-    public let offlineFountainQr: Bool
-    public let offlineSyncOptional: Bool
-
-    public var hasKagemushaRecursiveCompactMetadata: Bool {
-        offlineKagemushaRecursiveCompactAvailable
-            && offlineKagemushaRecursiveCompactMode == "recursive_compact_v1"
-            && offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion == 7
-            && offlineKagemushaRecursiveCompactCircuitId == "kagemusha-recursive-compact-v1"
-    }
-
-    public var hasCanonicalRecursiveVerifierMetadata: Bool {
-        guard let schemaHash = offlineRecursiveNoteProofPublicInputsSchemaHash,
-              schemaHash.count == 64,
-              schemaHash.allSatisfy(\.isHexDigit)
-        else {
-            return false
-        }
-        return offlineRecursiveNoteProof
-            && offlineRecursiveNoteProofBackend == OfflineNoteConstants.recursiveBackend
-            && offlineRecursiveNoteProofCircuitId == OfflineNoteConstants.recursiveVerifierName
-            && offlineRecursiveNoteProofPublicInstanceColumns == 16
-            && offlineRecursiveNoteProofVerifierKeyId?.backend == OfflineNoteConstants.recursiveBackend
-            && offlineRecursiveNoteProofVerifierKeyId?.name == OfflineNoteConstants.recursiveVerifierName
-    }
+public struct ToriiOfflineReadinessBlocker: Decodable, Sendable, Equatable {
+    public let code: String
+    public let message: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case offlineKagemushaRecursiveCompactAvailable = "offline_kagemusha_recursive_compact_available"
-        case offlineKagemushaRecursiveCompactMode = "offline_kagemusha_recursive_compact_mode"
-        case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
-        case offlineKagemushaRecursiveCompactCircuitId = "offline_kagemusha_recursive_compact_circuit_id"
-        case offlineKagemushaRecursiveCompactArtifactsAvailable = "offline_kagemusha_recursive_compact_artifacts_available"
-        case removedOfflineKagemushaAbi7 = "offline_kagemusha_abi7"
-        case removedOfflineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
-        case offlineTelemetry = "offline_telemetry"
-        case offlineNote = "offline_note"
-        case offlineOneUseKeys = "offline_one_use_keys"
-        case offlineRecursiveNoteProof = "offline_recursive_note_proof"
-        case offlineRecursiveNoteProofBackend = "offline_recursive_note_proof_backend"
-        case offlineRecursiveNoteProofCircuitId = "offline_recursive_note_proof_circuit_id"
-        case offlineRecursiveNoteProofPublicInputsSchemaHash = "offline_recursive_note_proof_public_inputs_schema_hash"
-        case offlineRecursiveNoteProofPublicInstanceColumns = "offline_recursive_note_proof_public_instance_columns"
-        case offlineRecursiveNoteProofVerifierKeyId = "offline_recursive_note_proof_verifier_key_id"
-        case offlineFountainQr = "offline_fountain_qr"
-        case offlineSyncOptional = "offline_sync_optional"
+        case code
+        case message
     }
 
-    private struct ReadinessField: CodingKey {
+    private struct Field: CodingKey {
         let stringValue: String
         let intValue: Int? = nil
 
@@ -9475,228 +9423,106 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         }
     }
 
-    private struct KagemushaReadinessFamily {
-        let available: Bool
-        let mode: String
-        let bridgeAbiVersion: UInt32
-        let circuitId: String
-        let artifacts: Bool
-    }
-
     public init(from decoder: Decoder) throws {
-        let readinessContainer = try decoder.container(keyedBy: ReadinessField.self)
-        try Self.rejectRemovedAbi7Fields(in: readinessContainer)
-        try Self.rejectUnknownFields(in: readinessContainer)
+        let fields = try decoder.container(keyedBy: Field.self)
+        let allowed = Set(CodingKeys.allCases.map(\.stringValue))
+        for key in fields.allKeys where !allowed.contains(key.stringValue) {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: fields,
+                debugDescription: "\(key.stringValue) is not a supported readiness blocker field"
+            )
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let hasRecursiveCompactFamily = Self.containsAny(
-            container,
-            keys: [
-                .offlineKagemushaRecursiveCompactAvailable,
-                .offlineKagemushaRecursiveCompactMode,
-                .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
-                .offlineKagemushaRecursiveCompactCircuitId,
-                .offlineKagemushaRecursiveCompactArtifactsAvailable
-            ]
-        )
-        guard hasRecursiveCompactFamily else {
-            throw Self.missingKey(.offlineKagemushaRecursiveCompactAvailable, in: container)
-        }
-        let recursiveCompact = try Self.decodeRecursiveCompactFamily(from: container)
-        offlineKagemushaRecursiveCompactAvailable = recursiveCompact.available
-        offlineKagemushaRecursiveCompactMode = recursiveCompact.mode
-        offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = recursiveCompact.bridgeAbiVersion
-        offlineKagemushaRecursiveCompactCircuitId = recursiveCompact.circuitId
-        offlineKagemushaRecursiveCompactArtifactsAvailable = recursiveCompact.artifacts
-        offlineTelemetry = try container.decode(Bool.self, forKey: .offlineTelemetry)
-        offlineNote = try container.decodeIfPresent(Bool.self, forKey: .offlineNote) ?? false
-        offlineOneUseKeys = try container.decodeIfPresent(Bool.self, forKey: .offlineOneUseKeys) ?? false
-        offlineRecursiveNoteProof = try container.decodeIfPresent(Bool.self, forKey: .offlineRecursiveNoteProof) ?? false
-        offlineRecursiveNoteProofBackend = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofBackend
-        )
-        offlineRecursiveNoteProofCircuitId = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofCircuitId
-        )
-        offlineRecursiveNoteProofPublicInputsSchemaHash = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofPublicInputsSchemaHash
-        )
-        offlineRecursiveNoteProofPublicInstanceColumns = try container.decodeIfPresent(
-            UInt64.self,
-            forKey: .offlineRecursiveNoteProofPublicInstanceColumns
-        )
-        offlineRecursiveNoteProofVerifierKeyId = try container.decodeIfPresent(
-            ToriiVerifyingKeyId.self,
-            forKey: .offlineRecursiveNoteProofVerifierKeyId
-        )
-        offlineFountainQr = try container.decodeIfPresent(Bool.self, forKey: .offlineFountainQr) ?? false
-        offlineSyncOptional = try container.decodeIfPresent(Bool.self, forKey: .offlineSyncOptional) ?? false
+        code = try Self.decodeExactText(from: container, forKey: .code)
+        message = try Self.decodeExactText(from: container, forKey: .message)
     }
 
-    private static func containsAny(
-        _ container: KeyedDecodingContainer<CodingKeys>,
-        keys: [CodingKeys]
-    ) -> Bool {
-        keys.contains { container.contains($0) }
-    }
-
-    private static func rejectUnknownFields(
-        in container: KeyedDecodingContainer<ReadinessField>
-    ) throws {
-        let allowedFields = Set(CodingKeys.allCases.map(\.stringValue))
-        for key in container.allKeys where !allowedFields.contains(key.stringValue) {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) is not a supported offline readiness field"
-            )
-        }
-    }
-
-    private static func rejectRemovedAbi7Fields(
-        in container: KeyedDecodingContainer<ReadinessField>
-    ) throws {
-        for key in container.allKeys where removedAbi7Fields.contains(key.stringValue) {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) is not supported; use offline_kagemusha_recursive_compact_*"
-            )
-        }
-    }
-
-    private static let removedAbi7Fields: Set<String> = [
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_artifacts",
-    ]
-
-    private static func decodeRecursiveCompactFamily(
-        from container: KeyedDecodingContainer<CodingKeys>
-    ) throws -> KagemushaReadinessFamily {
-        KagemushaReadinessFamily(
-            available: try decodeRequiredBool(from: container, forKey: .offlineKagemushaRecursiveCompactAvailable),
-            mode: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaRecursiveCompactMode),
-            bridgeAbiVersion: try decodeExactPositiveAbiVersion(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion
-            ),
-            circuitId: try decodeRequiredExactString(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactCircuitId
-            ),
-            artifacts: try decodeRequiredBool(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactArtifactsAvailable
-            )
-        )
-    }
-
-    private static func decodeRequiredBool(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> Bool {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
-        }
-        return try container.decode(Bool.self, forKey: key)
-    }
-
-    private static func decodeRequiredExactString(
+    private static func decodeExactText(
         from container: KeyedDecodingContainer<CodingKeys>,
         forKey key: CodingKeys
     ) throws -> String {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
-        }
         let value = try container.decode(String.self, forKey: key)
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard !value.isEmpty,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "\(key.stringValue) must be a non-empty string"
-            )
-        }
-        guard trimmed == value else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) must not contain surrounding whitespace"
+                debugDescription: "\(key.stringValue) must be exact non-empty text"
             )
         }
         return value
     }
+}
 
-    private static func decodeExactPositiveAbiVersion(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> UInt32 {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
+public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
+    public let assetDefinitionId: String
+    public let evaluatedBlockHeight: UInt64
+    public let ready: Bool
+    public let blockers: [ToriiOfflineReadinessBlocker]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case assetDefinitionId = "asset_definition_id"
+        case evaluatedBlockHeight = "evaluated_block_height"
+        case ready
+        case blockers
+    }
+
+    private struct Field: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
         }
-        let maximum = UInt64(Int32.max)
-        if let numeric = try? container.decode(UInt64.self, forKey: key) {
-            guard numeric > 0 else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must be a positive integer"
-                )
-            }
-            guard numeric <= maximum else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
-                )
-            }
-            return UInt32(numeric)
+
+        init?(intValue: Int) {
+            nil
         }
-        if let string = try? container.decode(String.self, forKey: key) {
-            let bytes = Array(string.utf8)
-            guard let first = bytes.first,
-                  first >= UInt8(ascii: "1"),
-                  first <= UInt8(ascii: "9"),
-                  bytes.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") })
-            else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must be an exact positive integer string"
-                )
-            }
-            guard let numeric = UInt64(string), numeric <= maximum else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
-                )
-            }
-            return UInt32(numeric)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: Field.self)
+        let allowed = Set(CodingKeys.allCases.map(\.stringValue))
+        for key in fields.allKeys where !allowed.contains(key.stringValue) {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: fields,
+                debugDescription: "\(key.stringValue) is not a supported offline readiness field"
+            )
         }
-        throw DecodingError.dataCorruptedError(
-            forKey: key,
-            in: container,
-            debugDescription: "\(key.stringValue) must be a positive integer"
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        assetDefinitionId = try Self.decodeExactText(
+            from: container,
+            forKey: .assetDefinitionId
+        )
+        evaluatedBlockHeight = try container.decode(
+            UInt64.self,
+            forKey: .evaluatedBlockHeight
+        )
+        ready = try container.decode(Bool.self, forKey: .ready)
+        blockers = try container.decode(
+            [ToriiOfflineReadinessBlocker].self,
+            forKey: .blockers
         )
     }
 
-    private static func missingKey(
-        _ key: CodingKeys,
-        in container: KeyedDecodingContainer<CodingKeys>
-    ) -> DecodingError {
-        DecodingError.keyNotFound(
-            key,
-            DecodingError.Context(
-                codingPath: container.codingPath,
-                debugDescription: "\(key.stringValue) is required"
+    private static func decodeExactText(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        guard !value.isEmpty,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be exact non-empty text"
             )
-        )
+        }
+        return value
     }
 }
 
@@ -16544,8 +16370,39 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getOfflineReadiness(completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineReadiness() }
+    public func getOfflineReadiness(
+        assetDefinitionId: String,
+        completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getOfflineReadiness(assetDefinitionId: assetDefinitionId)
+        }
+    }
+
+    @discardableResult
+    public func submitOfflineTopUp(
+        _ request: OfflineTopUpRequest,
+        completion: @escaping (Result<OfflineOperationReference, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitOfflineTopUp(request) }
+    }
+
+    @discardableResult
+    public func submitOfflineRedeem(
+        _ request: OfflineRedeemRequest,
+        completion: @escaping (Result<OfflineOperationReference, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitOfflineRedeem(request) }
+    }
+
+    @discardableResult
+    public func getOfflineOperationStatus(
+        operationId: String,
+        completion: @escaping (Result<OfflineOperationStatus, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getOfflineOperationStatus(operationId: operationId)
+        }
     }
 
     @discardableResult
@@ -18654,11 +18511,74 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getOfflineReadiness() async throws -> ToriiOfflineReadiness {
+    public func getOfflineReadiness(assetDefinitionId: String) async throws -> ToriiOfflineReadiness {
+        let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
+            assetDefinitionId,
+            field: "assetDefinitionId"
+        )
         let request = try makeRequest(path: "/v1/offline/readiness",
+                                      queryItems: [
+                                        URLQueryItem(
+                                            name: "asset_definition_id",
+                                            value: exactAssetDefinitionId
+                                        )
+                                      ],
                                       headers: ["Accept": "application/json"])
-        let data = try await data(for: request)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiOfflineReadiness.self, from: data)
+    }
+
+    public func submitOfflineTopUp(
+        _ requestBody: OfflineTopUpRequest
+    ) async throws -> OfflineOperationReference {
+        try await submitOfflineOperation(
+            path: OfflineAPI.Endpoint.topUp.path,
+            operationId: requestBody.operationId,
+            archive: requestBody.noritoArchive()
+        )
+    }
+
+    public func submitOfflineRedeem(
+        _ requestBody: OfflineRedeemRequest
+    ) async throws -> OfflineOperationReference {
+        try await submitOfflineOperation(
+            path: OfflineAPI.Endpoint.redeem.path,
+            operationId: requestBody.operationId,
+            archive: requestBody.noritoArchive()
+        )
+    }
+
+    public func getOfflineOperationStatus(
+        operationId: String
+    ) async throws -> OfflineOperationStatus {
+        let path = try OfflineAPI.operationPath(operationId)
+        let request = try makeRequest(
+            path: path,
+            headers: ["Accept": "application/x-norito"]
+        )
+        let (responseData, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        return try OfflineOperationCodec.decodeStatus(responseData)
+    }
+
+    private func submitOfflineOperation(
+        path: String,
+        operationId: String,
+        archive: Data
+    ) async throws -> OfflineOperationReference {
+        let request = try makeRequest(
+            path: path,
+            method: .post,
+            body: archive,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+                "Idempotency-Key": operationId,
+            ]
+        )
+        let data = try await data(for: request, acceptedStatus: 202..<203)
+        return try OfflineOperationCodec.decodeReference(data)
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {

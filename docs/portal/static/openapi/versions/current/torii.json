@@ -470,40 +470,6 @@
         ],
         "type": "object"
       },
-      "ApiVersionInfo": {
-        "additionalProperties": false,
-        "properties": {
-          "default": {
-            "description": "Default API version label.",
-            "type": "string"
-          },
-          "min_proof_version": {
-            "description": "Minimum API version required for proof/staking/fee endpoints.",
-            "type": "string"
-          },
-          "sunset_unix": {
-            "description": "Optional unix timestamp when the oldest API version sunsets.",
-            "format": "uint64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "supported": {
-            "description": "All supported API version labels.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "default",
-          "supported",
-          "min_proof_version"
-        ],
-        "type": "object"
-      },
       "AppPageMetadata": {
         "additionalProperties": true,
         "properties": {
@@ -6735,28 +6701,6 @@
           }
         },
         "summary": "Fetch the active API version.",
-        "tags": [
-          "System"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/api/versions": {
-      "get": {
-        "description": "Return the supported Torii API versions and defaults.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiVersionInfo"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List supported Torii API versions.",
         "tags": [
           "System"
         ],

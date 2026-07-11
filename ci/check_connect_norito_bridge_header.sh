@@ -98,6 +98,8 @@ required_abi6 = {
     "connect_norito_kagemusha_recursive_spend_append_v2",
     "connect_norito_kagemusha_recursive_spend_verify_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_v2",
+    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
+    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
 }
 
 def const_u8_ptr(name):
@@ -152,10 +154,18 @@ expected_recursive_signatures = {
         "out_instruction_ptr",
         "out_instruction_len",
     ),
-    "connect_norito_kagemusha_recursive_spend_append_v2": recursive_request_signature(
+    "connect_norito_kagemusha_recursive_spend_append_v2": c_signature(
+        "int32_t",
         "connect_norito_kagemusha_recursive_spend_append_v2",
-        "out_split_result_ptr",
-        "out_split_result_len",
+        [
+            const_u8_ptr("request_norito_ptr"),
+            ulong("request_norito_len"),
+            const_u8_ptr("recipient_request_norito_ptr"),
+            ulong("recipient_request_norito_len"),
+            r"uint64_t\s+verified_at_ms",
+            u8_out_ptr("out_split_result_ptr"),
+            ulong_ptr("out_split_result_len"),
+        ],
     ),
     "connect_norito_kagemusha_recursive_spend_verify_v2": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_verify_v2",
@@ -166,6 +176,16 @@ expected_recursive_signatures = {
         "connect_norito_kagemusha_recursive_spend_redeem_v2",
         "out_instruction_ptr",
         "out_instruction_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
+        "out_intent_ptr",
+        "out_intent_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
+        "out_intent_ptr",
+        "out_intent_len",
     ),
     "connect_norito_kagemusha_recursive_spend_topup": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_topup",

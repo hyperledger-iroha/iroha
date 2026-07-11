@@ -313,3 +313,128 @@ pub(crate) fn verify_ipa_proof_with_columns(
     let proofs_instances = [columns];
     verify_ipa_proof(params, vk, proof_payload, &proofs_instances)
 }
+
+#[cfg(test)]
+mod tests {
+    use halo2_proofs::{
+        circuit::{Layouter, SimpleFloorPlanner, Value},
+        plonk::{Advice, Circuit, Column, ConstraintSystem, Instance},
+        poly::{
+            VerificationStrategy,
+            ipa::{multiopen::VerifierIPA, strategy::AccumulatorStrategy},
+        },
+    };
+
+    use super::*;
+
+    /// A deliberately tiny circuit used to exercise Halo2's native IPA
+    /// accumulator strategy. This is a host-side batch-verification proof of
+    /// concept, not a recursive verifier circuit: `AccumulatorStrategy` keeps
+    /// an unevaluated MSM in private Rust state and `finalize` decides it on the
+    /// host.
+    #[derive(Clone, Default)]
+    struct PublicValue {
+        value: Scalar,
+    }
+
+    impl Circuit<Scalar> for PublicValue {
+        type Config = (Column<Advice>, Column<Instance>);
+        type FloorPlanner = SimpleFloorPlanner;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            let advice = meta.advice_column();
+            let instance = meta.instance_column();
+            meta.enable_equality(advice);
+            meta.enable_equality(instance);
+            (advice, instance)
+        }
+
+        fn synthesize(
+            &self,
+            (advice, instance): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let cell = layouter.assign_region(
+                || "public value",
+                |mut region| {
+                    assign_advice_compat(
+                        &mut region,
+                        || "value",
+                        advice,
+                        0,
+                        || Value::known(self.value),
+                    )
+                },
+            )?;
+            layouter.constrain_instance(cell.cell(), instance, 0)
+        }
+    }
+
+    #[test]
+    fn native_ipa_accumulator_batches_full_plonk_proofs_but_is_not_recursive() {
+        let params = params_new(5);
+        let circuit = PublicValue {
+            value: Scalar::from(7),
+        };
+        let vk = keygen_vk(&params, &circuit).expect("tiny verifier key");
+        let pk = keygen_pk(&params, vk.clone(), &circuit).expect("tiny proving key");
+
+        let values = [Scalar::from(7), Scalar::from(11)];
+        let proofs = values
+            .iter()
+            .map(|value| {
+                let circuit = PublicValue { value: *value };
+                let column = [*value];
+                let columns: [&[Scalar]; 1] = [&column];
+                create_ipa_proof(&params, &pk, &[circuit], &[&columns]).expect("tiny IPA proof")
+            })
+            .collect::<Vec<_>>();
+
+        let mut strategy = AccumulatorStrategy::new(&params);
+        for (proof, value) in proofs.iter().zip(values) {
+            let column = [value];
+            let columns: [&[Scalar]; 1] = [&column];
+            let instances: [&[&[Scalar]]; 1] = [&columns];
+            let mut transcript =
+                Blake2bRead::<_, Curve, Challenge255<Curve>>::init(io::Cursor::new(proof));
+            strategy = halo2_verify_proof::<
+                IPACommitmentScheme<Curve>,
+                VerifierIPA<'_, Curve>,
+                Challenge255<Curve>,
+                _,
+                _,
+            >(&params, &vk, strategy, &instances, &mut transcript)
+            .expect("well-formed proof contributes to accumulator");
+        }
+        assert!(strategy.finalize(), "both accumulated proofs must verify");
+
+        let wrong_column = [Scalar::from(8)];
+        let wrong_columns: [&[Scalar]; 1] = [&wrong_column];
+        let wrong_instances: [&[&[Scalar]]; 1] = [&wrong_columns];
+        let mut transcript =
+            Blake2bRead::<_, Curve, Challenge255<Curve>>::init(io::Cursor::new(&proofs[0]));
+        let wrong_strategy = halo2_verify_proof::<
+            IPACommitmentScheme<Curve>,
+            VerifierIPA<'_, Curve>,
+            Challenge255<Curve>,
+            _,
+            _,
+        >(
+            &params,
+            &vk,
+            AccumulatorStrategy::new(&params),
+            &wrong_instances,
+            &mut transcript,
+        )
+        .expect("instance substitution is detected when the MSM is decided");
+        assert!(
+            !wrong_strategy.finalize(),
+            "the native accumulator must reject a substituted public instance"
+        );
+    }
+}

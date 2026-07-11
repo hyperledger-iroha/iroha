@@ -1512,12 +1512,6 @@ pub mod torii {
         da::types::{BlobClass, GovernanceTag, RetentionPolicy},
         sorafs::pin_registry::StorageClass as SorafsStorageClass,
     };
-    use iroha_torii_shared::{
-        API_MIN_PROOF_VERSION as SHARED_API_MIN_PROOF_VERSION,
-        API_VERSION_DEFAULT as SHARED_API_VERSION_DEFAULT,
-        API_VERSION_SUNSET_UNIX as SHARED_API_VERSION_SUNSET_UNIX,
-        API_VERSION_SUPPORTED as SHARED_API_VERSION_SUPPORTED,
-    };
     use nonzero_ext::nonzero;
 
     /// Maximum request payload size accepted by Torii (bytes).
@@ -1870,7 +1864,6 @@ pub mod torii {
         vec![
             "application/x-norito".to_string(),
             "application/json".to_string(),
-            "text/json".to_string(),
             "application/x-zk1".to_string(),
         ]
     }
@@ -1924,30 +1917,6 @@ pub mod torii {
     }
     /// Emit Torii filter debug traces (developer diagnostics only).
     pub const DEBUG_MATCH_FILTERS: bool = false;
-    /// Default Torii API version used when clients omit the header.
-    pub const API_DEFAULT_VERSION: &str = SHARED_API_VERSION_DEFAULT;
-    /// Minimum API version required for proof/staking/fee endpoints.
-    pub const API_MIN_PROOF_VERSION: &str = SHARED_API_MIN_PROOF_VERSION;
-    /// Optional unix timestamp when the oldest supported version sunsets.
-    pub const API_SUNSET_UNIX: Option<u64> = SHARED_API_VERSION_SUNSET_UNIX;
-    /// Supported Torii API versions (oldest → newest).
-    #[must_use]
-    pub fn api_supported_versions() -> Vec<String> {
-        SHARED_API_VERSION_SUPPORTED
-            .iter()
-            .map(|v| (*v).to_string())
-            .collect()
-    }
-    /// Default Torii API version label as an owned string.
-    #[must_use]
-    pub fn api_default_version() -> String {
-        API_DEFAULT_VERSION.to_string()
-    }
-    /// Minimum API version for protected surfaces as an owned string.
-    #[must_use]
-    pub fn api_min_proof_version() -> String {
-        API_MIN_PROOF_VERSION.to_string()
-    }
     /// RBC sampling endpoint disabled by default.
     pub const RBC_SAMPLING_ENABLED: bool = false;
     /// Maximum chunks sampled per request.
