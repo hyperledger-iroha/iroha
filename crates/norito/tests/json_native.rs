@@ -26,6 +26,29 @@ struct DerivedDefaults {
     note: Option<String>,
 }
 
+#[derive(Debug, PartialEq, norito::JsonSerialize, norito::JsonDeserialize)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+enum DerivedTagged {
+    Unit,
+    Number(u64),
+}
+
+#[test]
+fn derived_tagged_json_rejects_duplicate_envelope_fields() {
+    assert_eq!(
+        json::to_json(&DerivedTagged::Unit).expect("serialize renamed unit variant"),
+        r#"{"kind":"unit","value":null}"#
+    );
+    for input in [
+        r#"{"kind":"unit","kind":"number","value":null}"#,
+        r#"{"kind":"unit","value":null,"value":null}"#,
+    ] {
+        let error = json::from_json::<DerivedTagged>(input)
+            .expect_err("duplicate tag or content must fail");
+        assert!(error.to_string().contains("duplicate field"));
+    }
+}
+
 #[test]
 fn derived_json_roundtrip() {
     let value = DerivedExample {

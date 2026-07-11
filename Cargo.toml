@@ -180,6 +180,12 @@ wayland-scanner = { path = "vendor/wayland-scanner-0.31.10" }
 #opus = { path = "vendor/opus_stub" }
 #icrate = { path = "vendor/icrate" }
 
+# The pinned 0.5.3 release does not adapt Pasta fields to halo2-base's local
+# ScalarField trait. Keep this source-scoped so no crates.io package can be
+# substituted accidentally.
+[patch."https://github.com/axiom-crypto/halo2-lib.git"]
+halo2-base = { path = "vendor/halo2-base" }
+
 [workspace.lints]
 rustdoc.private_doc_tests = "deny"
 

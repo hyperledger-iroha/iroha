@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 内部エラー |予期しない障害 (ログに記録 + アラート)。 |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ DA コミットメントまたはプルーフを検証するときに設定さ�
 プルーフをアクティブなポリシー セットにバインドするために追加のラウンドトリップを行う必要はありません。
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

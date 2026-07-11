@@ -9401,302 +9401,156 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
     }
 }
 
-public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
-    public let offlineKagemushaRecursiveCompactAvailable: Bool
-    public let offlineKagemushaRecursiveCompactMode: String
-    public let offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion: UInt32
-    public let offlineKagemushaRecursiveCompactCircuitId: String
-    public let offlineKagemushaRecursiveCompactArtifactsAvailable: Bool
-    public let offlineTelemetry: Bool
-    public let offlineNote: Bool
-    public let offlineOneUseKeys: Bool
-    public let offlineRecursiveNoteProof: Bool
-    public let offlineRecursiveNoteProofBackend: String?
-    public let offlineRecursiveNoteProofCircuitId: String?
-    public let offlineRecursiveNoteProofPublicInputsSchemaHash: String?
-    public let offlineRecursiveNoteProofPublicInstanceColumns: UInt64?
-    public let offlineRecursiveNoteProofVerifierKeyId: ToriiVerifyingKeyId?
-    public let offlineFountainQr: Bool
-    public let offlineSyncOptional: Bool
+public struct ToriiOfflineReadinessBlocker: Decodable, Sendable, Equatable {
+    public let code: String
+    public let message: String
 
-    public var hasKagemushaRecursiveCompactMetadata: Bool {
-        offlineKagemushaRecursiveCompactAvailable
-            && offlineKagemushaRecursiveCompactMode == "recursive_compact_v1"
-            && offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion == 7
-            && offlineKagemushaRecursiveCompactCircuitId == "kagemusha-recursive-compact-v1"
-    }
-
-    public var hasCanonicalRecursiveVerifierMetadata: Bool {
-        guard let schemaHash = offlineRecursiveNoteProofPublicInputsSchemaHash,
-              schemaHash.count == 64,
-              schemaHash.allSatisfy(\.isHexDigit)
-        else {
-            return false
-        }
-        return offlineRecursiveNoteProof
-            && offlineRecursiveNoteProofBackend == OfflineNoteConstants.recursiveBackend
-            && offlineRecursiveNoteProofCircuitId == OfflineNoteConstants.recursiveVerifierName
-            && offlineRecursiveNoteProofPublicInstanceColumns == 16
-            && offlineRecursiveNoteProofVerifierKeyId?.backend == OfflineNoteConstants.recursiveBackend
-            && offlineRecursiveNoteProofVerifierKeyId?.name == OfflineNoteConstants.recursiveVerifierName
-    }
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case offlineKagemushaRecursiveCompactAvailable = "offline_kagemusha_recursive_compact_available"
-        case offlineKagemushaRecursiveCompactMode = "offline_kagemusha_recursive_compact_mode"
-        case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
-        case offlineKagemushaRecursiveCompactCircuitId = "offline_kagemusha_recursive_compact_circuit_id"
-        case offlineKagemushaRecursiveCompactArtifactsAvailable = "offline_kagemusha_recursive_compact_artifacts_available"
-        case removedOfflineKagemushaAbi7 = "offline_kagemusha_abi7"
-        case removedOfflineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
-        case offlineTelemetry = "offline_telemetry"
-        case offlineNote = "offline_note"
-        case offlineOneUseKeys = "offline_one_use_keys"
-        case offlineRecursiveNoteProof = "offline_recursive_note_proof"
-        case offlineRecursiveNoteProofBackend = "offline_recursive_note_proof_backend"
-        case offlineRecursiveNoteProofCircuitId = "offline_recursive_note_proof_circuit_id"
-        case offlineRecursiveNoteProofPublicInputsSchemaHash = "offline_recursive_note_proof_public_inputs_schema_hash"
-        case offlineRecursiveNoteProofPublicInstanceColumns = "offline_recursive_note_proof_public_instance_columns"
-        case offlineRecursiveNoteProofVerifierKeyId = "offline_recursive_note_proof_verifier_key_id"
-        case offlineFountainQr = "offline_fountain_qr"
-        case offlineSyncOptional = "offline_sync_optional"
-    }
-
-    private struct ReadinessField: CodingKey {
-        let stringValue: String
-        let intValue: Int? = nil
-
-        init?(stringValue: String) {
-            self.stringValue = stringValue
-        }
-
-        init?(intValue: Int) {
-            nil
-        }
-    }
-
-    private struct KagemushaReadinessFamily {
-        let available: Bool
-        let mode: String
-        let bridgeAbiVersion: UInt32
-        let circuitId: String
-        let artifacts: Bool
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case message
     }
 
     public init(from decoder: Decoder) throws {
-        let readinessContainer = try decoder.container(keyedBy: ReadinessField.self)
-        try Self.rejectRemovedAbi7Fields(in: readinessContainer)
-        try Self.rejectUnknownFields(in: readinessContainer)
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let hasRecursiveCompactFamily = Self.containsAny(
-            container,
-            keys: [
-                .offlineKagemushaRecursiveCompactAvailable,
-                .offlineKagemushaRecursiveCompactMode,
-                .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
-                .offlineKagemushaRecursiveCompactCircuitId,
-                .offlineKagemushaRecursiveCompactArtifactsAvailable
-            ]
-        )
-        guard hasRecursiveCompactFamily else {
-            throw Self.missingKey(.offlineKagemushaRecursiveCompactAvailable, in: container)
-        }
-        let recursiveCompact = try Self.decodeRecursiveCompactFamily(from: container)
-        offlineKagemushaRecursiveCompactAvailable = recursiveCompact.available
-        offlineKagemushaRecursiveCompactMode = recursiveCompact.mode
-        offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = recursiveCompact.bridgeAbiVersion
-        offlineKagemushaRecursiveCompactCircuitId = recursiveCompact.circuitId
-        offlineKagemushaRecursiveCompactArtifactsAvailable = recursiveCompact.artifacts
-        offlineTelemetry = try container.decode(Bool.self, forKey: .offlineTelemetry)
-        offlineNote = try container.decodeIfPresent(Bool.self, forKey: .offlineNote) ?? false
-        offlineOneUseKeys = try container.decodeIfPresent(Bool.self, forKey: .offlineOneUseKeys) ?? false
-        offlineRecursiveNoteProof = try container.decodeIfPresent(Bool.self, forKey: .offlineRecursiveNoteProof) ?? false
-        offlineRecursiveNoteProofBackend = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofBackend
-        )
-        offlineRecursiveNoteProofCircuitId = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofCircuitId
-        )
-        offlineRecursiveNoteProofPublicInputsSchemaHash = try container.decodeIfPresent(
-            String.self,
-            forKey: .offlineRecursiveNoteProofPublicInputsSchemaHash
-        )
-        offlineRecursiveNoteProofPublicInstanceColumns = try container.decodeIfPresent(
-            UInt64.self,
-            forKey: .offlineRecursiveNoteProofPublicInstanceColumns
-        )
-        offlineRecursiveNoteProofVerifierKeyId = try container.decodeIfPresent(
-            ToriiVerifyingKeyId.self,
-            forKey: .offlineRecursiveNoteProofVerifierKeyId
-        )
-        offlineFountainQr = try container.decodeIfPresent(Bool.self, forKey: .offlineFountainQr) ?? false
-        offlineSyncOptional = try container.decodeIfPresent(Bool.self, forKey: .offlineSyncOptional) ?? false
-    }
-
-    private static func containsAny(
-        _ container: KeyedDecodingContainer<CodingKeys>,
-        keys: [CodingKeys]
-    ) -> Bool {
-        keys.contains { container.contains($0) }
-    }
-
-    private static func rejectUnknownFields(
-        in container: KeyedDecodingContainer<ReadinessField>
-    ) throws {
-        let allowedFields = Set(CodingKeys.allCases.map(\.stringValue))
-        for key in container.allKeys where !allowedFields.contains(key.stringValue) {
+        let decodedCode = try container.decode(String.self, forKey: .code)
+        guard ToriiOfflineReadinessValidation.isStableCode(decodedCode) else {
             throw DecodingError.dataCorruptedError(
-                forKey: key,
+                forKey: .code,
                 in: container,
-                debugDescription: "\(key.stringValue) is not a supported offline readiness field"
+                debugDescription: "code must be a 1-64 character lowercase stable identifier"
             )
         }
+        code = decodedCode
+        message = try Self.decodeExactText(from: container, forKey: .message)
     }
 
-    private static func rejectRemovedAbi7Fields(
-        in container: KeyedDecodingContainer<ReadinessField>
-    ) throws {
-        for key in container.allKeys where removedAbi7Fields.contains(key.stringValue) {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) is not supported; use offline_kagemusha_recursive_compact_*"
-            )
-        }
-    }
-
-    private static let removedAbi7Fields: Set<String> = [
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_artifacts",
-    ]
-
-    private static func decodeRecursiveCompactFamily(
-        from container: KeyedDecodingContainer<CodingKeys>
-    ) throws -> KagemushaReadinessFamily {
-        KagemushaReadinessFamily(
-            available: try decodeRequiredBool(from: container, forKey: .offlineKagemushaRecursiveCompactAvailable),
-            mode: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaRecursiveCompactMode),
-            bridgeAbiVersion: try decodeExactPositiveAbiVersion(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion
-            ),
-            circuitId: try decodeRequiredExactString(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactCircuitId
-            ),
-            artifacts: try decodeRequiredBool(
-                from: container,
-                forKey: .offlineKagemushaRecursiveCompactArtifactsAvailable
-            )
-        )
-    }
-
-    private static func decodeRequiredBool(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> Bool {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
-        }
-        return try container.decode(Bool.self, forKey: key)
-    }
-
-    private static func decodeRequiredExactString(
+    private static func decodeExactText(
         from container: KeyedDecodingContainer<CodingKeys>,
         forKey key: CodingKeys
     ) throws -> String {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
-        }
         let value = try container.decode(String.self, forKey: key)
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard ToriiOfflineReadinessValidation.isExactText(value)
+        else {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "\(key.stringValue) must be a non-empty string"
-            )
-        }
-        guard trimmed == value else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) must not contain surrounding whitespace"
+                debugDescription: "\(key.stringValue) must be exact non-empty text"
             )
         }
         return value
     }
+}
 
-    private static func decodeExactPositiveAbiVersion(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> UInt32 {
-        guard container.contains(key) else {
-            throw missingKey(key, in: container)
-        }
-        let maximum = UInt64(Int32.max)
-        if let numeric = try? container.decode(UInt64.self, forKey: key) {
-            guard numeric > 0 else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must be a positive integer"
-                )
-            }
-            guard numeric <= maximum else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
-                )
-            }
-            return UInt32(numeric)
-        }
-        if let string = try? container.decode(String.self, forKey: key) {
-            let bytes = Array(string.utf8)
-            guard let first = bytes.first,
-                  first >= UInt8(ascii: "1"),
-                  first <= UInt8(ascii: "9"),
-                  bytes.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") })
-            else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must be an exact positive integer string"
-                )
-            }
-            guard let numeric = UInt64(string), numeric <= maximum else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
-                )
-            }
-            return UInt32(numeric)
-        }
-        throw DecodingError.dataCorruptedError(
-            forKey: key,
-            in: container,
-            debugDescription: "\(key.stringValue) must be a positive integer"
-        )
+public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
+    public let assetDefinitionId: String
+    public let evaluatedBlockHeight: UInt64
+    public let evaluatedBlockHash: String
+    public let evaluatedBlockHashBytes: Data
+    public let ready: Bool
+    public let blockers: [ToriiOfflineReadinessBlocker]
+
+    private enum CodingKeys: String, CodingKey {
+        case assetDefinitionId = "asset_definition_id"
+        case evaluatedBlockHeight = "evaluated_block_height"
+        case evaluatedBlockHash = "evaluated_block_hash"
+        case ready
+        case blockers
     }
 
-    private static func missingKey(
-        _ key: CodingKeys,
-        in container: KeyedDecodingContainer<CodingKeys>
-    ) -> DecodingError {
-        DecodingError.keyNotFound(
-            key,
-            DecodingError.Context(
-                codingPath: container.codingPath,
-                debugDescription: "\(key.stringValue) is required"
-            )
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        assetDefinitionId = try Self.decodeExactToken(
+            from: container,
+            forKey: .assetDefinitionId
         )
+        evaluatedBlockHeight = try container.decode(
+            UInt64.self,
+            forKey: .evaluatedBlockHeight
+        )
+        let blockHash = try container.decode(String.self, forKey: .evaluatedBlockHash)
+        guard ToriiOfflineReadinessValidation.isCanonicalHash(blockHash),
+              let blockHashBytes = Data(hexString: blockHash),
+              blockHashBytes.count == 32 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .evaluatedBlockHash,
+                in: container,
+                debugDescription: "evaluated_block_hash must be exact lowercase 32-byte hexadecimal"
+            )
+        }
+        evaluatedBlockHash = blockHash
+        evaluatedBlockHashBytes = blockHashBytes
+        let decodedReady = try container.decode(Bool.self, forKey: .ready)
+        let decodedBlockers = try container.decode(
+            [ToriiOfflineReadinessBlocker].self,
+            forKey: .blockers
+        )
+        guard decodedReady == decodedBlockers.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ready,
+                in: container,
+                debugDescription: "ready must be true exactly when blockers is empty"
+            )
+        }
+        ready = decodedReady
+        blockers = decodedBlockers
+    }
+
+    private static func decodeExactToken(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        guard ToriiOfflineReadinessValidation.isExactToken(value)
+        else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be exact non-empty text without whitespace"
+            )
+        }
+        return value
+    }
+}
+
+private enum ToriiOfflineReadinessValidation {
+    static func isCanonicalHash(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        return bytes.count == 64 && bytes.allSatisfy {
+            ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
+                || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
+        }
+    }
+
+    static func isStableCode(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard (1...64).contains(bytes.count), let first = bytes.first else {
+            return false
+        }
+        let isDigit: (UInt8) -> Bool = {
+            $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9")
+        }
+        let isLowercase: (UInt8) -> Bool = {
+            $0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z")
+        }
+        return (isDigit(first) || isLowercase(first))
+            && bytes.allSatisfy {
+                isDigit($0) || isLowercase($0) || $0 == UInt8(ascii: "_")
+            }
+    }
+
+    static func isExactText(_ value: String) -> Bool {
+        !value.isEmpty
+            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !value.unicodeScalars.contains {
+                CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
+    static func isExactToken(_ value: String) -> Bool {
+        isExactText(value)
+            && !value.unicodeScalars.contains {
+                CharacterSet.whitespacesAndNewlines.contains($0)
+            }
     }
 }
 
@@ -17155,7 +17009,7 @@ private struct ToriiSumeragiV2DynamicCodingKey: CodingKey {
         self.intValue = intValue
     }
 }
-/// Commit QC record returned by `/v1/sumeragi/commit_qc/{hash}`.
+/// Commit QC record returned by `/v1/sumeragi/commit-qcs/{block_hash}`.
 public struct ToriiSumeragiCommitQcRecord: Decodable, Sendable, Equatable {
     public let subjectBlockHash: String
     public let commitQc: ToriiSumeragiCommitQc?
@@ -17166,7 +17020,7 @@ public struct ToriiSumeragiCommitQcRecord: Decodable, Sendable, Equatable {
     }
 }
 
-/// Full commit QC details returned by `/v1/sumeragi/commit_qc/{hash}`.
+/// Full commit QC details returned by `/v1/sumeragi/commit-qcs/{block_hash}`.
 public struct ToriiSumeragiCommitQc: Decodable, Sendable, Equatable {
     public let phase: String
     public let parentStateRoot: String
@@ -17277,6 +17131,22 @@ public struct ToriiProverReportsFilter: Sendable {
     }
 }
 
+/// A terminal error emitted after a Torii server-sent event stream has started.
+public struct ToriiStreamError: Error, Sendable, Equatable {
+    /// Stable machine-readable stream error code.
+    public let code: String
+    /// Human-readable terminal error message.
+    public let message: String
+    /// Number of broadcast messages skipped before termination, when reported.
+    public let droppedMessages: UInt64?
+    /// Whether the server can replay the missing portion of this stream.
+    public let replayAvailable: Bool
+}
+
+extension ToriiStreamError: LocalizedError {
+    public var errorDescription: String? { message }
+}
+
 public enum ToriiClientError: Error, Sendable {
     case invalidURL(String)
     case transport(Swift.Error)
@@ -17285,6 +17155,7 @@ public enum ToriiClientError: Error, Sendable {
     case httpStatus(code: Int, message: String?, rejectCode: String?)
     case decoding(Swift.Error)
     case invalidPayload(String)
+    case stream(ToriiStreamError)
     case dataModelMismatch(expected: Int, actual: Int?)
     case transactionSchemaMismatch(expected: String, actual: String?)
 }
@@ -17310,6 +17181,8 @@ extension ToriiClientError: LocalizedError {
             return "Failed to decode Torii response: \(Self.describeDecodingError(error))"
         case .invalidPayload(let reason):
             return "Torii response payload was invalid: \(reason)"
+        case .stream(let error):
+            return "Torii event stream terminated with \(error.code): \(error.message)"
         case let .dataModelMismatch(expected, actual):
             if let actual {
                 return "Torii data model version mismatch (expected \(expected), got \(actual))."
@@ -18211,8 +18084,39 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getOfflineReadiness(completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineReadiness() }
+    public func getOfflineReadiness(
+        assetDefinitionId: String,
+        completion: @escaping (Result<ToriiOfflineReadiness, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getOfflineReadiness(assetDefinitionId: assetDefinitionId)
+        }
+    }
+
+    @discardableResult
+    public func submitOfflineTopUp(
+        _ request: OfflineTopUpRequest,
+        completion: @escaping (Result<OfflineOperationReference, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitOfflineTopUp(request) }
+    }
+
+    @discardableResult
+    public func submitOfflineRedeem(
+        _ request: OfflineRedeemRequest,
+        completion: @escaping (Result<OfflineOperationReference, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) { try await self.submitOfflineRedeem(request) }
+    }
+
+    @discardableResult
+    public func getOfflineOperationStatus(
+        operationId: String,
+        completion: @escaping (Result<OfflineOperationStatus, Swift.Error>) -> Void
+    ) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getOfflineOperationStatus(operationId: operationId)
+        }
     }
 
     @discardableResult
@@ -19705,14 +19609,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getDaProofPolicies() async throws -> ToriiJSONValue {
-        let request = try makeRequest(path: "/v1/da/proof_policies",
+        let request = try makeRequest(path: "/v1/da/proof-policies",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiJSONValue.self, from: data)
     }
 
     public func getDaProofPolicySnapshot() async throws -> ToriiJSONValue {
-        let request = try makeRequest(path: "/v1/da/proof_policy_snapshot",
+        let request = try makeRequest(path: "/v1/da/proof-policies/snapshot",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiJSONValue.self, from: data)
@@ -19764,7 +19668,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
-        let request = try makeRequest(path: "/v1/da/pin_intents",
+        let request = try makeRequest(path: "/v1/da/pin-intents",
                                       method: .post,
                                       body: body,
                                       headers: [
@@ -19779,7 +19683,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalized = try normalizeDaPinIntentQueryRequest(requestBody)
         let encoder = JSONEncoder()
         let body = try encoder.encode(normalized)
-        let request = try makeRequest(path: "/v1/da/pin_intents/prove",
+        let request = try makeRequest(path: "/v1/da/pin-intents/prove",
                                       method: .post,
                                       body: body,
                                       headers: [
@@ -19791,7 +19695,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func verifyDaPinIntent(proof: ToriiJSONValue) async throws -> ToriiDaPinIntentVerifyResponse {
-        let request = try makeRequest(path: "/v1/da/pin_intents/verify",
+        let request = try makeRequest(path: "/v1/da/pin-intents/verify",
                                       method: .post,
                                       body: try proof.encodedData(),
                                       headers: [
@@ -20290,7 +20194,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest) async throws -> ToriiMultisigProposalsListResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/list",
+        let request = try makeRequest(path: "/v1/multisig/proposals/query",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
@@ -20300,7 +20204,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest) async throws -> ToriiMultisigProposalGetResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/get",
+        let request = try makeRequest(path: "/v1/multisig/proposals/lookup",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
@@ -20325,11 +20229,118 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getOfflineReadiness() async throws -> ToriiOfflineReadiness {
+    public func getOfflineReadiness(assetDefinitionId: String) async throws -> ToriiOfflineReadiness {
+        let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
+            assetDefinitionId,
+            field: "assetDefinitionId"
+        )
         let request = try makeRequest(path: "/v1/offline/readiness",
+                                      queryItems: [
+                                        URLQueryItem(
+                                            name: "asset_definition_id",
+                                            value: exactAssetDefinitionId
+                                        )
+                                      ],
                                       headers: ["Accept": "application/json"])
-        let data = try await data(for: request)
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        guard !data.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        do {
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "offline readiness response must be valid UTF-8 JSON without duplicate object keys"
+            )
+        }
         return try decodeJSON(ToriiOfflineReadiness.self, from: data)
+    }
+
+    public func submitOfflineTopUp(
+        _ requestBody: OfflineTopUpRequest
+    ) async throws -> OfflineOperationReference {
+        try await submitOfflineOperation(
+            path: OfflineAPI.Endpoint.topUp.path,
+            operationId: requestBody.operationId,
+            expectedKind: .topUp,
+            archive: requestBody.noritoArchive()
+        )
+    }
+
+    public func submitOfflineRedeem(
+        _ requestBody: OfflineRedeemRequest
+    ) async throws -> OfflineOperationReference {
+        try await submitOfflineOperation(
+            path: OfflineAPI.Endpoint.redeem.path,
+            operationId: requestBody.operationId,
+            expectedKind: .redeem,
+            archive: requestBody.noritoArchive()
+        )
+    }
+
+    public func getOfflineOperationStatus(
+        operationId: String
+    ) async throws -> OfflineOperationStatus {
+        let path = try OfflineAPI.operationPath(operationId)
+        let request = try makeRequest(
+            path: path,
+            headers: ["Accept": "application/x-norito"]
+        )
+        let (responseData, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: responseData)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !responseData.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        let status = try OfflineOperationCodec.decodeStatus(responseData)
+        guard status.operationId == operationId else {
+            throw ToriiClientError.invalidPayload(
+                "offline operation status operation_id does not match the requested resource"
+            )
+        }
+        return status
+    }
+
+    private func submitOfflineOperation(
+        path: String,
+        operationId: String,
+        expectedKind: OfflineOperationKind,
+        archive: Data
+    ) async throws -> OfflineOperationReference {
+        let request = try makeRequest(
+            path: path,
+            method: .post,
+            body: archive,
+            headers: [
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+                "Idempotency-Key": operationId,
+            ]
+        )
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 202, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/x-norito")
+        guard !data.isEmpty else {
+            throw ToriiClientError.emptyBody
+        }
+        let reference = try OfflineOperationCodec.decodeReference(data)
+        let expectedStatusUri = try OfflineAPI.operationPath(operationId)
+        guard reference.operationId == operationId,
+              reference.kind == expectedKind,
+              reference.state == .pending,
+              reference.statusUri == expectedStatusUri else {
+            throw ToriiClientError.invalidPayload(
+                "offline operation reference does not match the submitted command"
+            )
+        }
+        guard response.value(forHTTPHeaderField: "Location") == expectedStatusUri else {
+            throw ToriiClientError.invalidPayload(
+                "offline operation Location must match the canonical status resource"
+            )
+        }
+        return reference
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {
@@ -20504,19 +20515,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter(),
-                                         lastEventId: String? = nil) -> AsyncThrowingStream<ToriiVerifyingKeyEventMessage, Error> {
+    public func streamVerifyingKeyEvents(filter: ToriiVerifyingKeyEventFilter = ToriiVerifyingKeyEventFilter()) -> AsyncThrowingStream<ToriiVerifyingKeyEventMessage, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let queryItems = try filter.queryItems()
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(path: "/v1/events/sse",
                                                   queryItems: queryItems,
-                                                  headers: headers)
+                                                  headers: ["Accept": "text/event-stream"])
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw ToriiClientError.invalidResponse
@@ -20573,19 +20579,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamTriggerEvents(filter: ToriiTriggerEventFilter = ToriiTriggerEventFilter(),
-                                    lastEventId: String? = nil) -> AsyncThrowingStream<ToriiTriggerEventMessage, Error> {
+    public func streamTriggerEvents(filter: ToriiTriggerEventFilter = ToriiTriggerEventFilter()) -> AsyncThrowingStream<ToriiTriggerEventMessage, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let queryItems = try filter.queryItems()
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(path: "/v1/events/sse",
                                                   queryItems: queryItems,
-                                                  headers: headers)
+                                                  headers: ["Accept": "text/event-stream"])
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw ToriiClientError.invalidResponse
@@ -20642,19 +20643,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamProofEvents(filter: ToriiProofEventFilter = ToriiProofEventFilter(),
-                                  lastEventId: String? = nil) -> AsyncThrowingStream<ToriiProofEventMessage, Error> {
+    public func streamProofEvents(filter: ToriiProofEventFilter = ToriiProofEventFilter()) -> AsyncThrowingStream<ToriiProofEventMessage, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let queryItems = try filter.queryItems()
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(path: "/v1/events/sse",
                                                   queryItems: queryItems,
-                                                  headers: headers)
+                                                  headers: ["Accept": "text/event-stream"])
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
                         throw ToriiClientError.invalidResponse
@@ -21532,8 +21528,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func streamTransactionStatusEvents(hashHex: String,
-                                              lastEventId: String? = nil) -> AsyncThrowingStream<ToriiPipelineTransactionEvent, Error> {
+    public func streamTransactionStatusEvents(hashHex: String) -> AsyncThrowingStream<ToriiPipelineTransactionEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -21542,14 +21537,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                         decoding: Self.queryEqualsFilter(field: "tx_hash", value: normalizedHash).encodedData(),
                         as: UTF8.self
                     )
-                    var headers = ["Accept": "text/event-stream"]
-                    if let lastEventId {
-                        headers["Last-Event-ID"] = lastEventId
-                    }
                     let request = try makeRequest(
                         path: "/v1/events/sse",
                         queryItems: [URLQueryItem(name: "filter", value: filterValue)],
-                        headers: headers
+                        headers: ["Accept": "text/event-stream"]
                     )
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let httpResponse = response as? HTTPURLResponse else {
@@ -21690,7 +21681,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
         let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
-        let request = try makeRequest(path: "/v1/sumeragi/commit_qc/\(normalized)",
+        let request = try makeRequest(path: "/v1/sumeragi/commit-qcs/\(normalized)",
                                       headers: ["Accept": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiSumeragiCommitQcRecord.self, from: data)
@@ -22297,6 +22288,26 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
+    private func ensureResponseMediaType(
+        _ response: HTTPURLResponse,
+        equals expected: String
+    ) throws {
+        guard let rawValue = response.value(forHTTPHeaderField: "Content-Type") else {
+            throw ToriiClientError.invalidPayload(
+                "response Content-Type must be \(expected)"
+            )
+        }
+        let mediaType = rawValue
+            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard mediaType == expected else {
+            throw ToriiClientError.invalidPayload(
+                "response Content-Type must be \(expected)"
+            )
+        }
+    }
+
     private func data(for request: URLRequest,
                       acceptedStatus: Range<Int> = 200..<300,
                       allowEmptyBody: Bool = false) async throws -> Data {
@@ -22409,6 +22420,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "verifying-key SSE")
         guard let payloadString = parsed.data else {
             return nil
         }
@@ -22429,6 +22441,110 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let id: String?
         let retry: Int?
         let raw: String
+    }
+
+    private struct ToriiStreamErrorCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            return nil
+        }
+    }
+
+    private struct ToriiStreamErrorEnvelope: Decodable {
+        let code: String
+        let message: String
+        let droppedMessages: UInt64?
+        let replayAvailable: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case code
+            case message
+            case droppedMessages = "dropped_messages"
+            case replayAvailable = "replay_available"
+        }
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: ToriiStreamErrorCodingKey.self)
+            let expected = Set(["code", "message", "dropped_messages", "replay_available"])
+            let actual = Set(dynamic.allKeys.map(\.stringValue))
+            guard actual == expected else {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath,
+                          debugDescription: "A v1 stream error must contain exactly code, message, dropped_messages, and replay_available.")
+                )
+            }
+
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            code = try container.decode(String.self, forKey: .code)
+            message = try container.decode(String.self, forKey: .message)
+            droppedMessages = try container.decodeIfPresent(UInt64.self, forKey: .droppedMessages)
+            replayAvailable = try container.decode(Bool.self, forKey: .replayAvailable)
+
+            guard Self.isExactText(code, token: true) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .code,
+                    in: container,
+                    debugDescription: "Stream error code must be a non-empty exact token."
+                )
+            }
+            guard Self.isExactText(message, token: false) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .message,
+                    in: container,
+                    debugDescription: "Stream error message must be non-empty exact text."
+                )
+            }
+        }
+
+        private static func isExactText(_ value: String, token: Bool) -> Bool {
+            guard !value.isEmpty,
+                  value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
+                  !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                return false
+            }
+            return !token || !value.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains)
+        }
+    }
+
+    private func throwIfTerminalStreamError(_ parsed: ToriiSseParsedEvent,
+                                            context: String) throws {
+        guard parsed.eventName == "stream_error" else {
+            return
+        }
+        guard let payloadString = parsed.data,
+              let payloadData = payloadString.data(using: .utf8) else {
+            throw ToriiClientError.invalidPayload("\(context) terminal stream error must contain UTF-8 JSON data.")
+        }
+
+        do {
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: payloadData)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "\(context) terminal stream error must be valid JSON without duplicate object keys."
+            )
+        }
+
+        let envelope: ToriiStreamErrorEnvelope
+        do {
+            envelope = try JSONDecoder().decode(ToriiStreamErrorEnvelope.self, from: payloadData)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "\(context) terminal stream error is malformed: \(ToriiClientError.describeDecodingError(error))"
+            )
+        }
+
+        throw ToriiClientError.stream(
+            ToriiStreamError(code: envelope.code,
+                             message: envelope.message,
+                             droppedMessages: envelope.droppedMessages,
+                             replayAvailable: envelope.replayAvailable)
+        )
     }
 
     private func parseServerSentEvent(from lines: [String]) throws -> ToriiSseParsedEvent? {
@@ -22505,6 +22621,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "transaction-status SSE")
         guard let payloadString = parsed.data else {
             return nil
         }
@@ -22591,6 +22708,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "trigger SSE")
         guard let payloadString = parsed.data else {
             return nil
         }
@@ -22685,6 +22803,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         guard let parsed = try parseServerSentEvent(from: lines) else {
             return nil
         }
+        try throwIfTerminalStreamError(parsed, context: "proof SSE")
         guard let payloadString = parsed.data else {
             return nil
         }

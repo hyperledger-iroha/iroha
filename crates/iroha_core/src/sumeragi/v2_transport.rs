@@ -176,11 +176,6 @@ impl AuthenticatedPayloadChunk {
     pub(crate) const fn chunk(&self) -> &wire::PayloadChunk {
         &self.chunk
     }
-
-    /// Consume the token and recover the authenticated chunk.
-    pub(crate) fn into_inner(self) -> wire::PayloadChunk {
-        self.chunk
-    }
 }
 
 /// Certified-body request admitted through structural, identity, signature,
@@ -213,6 +208,7 @@ pub(crate) struct AuthenticatedCertifiedBodyResponse {
 
 impl AuthenticatedCertifiedBodyResponse {
     /// Borrow the authenticated response.
+    #[cfg(test)]
     pub(crate) const fn response(&self) -> &wire::CertifiedBodyResponse {
         &self.response
     }
@@ -256,11 +252,6 @@ impl AuthenticatedCommitCertificateResponse {
     /// Hash of the outstanding request authenticated by this response.
     pub(crate) const fn request_hash(&self) -> HashOf<wire::CommitCertificateRequest> {
         self.request_hash
-    }
-
-    /// Borrow the authenticated response.
-    pub(crate) const fn response(&self) -> &wire::CommitCertificateResponse {
-        &self.response
     }
 
     /// Consume the token and recover the response.
@@ -432,11 +423,13 @@ impl OutstandingCertifiedBodyRequests {
     }
 
     /// Whether the tracker has no outstanding requests.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.requests.is_empty()
     }
 
     /// Whether one exact request hash is currently outstanding.
+    #[cfg(test)]
     pub(crate) fn contains(&self, hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         self.requests.contains_key(&hash)
     }
@@ -569,16 +562,13 @@ impl OutstandingCommitCertificateRequests {
     }
 
     /// Number of outstanding requests.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.requests.len()
     }
 
-    /// Whether no CommitQC discovery request remains outstanding.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.requests.is_empty()
-    }
-
     /// Whether the exact request remains outstanding.
+    #[cfg(test)]
     pub(crate) fn contains(&self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
         self.requests.contains_key(&request_hash)
     }
@@ -667,11 +657,6 @@ impl OutstandingCommitCertificateRequests {
         let removed = self.identities.remove(&identity);
         debug_assert_eq!(removed, Some(request_hash));
         true
-    }
-
-    /// Cancel obsolete work when the active height changes by another path.
-    pub(crate) fn cancel(&mut self, request_hash: HashOf<wire::CommitCertificateRequest>) -> bool {
-        self.complete(request_hash)
     }
 }
 

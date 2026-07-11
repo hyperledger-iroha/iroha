@@ -95,7 +95,6 @@ Torii құралды жіберу үшін кіріс аутентификаци
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Клиенттер сонымен қатар `arguments.headers` арқылы әрбір қоңырауға қосымша тақырыптарды бере алады.
 `content-length`, `host` және `arguments.headers` ішінен `connection` еленбейді.

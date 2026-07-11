@@ -402,21 +402,18 @@ Taxonomie `ConnectError` afin que les intercepteurs HTTP/WebSocket partagés pui
 norme `connect.queue_depth`, `connect.queue_overflow_total`, et
 Métriques `connect.queue_expired_total` référencées tout au long de la feuille de route.
 
-## Observateurs de streaming et curseurs d'événements`ToriiClient.streamEvents()` expose `/v1/events/sse` en tant qu'itérateur asynchrone avec
-nouvelles tentatives, afin que les CLI Node/Bun puissent suivre l'activité du pipeline de la même manière que le fait la CLI Rust.
-Conservez le curseur `Last-Event-ID` à côté des artefacts de votre runbook afin que les opérateurs puissent
-reprendre un flux sans ignorer les événements lorsqu'un processus redémarre.
+## Live event streams
 
-```ts
-import fs from "node:fs/promises";
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
+
+```js
 import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
-const cursorFile = process.env.STREAM_CURSOR_FILE ?? ".cache/torii.cursor";
-const resumeId = await fs
-  .readFile(cursorFile, "utf8")
-  .then((value) => value.trim())
-  .catch(() => null);
 const controller = new AbortController();
 
 process.once("SIGINT", () => controller.abort());
@@ -424,28 +421,26 @@ process.once("SIGTERM", () => controller.abort());
 
 for await (const event of torii.streamEvents({
   filter: { Pipeline: { Transaction: { status: "Committed" } } },
-  lastEventId: resumeId || undefined,
   signal: controller.signal,
 })) {
-  if (event.id) {
-    await fs.writeFile(cursorFile, `${event.id}\n`, "utf8");
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
   }
   const status = event.data ? extractPipelineStatusKind(event.data) : null;
-  console.log(`[${event.event}] id=${event.id ?? "∅"} status=${status ?? "n/a"}`);
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
 }
 ```
 
-- Switch `PIPELINE_STATUS` (par exemple `Pending`, `Applied` ou `Approved`) ou définir
-  `STREAM_FILTER_JSON` pour relire les mêmes filtres acceptés par la CLI.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` maintient l'itérateur en vie jusqu'à ce qu'un
-  le signal est reçu ; passez `STREAM_MAX_EVENTS=25` lorsque vous n'avez besoin que des premiers événements
-  pour un test de fumée.
-- `ToriiClient.streamSumeragiStatus()` reflète la même interface pour
-  `/v1/sumeragi/status/sse` afin que la télémétrie consensuelle puisse être suivie séparément, et le
-  l'itérateur honore `Last-Event-ID` de la même manière.
-- Voir `javascript/iroha_js/recipes/streaming.mjs` pour une CLI clé en main (persistance du curseur,
-  remplacements de filtre env-var et journalisation `extractPipelineStatusKind`) utilisés dans le JS4
-  Feuille de route streaming/WebSocket livrable.
+- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
+  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
+  for a smoke test.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
 
 ## Portefeuilles UAID et répertoire spatial
 

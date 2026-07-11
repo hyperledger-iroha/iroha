@@ -84,7 +84,7 @@ translator: manual
 | אימות Pointer-ABI ותיעוד | ◉ | מדיניות TLV נאכפת עם גולדנים ו-doc sync. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | gating Syscalls של ZK ב-CoreHost | ◉ | תורים לכל פעולה מאכפים hash לפני ISI. | crates/iroha_core/src/smartcontracts/ivm/host.rs |
 | תיעוד Grammar של Kotodama Pointer-ABI | ◉ | מסונכרן עם היישום. | status.md:299-301 |
-| מנוע ISO 20022 ו-Bridge לטורי | ◉ | סכימות וה-API `/v1/iso20022/status/{MsgId}` זמינים. | status.md:65-70 |
+| מנוע ISO 20022 ו-Bridge לטורי | ◉ | סכימות וה-API `/v1/iso20022/messages/{MsgId}` זמינים. | status.md:65-70 |
 
 ## האצות חומרתיות
 

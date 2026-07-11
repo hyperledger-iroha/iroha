@@ -97,7 +97,6 @@ Torii asboblarni jo'natish uchun kirish autentsiyasi bilan bog'liq sarlavhalarni
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Mijozlar `arguments.headers` orqali qo'shimcha qo'ng'iroq sarlavhalarini ham taqdim etishlari mumkin.
 `content-length`, `host` va `arguments.headers` dan `connection` hisobga olinmaydi.

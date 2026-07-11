@@ -1,1041 +1,1004 @@
 import Foundation
 
-public enum ToriiOfflineCashAPI {
+/// Canonical first-release Torii Offline routes.
+public enum OfflineAPI {
     public enum Endpoint: String, Sendable {
-        case keyRefill = "/v1/offline/v2/keys/refill"
-        case noteIssue = "/v1/offline/v2/notes/issue"
-        case noteRedeem = "/v1/offline/v2/notes/redeem"
-        case audit = "/v1/offline/v2/audit"
-        case revocationBundle = "/v1/offline/revocations/bundle"
-        case telemetry = "/v1/offline/telemetry"
+        case readiness = "/v1/offline/readiness"
+        case topUp = "/v1/offline/top-up"
+        case redeem = "/v1/offline/redeem"
+        case operations = "/v1/offline/operations"
 
         public var path: String { rawValue }
     }
 
-    public static func canonicalBody<T: Encodable>(_ request: T) throws -> Data {
-        try ToriiOfflineCashCodec.canonicalData(request)
-    }
-
-    public static func idempotencyKey(for request: ToriiOfflineKeyRefillRequest) -> String {
-        request.operationId
-    }
-
-    public static func idempotencyKey(for request: ToriiOfflineNoteIssueSettlementRequest) -> String {
-        request.operationId
-    }
-
-    public static func idempotencyKey(for request: ToriiOfflineNoteRedeemSettlementRequest) -> String {
-        request.operationId
-    }
-
-    public static func idempotencyKey(for request: ToriiOfflineAuditRequest) -> String {
-        request.operationId
+    public static func operationPath(_ operationId: String) throws -> String {
+        "\(Endpoint.operations.path)/\(try OfflineOperationValidation.operationId(operationId))"
     }
 }
 
-public enum ToriiOfflineCashOperationKind: String, Codable, Equatable, Sendable {
-    case load
-    case refresh
-    case sync
+public enum OfflineOperationKind: String, Codable, Equatable, Sendable {
+    case topUp = "top_up"
     case redeem
 }
 
-private enum ToriiOfflineCashAPIModelValidation {
-    static func requireExactNonEmptyText(_ value: String, field: String) throws {
-        guard !value.isEmpty,
-              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
-            throw OfflineNotePayloadError.invalidField(field)
+public enum OfflineOperationState: String, Codable, Equatable, Sendable {
+    case pending
+}
+
+public enum OfflineOperationError: Error, LocalizedError, Equatable, Sendable {
+    case invalidField(String)
+    case invalidNoritoArchive
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidField(field):
+            return "Invalid Offline operation field: \(field)."
+        case .invalidNoritoArchive:
+            return "Offline operation request must be a canonical Norito archive."
         }
-    }
-
-    static func optionalExactNonEmptyText(_ value: String?, field: String) throws -> String? {
-        guard let value else { return nil }
-        try requireExactNonEmptyText(value, field: field)
-        return value
-    }
-
-    static func canonicalNonNegativeAmount(_ value: String, field: String) throws -> String {
-        let canonical = try ToriiOfflineCashCodec.canonicalAmountString(value)
-        guard !canonical.hasPrefix("-") else {
-            throw OfflineNotePayloadError.invalidField(field)
-        }
-        return canonical
-    }
-
-    static func optionalCanonicalNonNegativeAmount(_ value: String?, field: String) throws -> String? {
-        guard let value else { return nil }
-        return try canonicalNonNegativeAmount(value, field: field)
-    }
-
-    static func requireCanonicalSignatureBase64(_ value: String, field: String) throws {
-        guard let signature = OfflineNoteTextPayloadEncoding.decodeExactBase64(value),
-              signature.count == 64 else {
-            throw OfflineNotePayloadError.invalidField(field)
-        }
-    }
-
-    static func requireEmptyOrHashHex(_ value: String, field: String) throws {
-        guard !value.isEmpty else { return }
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(value, field: field)
-    }
-
-    static func optionalHashHex(_ value: String?, field: String) throws -> String? {
-        guard let value else { return nil }
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(value, field: field)
-        return value
     }
 }
 
-public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
+/// A schema-bound Offline top-up command submitted directly to Torii.
+public struct OfflineTopUpRequest: Equatable, Sendable {
+    /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
-    public let kind: ToriiOfflineCashOperationKind
-    public let accountId: String
-    public let deviceId: String
-    public let assetDefinitionId: String
-    public let amount: String
-    public let preBalance: String
-    public let postBalance: String
-    public let entryHash: String
-    public let chainTxHash: String
-    public let blockHeight: UInt64
-    public let issuedAtMs: UInt64
-    public let noteCommitment: String?
-    public let issuerSignatureBase64: String
+    private let archive: Data
+
+    /// Validates and retains a canonical first-release Offline top-up request archive.
+    public init(noritoArchive: Data) throws {
+        let validated = try OfflineOperationValidation.requestArchive(
+            noritoArchive,
+            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            operationIdFieldIndex: 6,
+            fieldCount: 8
+        )
+        self.operationId = validated.operationId
+        self.archive = validated.archive
+    }
+
+    public func noritoArchive() -> Data { archive }
+}
+
+/// A schema-bound Offline redemption command submitted directly to Torii.
+public struct OfflineRedeemRequest: Equatable, Sendable {
+    /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
+    public let operationId: String
+    private let archive: Data
+
+    /// Validates and retains a canonical first-release Offline redemption request archive.
+    public init(noritoArchive: Data) throws {
+        let validated = try OfflineOperationValidation.requestArchive(
+            noritoArchive,
+            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            operationIdFieldIndex: 9,
+            fieldCount: 11
+        )
+        self.operationId = validated.operationId
+        self.archive = validated.archive
+    }
+
+    public func noritoArchive() -> Data { archive }
+}
+
+public struct OfflineOperationReference: Codable, Equatable, Sendable {
+    public let operationId: String
+    public let kind: OfflineOperationKind
+    public let state: OfflineOperationState
+    public let transactionHash: String
+    public let statusUri: String
+    public let submittedAtMs: UInt64
 
     public init(
         operationId: String,
-        kind: ToriiOfflineCashOperationKind,
-        accountId: String,
-        deviceId: String,
-        assetDefinitionId: String,
-        amount: String,
-        preBalance: String,
-        postBalance: String,
-        entryHash: String,
-        chainTxHash: String,
-        blockHeight: UInt64,
-        issuedAtMs: UInt64,
-        noteCommitment: String? = nil,
-        issuerSignatureBase64: String
+        kind: OfflineOperationKind,
+        state: OfflineOperationState,
+        transactionHash: String,
+        statusUri: String,
+        submittedAtMs: UInt64
     ) throws {
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            operationId,
-            field: "operation_id"
-        )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            assetDefinitionId,
-            field: "asset_definition_id"
-        )
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(entryHash, field: "entry_hash")
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(chainTxHash, field: "chain_tx_hash")
-        try ToriiOfflineCashAPIModelValidation.requireCanonicalSignatureBase64(
-            issuerSignatureBase64,
-            field: "issuer_signature_base64"
-        )
-        self.operationId = operationId
+        let validatedOperationId = try OfflineOperationValidation.operationId(operationId)
+        self.operationId = validatedOperationId
         self.kind = kind
-        self.accountId = accountId
-        self.deviceId = deviceId
-        self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            amount,
-            field: "amount"
+        self.state = state
+        self.transactionHash = try OfflineOperationValidation.transactionHash(
+            transactionHash,
+            field: "transaction_hash"
         )
-        self.preBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            preBalance,
-            field: "pre_balance"
+        self.statusUri = try OfflineOperationValidation.statusUri(
+            statusUri,
+            operationId: validatedOperationId
         )
-        self.postBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            postBalance,
-            field: "post_balance"
-        )
-        self.entryHash = entryHash
-        self.chainTxHash = chainTxHash
-        self.blockHeight = blockHeight
-        self.issuedAtMs = issuedAtMs
-        if let noteCommitment {
-            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-                noteCommitment,
-                field: "note_commitment"
-            )
-            self.noteCommitment = noteCommitment
-        } else {
-            self.noteCommitment = nil
-        }
-        self.issuerSignatureBase64 = issuerSignatureBase64
+        self.submittedAtMs = submittedAtMs
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             operationId: container.decode(String.self, forKey: .operationId),
-            kind: container.decode(ToriiOfflineCashOperationKind.self, forKey: .kind),
-            accountId: container.decode(String.self, forKey: .accountId),
-            deviceId: container.decode(String.self, forKey: .deviceId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            amount: container.decode(String.self, forKey: .amount),
-            preBalance: container.decode(String.self, forKey: .preBalance),
-            postBalance: container.decode(String.self, forKey: .postBalance),
-            entryHash: container.decode(String.self, forKey: .entryHash),
-            chainTxHash: container.decode(String.self, forKey: .chainTxHash),
-            blockHeight: container.decode(UInt64.self, forKey: .blockHeight),
-            issuedAtMs: container.decode(UInt64.self, forKey: .issuedAtMs),
-            noteCommitment: container.decodeIfPresent(String.self, forKey: .noteCommitment),
-            issuerSignatureBase64: container.decode(String.self, forKey: .issuerSignatureBase64)
+            kind: container.decode(OfflineOperationKind.self, forKey: .kind),
+            state: container.decode(OfflineOperationState.self, forKey: .state),
+            transactionHash: container.decode(String.self, forKey: .transactionHash),
+            statusUri: container.decode(String.self, forKey: .statusUri),
+            submittedAtMs: container.decode(UInt64.self, forKey: .submittedAtMs)
         )
     }
 
     private enum CodingKeys: String, CodingKey {
         case operationId = "operation_id"
         case kind
-        case accountId = "account_id"
-        case deviceId = "device_id"
-        case assetDefinitionId = "asset_definition_id"
-        case amount
-        case preBalance = "pre_balance"
-        case postBalance = "post_balance"
-        case entryHash = "entry_hash"
-        case chainTxHash = "chain_tx_hash"
-        case blockHeight = "block_height"
-        case issuedAtMs = "issued_at_ms"
-        case noteCommitment = "note_commitment"
-        case issuerSignatureBase64 = "issuer_signature_base64"
+        case state
+        case transactionHash = "transaction_hash"
+        case statusUri = "status_uri"
+        case submittedAtMs = "submitted_at_ms"
     }
 }
 
-public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
-    public let operationId: String
-    public let accountId: String
-    public let deviceId: String
-    public let offlinePublicKey: String
-    public var attestationKeyId: String
-    public let assetDefinitionId: String
-    public let existingLineageId: String?
-    public let lineageState: ToriiOfflineCashState?
-    public let localRevision: UInt64
-    public let localStateHash: String
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let keyCertificateBindings: [ToriiOfflineDeviceBinding]
-    public let deviceProof: ToriiOfflineDeviceProof
+/// Canonical finalized top-up anchor consumed by the Offline wallet prover.
+///
+/// The public API intentionally exposes the current semantic name while the
+/// versioned consensus wire type remains an internal codec detail.
+public struct OfflineTopUpAnchor: Equatable, Sendable {
+    private let archive: Data
+    private let anchorDigest: Data
+
+    /// Validates and retains a canonical top-up anchor Norito archive.
+    public init(noritoArchive: Data) throws {
+        let wireValue = try KagemushaRecursiveSpendV2Codecs.decodeTopUpAnchor(
+            Data(noritoArchive)
+        )
+        self.archive = Data(wireValue.archive)
+        self.anchorDigest = Data(wireValue.anchorDigest)
+    }
+
+    /// Returns a defensive copy of the canonical Norito archive.
+    public func noritoArchive() -> Data {
+        Data(archive)
+    }
+
+    /// Digest committed by the finalized anchor, returned as a defensive copy.
+    public var digest: Data {
+        Data(anchorDigest)
+    }
+}
+
+public struct OfflineTopUpResult: Equatable, Sendable {
+    public let transactionHash: String
+    public let finalizedBlockHeight: UInt64
+    public let serverTimeMs: UInt64
+    public let anchor: OfflineTopUpAnchor
 
     public init(
-        operationId: String,
-        accountId: String,
-        deviceId: String,
-        offlinePublicKey: String,
-        attestationKeyId: String,
-        assetDefinitionId: String,
-        existingLineageId: String?,
-        lineageState: ToriiOfflineCashState? = nil,
-        localRevision: UInt64,
-        localStateHash: String,
-        deviceBinding: ToriiOfflineDeviceBinding,
-        keyCertificateBindings: [ToriiOfflineDeviceBinding]? = nil,
-        deviceProof: ToriiOfflineDeviceProof
+        transactionHash: String,
+        finalizedBlockHeight: UInt64,
+        serverTimeMs: UInt64,
+        anchor: OfflineTopUpAnchor
     ) throws {
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            operationId,
-            field: "operation_id"
+        self.transactionHash = try OfflineOperationValidation.transactionHash(
+            transactionHash,
+            field: "transaction_hash"
         )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            offlinePublicKey,
-            field: "offline_public_key"
+        self.finalizedBlockHeight = try OfflineOperationValidation.positive(
+            finalizedBlockHeight,
+            field: "finalized_block_height"
         )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            attestationKeyId,
-            field: "attestation_key_id"
+        self.serverTimeMs = try OfflineOperationValidation.positive(
+            serverTimeMs,
+            field: "server_time_ms"
         )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            assetDefinitionId,
-            field: "asset_definition_id"
+        self.anchor = anchor
+    }
+}
+
+public struct OfflineRedeemResult: Equatable, Sendable {
+    public let transactionHash: String
+    public let finalizedBlockHeight: UInt64
+    public let serverTimeMs: UInt64
+
+    public init(
+        transactionHash: String,
+        finalizedBlockHeight: UInt64,
+        serverTimeMs: UInt64
+    ) throws {
+        self.transactionHash = try OfflineOperationValidation.transactionHash(
+            transactionHash,
+            field: "transaction_hash"
         )
-        if let existingLineageId {
-            try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-                existingLineageId,
-                field: "existing_lineage_id"
+        self.finalizedBlockHeight = try OfflineOperationValidation.positive(
+            finalizedBlockHeight,
+            field: "finalized_block_height"
+        )
+        self.serverTimeMs = try OfflineOperationValidation.positive(
+            serverTimeMs,
+            field: "server_time_ms"
+        )
+    }
+}
+
+public enum OfflineOperationResult: Equatable, Sendable {
+    case topUp(OfflineTopUpResult)
+    case redeem(OfflineRedeemResult)
+}
+
+public struct OfflineQueueErrorSnapshot: Equatable, Sendable {
+    public let state: String
+    public let queued: UInt64
+    public let capacity: UInt64
+    public let saturated: Bool
+
+    public init(state: String, queued: UInt64, capacity: UInt64, saturated: Bool) throws {
+        self.state = try OfflineOperationValidation.exactToken(
+            state,
+            field: "error.details.queue.state"
+        )
+        self.queued = queued
+        self.capacity = capacity
+        self.saturated = saturated
+    }
+}
+
+public struct OfflineAxtErrorDetails: Equatable, Sendable {
+    public let code: String?
+    public let reason: String?
+    public let snapshotVersion: UInt64?
+    public let dataspace: UInt64?
+    public let lane: UInt32?
+    public let nextMinHandleEra: UInt64?
+    public let nextMinSubNonce: UInt64?
+
+    public init(
+        code: String? = nil,
+        reason: String? = nil,
+        snapshotVersion: UInt64? = nil,
+        dataspace: UInt64? = nil,
+        lane: UInt32? = nil,
+        nextMinHandleEra: UInt64? = nil,
+        nextMinSubNonce: UInt64? = nil
+    ) throws {
+        self.code = try code.map {
+            try OfflineOperationValidation.exactText($0, field: "error.details.axt.code")
+        }
+        self.reason = try reason.map {
+            try OfflineOperationValidation.exactText($0, field: "error.details.axt.reason")
+        }
+        self.snapshotVersion = snapshotVersion
+        self.dataspace = dataspace
+        self.lane = lane
+        self.nextMinHandleEra = nextMinHandleEra
+        self.nextMinSubNonce = nextMinSubNonce
+    }
+}
+
+public struct OfflineOperationErrorDetails: Equatable, Sendable {
+    public let layer: String?
+    public let rejectCode: String?
+    public let queue: OfflineQueueErrorSnapshot?
+    public let retryAfterSeconds: UInt64?
+    public let endpoint: String?
+    public let field: String?
+    public let expected: String?
+    public let actual: String?
+    public let profile: String?
+    public let chainDiscriminant: UInt16?
+    public let transactionHash: String?
+    public let lastStatus: String?
+    public let hint: String?
+    public let axt: OfflineAxtErrorDetails?
+
+    public init(
+        layer: String? = nil,
+        rejectCode: String? = nil,
+        queue: OfflineQueueErrorSnapshot? = nil,
+        retryAfterSeconds: UInt64? = nil,
+        endpoint: String? = nil,
+        field: String? = nil,
+        expected: String? = nil,
+        actual: String? = nil,
+        profile: String? = nil,
+        chainDiscriminant: UInt16? = nil,
+        transactionHash: String? = nil,
+        lastStatus: String? = nil,
+        hint: String? = nil,
+        axt: OfflineAxtErrorDetails? = nil
+    ) throws {
+        self.layer = try Self.exactOptionalText(layer, field: "error.details.layer")
+        self.rejectCode = try rejectCode.map {
+            try OfflineOperationValidation.exactText($0, field: "error.details.reject_code")
+        }
+        self.queue = queue
+        self.retryAfterSeconds = retryAfterSeconds
+        self.endpoint = try Self.exactOptionalText(endpoint, field: "error.details.endpoint")
+        self.field = try Self.exactOptionalText(field, field: "error.details.field")
+        self.expected = try Self.exactOptionalText(expected, field: "error.details.expected")
+        self.actual = try Self.exactOptionalText(actual, field: "error.details.actual")
+        self.profile = try Self.exactOptionalText(profile, field: "error.details.profile")
+        self.chainDiscriminant = chainDiscriminant
+        self.transactionHash = try transactionHash.map {
+            try OfflineOperationValidation.transactionHash(
+                $0,
+                field: "error.details.transaction_hash"
             )
         }
-        try ToriiOfflineCashAPIModelValidation.requireEmptyOrHashHex(
-            localStateHash,
-            field: "local_state_hash"
+        self.lastStatus = try Self.exactOptionalText(
+            lastStatus,
+            field: "error.details.last_status"
         )
-        self.operationId = operationId
-        self.accountId = accountId
-        self.deviceId = deviceId
-        self.offlinePublicKey = offlinePublicKey
-        self.attestationKeyId = attestationKeyId
-        self.assetDefinitionId = assetDefinitionId
-        self.existingLineageId = existingLineageId
-        self.lineageState = lineageState
-        self.localRevision = localRevision
-        self.localStateHash = localStateHash
-        self.deviceBinding = deviceBinding
-        self.keyCertificateBindings = keyCertificateBindings ?? [deviceBinding]
-        self.deviceProof = deviceProof
+        self.hint = try Self.exactOptionalText(hint, field: "error.details.hint")
+        self.axt = axt
     }
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decode(String.self, forKey: .operationId),
-            accountId: container.decode(String.self, forKey: .accountId),
-            deviceId: container.decode(String.self, forKey: .deviceId),
-            offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
-            attestationKeyId: container.decode(String.self, forKey: .attestationKeyId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            existingLineageId: container.decodeIfPresent(String.self, forKey: .existingLineageId),
-            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
-            localRevision: container.decode(UInt64.self, forKey: .localRevision),
-            localStateHash: container.decode(String.self, forKey: .localStateHash),
-            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
-            keyCertificateBindings: container.decodeIfPresent(
-                [ToriiOfflineDeviceBinding].self,
-                forKey: .keyCertificateBindings
-            ),
-            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
-        )
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(operationId, forKey: .operationId)
-        try container.encode(accountId, forKey: .accountId)
-        try container.encode(deviceId, forKey: .deviceId)
-        try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
-        try container.encode(attestationKeyId, forKey: .attestationKeyId)
-        try container.encode(assetDefinitionId, forKey: .assetDefinitionId)
-        try container.encodeIfPresent(existingLineageId, forKey: .existingLineageId)
-        try container.encodeIfPresent(lineageState, forKey: .lineageState)
-        try container.encode(localRevision, forKey: .localRevision)
-        try container.encode(localStateHash, forKey: .localStateHash)
-        try container.encode(deviceBinding, forKey: .deviceBinding)
-        try container.encode(keyCertificateBindings, forKey: .keyCertificateBindings)
-        try container.encode(deviceProof, forKey: .deviceProof)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case accountId = "account_id"
-        case deviceId = "device_id"
-        case offlinePublicKey = "offline_public_key"
-        case attestationKeyId = "attestation_key_id"
-        case assetDefinitionId = "asset_definition_id"
-        case existingLineageId = "existing_lineage_id"
-        case lineageState = "lineage_state"
-        case localRevision = "local_revision"
-        case localStateHash = "local_state_hash"
-        case deviceBinding = "device_binding"
-        case keyCertificateBindings = "key_certificate_bindings"
-        case deviceProof = "device_proof"
+    private static func exactOptionalText(_ value: String?, field: String) throws -> String? {
+        try value.map { try OfflineOperationValidation.exactText($0, field: field) }
     }
 }
 
-public struct ToriiOfflineKeyRefillResponse: Codable, Equatable, Sendable {
-    public let operationId: String?
-    public let lineageState: ToriiOfflineCashState?
-    public let keyCertificate: OfflineCompactKeyCertificate?
-    public let keyCertificates: [OfflineCompactKeyCertificate]?
+public struct OfflineOperationErrorEnvelope: Equatable, Sendable {
+    public let code: String
+    public let message: String
+    public let details: OfflineOperationErrorDetails?
 
     public init(
-        operationId: String? = nil,
-        lineageState: ToriiOfflineCashState? = nil,
-        keyCertificate: OfflineCompactKeyCertificate? = nil,
-        keyCertificates: [OfflineCompactKeyCertificate]? = nil
+        code: String,
+        message: String,
+        details: OfflineOperationErrorDetails? = nil
     ) throws {
-        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
-            operationId,
-            field: "operation_id"
+        self.code = try OfflineOperationValidation.stableCode(code, field: "error.code")
+        self.message = try OfflineOperationValidation.exactText(
+            message,
+            field: "error.message"
         )
-        self.lineageState = lineageState
-        self.keyCertificate = keyCertificate
-        self.keyCertificates = keyCertificates
+        self.details = details
     }
+}
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
-            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
-            keyCertificate: container.decodeIfPresent(
-                OfflineCompactKeyCertificate.self,
-                forKey: .keyCertificate
-            ),
-            keyCertificates: container.decodeIfPresent(
-                [OfflineCompactKeyCertificate].self,
-                forKey: .keyCertificates
+/// Pollable state returned by `/v1/offline/operations/{operation_id}`.
+public enum OfflineOperationStatus: Equatable, Sendable {
+    /// Validated payload for a queued or not-yet-finalized operation.
+    public struct Pending: Equatable, Sendable {
+        public let operationId: String
+        public let kind: OfflineOperationKind
+        public let transactionHash: String
+        public let submittedAtMs: UInt64
+
+        public init(
+            operationId: String,
+            kind: OfflineOperationKind,
+            transactionHash: String,
+            submittedAtMs: UInt64
+        ) throws {
+            self.operationId = try OfflineOperationValidation.operationId(operationId)
+            self.kind = kind
+            self.transactionHash = try OfflineOperationValidation.transactionHash(
+                transactionHash,
+                field: "transaction_hash"
             )
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case lineageState = "lineage_state"
-        case keyCertificate = "key_certificate"
-        case keyCertificates = "key_certificates"
-    }
-}
-
-public struct ToriiOfflineNoteIssueSettlementRequest: Codable, Equatable, Sendable {
-    public let operationId: String
-    public let accountId: String
-    public let deviceId: String
-    public let offlinePublicKey: String
-    public let lineageId: String
-    public let assetDefinitionId: String
-    public let amount: String
-    public let noteCommitment: String
-    public let lineageState: ToriiOfflineCashState?
-    public let localBalance: String
-    public let localRevision: UInt64
-    public let localStateHash: String
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let keyCertificateBindings: [ToriiOfflineDeviceBinding]?
-    public let deviceProof: ToriiOfflineDeviceProof
-
-    public init(
-        operationId: String,
-        accountId: String,
-        deviceId: String,
-        offlinePublicKey: String,
-        lineageId: String,
-        assetDefinitionId: String,
-        amount: String,
-        noteCommitment: String,
-        lineageState: ToriiOfflineCashState? = nil,
-        localBalance: String,
-        localRevision: UInt64,
-        localStateHash: String,
-        deviceBinding: ToriiOfflineDeviceBinding,
-        keyCertificateBindings: [ToriiOfflineDeviceBinding]? = nil,
-        deviceProof: ToriiOfflineDeviceProof
-    ) throws {
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            operationId,
-            field: "operation_id"
-        )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            offlinePublicKey,
-            field: "offline_public_key"
-        )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            assetDefinitionId,
-            field: "asset_definition_id"
-        )
-        let canonicalAmount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            amount,
-            field: "amount"
-        )
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-            noteCommitment,
-            field: "note_commitment"
-        )
-        let canonicalLocalBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            localBalance,
-            field: "local_balance"
-        )
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-            localStateHash,
-            field: "local_state_hash"
-        )
-        self.operationId = operationId
-        self.accountId = accountId
-        self.deviceId = deviceId
-        self.offlinePublicKey = offlinePublicKey
-        self.lineageId = lineageId
-        self.assetDefinitionId = assetDefinitionId
-        self.amount = canonicalAmount
-        self.noteCommitment = noteCommitment
-        self.lineageState = lineageState
-        self.localBalance = canonicalLocalBalance
-        self.localRevision = localRevision
-        self.localStateHash = localStateHash
-        self.deviceBinding = deviceBinding
-        self.keyCertificateBindings = keyCertificateBindings ?? [deviceBinding]
-        self.deviceProof = deviceProof
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decode(String.self, forKey: .operationId),
-            accountId: container.decode(String.self, forKey: .accountId),
-            deviceId: container.decode(String.self, forKey: .deviceId),
-            offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
-            lineageId: container.decode(String.self, forKey: .lineageId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            amount: container.decode(String.self, forKey: .amount),
-            noteCommitment: container.decode(String.self, forKey: .noteCommitment),
-            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
-            localBalance: container.decode(String.self, forKey: .localBalance),
-            localRevision: container.decode(UInt64.self, forKey: .localRevision),
-            localStateHash: container.decode(String.self, forKey: .localStateHash),
-            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
-            keyCertificateBindings: container.decodeIfPresent(
-                [ToriiOfflineDeviceBinding].self,
-                forKey: .keyCertificateBindings
-            ),
-            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case accountId = "account_id"
-        case deviceId = "device_id"
-        case offlinePublicKey = "offline_public_key"
-        case lineageId = "lineage_id"
-        case assetDefinitionId = "asset_definition_id"
-        case amount
-        case noteCommitment = "note_commitment"
-        case lineageState = "lineage_state"
-        case localBalance = "local_balance"
-        case localRevision = "local_revision"
-        case localStateHash = "local_state_hash"
-        case deviceBinding = "device_binding"
-        case keyCertificateBindings = "key_certificate_bindings"
-        case deviceProof = "device_proof"
-    }
-}
-
-public struct ToriiOfflineNoteIssueSettlementResponse: Codable, Equatable, Sendable {
-    public let operationId: String?
-    public let settlement: ToriiOfflineSettlementProof
-    public let issuedNoteCommitment: String?
-    public let lineageState: ToriiOfflineCashState?
-    public let localBalance: String?
-    public let lockedBalance: String?
-    public let localRevision: UInt64?
-    public let localStateHash: String?
-    public let keyCertificate: OfflineCompactKeyCertificate?
-    public let keyCertificates: [OfflineCompactKeyCertificate]?
-
-    public init(
-        operationId: String? = nil,
-        settlement: ToriiOfflineSettlementProof,
-        issuedNoteCommitment: String? = nil,
-        lineageState: ToriiOfflineCashState? = nil,
-        localBalance: String? = nil,
-        lockedBalance: String? = nil,
-        localRevision: UInt64? = nil,
-        localStateHash: String? = nil,
-        keyCertificate: OfflineCompactKeyCertificate? = nil,
-        keyCertificates: [OfflineCompactKeyCertificate]? = nil
-    ) throws {
-        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
-            operationId,
-            field: "operation_id"
-        )
-        self.settlement = settlement
-        if let issuedNoteCommitment {
-            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-                issuedNoteCommitment,
-                field: "issued_note_commitment"
-            )
-            self.issuedNoteCommitment = issuedNoteCommitment
-        } else {
-            self.issuedNoteCommitment = nil
+            self.submittedAtMs = submittedAtMs
         }
-        self.lineageState = lineageState
-        self.localBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
-            localBalance,
-            field: "local_balance"
-        )
-        self.lockedBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
-            lockedBalance,
-            field: "locked_balance"
-        )
-        self.localRevision = localRevision
-        self.localStateHash = try ToriiOfflineCashAPIModelValidation.optionalHashHex(
-            localStateHash,
-            field: "local_state_hash"
-        )
-        self.keyCertificate = keyCertificate
-        self.keyCertificates = keyCertificates
     }
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
-            settlement: container.decode(ToriiOfflineSettlementProof.self, forKey: .settlement),
-            issuedNoteCommitment: container.decodeIfPresent(
-                String.self,
-                forKey: .issuedNoteCommitment
-            ),
-            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
-            localBalance: container.decodeIfPresent(String.self, forKey: .localBalance),
-            lockedBalance: container.decodeIfPresent(String.self, forKey: .lockedBalance),
-            localRevision: container.decodeIfPresent(UInt64.self, forKey: .localRevision),
-            localStateHash: container.decodeIfPresent(String.self, forKey: .localStateHash),
-            keyCertificate: container.decodeIfPresent(
-                OfflineCompactKeyCertificate.self,
-                forKey: .keyCertificate
-            ),
-            keyCertificates: container.decodeIfPresent(
-                [OfflineCompactKeyCertificate].self,
-                forKey: .keyCertificates
-            )
-        )
-    }
+    /// Validated payload for a finalized operation.
+    public struct Applied: Equatable, Sendable {
+        public let operationId: String
+        public let result: OfflineOperationResult
 
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case settlement
-        case issuedNoteCommitment = "issued_note_commitment"
-        case lineageState = "lineage_state"
-        case localBalance = "local_balance"
-        case lockedBalance = "locked_balance"
-        case localRevision = "local_revision"
-        case localStateHash = "local_state_hash"
-        case keyCertificate = "key_certificate"
-        case keyCertificates = "key_certificates"
-    }
-}
-
-public struct ToriiOfflineRedemptionProof: Codable, Equatable, Sendable {
-    public let sourceNoteCommitment: String
-    public let inputNullifiers: [String]
-    public let senderKeyCertificate: OfflineCompactKeyCertificate
-    public let recipientAccountId: String
-    public let assetDefinitionId: String
-    public let amount: String
-    public let recursiveProof: OfflineRecursiveProof
-
-    public init(
-        sourceNoteCommitment: String,
-        inputNullifiers: [String],
-        senderKeyCertificate: OfflineCompactKeyCertificate,
-        recipientAccountId: String,
-        assetDefinitionId: String,
-        amount: String,
-        recursiveProof: OfflineRecursiveProof
-    ) throws {
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-            sourceNoteCommitment,
-            field: "source_note_commitment"
-        )
-        guard !inputNullifiers.isEmpty else {
-            throw OfflineNotePayloadError.invalidField("input_nullifiers")
+        public init(operationId: String, result: OfflineOperationResult) throws {
+            self.operationId = try OfflineOperationValidation.operationId(operationId)
+            self.result = result
         }
-        for inputNullifier in inputNullifiers {
-            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-                inputNullifier,
-                field: "input_nullifiers"
+    }
+
+    /// Validated payload for a terminally rejected operation.
+    public struct Rejected: Equatable, Sendable {
+        public let operationId: String
+        public let kind: OfflineOperationKind
+        public let transactionHash: String
+        public let error: OfflineOperationErrorEnvelope
+
+        public init(
+            operationId: String,
+            kind: OfflineOperationKind,
+            transactionHash: String,
+            error: OfflineOperationErrorEnvelope
+        ) throws {
+            self.operationId = try OfflineOperationValidation.operationId(operationId)
+            self.kind = kind
+            self.transactionHash = try OfflineOperationValidation.transactionHash(
+                transactionHash,
+                field: "transaction_hash"
             )
+            self.error = error
         }
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            recipientAccountId,
-            field: "recipient_account_id"
-        )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            assetDefinitionId,
-            field: "asset_definition_id"
-        )
-        self.sourceNoteCommitment = sourceNoteCommitment
-        self.inputNullifiers = inputNullifiers
-        self.senderKeyCertificate = senderKeyCertificate
-        self.recipientAccountId = recipientAccountId
-        self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            amount,
-            field: "amount"
-        )
-        self.recursiveProof = recursiveProof
     }
 
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            sourceNoteCommitment: container.decode(String.self, forKey: .sourceNoteCommitment),
-            inputNullifiers: container.decode([String].self, forKey: .inputNullifiers),
-            senderKeyCertificate: container.decode(
-                OfflineCompactKeyCertificate.self,
-                forKey: .senderKeyCertificate
-            ),
-            recipientAccountId: container.decode(String.self, forKey: .recipientAccountId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            amount: container.decode(String.self, forKey: .amount),
-            recursiveProof: container.decode(OfflineRecursiveProof.self, forKey: .recursiveProof)
-        )
-    }
+    case pending(Pending)
+    case applied(Applied)
+    case rejected(Rejected)
 
-    private enum CodingKeys: String, CodingKey {
-        case sourceNoteCommitment = "source_note_commitment"
-        case inputNullifiers = "input_nullifiers"
-        case senderKeyCertificate = "sender_key_certificate"
-        case recipientAccountId = "recipient_account_id"
-        case assetDefinitionId = "asset_definition_id"
-        case amount
-        case recursiveProof = "recursive_proof"
-    }
-}
-
-public struct ToriiOfflineNoteRedeemSettlementRequest: Codable, Equatable, Sendable {
-    public let operationId: String
-    public let accountId: String
-    public let deviceId: String
-    public let lineageId: String
-    public let assetDefinitionId: String
-    public let amount: String
-    public let localBalance: String
-    public let localRevision: UInt64
-    public let localStateHash: String
-    public let pendingReceipts: [ToriiOfflineTransferReceipt]
-    public let paymentTokens: [OfflinePaymentToken]
-    public let paymentTokensNoritoBase64: [String]
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let deviceProof: ToriiOfflineDeviceProof
-    public let redemption: ToriiOfflineRedemptionProof
-
-    public init(
-        operationId: String,
-        accountId: String,
-        deviceId: String,
-        lineageId: String,
-        assetDefinitionId: String,
-        amount: String,
-        localBalance: String,
-        localRevision: UInt64,
-        localStateHash: String,
-        pendingReceipts: [ToriiOfflineTransferReceipt],
-        paymentTokens: [OfflinePaymentToken] = [],
-        paymentTokensNoritoBase64: [String] = [],
-        deviceBinding: ToriiOfflineDeviceBinding,
-        deviceProof: ToriiOfflineDeviceProof,
-        redemption: ToriiOfflineRedemptionProof
-    ) throws {
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            operationId,
-            field: "operation_id"
-        )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            assetDefinitionId,
-            field: "asset_definition_id"
-        )
-        let canonicalAmount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            amount,
-            field: "amount"
-        )
-        let canonicalLocalBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
-            localBalance,
-            field: "local_balance"
-        )
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-            localStateHash,
-            field: "local_state_hash"
-        )
-        self.operationId = operationId
-        self.accountId = accountId
-        self.deviceId = deviceId
-        self.lineageId = lineageId
-        self.assetDefinitionId = assetDefinitionId
-        self.amount = canonicalAmount
-        self.localBalance = canonicalLocalBalance
-        self.localRevision = localRevision
-        self.localStateHash = localStateHash
-        self.pendingReceipts = pendingReceipts
-        self.paymentTokens = paymentTokens
-        self.paymentTokensNoritoBase64 = paymentTokensNoritoBase64
-        self.deviceBinding = deviceBinding
-        self.deviceProof = deviceProof
-        self.redemption = redemption
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decode(String.self, forKey: .operationId),
-            accountId: container.decode(String.self, forKey: .accountId),
-            deviceId: container.decode(String.self, forKey: .deviceId),
-            lineageId: container.decode(String.self, forKey: .lineageId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            amount: container.decode(String.self, forKey: .amount),
-            localBalance: container.decode(String.self, forKey: .localBalance),
-            localRevision: container.decode(UInt64.self, forKey: .localRevision),
-            localStateHash: container.decode(String.self, forKey: .localStateHash),
-            pendingReceipts: container.decode([ToriiOfflineTransferReceipt].self, forKey: .pendingReceipts),
-            paymentTokens: container.decodeIfPresent(
-                [OfflinePaymentToken].self,
-                forKey: .paymentTokens
-            ) ?? [],
-            paymentTokensNoritoBase64: container.decodeIfPresent(
-                [String].self,
-                forKey: .paymentTokensNoritoBase64
-            ) ?? [],
-            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
-            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof),
-            redemption: container.decode(ToriiOfflineRedemptionProof.self, forKey: .redemption)
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case accountId = "account_id"
-        case deviceId = "device_id"
-        case lineageId = "lineage_id"
-        case assetDefinitionId = "asset_definition_id"
-        case amount
-        case localBalance = "local_balance"
-        case localRevision = "local_revision"
-        case localStateHash = "local_state_hash"
-        case pendingReceipts = "pending_receipts"
-        case paymentTokens = "payment_tokens"
-        case paymentTokensNoritoBase64 = "payment_tokens_norito_base64"
-        case deviceBinding = "device_binding"
-        case deviceProof = "device_proof"
-        case redemption
-    }
-}
-
-public struct ToriiOfflineNoteRedeemSettlementResponse: Codable, Equatable, Sendable {
-    public let operationId: String?
-    public let settlement: ToriiOfflineSettlementProof
-    public let lineageState: ToriiOfflineCashState?
-    public let localBalance: String?
-    public let lockedBalance: String?
-    public let localRevision: UInt64?
-    public let localStateHash: String?
-    public let acceptedReceiptIds: [String]?
-    public let keyCertificate: OfflineCompactKeyCertificate?
-    public let keyCertificates: [OfflineCompactKeyCertificate]?
-
-    public init(
-        operationId: String? = nil,
-        settlement: ToriiOfflineSettlementProof,
-        lineageState: ToriiOfflineCashState? = nil,
-        localBalance: String? = nil,
-        lockedBalance: String? = nil,
-        localRevision: UInt64? = nil,
-        localStateHash: String? = nil,
-        acceptedReceiptIds: [String]? = nil,
-        keyCertificate: OfflineCompactKeyCertificate? = nil,
-        keyCertificates: [OfflineCompactKeyCertificate]? = nil
-    ) throws {
-        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
-            operationId,
-            field: "operation_id"
-        )
-        self.settlement = settlement
-        self.lineageState = lineageState
-        self.localBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
-            localBalance,
-            field: "local_balance"
-        )
-        self.lockedBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
-            lockedBalance,
-            field: "locked_balance"
-        )
-        self.localRevision = localRevision
-        self.localStateHash = try ToriiOfflineCashAPIModelValidation.optionalHashHex(
-            localStateHash,
-            field: "local_state_hash"
-        )
-        self.acceptedReceiptIds = try acceptedReceiptIds?.map { receiptId in
-            try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-                receiptId,
-                field: "accepted_receipt_ids"
-            )
-            return receiptId
+    /// Canonical identifier shared by every tagged operation state.
+    public var operationId: String {
+        switch self {
+        case let .pending(value): value.operationId
+        case let .applied(value): value.operationId
+        case let .rejected(value): value.operationId
         }
-        self.keyCertificate = keyCertificate
-        self.keyCertificates = keyCertificates
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
-            settlement: container.decode(ToriiOfflineSettlementProof.self, forKey: .settlement),
-            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
-            localBalance: container.decodeIfPresent(String.self, forKey: .localBalance),
-            lockedBalance: container.decodeIfPresent(String.self, forKey: .lockedBalance),
-            localRevision: container.decodeIfPresent(UInt64.self, forKey: .localRevision),
-            localStateHash: container.decodeIfPresent(String.self, forKey: .localStateHash),
-            acceptedReceiptIds: container.decodeIfPresent([String].self, forKey: .acceptedReceiptIds),
-            keyCertificate: container.decodeIfPresent(
-                OfflineCompactKeyCertificate.self,
-                forKey: .keyCertificate
-            ),
-            keyCertificates: container.decodeIfPresent(
-                [OfflineCompactKeyCertificate].self,
-                forKey: .keyCertificates
-            )
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case settlement
-        case lineageState = "lineage_state"
-        case localBalance = "local_balance"
-        case lockedBalance = "locked_balance"
-        case localRevision = "local_revision"
-        case localStateHash = "local_state_hash"
-        case acceptedReceiptIds = "accepted_receipt_ids"
-        case keyCertificate = "key_certificate"
-        case keyCertificates = "key_certificates"
     }
 }
 
-public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
-    public let operationId: String
-    public let accountId: String
-    public let deviceId: String
-    public let lineageId: String
-    public let assetDefinitionId: String
-    public let localRevision: UInt64
-    public let localStateHash: String
-    public let receipts: [ToriiOfflineTransferReceipt]
-    public let paymentTokens: [OfflinePaymentToken]
-    public let paymentTokensNoritoBase64: [String]
-    public let deviceBinding: ToriiOfflineDeviceBinding
-    public let deviceProof: ToriiOfflineDeviceProof
+public enum OfflineOperationCodec {
+    private static let referenceSchema =
+        "iroha_torii_shared::offline_api::OfflineOperationReference"
+    private static let statusSchema =
+        "iroha_torii_shared::offline_api::OfflineOperationStatus"
 
-    public init(
-        operationId: String,
-        accountId: String,
-        deviceId: String,
-        lineageId: String,
-        assetDefinitionId: String,
-        localRevision: UInt64,
-        localStateHash: String,
-        receipts: [ToriiOfflineTransferReceipt],
-        paymentTokens: [OfflinePaymentToken],
-        paymentTokensNoritoBase64: [String],
-        deviceBinding: ToriiOfflineDeviceBinding,
-        deviceProof: ToriiOfflineDeviceProof
-    ) throws {
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            operationId,
-            field: "operation_id"
-        )
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
-        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-            assetDefinitionId,
-            field: "asset_definition_id"
-        )
-        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
-            localStateHash,
-            field: "local_state_hash"
-        )
-        self.operationId = operationId
-        self.accountId = accountId
-        self.deviceId = deviceId
-        self.lineageId = lineageId
-        self.assetDefinitionId = assetDefinitionId
-        self.localRevision = localRevision
-        self.localStateHash = localStateHash
-        self.receipts = receipts
-        self.paymentTokens = paymentTokens
-        self.paymentTokensNoritoBase64 = paymentTokensNoritoBase64
-        self.deviceBinding = deviceBinding
-        self.deviceProof = deviceProof
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decode(String.self, forKey: .operationId),
-            accountId: container.decode(String.self, forKey: .accountId),
-            deviceId: container.decode(String.self, forKey: .deviceId),
-            lineageId: container.decode(String.self, forKey: .lineageId),
-            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
-            localRevision: container.decode(UInt64.self, forKey: .localRevision),
-            localStateHash: container.decode(String.self, forKey: .localStateHash),
-            receipts: container.decode([ToriiOfflineTransferReceipt].self, forKey: .receipts),
-            paymentTokens: container.decodeIfPresent(
-                [OfflinePaymentToken].self,
-                forKey: .paymentTokens
-            ) ?? [],
-            paymentTokensNoritoBase64: container.decodeIfPresent(
-                [String].self,
-                forKey: .paymentTokensNoritoBase64
-            ) ?? [],
-            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
-            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
-        )
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case accountId = "account_id"
-        case deviceId = "device_id"
-        case lineageId = "lineage_id"
-        case assetDefinitionId = "asset_definition_id"
-        case localRevision = "local_revision"
-        case localStateHash = "local_state_hash"
-        case receipts
-        case paymentTokens = "payment_tokens"
-        case paymentTokensNoritoBase64 = "payment_tokens_norito_base64"
-        case deviceBinding = "device_binding"
-        case deviceProof = "device_proof"
-    }
-}
-
-public struct ToriiOfflineAuditResponse: Codable, Equatable, Sendable {
-    public let operationId: String?
-    public let acceptedReceiptIds: [String]?
-    public let lineageState: ToriiOfflineCashState?
-    public let keyCertificate: OfflineCompactKeyCertificate?
-    public let keyCertificates: [OfflineCompactKeyCertificate]?
-
-    public init(
-        operationId: String? = nil,
-        acceptedReceiptIds: [String]? = nil,
-        lineageState: ToriiOfflineCashState? = nil,
-        keyCertificate: OfflineCompactKeyCertificate? = nil,
-        keyCertificates: [OfflineCompactKeyCertificate]? = nil
-    ) throws {
-        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
-            operationId,
-            field: "operation_id"
-        )
-        self.acceptedReceiptIds = try acceptedReceiptIds?.map { receiptId in
-            try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
-                receiptId,
-                field: "accepted_receipt_ids"
-            )
-            return receiptId
+    public static func decodeReference(_ archive: Data) throws -> OfflineOperationReference {
+        guard let frame = noritoDecodeFrame(archive),
+              frame.header.compression == .none,
+              frame.header.schema == noritoSchemaHash(forTypeName: referenceSchema),
+              frame.header.flags == NoritoHeader.compactLen,
+              frame.paddingLength == 0 else {
+            throw OfflineOperationError.invalidNoritoArchive
         }
-        self.lineageState = lineageState
-        self.keyCertificate = keyCertificate
-        self.keyCertificates = keyCertificates
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
-            acceptedReceiptIds: container.decodeIfPresent([String].self, forKey: .acceptedReceiptIds),
-            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
-            keyCertificate: container.decodeIfPresent(
-                OfflineCompactKeyCertificate.self,
-                forKey: .keyCertificate
-            ),
-            keyCertificates: container.decodeIfPresent(
-                [OfflineCompactKeyCertificate].self,
-                forKey: .keyCertificates
-            )
+        let compact = true
+        var reader = OfflineNoritoReader(data: frame.payload)
+        let operationId = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        let kindTag = try readField(&reader, compact: compact) { try $0.readUInt32LE() }
+        let stateTag = try readField(&reader, compact: compact) { try $0.readUInt32LE() }
+        let transactionHash = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        let statusUri = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        let submittedAtMs = try readField(&reader, compact: compact) { try $0.readUInt64LE() }
+        guard reader.remaining() == 0 else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+        let kind: OfflineOperationKind
+        switch kindTag {
+        case 0: kind = .topUp
+        case 1: kind = .redeem
+        default: throw OfflineOperationError.invalidField("kind")
+        }
+        guard stateTag == 0 else {
+            throw OfflineOperationError.invalidField("state")
+        }
+        return try OfflineOperationReference(
+            operationId: operationId,
+            kind: kind,
+            state: .pending,
+            transactionHash: transactionHash,
+            statusUri: statusUri,
+            submittedAtMs: submittedAtMs
         )
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case operationId = "operation_id"
-        case acceptedReceiptIds = "accepted_receipt_ids"
-        case lineageState = "lineage_state"
-        case keyCertificate = "key_certificate"
-        case keyCertificates = "key_certificates"
+    public static func encodeReference(_ reference: OfflineOperationReference) -> Data {
+        var payload = OfflineCompactNoritoWriter()
+        payload.writeField(OfflineCompactNorito.encodeString(reference.operationId))
+        payload.writeField(OfflineCompactNorito.encodeUInt32(reference.kind == .topUp ? 0 : 1))
+        payload.writeField(OfflineCompactNorito.encodeUInt32(0))
+        payload.writeField(OfflineCompactNorito.encodeString(reference.transactionHash))
+        payload.writeField(OfflineCompactNorito.encodeString(reference.statusUri))
+        var submittedAt = OfflineCompactNoritoWriter()
+        submittedAt.writeUInt64LE(reference.submittedAtMs)
+        payload.writeField(submittedAt.data)
+        return noritoEncode(
+            typeName: referenceSchema,
+            payload: payload.data,
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    public static func decodeStatus(_ archive: Data) throws -> OfflineOperationStatus {
+        guard let frame = noritoDecodeFrame(archive),
+              frame.header.compression == .none,
+              frame.header.schema == noritoSchemaHash(forTypeName: statusSchema),
+              frame.header.flags == NoritoHeader.compactLen,
+              frame.paddingLength == 8 else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+        var reader = OfflineNoritoReader(data: frame.payload)
+        let variant = try reader.readUInt32LE()
+        let status: OfflineOperationStatus
+        switch variant {
+        case 0:
+            let operationId = try readOperationIdField(&reader, compact: true)
+            let kind = try readKindField(&reader, compact: true)
+            let transactionHash = try readExactTextField(
+                &reader,
+                compact: true,
+                field: "transaction_hash"
+            )
+            let submittedAtMs = try readField(&reader, compact: true) {
+                try $0.readUInt64LE()
+            }
+            status = .pending(try .init(
+                operationId: operationId,
+                kind: kind,
+                transactionHash: transactionHash,
+                submittedAtMs: submittedAtMs
+            ))
+        case 1:
+            let operationId = try readOperationIdField(&reader, compact: true)
+            let result = try readField(&reader, compact: true) {
+                try decodeResult(&$0, compact: true)
+            }
+            status = .applied(try .init(operationId: operationId, result: result))
+        case 2:
+            let operationId = try readOperationIdField(&reader, compact: true)
+            let kind = try readKindField(&reader, compact: true)
+            let transactionHash = try readExactTextField(
+                &reader,
+                compact: true,
+                field: "transaction_hash"
+            )
+            let error = try readField(&reader, compact: true) {
+                try decodeErrorEnvelope(&$0, compact: true)
+            }
+            status = .rejected(try .init(
+                operationId: operationId,
+                kind: kind,
+                transactionHash: transactionHash,
+                error: error
+            ))
+        default:
+            throw OfflineOperationError.invalidField("status")
+        }
+        guard reader.remaining() == 0 else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+        return status
+    }
+
+    private static func decodeResult(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineOperationResult {
+        switch try reader.readUInt32LE() {
+        case 0:
+            return try readField(&reader, compact: compact) {
+                .topUp(try decodeTopUpResult(&$0, compact: compact))
+            }
+        case 1:
+            return try readField(&reader, compact: compact) {
+                .redeem(try decodeRedeemResult(&$0, compact: compact))
+            }
+        default:
+            throw OfflineOperationError.invalidField("result")
+        }
+    }
+
+    private static func decodeTopUpResult(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineTopUpResult {
+        let transactionHash = try readExactTextField(
+            &reader,
+            compact: compact,
+            field: "transaction_hash"
+        )
+        let finalizedBlockHeight = try readField(&reader, compact: compact) {
+            try $0.readUInt64LE()
+        }
+        let serverTimeMs = try readField(&reader, compact: compact) {
+            try $0.readUInt64LE()
+        }
+        let anchorPayload = try readField(&reader, compact: compact) {
+            try $0.readBytes($0.remaining())
+        }
+        let anchorArchive = noritoEncode(
+            typeName: KagemushaRecursiveSpendV2.topUpAnchorWireName,
+            payload: anchorPayload,
+            flags: NoritoHeader.compactLen
+        )
+        let anchor = try OfflineTopUpAnchor(noritoArchive: anchorArchive)
+        return try OfflineTopUpResult(
+            transactionHash: transactionHash,
+            finalizedBlockHeight: finalizedBlockHeight,
+            serverTimeMs: serverTimeMs,
+            anchor: anchor
+        )
+    }
+
+    private static func decodeRedeemResult(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineRedeemResult {
+        let transactionHash = try readExactTextField(
+            &reader,
+            compact: compact,
+            field: "transaction_hash"
+        )
+        let finalizedBlockHeight = try readField(&reader, compact: compact) {
+            try $0.readUInt64LE()
+        }
+        let serverTimeMs = try readField(&reader, compact: compact) {
+            try $0.readUInt64LE()
+        }
+        return try OfflineRedeemResult(
+            transactionHash: transactionHash,
+            finalizedBlockHeight: finalizedBlockHeight,
+            serverTimeMs: serverTimeMs
+        )
+    }
+
+    private static func decodeErrorEnvelope(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineOperationErrorEnvelope {
+        let code = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        let message = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        let details = try readField(&reader, compact: compact) {
+            try decodeOption(&$0, compact: compact) {
+                try decodeErrorDetails(&$0, compact: compact)
+            }
+        }
+        return try OfflineOperationErrorEnvelope(code: code, message: message, details: details)
+    }
+
+    private static func decodeErrorDetails(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineOperationErrorDetails {
+        let layer = try readOptionalStringField(&reader, compact: compact)
+        let rejectCode = try readOptionalStringField(&reader, compact: compact)
+        let queue = try readField(&reader, compact: compact) {
+            try decodeOption(&$0, compact: compact) {
+                try decodeQueueSnapshot(&$0, compact: compact)
+            }
+        }
+        let retryAfterSeconds = try readOptionalScalarField(
+            &reader,
+            compact: compact,
+            decode: { try $0.readUInt64LE() }
+        )
+        let endpoint = try readOptionalStringField(&reader, compact: compact)
+        let field = try readOptionalStringField(&reader, compact: compact)
+        let expected = try readOptionalStringField(&reader, compact: compact)
+        let actual = try readOptionalStringField(&reader, compact: compact)
+        let profile = try readOptionalStringField(&reader, compact: compact)
+        let chainDiscriminant = try readOptionalScalarField(
+            &reader,
+            compact: compact,
+            decode: { try $0.readUInt16LE() }
+        )
+        let transactionHash = try readOptionalStringField(&reader, compact: compact)
+        let lastStatus = try readOptionalStringField(&reader, compact: compact)
+        let hint = try readOptionalStringField(&reader, compact: compact)
+        let axt = try readField(&reader, compact: compact) {
+            try decodeOption(&$0, compact: compact) {
+                try decodeAxtDetails(&$0, compact: compact)
+            }
+        }
+        return try OfflineOperationErrorDetails(
+            layer: layer,
+            rejectCode: rejectCode,
+            queue: queue,
+            retryAfterSeconds: retryAfterSeconds,
+            endpoint: endpoint,
+            field: field,
+            expected: expected,
+            actual: actual,
+            profile: profile,
+            chainDiscriminant: chainDiscriminant,
+            transactionHash: transactionHash,
+            lastStatus: lastStatus,
+            hint: hint,
+            axt: axt
+        )
+    }
+
+    private static func decodeQueueSnapshot(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineQueueErrorSnapshot {
+        let state = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        let queued = try readField(&reader, compact: compact) { try $0.readUInt64LE() }
+        let capacity = try readField(&reader, compact: compact) { try $0.readUInt64LE() }
+        let saturated = try readField(&reader, compact: compact) {
+            switch try $0.readUInt8() {
+            case 0: return false
+            case 1: return true
+            default: throw OfflineOperationError.invalidField("queue.saturated")
+            }
+        }
+        return try OfflineQueueErrorSnapshot(
+            state: state,
+            queued: queued,
+            capacity: capacity,
+            saturated: saturated
+        )
+    }
+
+    private static func decodeAxtDetails(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineAxtErrorDetails {
+        let code = try readOptionalStringField(&reader, compact: compact)
+        let reason = try readOptionalStringField(&reader, compact: compact)
+        let snapshotVersion = try readOptionalScalarField(
+            &reader,
+            compact: compact,
+            decode: { try $0.readUInt64LE() }
+        )
+        let dataspace = try readOptionalScalarField(
+            &reader,
+            compact: compact,
+            decode: { try $0.readUInt64LE() }
+        )
+        let lane = try readOptionalScalarField(
+            &reader,
+            compact: compact,
+            decode: { try $0.readUInt32LE() }
+        )
+        let nextMinHandleEra = try readOptionalScalarField(
+            &reader,
+            compact: compact,
+            decode: { try $0.readUInt64LE() }
+        )
+        let nextMinSubNonce = try readOptionalScalarField(
+            &reader,
+            compact: compact,
+            decode: { try $0.readUInt64LE() }
+        )
+        return try OfflineAxtErrorDetails(
+            code: code,
+            reason: reason,
+            snapshotVersion: snapshotVersion,
+            dataspace: dataspace,
+            lane: lane,
+            nextMinHandleEra: nextMinHandleEra,
+            nextMinSubNonce: nextMinSubNonce
+        )
+    }
+
+    private static func readOperationIdField(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> String {
+        let value = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        return try OfflineOperationValidation.operationId(value)
+    }
+
+    private static func readKindField(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> OfflineOperationKind {
+        let tag = try readField(&reader, compact: compact) { try $0.readUInt32LE() }
+        switch tag {
+        case 0: return .topUp
+        case 1: return .redeem
+        default: throw OfflineOperationError.invalidField("kind")
+        }
+    }
+
+    private static func readExactTextField(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool,
+        field: String
+    ) throws -> String {
+        let value = try readField(&reader, compact: compact) {
+            try readString(&$0, compact: compact)
+        }
+        return try OfflineOperationValidation.exactText(value, field: field)
+    }
+
+    private static func readOptionalStringField(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> String? {
+        try readField(&reader, compact: compact) {
+            try decodeOption(&$0, compact: compact) {
+                try readString(&$0, compact: compact)
+            }
+        }
+    }
+
+    private static func readOptionalScalarField<T>(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool,
+        decode: (inout OfflineNoritoReader) throws -> T
+    ) throws -> T? {
+        try readField(&reader, compact: compact) {
+            try decodeOption(&$0, compact: compact, decode: decode)
+        }
+    }
+
+    private static func decodeOption<T>(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool,
+        decode: (inout OfflineNoritoReader) throws -> T
+    ) throws -> T? {
+        switch try reader.readUInt8() {
+        case 0:
+            guard reader.remaining() == 0 else {
+                throw OfflineOperationError.invalidNoritoArchive
+            }
+            return nil
+        case 1:
+            let payload = compact ? try reader.readCompactField() : try reader.readField()
+            var child = OfflineNoritoReader(data: payload)
+            let value = try decode(&child)
+            guard child.remaining() == 0, reader.remaining() == 0 else {
+                throw OfflineOperationError.invalidNoritoArchive
+            }
+            return value
+        default:
+            throw OfflineOperationError.invalidField("option")
+        }
+    }
+
+    private static func readField<T>(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool,
+        _ decode: (inout OfflineNoritoReader) throws -> T
+    ) throws -> T {
+        let bytes = compact ? try reader.readCompactField() : try reader.readField()
+        var child = OfflineNoritoReader(data: bytes)
+        let value = try decode(&child)
+        guard child.remaining() == 0 else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+        return value
+    }
+
+    private static func readString(
+        _ reader: inout OfflineNoritoReader,
+        compact: Bool
+    ) throws -> String {
+        let length = compact ? try reader.readVarint() : try reader.readUInt64LE()
+        guard length <= UInt64(Int.max),
+              let value = String(
+                data: try reader.readBytes(Int(length)),
+                encoding: .utf8
+              ) else {
+            throw OfflineOperationError.invalidField("string")
+        }
+        return value
+    }
+}
+
+private enum OfflineOperationValidation {
+    static func positive(_ value: UInt64, field: String) throws -> UInt64 {
+        guard value > 0 else {
+            throw OfflineOperationError.invalidField(field)
+        }
+        return value
+    }
+
+    static func operationId(_ value: String) throws -> String {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 64,
+              bytes.contains(where: { $0 != UInt8(ascii: "0") }),
+              bytes.allSatisfy({
+                  ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
+                      || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
+              }) else {
+            throw OfflineOperationError.invalidField("operation_id")
+        }
+        return value
+    }
+
+    static func transactionHash(_ value: String, field: String) throws -> String {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 64,
+              bytes.allSatisfy({
+                  ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
+                      || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
+              }) else {
+            throw OfflineOperationError.invalidField(field)
+        }
+        return value
+    }
+
+    static func statusUri(_ value: String, operationId: String) throws -> String {
+        let expected = "\(OfflineAPI.Endpoint.operations.path)/\(operationId)"
+        guard value == expected else {
+            throw OfflineOperationError.invalidField("status_uri")
+        }
+        return value
+    }
+
+    static func stableCode(_ value: String, field: String) throws -> String {
+        let bytes = Array(value.utf8)
+        guard (1...64).contains(bytes.count),
+              let first = bytes.first,
+              isLowercaseLetter(first) || isDigit(first),
+              bytes.allSatisfy({
+                  isLowercaseLetter($0) || isDigit($0) || $0 == UInt8(ascii: "_")
+              }) else {
+            throw OfflineOperationError.invalidField(field)
+        }
+        return value
+    }
+
+    static func exactText(_ value: String, field: String) throws -> String {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
+              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        else {
+            throw OfflineOperationError.invalidField(field)
+        }
+        return value
+    }
+
+    static func exactToken(_ value: String, field: String) throws -> String {
+        let exact = try exactText(value, field: field)
+        guard !exact.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains)
+        else {
+            throw OfflineOperationError.invalidField(field)
+        }
+        return exact
+    }
+
+    private static func isDigit(_ byte: UInt8) -> Bool {
+        byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9")
+    }
+
+    private static func isLowercaseLetter(_ byte: UInt8) -> Bool {
+        byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z")
+    }
+
+    static func requestArchive(
+        _ value: Data,
+        schema: String,
+        operationIdFieldIndex: Int,
+        fieldCount: Int
+    ) throws -> (archive: Data, operationId: String) {
+        guard !value.isEmpty,
+              value.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes,
+              let frame = noritoDecodeFrame(value),
+              frame.header.schema == noritoSchemaHash(forTypeName: schema),
+              frame.header.compression == .none,
+              frame.header.flags == NoritoHeader.compactLen,
+              frame.paddingLength == 0,
+              !frame.payload.isEmpty,
+              operationIdFieldIndex >= 0,
+              operationIdFieldIndex < fieldCount else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+
+        var reader = OfflineNoritoReader(data: frame.payload)
+        var fields = [Data]()
+        fields.reserveCapacity(fieldCount)
+        do {
+            for _ in 0..<fieldCount {
+                fields.append(try reader.readCompactField())
+            }
+        } catch {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+        guard reader.remaining() == 0 else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+
+        var canonicalPayload = OfflineCompactNoritoWriter()
+        for field in fields {
+            canonicalPayload.writeField(field)
+        }
+        guard noritoEncode(
+            typeName: schema,
+            payload: canonicalPayload.data,
+            flags: NoritoHeader.compactLen
+        ) == value else {
+            throw OfflineOperationError.invalidNoritoArchive
+        }
+
+        let operationId = fields[operationIdFieldIndex]
+        guard operationId.count == 32,
+              operationId.contains(where: { $0 != 0 }) else {
+            throw OfflineOperationError.invalidField("operation_id")
+        }
+        return (Data(value), operationId.hexEncodedString())
     }
 }

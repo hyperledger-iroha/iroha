@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Verify that when `connect.enabled=false`, Torii hides WS/relay endpoints.
+//! Verify that Connect routes are stable while runtime configuration controls availability.
 
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
@@ -258,10 +258,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         },
         torii: A::Torii {
             address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),
-            api_versions: iroha_config::parameters::defaults::torii::api_supported_versions(),
-            api_version_default: iroha_config::parameters::defaults::torii::api_default_version(),
-            api_min_proof_version: iroha_config::parameters::defaults::torii::api_min_proof_version(),
-            api_version_sunset_unix: iroha_config::parameters::defaults::torii::API_SUNSET_UNIX,
             max_content_len: (1_048_576u64).into(),
             data_dir: iroha_config::parameters::defaults::torii::data_dir(),
             receipt_signer: None,
@@ -1470,12 +1466,12 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
 }
 
 #[tokio::test]
-async fn connect_endpoints_hidden_when_disabled() {
+async fn connect_endpoints_report_typed_unavailability_when_disabled() {
     let cfg = minimal_actual_config(false);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    // /v1/connect/ws should be 404 when disabled
+    // The WebSocket route remains mounted but rejects the upgrade while disabled.
     let resp = app
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1486,19 +1482,30 @@ async fn connect_endpoints_hidden_when_disabled() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-    // /v1/connect/status should be 404 when disabled
+    // Ordinary REST routes return the shared typed error envelope.
     let resp = app
         .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .uri(Uri::from_static("/v1/connect/status"))
+                .header(axum::http::header::ACCEPT, "application/json")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .expect("connect disabled response body")
+        .to_bytes();
+    let error: norito::json::Value =
+        norito::json::from_slice(&body).expect("typed Connect disabled error envelope");
+    assert_eq!(
+        error.get("code").and_then(norito::json::Value::as_str),
+        Some("connect_disabled")
+    );
 }
 
 #[tokio::test]
@@ -3391,9 +3398,12 @@ async fn connect_ws_handshake_fails_when_disabled() {
         "ws://{}/v1/connect/ws?sid={}&role=app",
         addr, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     );
-    let res = tokio_tungstenite::connect_async(&url).await;
-    assert!(
-        res.is_err(),
-        "ws handshake should fail when connect disabled"
-    );
+    let err = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect_err("ws handshake should fail when connect disabled");
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(response) => response.status(),
+        other => panic!("unexpected WebSocket error: {other:?}"),
+    };
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }

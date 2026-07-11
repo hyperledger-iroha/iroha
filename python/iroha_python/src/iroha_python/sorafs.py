@@ -46,7 +46,6 @@ if TYPE_CHECKING:
     from .client import (
         SorafsPorIngestionProviderStatus,
         SorafsPorIngestionStatus,
-        SorafsPorObservationResponse,
         SorafsPorSubmissionResponse,
         SorafsPorVerdictResponse,
     )

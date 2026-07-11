@@ -195,7 +195,7 @@ CREATE TABLE reputation_snapshots (
   through `GET /v1/sorafs/reputation/events`. Live server-sent event streaming
   is available through `GET /v1/sorafs/reputation/events/stream`, seeded by the
   same optional `since`/`limit` backlog cursor. WebSocket parity is available at
-  `/ws/reputation` with JSON text frames backed by the same event broadcaster.
+  `/v1/sorafs/reputation/events/ws` with JSON text frames backed by the same event broadcaster.
 - JavaScript/TypeScript and Python Torii clients expose convenience helpers for
   the local reputation latest/provider/snapshot/weights/events endpoints and
   the SSE stream, including cache-validator options for `If-None-Match` polling.
@@ -304,7 +304,7 @@ CREATE TABLE reputation_snapshots (
     and the repository ships Grafana/alert assets for deployed publisher
     health. Remaining rollout: deploy the ingest/publisher service and capture
     live run evidence.
-- Implemented locally: WebSocket `/ws/reputation` emits `reputation_snapshot`
+- Implemented locally: WebSocket `/v1/sorafs/reputation/events/ws` emits `reputation_snapshot`
   JSON text frames for the optional `since`/`limit` backlog and for live
   snapshot publications. Lag notifications use `event = "lagged"` frames so
   clients can resynchronize through `GET /v1/sorafs/reputation/events`.

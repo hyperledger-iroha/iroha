@@ -23,6 +23,8 @@ import org.hyperledger.iroha.android.client.ClientResponse;
  * inputs; production offline payments use Kagemusha.
  */
 public final class OfflineNoteWallet {
+  static final String RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE =
+      "Classic Offline Note issue transactions are retired; use Offline top-up.";
   private static final int MAX_NUMERIC_SCALE = 28;
   private static final int MAX_NUMERIC_BYTES = 64;
   private static final AtomicInteger LOAD_THREAD_COUNTER = new AtomicInteger();
@@ -417,7 +419,7 @@ public final class OfflineNoteWallet {
   public CompletableFuture<OfflineNoteWalletNote> load(
       final String assetDefinitionId, final String amount) {
     return failedFuture(
-        new IllegalStateException(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE));
+        new IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE));
   }
 
   public OfflineNoteReceiveRequest prepareReceive(

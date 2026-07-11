@@ -46,7 +46,7 @@ translator: manual
 
 ה-worker (ברירת מחדל כבוי) סורק קבצים, מאמת מטעני `ProofAttachment`/`ProofAttachmentList`, ומפיק דוח JSON לכל קובץ. מעטפות ZK1/TLV אינן מתקבלות כ-payload עליון; הן רק מתויגות ומסומנות כ-`ok=false`:
 - Norito (`application/x-norito`): חייב להתפענח כ-`ProofAttachment` או `ProofAttachmentList`.
-- JSON (`application/json`, ‏`text/json`): חייב להתפענח כאובייקט `ProofAttachment`, ‏`ProofAttachmentList` (מחרוזת base64), או מערך `ProofAttachment`.
+- JSON (`application/json`): חייב להתפענח כאובייקט `ProofAttachment`, ‏`ProofAttachmentList` (מחרוזת base64), או מערך `ProofAttachment`.
 - אחרים: ניסיון JSON ואז Norito; כישלון → `ok: false`.
 
 נקודות קצה:

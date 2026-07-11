@@ -8,14 +8,14 @@ async fn new_view_json_shape() {
 
     // Router with JSON endpoint
     let app = Router::new().route(
-        "/v1/sumeragi/new_view/json",
+        "/v1/sumeragi/new-view",
         get(|| async move { iroha_torii::handle_v1_new_view_json().await }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v1/sumeragi/new_view/json")
+                .uri("/v1/sumeragi/new-view")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

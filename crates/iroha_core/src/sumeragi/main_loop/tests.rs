@@ -214414,7 +214414,7 @@ async fn queue_committed_lane_block_sessions_prunes_inactive_cached_lane_routes_
     actor
         .state
         .kura()
-        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision active cached route lane storage");
     {
         let mut nexus = actor.state.nexus.write();
@@ -214752,13 +214752,39 @@ async fn known_lane_block_tips_ignore_reset_watermark_committed_queue_before_pru
                     prepare_qc: stale_prepare_qc,
                     commit_qc: stale_commit_qc,
                 },
+            ]),
+        1
+    );
+    assert!(
+        !actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                reset_height.saturating_add(1),
+            )
+            .contains(&lane_id),
+        "a queued session from a retired lane incarnation must not block the recreated lane",
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .committed_lane_blocks
+            .hydrate_from_certified_sessions(vec![
                 crate::lane_consensus::CommittedLaneBlockSession {
                     proposal: fresh_proposal.clone(),
                     prepare_qc: fresh_prepare_qc,
                     commit_qc: fresh_commit_qc,
                 },
             ]),
-        2
+        1
+    );
+    assert!(
+        actor
+            .unapplied_lane_block_lanes_for_proposal(
+                actor.state.as_ref(),
+                reset_height.saturating_add(1),
+            )
+            .contains(&lane_id),
+        "the current lane incarnation must remain blocked while its certified session is unapplied",
     );
     assert_eq!(
         actor.subsystems.committed_lane_blocks.len(),
@@ -217074,7 +217100,7 @@ async fn actor_startup_status_includes_application_receipted_certified_sidecars(
                 .expect("runtime lane entry for startup applied certified fixture");
             state
                 .kura()
-                .reconcile_lane_segments(&[lane_entry], &[], &[])
+                .reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
                 .expect("provision startup applied certified fixture lane storage");
             {
                 let mut nexus = state.nexus.write();
@@ -217189,7 +217215,7 @@ async fn actor_startup_status_preserves_direct_application_receipted_certified_s
                 .expect("runtime lane entry for startup direct-applied certified fixture");
             state
                 .kura()
-                .reconcile_lane_segments(&[lane_entry], &[], &[])
+                .reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
                 .expect("provision startup direct-applied certified fixture lane storage");
             {
                 let mut nexus = state.nexus.write();
@@ -217401,7 +217427,7 @@ fn committed_lane_block_status_reports_available_payload_from_kura_artifact() {
         .entry(lane_id)
         .expect("runtime lane entry for status fixture");
     let kura = Kura::blank_kura_for_testing();
-    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+    kura.reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision status fixture lane storage");
     kura.store_block(Arc::new(block))
         .expect("store block with lane payload artifact");
@@ -217554,7 +217580,7 @@ fn direct_lane_application_fixture_with_transactions(
     let lane_entry = runtime_lane_config
         .entry(lane_id)
         .expect("runtime direct-application lane entry");
-    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+    kura.reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision direct-application lane storage");
     {
         let mut nexus = state.nexus.write();
@@ -217651,7 +217677,7 @@ fn committed_lane_block_queue_preflights_recovered_inputs_from_isolated_state_ba
     let lane_b_entry = runtime_lane_config
         .entry(lane_b)
         .expect("runtime lane B entry");
-    kura.reconcile_lane_segments(&[lane_a_entry, lane_b_entry], &[], &[])
+    kura.reconcile_lane_segments_for_testing(&[lane_a_entry, lane_b_entry], &[], &[])
         .expect("provision isolation lane storage");
     {
         let mut nexus = state.nexus.write();
@@ -218725,7 +218751,7 @@ fn committed_lane_block_queue_records_canonical_receipt_despite_conflicting_pref
         .entry(lane_id)
         .expect("runtime lane entry for conflict fixture");
     let kura = Kura::blank_kura_for_testing();
-    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+    kura.reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision conflict fixture lane storage");
     kura.store_block(Arc::new(block))
         .expect("store block with canonical lane results");
@@ -218898,7 +218924,7 @@ fn committed_lane_block_queue_prunes_only_application_receipted_sessions() {
         .entry(lane_id)
         .expect("runtime lane entry for queue-prune fixture");
     let kura = Kura::blank_kura_for_testing();
-    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+    kura.reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision queue-prune fixture lane storage");
     kura.store_block(Arc::new(applied_block))
         .expect("store applied lane payload artifact");
@@ -219066,7 +219092,7 @@ async fn tick_redrives_committed_lane_block_queue_after_backpressure_prune() {
     actor
         .state
         .kura()
-        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision tick redrive lane storage");
     {
         let mut nexus = actor.state.nexus.write();
@@ -219340,7 +219366,7 @@ fn committed_lane_block_queue_waits_for_matching_predecessor_receipt() {
         .expect("runtime lane entry for predecessor-gate fixture");
     let mismatched_kura = Kura::blank_kura_for_testing();
     mismatched_kura
-        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision predecessor-gate fixture lane storage");
     mismatched_kura
         .store_block(Arc::new(first_block.clone()))
@@ -219396,7 +219422,7 @@ fn committed_lane_block_queue_waits_for_matching_predecessor_receipt() {
         .entry(lane_id)
         .expect("runtime lane entry for matching predecessor fixture");
     matching_kura
-        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision matching predecessor fixture lane storage");
     matching_kura
         .store_block(Arc::new(first_block))
@@ -220800,7 +220826,7 @@ async fn nexus_multivalidator_lane_block_ingress_seals_and_queues_committed_sess
     actor
         .state
         .kura()
-        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .reconcile_lane_segments_for_testing(&[lane_entry], &[], &[])
         .expect("provision sidecar lane storage");
     for keypair in &key_pairs {
         let pop =

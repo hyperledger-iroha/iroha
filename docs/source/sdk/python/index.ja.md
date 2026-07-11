@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sdk/python/index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 92a224896d82d8c970b83aa867d1dac752b7db3fff8f04dc9ebc8779b59db70d
+source_hash: eb2016afb1ae08a3cac4757184e873ac701285edbc395ade8c0f14fce59c68c5
 source_last_modified: "2026-01-30T12:29:45.472189+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -88,16 +88,25 @@ holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=ass
 print(assets, txs, holders)
 ```
 
-## Offline readiness
+## Offline lifecycle
 
-Use `GET /v1/offline/readiness` through `get_offline_readiness()` for offline feature discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are retired;
-Kagemusha readiness fields advertise the active offline payment implementation.
+The first-release HTTP lifecycle consists of exactly four canonical routes:
+
+- `GET /v1/offline/readiness?asset_definition_id=...`
+- `POST /v1/offline/top-up`
+- `POST /v1/offline/redeem`
+- `GET /v1/offline/operations/{operation_id}`
+
+Top-up and redemption send the typed request directly as structured JSON or
+Norito and return `202 Accepted` with a typed operation reference and
+`Location`. Readiness requires `asset_definition_id`; `ready: false` is a
+successfully evaluated domain state, while `503 readiness_unavailable` means
+the node could not evaluate it.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
+readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+print("offline ready", readiness.ready, readiness.blockers)
 ```

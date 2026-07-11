@@ -109,11 +109,11 @@
     "preferred_append_output": [
       {
         "previous_hop_count": 1,
-        "circuit_id": "kagemusha-recursive-spend-lineage-append-v1"
+        "circuit_id": "kagemusha-recursive-aggregation-v1"
       },
       {
         "previous_hop_count": 63,
-        "circuit_id": "kagemusha-recursive-spend-lineage-append-v1"
+        "circuit_id": "kagemusha-recursive-aggregation-v1"
       },
       {
         "previous_hop_count": 64,
@@ -131,11 +131,11 @@
       },
       {
         "previous_hop_count": 1,
-        "allowed": true
+        "allowed": false
       },
       {
         "previous_hop_count": 63,
-        "allowed": true
+        "allowed": false
       },
       {
         "previous_hop_count": 64,
@@ -152,20 +152,20 @@
       {
         "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
         "hop_count": 1,
-        "allowed": true,
-        "requires_lineage_witness": false
+        "allowed": false,
+        "requires_lineage_witness": true
       },
       {
         "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
         "hop_count": 2,
-        "allowed": true,
-        "requires_lineage_witness": false
+        "allowed": false,
+        "requires_lineage_witness": true
       },
       {
         "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
         "hop_count": 64,
-        "allowed": true,
-        "requires_lineage_witness": false
+        "allowed": false,
+        "requires_lineage_witness": true
       },
       {
         "circuit_id": "kagemusha-recursive-aggregation-v1",

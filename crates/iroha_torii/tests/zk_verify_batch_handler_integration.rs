@@ -415,7 +415,7 @@ async fn zk_verify_batch_json_applies_open_verify_limits() {
 }
 
 #[tokio::test]
-async fn zk_verify_batch_text_json_content_type_is_accepted() {
+async fn zk_verify_batch_rejects_retired_text_json_alias() {
     use base64::Engine as _;
 
     let env = sample_pallas_envelope("torii-text-json");
@@ -432,14 +432,13 @@ async fn zk_verify_batch_text_json_content_type_is_accepted() {
     )
     .await;
 
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())
         .cloned()
         .unwrap_or_default();
-    assert_eq!(statuses.len(), 1);
-    assert_eq!(statuses[0].as_bool(), Some(true));
+    assert!(statuses.is_empty());
 }
 
 #[tokio::test]

@@ -4031,7 +4031,7 @@ fn build_app_frontend_projection(
     Ok(static_site.map(|static_site| {
         let cid_gateway_url_template = (static_site.publish_mode
             == APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY)
-            .then(|| format!("{public_origin}sorafs/cid/<cid>/"));
+            .then(|| format!("{public_origin}sorafs/cid/<cid>"));
         let root_binding_url = (static_site.publish_mode
             == APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING)
             .then(|| public_origin.to_string());
@@ -4221,7 +4221,7 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
         && frontend.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY
     {
         notes.push(
-            "frontend is CID-only; Torii root remains unbound and the published build is expected under /sorafs/cid/<cid>/"
+            "frontend is CID-only; Torii root remains unbound and the published build is expected under /sorafs/cid/<cid>"
                 .to_owned(),
         );
     }
@@ -10098,7 +10098,7 @@ fn plan_app_static_site_publication(
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
     let content_cid = encode_content_cid(&manifest.root_cid);
     let mut cid_gateway_url = public_url.clone();
-    cid_gateway_url.set_path(&format!("/sorafs/cid/{content_cid}/"));
+    cid_gateway_url.set_path(&format!("/sorafs/cid/{content_cid}"));
 
     Ok(AppStaticSitePublishOutput {
         hostname,
@@ -21001,7 +21001,7 @@ mod tests {
         assert_eq!(
             publication.cid_gateway_url,
             format!(
-                "https://travel-ops.sora/sorafs/cid/{}/",
+                "https://travel-ops.sora/sorafs/cid/{}",
                 publication.content_cid
             )
         );
@@ -27573,7 +27573,7 @@ main().catch((error) => {
                 .frontend
                 .as_ref()
                 .and_then(|frontend| frontend.cid_gateway_url_template.as_deref()),
-            Some("https://travel-ops.sora/sorafs/cid/<cid>/")
+            Some("https://travel-ops.sora/sorafs/cid/<cid>")
         );
         assert!(output.services.iter().any(|service| {
             service.service_name == "travel-ops_live"
@@ -29485,7 +29485,7 @@ main().catch((error) => {
         let publication = AppStaticSitePublishOutput {
             hostname: "travel-ops.sora".to_owned(),
             public_url: "https://travel-ops.sora/".to_owned(),
-            cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest/".to_owned(),
+            cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest".to_owned(),
             content_cid: "bafytest".to_owned(),
             manifest_digest_hex: "abcd".repeat(16),
             manifest_id_hex: None,
@@ -29515,7 +29515,7 @@ main().catch((error) => {
         let publication = AppStaticSitePublishOutput {
             hostname: "travel-ops.sora".to_owned(),
             public_url: "https://travel-ops.sora/".to_owned(),
-            cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest/".to_owned(),
+            cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest".to_owned(),
             content_cid: "bafytest".to_owned(),
             manifest_digest_hex: "abcd".repeat(16),
             manifest_id_hex: None,
@@ -29547,7 +29547,7 @@ main().catch((error) => {
         let publication = AppStaticSitePublishOutput {
             hostname: "travel-ops.sora".to_owned(),
             public_url: "https://travel-ops.sora/".to_owned(),
-            cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest/".to_owned(),
+            cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest".to_owned(),
             content_cid: "bafytest".to_owned(),
             manifest_digest_hex: "abcd".repeat(16),
             manifest_id_hex: None,
@@ -30211,7 +30211,7 @@ main().catch((error) => {
                 .frontend
                 .as_ref()
                 .and_then(|frontend| frontend.cid_gateway_url_template.as_deref()),
-            Some("https://travel-ops.sora/sorafs/cid/<cid>/")
+            Some("https://travel-ops.sora/sorafs/cid/<cid>")
         );
         assert_eq!(
             output
@@ -30688,7 +30688,7 @@ main().catch((error) => {
         assert_eq!(
             publication.cid_gateway_url,
             format!(
-                "https://travel-ops.sora/sorafs/cid/{}/",
+                "https://travel-ops.sora/sorafs/cid/{}",
                 publication.content_cid
             )
         );
@@ -31018,7 +31018,7 @@ main().catch((error) => {
                 .frontend
                 .as_ref()
                 .and_then(|frontend| frontend.cid_gateway_url_template.as_deref()),
-            Some("https://travel-ops.sora/sorafs/cid/<cid>/")
+            Some("https://travel-ops.sora/sorafs/cid/<cid>")
         );
         let live = output
             .services
@@ -31073,7 +31073,7 @@ main().catch((error) => {
         assert_eq!(
             publication.cid_gateway_url,
             format!(
-                "https://travel-ops.sora/sorafs/cid/{}/",
+                "https://travel-ops.sora/sorafs/cid/{}",
                 publication.content_cid
             )
         );
@@ -31231,7 +31231,7 @@ main().catch((error) => {
                 .frontend
                 .as_ref()
                 .and_then(|frontend| frontend.cid_gateway_url_template.as_deref()),
-            Some("https://travel-ops.sora/sorafs/cid/<cid>/")
+            Some("https://travel-ops.sora/sorafs/cid/<cid>")
         );
         let publication = output
             .published_static_site

@@ -160,7 +160,7 @@ accepts traffic:
 
 - `/v1/sumeragi/status` now reports `commit_quorum`/`commit_qc` summaries alongside `worker_loop.queue_diagnostics` (blocked/dropped enqueues per queue), `dedup_evictions`, `bg_post_drop_{post,broadcast}_total`, and `commit_inflight` (active commit id/height/view, elapsed/timeout, and pause/resume queue depths) so stalled commit jobs and channel backpressure are visible without log scraping.
 - `/v1/sumeragi/status` includes the effective timing snapshot (`effective_min_finality_ms`, `effective_block_time_ms`, `effective_commit_time_ms`, `effective_pacing_factor_bps`, and `effective_npos_timeouts` in NPoS) so operators can validate on-chain timing and scaling in one place.
-- `/v1/sumeragi/commit_qc/{hash}` returns the full commit QC record (when available), including `parent_state_root`, `post_state_root`, and the aggregate signature payload needed for independent verification.
+- `/v1/sumeragi/commit-qcs/{block_hash}` returns the full commit QC record (when available), including `parent_state_root`, `post_state_root`, and the aggregate signature payload needed for independent verification.
 - Prometheus metrics provide the same signals for fleet monitoring:
   - `sumeragi_epoch_length_blocks`, `sumeragi_epoch_commit_deadline_offset`, `sumeragi_epoch_reveal_deadline_offset` — confirm the node loaded the intended VRF schedule.
   - `sumeragi_prf_epoch_seed_hex` — last seed published by the VRF pipeline (pairs with `/v1/sumeragi/status.prf_epoch_seed`).

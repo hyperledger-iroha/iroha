@@ -86,7 +86,7 @@ public final class CanonicalRequestSignerTests {
   }
 
   private static void callbackBodySignatureReceivesCanonicalMessage() throws Exception {
-    final URI uri = new URI("https://torii.example/v1/offline/notes/issue");
+    final URI uri = new URI("https://torii.example/v1/transactions");
     final long timestampMs = 1_717_171_717_002L;
     final String nonce = "callback-body-nonce";
     final AtomicReference<byte[]> signedMessage = new AtomicReference<>();

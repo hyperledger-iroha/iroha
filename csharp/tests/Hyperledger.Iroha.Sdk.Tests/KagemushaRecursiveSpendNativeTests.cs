@@ -303,7 +303,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal("halo2/ipa", KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend);
         Assert.Equal(64u, KagemushaRecursiveSpendNative.CompactTokenMaxHops);
         Assert.Equal(64u, KagemushaRecursiveSpendNative.RecursiveSpendLineageWitnesslessMaxHopsV1);
-        Assert.True(KagemushaRecursiveSpendNative.RecursiveSpendLineageTransitionCircuitWiredV1);
+        Assert.False(KagemushaRecursiveSpendNative.RecursiveSpendLineageTransitionCircuitWiredV1);
         Assert.Equal(
             1,
             KagemushaRecursiveSpendNative.RecursivePreviousProofOpenEnvelopesRequiredCountV1);
@@ -845,15 +845,15 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "kagemusha-recursive-spend-lineage-v1",
             "unknown-kagemusha-recursive-spend-circuit"));
         Assert.Equal(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(1u));
         Assert.Equal(
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(63u));
         Assert.True(
             KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(64u)
                 == KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-            "preferred append selector falls back at the witnessless hop cap");
+            "the semantic append circuit remains preferred while lineage transition verification is unavailable");
         Assert.Equal(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(0u));
@@ -873,7 +873,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
             "kagemusha-recursive-spend-lineage-v1",
             1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
+        Assert.False(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             1u));
         Assert.False(KagemushaRecursiveSpendNative.CanProveAppendOutputCircuitId(
@@ -913,7 +913,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
+        Assert.False(KagemushaRecursiveSpendNative.CanSelectAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             1u));
@@ -928,10 +928,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             "kagemusha-recursive-spend-lineage-v1",
             1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
+        Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
             1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
+        Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             2u));
         Assert.True(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(
@@ -966,10 +966,24 @@ public sealed class KagemushaRecursiveSpendNativeTests
             Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(circuitId, hopCount));
             Assert.True(KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(circuitId, hopCount));
         }
-        Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(0u));
-        Assert.True(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(1u));
-        Assert.True(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(63u));
-        Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(64u));
+        foreach (var circuitId in new[]
+        {
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+        })
+        {
+            foreach (var hopCount in new[] { 1u, 2u, 63u, 64u })
+            {
+                Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(circuitId, hopCount));
+                Assert.True(
+                    KagemushaRecursiveSpendNative.RequiresLineageWitnessForRedeem(circuitId, hopCount),
+                    $"{circuitId} hop {hopCount} must require a record-backed lineage witness");
+            }
+        }
+        foreach (var hopCount in new[] { 0u, 1u, 2u, 63u, 64u, uint.MaxValue })
+        {
+            Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(hopCount));
+        }
         Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(uint.MaxValue));
         Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousProofOpenEnvelopesForAppend(
             "kagemusha-recursive-spend-lineage-v1",
@@ -1170,7 +1184,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             2u,
-            hasLineageWitness: false,
+            hasLineageWitness: true,
             hasLineageVerifierRecord: true);
         KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
@@ -1405,7 +1419,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 malformedRequestArchive,
                 KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
                 bundleSummary.HopCount,
-                hasLineageWitness: false,
+                hasLineageWitness: true,
                 hasLineageVerifierRecord: true,
                 publicAmount: "1",
                 bundleSummary,
@@ -1883,18 +1897,18 @@ public sealed class KagemushaRecursiveSpendNativeTests
             redeemInstructionArchive.GetProperty("bytes_base64").GetString()!));
 
         Assert.Equal(
-            circuitIds.GetProperty("reserved_lineage_append").GetString(),
+            circuitIds.GetProperty("recursive_aggregation").GetString(),
             KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(1u));
         Assert.Equal(
-            circuitIds.GetProperty("reserved_lineage_append").GetString(),
+            circuitIds.GetProperty("recursive_aggregation").GetString(),
             KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(63u));
         Assert.Equal(
             circuitIds.GetProperty("recursive_aggregation").GetString(),
             KagemushaRecursiveSpendNative.PreferredAppendOutputCircuitId(64u));
         Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(0u));
-        Assert.True(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(63u));
+        Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(63u));
         Assert.False(KagemushaRecursiveSpendNative.CanAppendWitnesslessLineage(64u));
-        Assert.True(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
+        Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             2u));
         Assert.False(KagemushaRecursiveSpendNative.CanRedeemWitnessless(
@@ -2922,9 +2936,9 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
-    public void RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge()
+    public void RecursiveSpendAppendRequestEncoderFailsClosedForReservedOutputAndRejectsMisplacedLineageMaterial()
     {
-        var previousBundle = SharedRecursiveSpendArchive("init_bundle");
+        var previousBundle = SharedRecursiveSpendAbi7Archive("append_bundle");
         var recordBundle = RecordBundleWithStepCount();
         var pallasOpenEnvelopes = PallasOpenEnvelopesArchive();
         var previousProofOpenEnvelopes = PallasOpenEnvelopesArchive();
@@ -2955,15 +2969,25 @@ public sealed class KagemushaRecursiveSpendNativeTests
             initVerifierKey,
             initProvingKey);
 
+        var reservedOutput = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequest(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageRecord,
+                previousProofOpenEnvelopes,
+                appendArtifacts));
+        Assert.Equal("outputProofCircuitId", reservedOutput.ParamName);
+        Assert.Contains("outputProofCircuitId is not valid for the previous bundle", reservedOutput.Message);
+
         var request = KagemushaRecursiveSpendNative.EncodeAppendRequest(
             previousBundle,
             recordBundle,
             pallasOpenEnvelopes,
             currentNote,
-            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-            previousLineageRecord,
-            previousProofOpenEnvelopes,
-            appendArtifacts,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             blockHeight: 43);
         Assert.Equal(
             NoritoCodec.SchemaHash(KagemushaRecursiveSpendNative.RecursiveSpendAppendRequestWireName),
@@ -2973,65 +2997,24 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaNoritoPayload(request),
             KagemushaNoritoCompactLenFlag);
         Assert.Equal(10, fields.Count);
-        Assert.NotEmpty(fields[6]);
-        Assert.Equal(0x01, fields[7][0]);
-        Assert.Equal(0x01, fields[8][0]);
+        Assert.Equal(0x00, fields[5][0]);
+        Assert.Equal(0x00, fields[6][0]);
+        Assert.Equal(0x00, fields[7][0]);
+        Assert.Equal(0x00, fields[8][0]);
         Assert.Equal(0x01, fields[9][0]);
 
-        var missingPreviousRecord = Assert.Throws<ArgumentException>(() =>
+        var danglingPreviousRecord = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequest(
                 previousBundle,
                 recordBundle,
                 pallasOpenEnvelopes,
                 currentNote,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                previousLineageVerifierRecordArchive: null,
-                previousProofOpenEnvelopesArchive: previousProofOpenEnvelopes,
-                lineageKeyArtifacts: appendArtifacts));
-        Assert.Equal("previousLineageVerifierRecordArchive", missingPreviousRecord.ParamName);
-        Assert.Contains("previousLineageVerifierRecordArchive is required", missingPreviousRecord.Message);
-
-        var missingPreviousOpenings = Assert.Throws<ArgumentException>(() =>
-            KagemushaRecursiveSpendNative.EncodeAppendRequest(
-                previousBundle,
-                recordBundle,
-                pallasOpenEnvelopes,
-                currentNote,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
                 previousLineageRecord,
                 previousProofOpenEnvelopesArchive: null,
-                lineageKeyArtifacts: appendArtifacts));
-        Assert.Equal("previousProofOpenEnvelopesArchive", missingPreviousOpenings.ParamName);
-        Assert.Contains("previousProofOpenEnvelopesArchive is required", missingPreviousOpenings.Message);
-
-        var malformedPreviousOpenings = Assert.Throws<ArgumentException>(() =>
-            KagemushaRecursiveSpendNative.EncodeAppendRequest(
-                previousBundle,
-                recordBundle,
-                pallasOpenEnvelopes,
-                currentNote,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                previousLineageRecord,
-                KagemushaNoritoFrameWithPayload(0x4b),
-                appendArtifacts));
-        Assert.Equal("previousProofOpenEnvelopesArchive", malformedPreviousOpenings.ParamName);
-        Assert.Contains(
-            "previousProofOpenEnvelopesArchive must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
-            malformedPreviousOpenings.Message);
-
-        var overCountPreviousOpenings = Assert.Throws<ArgumentException>(() =>
-            KagemushaRecursiveSpendNative.EncodeAppendRequest(
-                previousBundle,
-                recordBundle,
-                pallasOpenEnvelopes,
-                currentNote,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                previousLineageRecord,
-                PallasOpenEnvelopesArchive(2),
-                appendArtifacts));
-        Assert.Contains(
-            "previousProofOpenEnvelopesArchive requires exactly 1 envelope(s)",
-            overCountPreviousOpenings.Message);
+                lineageKeyArtifacts: null));
+        Assert.Equal("previousLineageVerifierRecordArchive", danglingPreviousRecord.ParamName);
+        Assert.Contains("previousLineageVerifierRecordArchive is only valid", danglingPreviousRecord.Message);
 
         var danglingPreviousOpenings = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequest(
@@ -3040,8 +3023,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 pallasOpenEnvelopes,
                 currentNote,
                 KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                previousLineageRecord,
-                previousProofOpenEnvelopes,
+                previousLineageVerifierRecordArchive: null,
+                previousProofOpenEnvelopesArchive: previousProofOpenEnvelopes,
                 lineageKeyArtifacts: null));
         Assert.Equal("previousProofOpenEnvelopesArchive", danglingPreviousOpenings.ParamName);
         Assert.Contains("previousProofOpenEnvelopesArchive is only valid", danglingPreviousOpenings.Message);
@@ -3052,26 +3035,12 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 recordBundle,
                 pallasOpenEnvelopes,
                 currentNote,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                previousLineageRecord,
-                previousProofOpenEnvelopes,
-                initArtifacts));
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                previousLineageVerifierRecordArchive: null,
+                previousProofOpenEnvelopesArchive: null,
+                lineageKeyArtifacts: initArtifacts));
         Assert.Equal("lineageKeyArtifacts", wrongAppendArtifact.ParamName);
         Assert.Contains("lineage_key_artifacts must be append artifacts", wrongAppendArtifact.Message);
-
-        Assert.Contains(
-            "lineage_verifier_key",
-            Assert.Throws<ArgumentException>(() =>
-                KagemushaRecursiveSpendNative.EncodeAppendRequestWithLineageMaterials(
-                    previousBundle,
-                    recordBundle,
-                    pallasOpenEnvelopes,
-                    currentNote,
-                    KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                    previousLineageRecord,
-                    previousProofOpenEnvelopes,
-                    initVerifierKey,
-                    initProvingKey)).Message);
 
         var danglingLineageKeyMaterial = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequestWithLineageMaterials(
@@ -3080,10 +3049,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 pallasOpenEnvelopes,
                 currentNote,
                 KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                previousLineageRecord,
+                previousLineageVerifierRecordArchive: null,
                 previousProofOpenEnvelopesArchive: null,
-                appendVerifierKey,
-                appendProvingKey));
+                lineageVerifierKey: appendVerifierKey,
+                lineageProvingKeyArchive: appendProvingKey));
         Assert.Equal("lineageVerifierKey", danglingLineageKeyMaterial.ParamName);
         Assert.Contains("lineageKeyArtifacts are only valid for lineage append output", danglingLineageKeyMaterial.Message);
     }
@@ -3146,7 +3115,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
     [Fact]
     public void RecursiveSpendGeneratedPallasAppendRequestHelperRejectsLineageBeforeNativeBuilder()
     {
-        var previousBundle = SharedRecursiveSpendArchive("init_bundle");
+        var previousBundle = SharedRecursiveSpendAbi7Archive("append_bundle");
         var malformedRecordBundle = new byte[] { 0x01, 0x02 };
         var previousLineageRecord = VerifyingKeyRecordArchive();
         var currentNote = ValidSpendableNoteDescriptor();
@@ -3175,7 +3144,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             appendVerifierKey,
             appendProvingKey);
 
-        var missingPreviousRecord = Assert.Throws<ArgumentException>(() =>
+        var reservedOutput = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
                 previousBundle,
                 malformedRecordBundle,
@@ -3183,8 +3152,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
                 previousLineageVerifierRecordArchive: null,
                 lineageKeyArtifacts: appendArtifacts));
-        Assert.Equal("previousLineageVerifierRecordArchive", missingPreviousRecord.ParamName);
-        Assert.Contains("previousLineageVerifierRecordArchive is required", missingPreviousRecord.Message);
+        Assert.Equal("outputProofCircuitId", reservedOutput.ParamName);
+        Assert.Contains("outputProofCircuitId is not valid for the previous bundle", reservedOutput.Message);
 
         var wrongProfile = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
@@ -3197,16 +3166,16 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal("lineageKeyArtifacts", wrongProfile.ParamName);
         Assert.Contains("lineage_key_artifacts must be append artifacts", wrongProfile.Message);
 
-        var malformedPreviousRecord = Assert.Throws<ArgumentException>(() =>
+        var danglingPreviousRecord = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
                 previousBundle,
                 malformedRecordBundle,
                 currentNote,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
                 previousLineageVerifierRecordArchive: new byte[] { 0x01, 0x02 },
-                lineageKeyArtifacts: appendArtifacts));
-        Assert.Equal("previousLineageVerifierRecordArchive", malformedPreviousRecord.ParamName);
-        Assert.Contains("must be a valid Norito V1 archive", malformedPreviousRecord.Message);
+                lineageKeyArtifacts: null));
+        Assert.Equal("previousLineageVerifierRecordArchive", danglingPreviousRecord.ParamName);
+        Assert.Contains("previousLineageVerifierRecordArchive is only valid", danglingPreviousRecord.Message);
 
         var danglingLineageKeyMaterial = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
@@ -3214,23 +3183,21 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 malformedRecordBundle,
                 currentNote,
                 KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                previousLineageVerifierRecordArchive: previousLineageRecord,
+                previousLineageVerifierRecordArchive: null,
                 lineageVerifierKey: appendVerifierKey,
                 lineageProvingKeyArchive: appendProvingKey));
         Assert.Equal("lineageVerifierKey", danglingLineageKeyMaterial.ParamName);
         Assert.Contains("lineageKeyArtifacts are only valid for lineage append output", danglingLineageKeyMaterial.Message);
 
-        Assert.Contains(
-            "lineage_verifier_key",
-            Assert.Throws<ArgumentException>(() =>
-                KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
-                    previousBundle,
-                    malformedRecordBundle,
-                    currentNote,
-                    KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                    previousLineageVerifierRecordArchive: previousLineageRecord,
-                    lineageVerifierKey: initVerifierKey,
-                    lineageProvingKeyArchive: initProvingKey)).Message);
+        var malformedRecordBundleError = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
+                previousBundle,
+                malformedRecordBundle,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                lineageKeyArtifacts: null));
+        Assert.Equal("recordBundleArchive", malformedRecordBundleError.ParamName);
+        Assert.Contains("must be a valid Norito archive", malformedRecordBundleError.Message);
 
         var nullNote = Assert.Throws<ArgumentNullException>(() =>
             KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(

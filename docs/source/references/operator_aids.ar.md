@@ -16,15 +16,15 @@ translation_last_reviewed: 2026-01-01
 تسرد هذه الصفحة نقاط نهاية غير توافقية موجهة للمشغّلين تساعد في الرؤية واستكشاف الأعطال. الاستجابات بصيغة JSON ما لم يُذكر خلاف ذلك.
 
 التوافق (Sumeragi)
-- GET `/v1/sumeragi/new_view`
+- GET `/v1/sumeragi/new-view`
   - لقطة لعدّادات استلام NEW_VIEW لكل `(height, view)`.
   - الشكل: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
   - مثال:
-    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new_view | jq .`
-- GET `/v1/sumeragi/new_view/sse` (SSE)
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
+- GET `/v1/sumeragi/new-view/sse` (SSE)
   - تدفق دوري (≈1 ث) لنفس الحمولة لأجل لوحات المتابعة.
   - مثال:
-    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
+    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - المقاييس: عدادات `sumeragi_new_view_receipts_by_hv{height,view}` تعكس الأعداد.
 - GET `/v1/sumeragi/status`
   - لقطة لمؤشر القائد، Highest/Locked QCs (`highest_qc`/`locked_qc` مع الارتفاعات والمشاهدات وتجزئات الموضوع)، عدادات المجمّعين/VRF، تأجيلات pacemaker، عمق طابور المعاملات، وصحة مخزن RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
@@ -97,7 +97,7 @@ TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
 while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new_view" \
+  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
     | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
   sleep "$INTERVAL"
 done
@@ -112,7 +112,7 @@ TORII="${TORII:-http://127.0.0.1:8080}"
 TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new_view/sse" \
+curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
   | awk '/^data:/{sub(/^data: /,""); print}' \
   | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
 ```

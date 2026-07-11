@@ -15,6 +15,9 @@ pub enum Error {
     /// Error from provided stream/websocket
     #[error("Stream error: {0}")]
     Stream(#[source] stream::Error),
+    /// Invalid event subscription: {0}
+    #[error("Invalid event subscription: {0}")]
+    InvalidSubscription(String),
 }
 
 impl From<stream::Error> for Error {
@@ -45,6 +48,11 @@ impl<'ws> Consumer<'ws> {
     #[iroha_futures::telemetry_future]
     pub async fn new(stream: &'ws mut WebSocketNorito) -> Result<Self> {
         let request = stream.recv::<EventSubscriptionRequest>().await?;
+        if request.filters.is_empty() {
+            return Err(Error::InvalidSubscription(
+                "at least one event filter is required".to_owned(),
+            ));
+        }
         let (proof_backend, proof_call_hash, proof_envelope_hash) =
             proof_filters::normalize_proof_filters(
                 request.proof_backend,

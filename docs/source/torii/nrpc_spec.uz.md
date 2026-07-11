@@ -83,7 +83,7 @@ Clients must surface both HTTP status and `X-Iroha-Error-Code` to the caller. SD
 
 ### 5. Negotiation, Compression & Streaming
 - Set `Accept: application/x-norito` to request binary responses. Torii treats
-  `application/json`, `text/json`, and `application/*+json` as JSON and ignores
+  `application/json` and `application/*+json` as JSON and ignores
   media-type parameters. JSON fallback remains available for clients without
   binary support.  
 - When a handler emits a dynamic JSON value, the `application/x-norito` payload

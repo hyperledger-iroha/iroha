@@ -78,7 +78,7 @@ use iroha_data_model::{
     parameter::{Parameters, system::ivm_metadata},
     permission::Permissions,
     prelude::{AccountId, *},
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
     query::{
         QueryBox, QueryOutputBatchBox, QueryRequest, QueryResponse, QueryWithFilter,
         QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
@@ -475,11 +475,7 @@ impl std::io::Write for BoundedCountingWriter {
     }
 }
 
-/// Core host adapter used by Iroha to run IVM bytecode.
-///
-/// Stateful operations must be translated into ISIs and executed via the
-/// executor. Durable-state syscalls are only forwarded to an in-memory
-/// overlay when access logging is enabled for prepass execution.
+/// Verifying-key record prepared for repeated host-side proof checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedVerifyingKey {
     record: Arc<VerifyingKeyRecord>,
@@ -488,6 +484,10 @@ struct PreparedVerifyingKey {
 }
 
 /// Core host adapter used by Iroha to run IVM bytecode.
+///
+/// Stateful operations must be translated into ISIs and executed via the
+/// executor. Durable-state syscalls are only forwarded to an in-memory
+/// overlay when access logging is enabled for prepass execution.
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
@@ -2977,6 +2977,120 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = Some(authorization);
     }
 
+    fn verified_deployed_contract_runtime_identity(
+        &self,
+        state: &impl StateReadOnly,
+        contract_address: &ContractAddress,
+        expected_alias: Option<&ContractAlias>,
+        contract: &ivm::PreparedContract,
+    ) -> Result<
+        (
+            crate::smartcontracts::code::BoundContractIdentity,
+            AccountId,
+        ),
+        ValidationFail,
+    > {
+        let identity =
+            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{contract_address}` has no valid live identity binding"
+                    ))
+                })?;
+        if identity.contract_alias.as_ref() != expected_alias {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{contract_address}` alias changed before runtime binding"
+            )));
+        }
+        if identity.code_hash != contract.code_hash() {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{contract_address}` code binding changed before runtime binding"
+            )));
+        }
+        let contract_subject =
+            crate::smartcontracts::code::fetch_bound_contract_subject(state, contract_address)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{contract_address}` has no valid subject binding"
+                    ))
+                })?;
+        Ok((identity, contract_subject))
+    }
+
+    /// Revalidate and bind a transaction-capable deployed contract runtime against one immutable
+    /// state view.
+    ///
+    /// App-facing simulation paths use this boundary instead of constructing runtime provenance
+    /// from caller-supplied address, alias, code hash, or permission fields. Read-only selectors
+    /// are deliberately rejected here and must use the view-specific boundary below.
+    pub fn bind_authorized_deployed_contract_runtime_context(
+        &mut self,
+        state: &impl StateReadOnly,
+        contract_address: &ContractAddress,
+        expected_alias: Option<&ContractAlias>,
+        contract: &ivm::PreparedContract,
+        selector: &str,
+    ) -> Result<(), ValidationFail> {
+        let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
+            state,
+            contract_address,
+            expected_alias,
+            contract,
+        )?;
+        let authorization = crate::executor::authorize_prepared_contract_selector(
+            state.world(),
+            &self.authority,
+            contract,
+            selector,
+            &identity,
+        )?;
+        let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+        })?;
+        crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
+            state.world(),
+            contract_address,
+            identity.code_hash,
+            descriptor.kind,
+        )?;
+        self.bind_contract_runtime_context(contract_subject, authorization);
+        Ok(())
+    }
+
+    /// Revalidate and bind a read-only deployed contract view against one immutable state view.
+    ///
+    /// This boundary captures the same live identity and subject provenance as transaction
+    /// simulation while requiring the selected artifact entrypoint to be declared as `view`.
+    pub fn bind_authorized_deployed_contract_view_runtime_context(
+        &mut self,
+        state: &impl StateReadOnly,
+        contract_address: &ContractAddress,
+        expected_alias: Option<&ContractAlias>,
+        contract: &ivm::PreparedContract,
+        selector: &str,
+    ) -> Result<(), ValidationFail> {
+        let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
+            state,
+            contract_address,
+            expected_alias,
+            contract,
+        )?;
+        let authorization = crate::executor::authorize_prepared_contract_view_selector(
+            state.world(),
+            &self.authority,
+            contract,
+            selector,
+            &identity,
+        )?;
+        crate::smartcontracts::code::ensure_contract_ready_for_view(
+            state.world(),
+            contract_address,
+            identity.code_hash,
+        )?;
+        self.bind_contract_runtime_context(contract_subject, authorization);
+        Ok(())
+    }
+
     /// Share the outer runtime's bounded immutable contract-artifact cache.
     pub fn set_prepared_contract_cache(&mut self, cache: PreparedContractCache) {
         self.prepared_contract_cache = cache;
@@ -4189,6 +4303,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok((env, prepared))
     }
 
+    #[cfg(test)]
     fn enforce_zk_envelope(
         &self,
         payload: &[u8],
@@ -5000,11 +5115,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_keys_gas(examined_count: usize, payload_len: usize) -> u64 {
         Self::state_query_gas(payload_len)
             .saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_count_gas(examined_count: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }
@@ -5168,20 +5285,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .saturating_add(state.proofs().len())
             .saturating_add(state.handles().len());
         Self::axt_gas(entries)
-    }
-
-    fn visit_local_durable_state_keys_with_text_prefix<V>(
-        map: &BTreeMap<Name, V>,
-        prefix: &str,
-        visitor: &mut dyn FnMut(&Name, &V) -> Result<(), ivm::VMError>,
-    ) -> Result<(), ivm::VMError> {
-        for (key, value) in map.range::<str, _>((Bound::Included(prefix), Bound::Unbounded)) {
-            if !key.as_ref().starts_with(prefix) {
-                break;
-            }
-            visitor(key, value)?;
-        }
-        Ok(())
     }
 
     fn relative_durable_state_key<'a>(
@@ -6623,14 +6726,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             arguments,
         };
         let entrypoint_name = invocation.entrypoint.clone();
-        let call_context = crate::executor::parse_prepared_contract_invocation_execution_context(
-            &invocation,
-            prepared_contract.as_ref(),
-            identity.contract_alias.clone(),
-            contract_subject,
-            child_gas_limit,
-        )
-        .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
+        let call_context =
+            crate::executor::parse_prepared_nested_contract_invocation_execution_context(
+                &invocation,
+                prepared_contract.as_ref(),
+                identity.contract_alias.clone(),
+                contract_subject,
+                child_gas_limit,
+            )
+            .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
         let callee_context = call_context
             .runtime_context()
             .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
@@ -6810,21 +6914,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     const ASSET_DEFINITION_VIEW_WORDS: u64 = 6;
     const DOMAIN_VIEW_WORDS: u64 = 3;
     const NFT_VIEW_WORDS: u64 = 3;
-
-    #[cfg(test)]
-    fn query_total_items(response: &QueryResponse) -> u64 {
-        match response {
-            QueryResponse::Singular(_) => 1,
-            QueryResponse::Iterable(output) => {
-                let returned = output
-                    .batch
-                    .iter()
-                    .map(|batch| u64::try_from(batch.len()).unwrap_or(u64::MAX))
-                    .fold(0_u64, u64::saturating_add);
-                returned.saturating_add(output.remaining_items_hint())
-            }
-        }
-    }
 
     fn query_sort_requested(request: &QueryRequest) -> bool {
         match request {
@@ -11659,7 +11748,7 @@ mod pointer_abi_tests {
     use core::{num::NonZeroU16, str::FromStr};
 
     use iroha_crypto::{Algorithm, Hash as IrohaHash, KeyPair, PublicKey};
-    use iroha_data_model::smart_contract::manifest::ContractManifest;
+    use iroha_data_model::{proof::ProofAttachment, smart_contract::manifest::ContractManifest};
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::{
@@ -14944,7 +15033,7 @@ mod tests {
     use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter},
-        proof::{VerifyingKeyBox, VerifyingKeyId},
+        proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
     };
@@ -25765,11 +25854,8 @@ seiyaku Vault {
             .get(&path)
             .and_then(Option::as_ref)
             .expect("unscoped overlay entry");
-        let stored_tlv =
-            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored unscoped overlay tlv");
-        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
         let stored_value: u64 =
-            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+            norito::decode_from_bytes(stored).expect("decode raw persisted overlay state");
         assert_eq!(stored_value, 22);
     }
 
@@ -26233,11 +26319,8 @@ seiyaku Vault {
             .get(&scoped_path)
             .and_then(Option::as_ref)
             .expect("scoped overlay entry");
-        let stored_tlv =
-            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored scoped overlay tlv");
-        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
         let stored_value: u64 =
-            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+            norito::decode_from_bytes(stored).expect("decode raw persisted overlay state");
         assert_eq!(stored_value, 22);
     }
 

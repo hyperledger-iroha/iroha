@@ -75,7 +75,7 @@ Alias Service
   - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
   - Response: { "alias": "GB82WEST12345698765432", "account_id": "<i105-account-id>", "index": 0, "source": "iso_bridge" }
   - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
-- POST `/v1/aliases/resolve_index`
+- POST `/v1/aliases/resolve-index`
   - Request: { "index": 0 }
   - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "<i105-account-id>", "source": "iso_bridge" }
   - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.

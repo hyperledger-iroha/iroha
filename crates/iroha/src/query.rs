@@ -97,9 +97,10 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
                 .and_then(|h| h.to_str().ok())
                 .is_some_and(|ct| {
                     let media_type = ct.split(';').next().map(str::trim).unwrap_or_default();
+                    let media_type_lower = media_type.to_ascii_lowercase();
                     media_type.eq_ignore_ascii_case("application/json")
-                        || media_type.eq_ignore_ascii_case("text/json")
-                        || media_type.to_ascii_lowercase().ends_with("+json")
+                        || (media_type_lower.starts_with("application/")
+                            && media_type_lower.ends_with("+json"))
                 });
             if is_json {
                 return json::from_slice::<QueryResponse>(body).map_err(|error| {
@@ -702,6 +703,26 @@ mod query_errors_handling {
         let decoded = decode_query_response(&response)?;
         assert_eq!(decoded, expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn text_json_is_not_a_supported_response_media_type() -> Result<()> {
+        let payload = QueryResponse::Iterable(QueryOutput {
+            batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
+            remaining_items: Some(0),
+            has_more: false,
+            continue_cursor: None,
+        });
+        let response = Response::builder()
+            .status(HttpStatusCode::OK)
+            .header("content-type", "text/json")
+            .body(norito::json::to_vec(&payload)?)?;
+
+        assert!(
+            matches!(decode_query_response(&response), Err(QueryError::Other(_))),
+            "the retired text/json alias must not select JSON decoding"
+        );
         Ok(())
     }
 

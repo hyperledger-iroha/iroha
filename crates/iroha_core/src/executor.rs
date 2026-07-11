@@ -1719,22 +1719,6 @@ impl ContractEntrypointAuthorizationSnapshot {
     }
 }
 
-impl ContractRuntimeExecutionContext {
-    fn allows_benefit_runtime_asset_transfer_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "benefit"
-                && contract_alias.dataspace_segment() == "benefit"
-        }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
-    }
-
-    fn allows_bisp_spend_permission_grant_bypass(&self) -> bool {
-        self.contract_alias.as_ref().is_some_and(|contract_alias| {
-            contract_alias.name_segment() == "bisp_bisp"
-                && contract_alias.dataspace_segment() == "sbp"
-        }) && self.entrypoint == "grant_beneficiary_spend_permission"
-    }
-}
-
 /// Reject binding mutations emitted from a lifecycle hook before executor dispatch.
 ///
 /// This guard runs ahead of both initial and user-provided executors and is shared by owned and
@@ -1902,6 +1886,7 @@ fn prepare_validated_contract_argument_record(
 
 type ResolvedContractEntrypoint = (u64, Option<String>, Option<ivm::EntrypointArgumentSchemaV1>);
 
+#[cfg(test)]
 fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -1925,36 +1910,6 @@ fn resolve_callable_contract_entrypoint(
             ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
         })?;
     let permission = callable_contract_entrypoint_permission(descriptor, selector)?;
-    Ok((
-        prefix_len + descriptor.entry_pc,
-        permission,
-        descriptor.argument_schema.clone(),
-    ))
-}
-
-fn resolve_nested_contract_entrypoint(
-    bytecode: &[u8],
-    selector: &str,
-) -> Result<ResolvedContractEntrypoint, ValidationFail> {
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
-        ValidationFail::NotPermitted(format!(
-            "invalid contract artifact for nested contract dispatch: {err}"
-        ))
-    })?;
-    let prefix_len = parsed.prefix_len() as u64;
-    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-        ValidationFail::NotPermitted(
-            "nested contract call requires a self-describing contract artifact".to_owned(),
-        )
-    })?;
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == selector)
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
-        })?;
-    let permission = nested_contract_entrypoint_permission(descriptor, selector)?;
     Ok((
         prefix_len + descriptor.entry_pc,
         permission,
@@ -2008,6 +1963,52 @@ fn resolve_prepared_contract_entrypoint(
     Ok((
         entrypoint_pc,
         permission,
+        descriptor.argument_schema.clone(),
+    ))
+}
+
+fn resolve_prepared_nested_contract_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
+    let permission = nested_contract_entrypoint_permission(descriptor, selector)?;
+    Ok((
+        entrypoint_pc,
+        permission,
+        descriptor.argument_schema.clone(),
+    ))
+}
+
+fn resolve_prepared_contract_view_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    if descriptor.kind != EntryPointKind::View {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is not a read-only view"
+        )));
+    }
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
+    Ok((
+        entrypoint_pc,
+        descriptor.permission.clone(),
         descriptor.argument_schema.clone(),
     ))
 }
@@ -2132,6 +2133,7 @@ impl ContractDispatchSource<'_> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
@@ -2453,40 +2455,7 @@ fn parse_contract_call_execution_context_from_source(
     }))
 }
 
-/// Replace caller-supplied contract identity metadata with the canonical active WSV binding.
-///
-/// A contract alias is security-sensitive runtime context and must never be trusted merely
-/// because it was signed by the transaction authority. When an address is present, reject a
-/// conflicting claimed alias and install only the alias stored for that active instance.
-pub(crate) fn canonicalize_contract_call_execution_context<R: StateReadOnly>(
-    state: &R,
-    context: &mut ContractCallExecutionContext,
-) -> Result<(), ValidationFail> {
-    let Some(contract_address) = context.contract_address.as_ref() else {
-        if context.contract_alias.is_some() {
-            return Err(ValidationFail::NotPermitted(
-                "contract_alias metadata requires contract_address metadata".to_owned(),
-            ));
-        }
-        return Ok(());
-    };
-    let record = code::fetch_bound_contract_record(state, contract_address).ok_or_else(|| {
-        ValidationFail::NotPermitted(format!(
-            "contract instance `{contract_address}` not found in WSV"
-        ))
-    })?;
-    if let Some(claimed_alias) = context.contract_alias.as_ref()
-        && record.contract_alias.as_ref() != Some(claimed_alias)
-    {
-        return Err(ValidationFail::NotPermitted(format!(
-            "contract_alias metadata `{claimed_alias}` does not match the active binding for `{contract_address}`"
-        )));
-    }
-    context.contract_alias = record.contract_alias;
-    context.contract_subject = Some(record.contract_subject);
-    Ok(())
-}
-
+#[cfg(test)]
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
@@ -2525,46 +2494,55 @@ pub(crate) fn parse_contract_invocation_execution_context(
     })
 }
 
-pub(crate) fn parse_nested_contract_invocation_execution_context(
-    invocation: &ContractInvocation,
-    bytecode: &[u8],
-    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    contract_subject: AccountId,
-) -> Result<ContractCallExecutionContext, ValidationFail> {
-    let selector = invocation.entrypoint.trim();
-    if selector.is_empty() {
-        return Err(ValidationFail::NotPermitted(
-            "nested contract entrypoint must not be empty".to_owned(),
-        ));
-    }
-
-    let (entrypoint_pc, entrypoint_permission, argument_schema) =
-        resolve_nested_contract_entrypoint(bytecode, selector)?;
-    let args = Json::default();
-    let argument_record = prepare_validated_contract_argument_record(
-        argument_schema.as_ref(),
-        invocation.arguments.as_deref(),
-        u64::MAX,
-    )?;
-
-    Ok(ContractCallExecutionContext {
-        contract_address: Some(invocation.contract_address.clone()),
-        contract_subject: Some(contract_subject),
-        contract_alias,
-        entrypoint: Some(selector.to_owned()),
-        entrypoint_pc: Some(entrypoint_pc),
-        entrypoint_permission,
-        args,
-        argument_record,
-    })
-}
-
 pub(crate) fn parse_prepared_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     contract: &ivm::PreparedContract,
     contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     contract_subject: AccountId,
     gas_limit: u64,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    parse_prepared_contract_invocation_execution_context_with_resolver(
+        invocation,
+        contract,
+        contract_alias,
+        contract_subject,
+        gas_limit,
+        resolve_prepared_contract_entrypoint,
+    )
+}
+
+/// Resolve a prepared ordinary nested call using the nested entrypoint policy.
+///
+/// Unlike top-level transaction dispatch, nested calls may enter read-only
+/// views. Lifecycle entrypoints remain reserved for their dedicated state
+/// transition machinery.
+pub(crate) fn parse_prepared_nested_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    contract: &ivm::PreparedContract,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    contract_subject: AccountId,
+    gas_limit: u64,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    parse_prepared_contract_invocation_execution_context_with_resolver(
+        invocation,
+        contract,
+        contract_alias,
+        contract_subject,
+        gas_limit,
+        resolve_prepared_nested_contract_entrypoint,
+    )
+}
+
+fn parse_prepared_contract_invocation_execution_context_with_resolver(
+    invocation: &ContractInvocation,
+    contract: &ivm::PreparedContract,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    contract_subject: AccountId,
+    gas_limit: u64,
+    resolve_entrypoint: fn(
+        &ivm::PreparedContract,
+        &str,
+    ) -> Result<ResolvedContractEntrypoint, ValidationFail>,
 ) -> Result<ContractCallExecutionContext, ValidationFail> {
     let selector = invocation.entrypoint.trim();
     if selector.is_empty() {
@@ -2574,7 +2552,7 @@ pub(crate) fn parse_prepared_contract_invocation_execution_context(
     }
 
     let (entrypoint_pc, entrypoint_permission, argument_schema) =
-        resolve_prepared_contract_entrypoint(contract, selector)?;
+        resolve_entrypoint(contract, selector)?;
     let args = Json::default();
     let argument_record = prepare_validated_contract_argument_record(
         argument_schema.as_ref(),
@@ -5360,7 +5338,9 @@ impl Executor {
             QueryRequest::Singular(singular) => AnyQueryBox::Singular(singular.clone()),
             QueryRequest::Start(iterable) => AnyQueryBox::Iterable(iterable.clone()),
             QueryRequest::Continue(_) => {
-                // The iterable query was already validated when it started
+                // The iterable query was validated when it started. Execution still
+                // binds the cursor to this request's authority in LiveQueryStore
+                // before advancing any stored state.
                 return Ok(());
             }
         };
@@ -6647,6 +6627,31 @@ pub(crate) fn authorize_prepared_contract_selector(
         ));
     }
     let (_, permission, _) = resolve_prepared_contract_entrypoint(contract, selector)?;
+    let snapshot = ContractEntrypointAuthorizationSnapshot::new(
+        authority.clone(),
+        selector.to_owned(),
+        permission,
+        identity,
+    );
+    snapshot.validate(world)?;
+    Ok(snapshot)
+}
+
+/// Authorize a prepared deployed-contract read-only selector and capture its immutable snapshot.
+pub(crate) fn authorize_prepared_contract_view_selector(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    contract: &ivm::PreparedContract,
+    selector: &str,
+    identity: &code::BoundContractIdentity,
+) -> Result<ContractEntrypointAuthorizationSnapshot, ValidationFail> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+    let (_, permission, _) = resolve_prepared_contract_view_entrypoint(contract, selector)?;
     let snapshot = ContractEntrypointAuthorizationSnapshot::new(
         authority.clone(),
         selector.to_owned(),
@@ -10002,12 +10007,13 @@ mod tests {
             confidential::ConfidentialStatus,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-                KagemushaRecursiveSpendBranchPathV2, KagemushaRecursiveSpendBundleV2,
+                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV2,
                 KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendProofV2,
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
-                KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRequestAuthorizationV2,
+                KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
+                KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-                KagemushaUnshieldPublicInputsBindingV2,
+                KagemushaUnshieldPublicInputsBindingV2, kagemusha_recursive_spend_lineage_root_v2,
             },
             proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
             zk::BackendTag,
@@ -10025,36 +10031,67 @@ mod tests {
             spend_nullifier: [0x42; 32],
             amount,
         };
-        let branch_path = KagemushaRecursiveSpendBranchPathV2 {
-            lineage_root: [0x43; 32],
-            depth: 0,
-            path_bits: [0; 8],
-        };
+        let artifact_generation = "fee-policy-v2";
+        let topup_operation_id = [0x47; 32];
+        let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
+            version: 2,
+            chain_id: chain_id.clone(),
+            payer: recipient.clone(),
+            asset: AssetId::new(asset.clone(), recipient.clone()),
+            asset_scale: amount.scale,
+            amount,
+            initial_root: [0x44; 32],
+            finalized_root: [0x45; 32],
+            topup_anchor_nullifiers: vec![[0x46; 32]],
+            current_note: note.clone(),
+            topup_operation_id,
+            transfer_verifier_id: VerifyingKeyId::new(
+                "halo2/ipa",
+                "fee-policy-confidential-transfer-v2",
+            ),
+            transfer_verifier_commitment: [0x53; 32],
+            artifact_generation: artifact_generation.to_owned(),
+            finalized_height: 1,
+            finalized_tx_hash: [0x54; 32],
+            anchor_digest: [0; 32],
+        }
+        .finalize_digest()
+        .expect("canonical fee-policy V2 top-up anchor");
+        let topup_anchor_ref = topup_anchor
+            .compact_ref()
+            .expect("canonical fee-policy V2 anchor reference");
+        let lineage_root =
+            kagemusha_recursive_spend_lineage_root_v2(topup_anchor_ref.anchor_digest)
+                .expect("canonical fee-policy V2 lineage root");
+        let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
+            .expect("canonical fee-policy V2 root claim");
         let verifier_key_id = VerifyingKeyId::new(
             "halo2/ipa",
             KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
         );
+        let statement = KagemushaRecursiveSpendPublicStatementV2 {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            asset_scale: amount.scale,
+            final_root: topup_anchor.finalized_root,
+            topup_anchor_refs: vec![topup_anchor_ref],
+            proof_step_count: 1,
+            peer_hop_count: 0,
+            current_note: note.clone(),
+            branch_claims: vec![branch_claim],
+            transition: None,
+            artifact_generation: artifact_generation.to_owned(),
+            lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
+            verifier_key_id: verifier_key_id.clone(),
+        };
+        let public_statement_digest = statement
+            .digest()
+            .expect("canonical fee-policy V2 public statement");
         let bundle = KagemushaRecursiveSpendBundleV2 {
-            statement: KagemushaRecursiveSpendPublicStatementV2 {
-                chain_id: chain_id.clone(),
-                asset: asset.clone(),
-                asset_scale: 0,
-                initial_root: [0x44; 32],
-                final_root: [0x45; 32],
-                topup_anchor_nullifiers: vec![[0x46; 32]],
-                proof_step_count: 1,
-                peer_hop_count: 0,
-                current_note: note.clone(),
-                topup_operation_id: [0x47; 32],
-                branch_path,
-                transition: None,
-                artifact_generation: "fee-policy-v2".to_owned(),
-                lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
-                verifier_key_id: verifier_key_id.clone(),
-            },
+            statement,
             recursive_proof: KagemushaRecursiveSpendProofV2 {
                 verifier_key_id: verifier_key_id.clone(),
-                public_statement_digest: [0x48; 32],
+                public_statement_digest,
                 proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x49; 32]),
             },
         };
@@ -10072,20 +10109,20 @@ mod tests {
             asset_tag: [0x4B; 32],
             chain_tag: [0x4C; 32],
         };
-        let redemption = KagemushaRecursiveSpendRedemptionIntentV2 {
-            chain_id,
-            asset,
-            input_note: note,
-            parent_branch_path: branch_path,
-            parent_bundle_digest: [0x4D; 32],
-            input_root: bundle.statement.final_root,
+        let redemption = KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
+            previous_bundle: bundle.clone(),
             recipient: recipient.clone(),
             public_amount: amount,
             change_output: None,
+            change_artifact_generation: None,
             unshield_public_inputs,
-            unshield_public_inputs_digest: [0x4E; 32],
+            unshield_public_inputs_digest: unshield_public_inputs
+                .digest()
+                .expect("canonical fee-policy V2 unshield digest"),
             operation_id,
-        };
+        }
+        .into_intent()
+        .expect("canonical fee-policy V2 redemption intent");
         let mut lineage_verifier_record = VerifyingKeyRecord::new(
             1,
             KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
@@ -13084,8 +13121,13 @@ seiyaku IdentityRequired {
     fn nested_contract_dispatch_accepts_view_without_relaxing_top_level_calls() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
-        let (program, expected_entrypoint_pc) =
-            contract_program_with_entrypoint_kind("configuration", EntryPointKind::View, None);
+        let (program, expected_entrypoint_pc) = contract_program_with_entrypoint_kind(
+            "configuration",
+            EntryPointKind::View,
+            Some("CanInspectConfiguration"),
+        );
+        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
+            .expect("prepare nested-view contract");
         let contract_address = ContractAddress::derive(
             iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
             &ALICE_ID,
@@ -13099,11 +13141,12 @@ seiyaku IdentityRequired {
             arguments: None,
         };
 
-        let top_level_err = parse_contract_invocation_execution_context(
+        let top_level_err = parse_prepared_contract_invocation_execution_context(
             &invocation,
-            &program,
+            &prepared,
             None,
             contract_address.subject_id(),
+            u64::MAX,
         )
         .expect_err("top-level transaction dispatch must remain public-only");
         assert!(matches!(
@@ -13111,16 +13154,85 @@ seiyaku IdentityRequired {
             ValidationFail::NotPermitted(message) if message.contains("read-only")
         ));
 
-        let nested = parse_nested_contract_invocation_execution_context(
+        let nested = parse_prepared_nested_contract_invocation_execution_context(
             &invocation,
-            &program,
+            &prepared,
             None,
             contract_address.subject_id(),
+            u64::MAX,
         )
         .expect("nested dispatch should accept a declared view");
         assert_eq!(nested.entrypoint.as_deref(), Some("configuration"));
         assert_eq!(nested.entrypoint_pc(), Some(expected_entrypoint_pc));
-        assert_eq!(nested.entrypoint_permission(), None);
+        assert_eq!(
+            nested.entrypoint_permission(),
+            Some("CanInspectConfiguration")
+        );
+
+        for (selector, kind) in [
+            ("start", EntryPointKind::Hajimari),
+            ("upgrade", EntryPointKind::Kaizen),
+        ] {
+            let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
+            let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
+                .expect("prepare lifecycle contract");
+            let invocation = ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: selector.to_owned(),
+                arguments: None,
+            };
+            let error = parse_prepared_nested_contract_invocation_execution_context(
+                &invocation,
+                &prepared,
+                None,
+                contract_address.subject_id(),
+                u64::MAX,
+            )
+            .expect_err("nested dispatch must reject lifecycle entrypoints");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message) if message.contains("cannot be invoked by a nested call")),
+                "unexpected {kind:?} nested-dispatch error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_view_resolver_accepts_only_views_and_preserves_exact_permission() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        let (program, expected_pc) = contract_program_with_entrypoint_kind(
+            "inspect",
+            EntryPointKind::View,
+            Some("CanInspectContract"),
+        );
+        let prepared =
+            ivm::prepare_contract(Arc::<[u8]>::from(program)).expect("prepare view contract");
+        let (pc, permission, arguments) =
+            resolve_prepared_contract_view_entrypoint(&prepared, "inspect")
+                .expect("declared view resolves");
+        assert_eq!(pc, expected_pc);
+        assert_eq!(permission.as_deref(), Some("CanInspectContract"));
+        assert!(arguments.is_none());
+        assert!(
+            resolve_prepared_contract_entrypoint(&prepared, "inspect").is_err(),
+            "transaction resolution must continue to reject read-only views"
+        );
+
+        for (selector, kind) in [
+            ("write", EntryPointKind::Kotoage),
+            ("start", EntryPointKind::Hajimari),
+            ("upgrade", EntryPointKind::Kaizen),
+        ] {
+            let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
+            let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
+                .expect("prepare non-view contract");
+            let error = resolve_prepared_contract_view_entrypoint(&prepared, selector)
+                .expect_err("the view boundary must reject every non-view entrypoint kind");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message) if message.contains("not a read-only view")),
+                "unexpected {kind:?} view-resolution error: {error}"
+            );
+        }
     }
 
     #[test]

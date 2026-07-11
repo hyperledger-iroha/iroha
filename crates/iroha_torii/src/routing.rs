@@ -115,7 +115,6 @@ use iroha_data_model::{
     },
 };
 
-use crate::api_version::{self, ApiVersion};
 use core::fmt;
 use std::{
     cmp::{Ordering, Reverse},
@@ -3488,7 +3487,7 @@ use core::convert::Infallible;
 #[cfg(feature = "app_api")]
 use std::num::NonZeroU64;
 
-use axum::response::sse::{Event as SseEvent, Sse};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures::stream;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -5826,7 +5825,7 @@ pub async fn handle_v1_zk_verify(
         // For Norito, treat non-empty body as accepted. We avoid binding to a
         // specific envelope type in this app-facing convenience endpoint.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -5869,7 +5868,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
         view_timeout_target_ms: m.sumeragi_pacemaker_view_timeout_target_ms.get(),
         view_timeout_remaining_ms: m.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5880,7 +5879,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snap = sumeragi::status_snapshot();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5940,7 +5939,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let checkpoints: Vec<ValidatorSetCheckpoint> = sumeragi::status::validator_checkpoint_history();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -5976,7 +5975,7 @@ pub async fn handle_v1_sumeragi_consensus_keys(
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -6011,7 +6010,7 @@ pub async fn handle_v1_sumeragi_commit_qcs(
         COMMIT_CERT_PAGE_CAP,
         |cert| cert.height,
     );
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -6122,9 +6121,9 @@ fn sccp_internal_error(message: impl Into<String>) -> Error {
 
 fn sccp_bundle_response<T>(value: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
-    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize,
+    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize + 'static,
 {
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
+    let format = match crate::utils::negotiate_response_format(accept) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -7976,7 +7975,7 @@ pub async fn handle_v1_sumeragi_validator_sets(
         COMMIT_CERT_PAGE_CAP,
         |snap| snap.height,
     );
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8108,7 +8107,7 @@ pub async fn handle_v1_sumeragi_phases(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v1/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
+/// GET /v1/sumeragi/bls-keys — map of network public keys -> BLS public keys (hex strings)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_bls_keys(
     State(state): State<Arc<CoreState>>,
@@ -8155,7 +8154,7 @@ pub async fn handle_v1_sumeragi_leader(
             epoch_seed: seed_opt.map(hex::encode),
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8243,7 +8242,7 @@ pub async fn handle_v1_sumeragi_collectors(
                 epoch_seed: epoch_seed_hex,
             },
         };
-        let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
             Ok(fmt) => fmt,
             Err(resp) => return Ok(resp),
         };
@@ -8332,7 +8331,7 @@ pub async fn handle_v1_sumeragi_collectors(
             epoch_seed: epoch_seed_hex,
         },
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8390,7 +8389,7 @@ pub async fn handle_v1_sumeragi_params(
         mode_activation_height: sp.mode_activation_height,
         chain_height: state.committed_height() as u64,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8497,7 +8496,7 @@ pub async fn handle_v1_zk_submit_proof(
     let ok = if ct.contains(super::utils::NORITO_MIME_TYPE) {
         // For Norito, any non-empty payload is considered accepted by the demo handler.
         !body.is_empty()
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         norito::json::from_slice::<norito::json::Value>(&body).is_ok()
     } else {
         // Unknown content type; try JSON as a last resort.
@@ -8509,7 +8508,7 @@ pub async fn handle_v1_zk_submit_proof(
         hex::encode::<[u8; 32]>(h.into())
     };
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -8666,7 +8665,7 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
             statuses_json = bools_to_json_array(&statuses);
             ok = true;
         }
-    } else if ct.contains("application/json") || ct.contains("text/json") {
+    } else if ct.contains("application/json") {
         // JSON: accept array of base64-encoded Norito envelopes.
         if let Ok(v) = norito::json::from_slice::<norito::json::Value>(&body) {
             if let Some(arr) = v.as_array() {
@@ -8896,7 +8895,7 @@ pub async fn handle_v1_zk_roots(
         // For convenience, report the total number of roots recorded for this asset.
         height: roots_all.len() as u32,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9015,7 +9014,7 @@ pub async fn handle_v1_zk_merkle_path(
         next_zero_path,
         paths,
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9038,7 +9037,7 @@ pub async fn handle_v1_zk_vote_tally(
         None => (false, Vec::new()),
     };
     let payload = ZkVoteGetTallyResponseDto { finalized, tally };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -9119,7 +9118,7 @@ pub async fn handle_v1_sumeragi_evidence_list(
         let end = core::cmp::min(total, offset + limit);
         &records[offset..end]
     };
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -12838,7 +12837,7 @@ mod contract_manifest_response_tests {
                         name: "amount".to_owned(),
                         ty: EntrypointValueTypeV1 {
                             nodes: vec![EntrypointValueTypeNodeV1::Leaf(
-                                EntrypointValueKindV1::Amount,
+                                EntrypointValueKindV1::Quantity,
                             )],
                         },
                     }],
@@ -13081,33 +13080,6 @@ fn collect_contract_state_schemas(
 }
 
 #[cfg(feature = "app_api")]
-fn contract_state_child_base(base: &str, suffix: &str) -> String {
-    format!("{base}_{suffix}")
-}
-
-#[cfg(feature = "app_api")]
-fn decode_contract_state_pointer_payload<'a>(
-    bytes: &'a [u8],
-    expected: ivm::pointer_abi::PointerType,
-    label: &str,
-) -> core::result::Result<&'a [u8], String> {
-    let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes)
-        .map_err(|err| format!("invalid durable TLV: {err}"))?;
-    if tlv.type_id == expected {
-        return Ok(tlv.payload);
-    }
-    if tlv.type_id != ivm::pointer_abi::PointerType::NoritoBytes {
-        return Err(format!("expected {label} payload for {label} state"));
-    }
-    let inner = ivm::pointer_abi::validate_tlv_bytes(tlv.payload)
-        .map_err(|err| format!("invalid nested durable TLV: {err}"))?;
-    if inner.type_id != expected {
-        return Err(format!("expected {label} payload for {label} state"));
-    }
-    Ok(inner.payload)
-}
-
-#[cfg(feature = "app_api")]
 fn encode_contract_state_pointer_tlv_bytes(
     ty: &ivm::EmbeddedStateType,
     raw: &str,
@@ -13116,6 +13088,39 @@ fn encode_contract_state_pointer_tlv_bytes(
     use norito::to_bytes;
 
     let (type_id, payload) = match ty {
+        ivm::EmbeddedStateType::Int => {
+            let value = raw.parse::<iroha_primitives::bigint::BigInt>().ok()?;
+            let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(value)
+                .ok()?
+                .encode_frame()
+                .ok()?;
+            (PointerType::Int, frame)
+        }
+        ivm::EmbeddedStateType::Decimal => {
+            let value = raw.parse::<iroha_primitives::numeric::Numeric>().ok()?;
+            let frame = iroha_primitives::numeric_abi::DecimalValueV1::try_from_numeric(value)
+                .ok()?
+                .encode_frame()
+                .ok()?;
+            (PointerType::Decimal, frame)
+        }
+        ivm::EmbeddedStateType::Quantity => {
+            let value = raw.parse::<iroha_primitives::numeric::Numeric>().ok()?;
+            let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
+            let frame = iroha_primitives::numeric_abi::QuantityValueV1::new(quantity)
+                .encode_frame()
+                .ok()?;
+            (PointerType::Quantity, frame)
+        }
+        ivm::EmbeddedStateType::String => (PointerType::Blob, raw.as_bytes().to_vec()),
+        ivm::EmbeddedStateType::Bytes => {
+            let bytes = if let Some(trimmed) = raw.strip_prefix("0x") {
+                hex::decode(trimmed).ok()?
+            } else {
+                raw.as_bytes().to_vec()
+            };
+            (PointerType::Blob, bytes)
+        }
         ivm::EmbeddedStateType::Name => {
             let value: iroha_data_model::name::Name = raw.parse().ok()?;
             (PointerType::Name, to_bytes(&value).ok()?)
@@ -13150,13 +13155,13 @@ fn encode_contract_state_pointer_tlv_bytes(
         _ => return None,
     };
 
-    let mut encoded = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
+    let payload_len = u32::try_from(payload.len()).ok()?;
+    let mut encoded = Vec::with_capacity(2 + 1 + 4 + payload.len() + Hash::LENGTH);
     encoded.extend_from_slice(&(type_id as u16).to_be_bytes());
     encoded.push(1);
-    encoded.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    encoded.extend_from_slice(&payload_len.to_be_bytes());
     encoded.extend_from_slice(&payload);
-    let digest: [u8; 32] = Hash::new(&payload).into();
-    encoded.extend_from_slice(&digest);
+    encoded.extend_from_slice(Hash::new(&payload).as_ref());
     Some(encoded)
 }
 
@@ -13165,35 +13170,43 @@ fn contract_state_stored_map_key_suffix(
     key_ty: &ivm::EmbeddedStateType,
     logical_key_suffix: &str,
 ) -> Option<String> {
-    match key_ty {
-        ivm::EmbeddedStateType::I64 => Some(logical_key_suffix.to_owned()),
-        ivm::EmbeddedStateType::U128 | ivm::EmbeddedStateType::Amount => {
-            let value = logical_key_suffix
-                .parse::<iroha_primitives::numeric::Numeric>()
-                .ok()?;
-            let encoded = norito::to_bytes(&value).ok()?;
-            Some(hex::encode(Hash::new(&encoded).as_ref()))
+    let logical_key_suffix = if let Some(escaped) = logical_key_suffix.strip_prefix("logical-")
+        && escaped.starts_with("tlv-")
+    {
+        escaped
+    } else {
+        if let Some(stored_suffix) = logical_key_suffix.strip_prefix("tlv-") {
+            validate_contract_state_stored_map_key_suffix(key_ty, stored_suffix).ok()?;
+            return Some(stored_suffix.to_owned());
         }
-        ivm::EmbeddedStateType::Bytes => {
-            let encoded = if let Some(trimmed) = logical_key_suffix.strip_prefix("0x") {
-                hex::decode(trimmed).ok()?
-            } else {
-                logical_key_suffix.as_bytes().to_vec()
+        logical_key_suffix
+    };
+    let encoded = match key_ty {
+        ivm::EmbeddedStateType::Bool => {
+            let value = match logical_key_suffix {
+                "true" | "1" => 1_i64,
+                "false" | "0" => 0_i64,
+                _ => return None,
             };
-            Some(hex::encode(Hash::new(&encoded).as_ref()))
+            norito::to_bytes(&value).ok()?
         }
-        ivm::EmbeddedStateType::Name
+        ivm::EmbeddedStateType::Int
+        | ivm::EmbeddedStateType::Decimal
+        | ivm::EmbeddedStateType::Quantity
+        | ivm::EmbeddedStateType::String
+        | ivm::EmbeddedStateType::Bytes
+        | ivm::EmbeddedStateType::Name
         | ivm::EmbeddedStateType::AccountId
         | ivm::EmbeddedStateType::AssetDefinitionId
         | ivm::EmbeddedStateType::AssetId
         | ivm::EmbeddedStateType::NftId
         | ivm::EmbeddedStateType::DomainId
         | ivm::EmbeddedStateType::DataSpaceId => {
-            let encoded = encode_contract_state_pointer_tlv_bytes(key_ty, logical_key_suffix)?;
-            Some(hex::encode(Hash::new(&encoded).as_ref()))
+            encode_contract_state_pointer_tlv_bytes(key_ty, logical_key_suffix)?
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some(hex::encode(encoded))
 }
 
 #[cfg(feature = "app_api")]
@@ -13206,8 +13219,7 @@ fn contract_state_logical_map_entry_value(
         return get_value(logical_path);
     }
     let (base, key, key_suffix) = contract_state_logical_map_parts(registry, logical_path)?;
-    let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
-        .unwrap_or_else(|| key_suffix.to_owned());
+    let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)?;
     get_value(&format!("{base}/{stored_key_suffix}"))
 }
 
@@ -13229,128 +13241,361 @@ fn contract_state_logical_map_parts<'a>(
 }
 
 #[cfg(feature = "app_api")]
+fn embedded_contract_state_value_kind(
+    ty: &ivm::EmbeddedStateType,
+) -> Option<ivm_abi::state_value::StateValueKindV1> {
+    use ivm::EmbeddedStateType as Embedded;
+    use ivm_abi::state_value::StateValueKindV1 as Kind;
+
+    Some(match ty {
+        Embedded::Int => Kind::Int,
+        Embedded::Decimal => Kind::Decimal,
+        Embedded::Quantity => Kind::Quantity,
+        Embedded::Bool => Kind::Bool,
+        Embedded::String => Kind::String,
+        Embedded::Bytes => Kind::Bytes,
+        Embedded::DataSpaceId => Kind::DataSpaceId,
+        Embedded::AccountId => Kind::AccountId,
+        Embedded::AssetDefinitionId => Kind::AssetDefinitionId,
+        Embedded::AssetId => Kind::AssetId,
+        Embedded::NftId => Kind::NftId,
+        Embedded::DomainId => Kind::DomainId,
+        Embedded::Name => Kind::Name,
+        Embedded::Json => Kind::Json,
+        Embedded::Tuple(_)
+        | Embedded::Struct { .. }
+        | Embedded::StateMap { .. }
+        | Embedded::Option(_)
+        | Embedded::Result { .. }
+        | Embedded::List { .. } => return None,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn append_embedded_contract_state_schema_nodes(
+    ty: &ivm::EmbeddedStateType,
+    nodes: &mut Vec<ivm_abi::state_value::StateValueNodeV1>,
+) -> bool {
+    use ivm::EmbeddedStateType as Embedded;
+    use ivm_abi::state_value::StateValueNodeV1 as Node;
+
+    match ty {
+        Embedded::Struct { name, fields } => {
+            nodes.push(Node::Struct {
+                name: name.clone(),
+                fields: fields.iter().map(|field| field.name.clone()).collect(),
+            });
+            fields
+                .iter()
+                .all(|field| append_embedded_contract_state_schema_nodes(&field.ty, nodes))
+        }
+        Embedded::Tuple(items) => {
+            let Ok(arity) = u16::try_from(items.len()) else {
+                return false;
+            };
+            nodes.push(Node::Tuple { arity });
+            items
+                .iter()
+                .all(|item| append_embedded_contract_state_schema_nodes(item, nodes))
+        }
+        Embedded::Option(inner) => {
+            nodes.push(Node::Option);
+            append_embedded_contract_state_schema_nodes(inner, nodes)
+        }
+        Embedded::Result { ok, err } => {
+            nodes.push(Node::Result);
+            append_embedded_contract_state_schema_nodes(ok, nodes)
+                && append_embedded_contract_state_schema_nodes(err, nodes)
+        }
+        Embedded::List { element, capacity } => {
+            let Some(element) = embedded_contract_state_value_schema(element) else {
+                return false;
+            };
+            nodes.push(Node::List {
+                element: Box::new(element),
+                capacity: *capacity,
+            });
+            true
+        }
+        Embedded::StateMap { .. } => false,
+        leaf => {
+            let Some(kind) = embedded_contract_state_value_kind(leaf) else {
+                return false;
+            };
+            nodes.push(Node::Leaf(kind));
+            true
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn embedded_contract_state_value_schema(
+    ty: &ivm::EmbeddedStateType,
+) -> Option<ivm_abi::state_value::StateValueSchemaV1> {
+    let mut nodes = Vec::new();
+    if !append_embedded_contract_state_schema_nodes(ty, &mut nodes) {
+        return None;
+    }
+    let schema = ivm_abi::state_value::StateValueSchemaV1 { nodes };
+    schema.validate().then_some(schema)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_canonical_norito<T>(
+    payload: &[u8],
+    label: &str,
+) -> core::result::Result<T, String>
+where
+    T: norito::codec::Decode + norito::codec::Encode,
+{
+    let value: T =
+        norito::decode_from_bytes(payload).map_err(|error| format!("decode {label}: {error}"))?;
+    let canonical =
+        norito::to_bytes(&value).map_err(|error| format!("re-encode {label}: {error}"))?;
+    if canonical != payload {
+        return Err(format!("non-canonical {label} state payload"));
+    }
+    Ok(value)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_pointer_atom_json(
+    envelope: &[u8],
+    ty: &ivm::EmbeddedStateType,
+) -> core::result::Result<norito::json::Value, String> {
+    use iroha_primitives::numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1};
+    use ivm::EmbeddedStateType as Embedded;
+    use ivm::pointer_abi::PointerType;
+
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(envelope)
+        .map_err(|error| format!("invalid state atom TLV: {error}"))?;
+    let require = |expected: PointerType, label: &str| {
+        (tlv.type_id == expected)
+            .then_some(tlv.payload)
+            .ok_or_else(|| format!("expected {label} state atom, got {:?}", tlv.type_id))
+    };
+
+    match ty {
+        Embedded::Int => {
+            let value = IntValueV1::decode_frame(require(PointerType::Int, "Int")?)
+                .map_err(|error| format!("decode Int state atom: {error}"))?;
+            Ok(norito::json::Value::from(value.into_int().to_string()))
+        }
+        Embedded::Decimal => {
+            let value = DecimalValueV1::decode_frame(require(PointerType::Decimal, "Decimal")?)
+                .map_err(|error| format!("decode Decimal state atom: {error}"))?;
+            Ok(norito::json::Value::from(value.into_numeric().to_string()))
+        }
+        Embedded::Quantity => {
+            let value = QuantityValueV1::decode_frame(require(PointerType::Quantity, "Quantity")?)
+                .map_err(|error| format!("decode Quantity state atom: {error}"))?;
+            Ok(norito::json::Value::from(value.into_quantity().to_string()))
+        }
+        Embedded::String => {
+            let payload = require(PointerType::Blob, "String")?;
+            let value = std::str::from_utf8(payload)
+                .map_err(|error| format!("decode String state atom: {error}"))?;
+            Ok(norito::json::Value::from(value.to_owned()))
+        }
+        Embedded::Bytes => Ok(norito::json::Value::from(
+            base64::engine::general_purpose::STANDARD.encode(require(PointerType::Blob, "Bytes")?),
+        )),
+        Embedded::Json => {
+            let value: iroha_primitives::json::Json = decode_contract_state_canonical_norito(
+                require(PointerType::Json, "Json")?,
+                "Json",
+            )?;
+            value
+                .try_into_any_norito::<norito::json::Value>()
+                .map_err(|error| format!("convert Json state atom: {error}"))
+        }
+        Embedded::Name => {
+            let value: iroha_data_model::prelude::Name = decode_contract_state_canonical_norito(
+                require(PointerType::Name, "Name")?,
+                "Name",
+            )?;
+            Ok(norito::json::Value::from(value.as_ref().to_owned()))
+        }
+        Embedded::AccountId => {
+            let value: iroha_data_model::account::AccountId =
+                decode_contract_state_canonical_norito(
+                    require(PointerType::AccountId, "AccountId")?,
+                    "AccountId",
+                )?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Embedded::AssetDefinitionId => {
+            let value: iroha_data_model::asset::AssetDefinitionId =
+                decode_contract_state_canonical_norito(
+                    require(PointerType::AssetDefinitionId, "AssetDefinitionId")?,
+                    "AssetDefinitionId",
+                )?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Embedded::AssetId => {
+            let value: iroha_data_model::asset::AssetId = decode_contract_state_canonical_norito(
+                require(PointerType::AssetId, "AssetId")?,
+                "AssetId",
+            )?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Embedded::NftId => {
+            let value: iroha_data_model::nft::NftId = decode_contract_state_canonical_norito(
+                require(PointerType::NftId, "NftId")?,
+                "NftId",
+            )?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Embedded::DomainId => {
+            let value: iroha_data_model::domain::DomainId = decode_contract_state_canonical_norito(
+                require(PointerType::DomainId, "DomainId")?,
+                "DomainId",
+            )?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Embedded::DataSpaceId => {
+            let value: iroha_data_model::nexus::DataSpaceId =
+                decode_contract_state_canonical_norito(
+                    require(PointerType::DataSpaceId, "DataSpaceId")?,
+                    "DataSpaceId",
+                )?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        Embedded::Bool
+        | Embedded::Tuple(_)
+        | Embedded::Struct { .. }
+        | Embedded::StateMap { .. }
+        | Embedded::Option(_)
+        | Embedded::Result { .. }
+        | Embedded::List { .. } => Err("state atom does not match a pointer leaf".to_owned()),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_atoms_json(
+    ty: &ivm::EmbeddedStateType,
+    atoms: &[ivm_abi::state_value::StateValueAtomV1],
+    atom_index: &mut usize,
+) -> core::result::Result<norito::json::Value, String> {
+    use ivm::EmbeddedStateType as Embedded;
+    use ivm_abi::state_value::StateValueAtomV1 as Atom;
+
+    match ty {
+        Embedded::Struct { fields, .. } => {
+            let mut object = norito::json::Map::new();
+            for field in fields {
+                object.insert(
+                    field.name.clone().into(),
+                    decode_contract_state_atoms_json(&field.ty, atoms, atom_index)?,
+                );
+            }
+            Ok(norito::json::Value::Object(object))
+        }
+        Embedded::Tuple(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                values.push(decode_contract_state_atoms_json(item, atoms, atom_index)?);
+            }
+            Ok(norito::json::Value::Array(values))
+        }
+        Embedded::Option(inner) => {
+            let Some(Atom::Tag(present)) = atoms.get(*atom_index) else {
+                return Err("Option state value is missing its tag atom".to_owned());
+            };
+            *atom_index = atom_index.saturating_add(1);
+            if *present {
+                decode_contract_state_atoms_json(inner, atoms, atom_index)
+            } else {
+                Ok(norito::json::Value::Null)
+            }
+        }
+        Embedded::Result { ok, err } => {
+            let Some(Atom::Tag(success)) = atoms.get(*atom_index) else {
+                return Err("Result state value is missing its tag atom".to_owned());
+            };
+            *atom_index = atom_index.saturating_add(1);
+            let (label, value_ty) = if *success { ("ok", ok) } else { ("err", err) };
+            let mut object = norito::json::Map::new();
+            object.insert(
+                label.into(),
+                decode_contract_state_atoms_json(value_ty, atoms, atom_index)?,
+            );
+            Ok(norito::json::Value::Object(object))
+        }
+        Embedded::List { element, .. } => {
+            let Some(Atom::List(items)) = atoms.get(*atom_index) else {
+                return Err("List state value is missing its sequence atom".to_owned());
+            };
+            *atom_index = atom_index.saturating_add(1);
+            let mut values = Vec::with_capacity(items.len());
+            for item_atoms in items {
+                let mut item_index = 0;
+                let value = decode_contract_state_atoms_json(element, item_atoms, &mut item_index)?;
+                if item_index != item_atoms.len() {
+                    return Err("List item contains trailing state atoms".to_owned());
+                }
+                values.push(value);
+            }
+            Ok(norito::json::Value::Array(values))
+        }
+        Embedded::Bool => {
+            let Some(Atom::Bool(value)) = atoms.get(*atom_index) else {
+                return Err("Bool state value is missing its boolean atom".to_owned());
+            };
+            *atom_index = atom_index.saturating_add(1);
+            Ok(norito::json::Value::from(*value))
+        }
+        Embedded::StateMap { .. } => Err("nested durable maps are not supported".to_owned()),
+        leaf => {
+            let Some(Atom::Pointer(envelope)) = atoms.get(*atom_index) else {
+                return Err("pointer state value is missing its TLV atom".to_owned());
+            };
+            *atom_index = atom_index.saturating_add(1);
+            decode_contract_state_pointer_atom_json(envelope, leaf)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn decode_contract_state_scalar_json(
     bytes: &[u8],
     ty: &ivm::EmbeddedStateType,
 ) -> core::result::Result<norito::json::Value, String> {
-    let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes)
-        .map_err(|err| format!("invalid durable TLV: {err}"))?;
-    let payload = tlv.payload;
-    use ivm::pointer_abi::PointerType;
+    use ivm_abi::state_value::{
+        MAX_STATE_VALUE_RECORD_BYTES, StateValueRecordV1, state_value_schema_hash_v1,
+    };
 
-    match ty {
-        ivm::EmbeddedStateType::I64 => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return Err("expected NoritoBytes payload for i64 state".into());
-            }
-            let value: i64 =
-                norito::decode_from_bytes(payload).map_err(|err| format!("decode i64: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::Bool => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return Err("expected NoritoBytes payload for bool state".into());
-            }
-            let value: i64 =
-                norito::decode_from_bytes(payload).map_err(|err| format!("decode bool: {err}"))?;
-            Ok(norito::json::Value::from(value != 0))
-        }
-        ivm::EmbeddedStateType::U128 | ivm::EmbeddedStateType::Amount => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return Err("expected NoritoBytes payload for numeric state".into());
-            }
-            let value: iroha_primitives::numeric::Numeric = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode numeric: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::Json => {
-            if tlv.type_id == PointerType::NoritoBytes {
-                if let Ok(value) = norito::decode_from_bytes(tlv.payload) {
-                    let value: iroha_primitives::json::Json = value;
-                    return value
-                        .try_into_any_norito::<norito::json::Value>()
-                        .map_err(|err| format!("convert json payload: {err}"));
-                }
-            }
-            let payload = decode_contract_state_pointer_payload(bytes, PointerType::Json, "Json")?;
-            let value: iroha_primitives::json::Json =
-                norito::decode_from_bytes(payload).map_err(|err| format!("decode json: {err}"))?;
-            value
-                .try_into_any_norito::<norito::json::Value>()
-                .map_err(|err| format!("convert json payload: {err}"))
-        }
-        ivm::EmbeddedStateType::Name => {
-            let payload = decode_contract_state_pointer_payload(bytes, PointerType::Name, "Name")?;
-            let value: iroha_data_model::prelude::Name =
-                norito::decode_from_bytes(payload).map_err(|err| format!("decode name: {err}"))?;
-            Ok(norito::json::Value::from(value.as_ref().to_owned()))
-        }
-        ivm::EmbeddedStateType::AccountId => {
-            let payload =
-                decode_contract_state_pointer_payload(bytes, PointerType::AccountId, "AccountId")?;
-            let value: iroha_data_model::account::AccountId = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode account id: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::AssetDefinitionId => {
-            let payload = decode_contract_state_pointer_payload(
-                bytes,
-                PointerType::AssetDefinitionId,
-                "AssetDefinitionId",
-            )?;
-            let value: iroha_data_model::asset::AssetDefinitionId =
-                norito::decode_from_bytes(payload)
-                    .map_err(|err| format!("decode asset definition id: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::AssetId => {
-            let payload =
-                decode_contract_state_pointer_payload(bytes, PointerType::AssetId, "AssetId")?;
-            let value: iroha_data_model::asset::AssetId = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode asset id: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::NftId => {
-            let payload =
-                decode_contract_state_pointer_payload(bytes, PointerType::NftId, "NftId")?;
-            let value: iroha_data_model::nft::NftId = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode nft id: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::DomainId => {
-            let payload =
-                decode_contract_state_pointer_payload(bytes, PointerType::DomainId, "DomainId")?;
-            let value: iroha_data_model::domain::DomainId = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode domain id: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::DataSpaceId => {
-            let payload = decode_contract_state_pointer_payload(
-                bytes,
-                PointerType::DataSpaceId,
-                "DataSpaceId",
-            )?;
-            let value: iroha_data_model::nexus::DataSpaceId = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode dataspace id: {err}"))?;
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::Bytes => Ok(norito::json::Value::from(
-            base64::engine::general_purpose::STANDARD.encode(payload),
-        )),
-        ivm::EmbeddedStateType::String => {
-            let value: String = norito::decode_from_bytes(payload)
-                .map_err(|err| format!("decode string: {err}"))?;
-            Ok(norito::json::Value::from(value))
-        }
-        ivm::EmbeddedStateType::Tuple(_)
-        | ivm::EmbeddedStateType::Struct { .. }
-        | ivm::EmbeddedStateType::StateMap { .. }
-        | ivm::EmbeddedStateType::List { .. }
-        | ivm::EmbeddedStateType::Option(_)
-        | ivm::EmbeddedStateType::Result { .. } => {
-            Err("composite state values must be decoded through the composite helpers".into())
-        }
+    // SYSCALL_STATE_SET validates a NoritoBytes envelope at the VM boundary, then persists only
+    // its payload. Durable WSV bytes are therefore the canonical StateValueRecordV1 itself; the
+    // host recreates the transport envelope only when loading the value back into a VM.
+    if bytes.len() > MAX_STATE_VALUE_RECORD_BYTES {
+        return Err(format!(
+            "state record exceeds the {MAX_STATE_VALUE_RECORD_BYTES}-byte limit"
+        ));
     }
+    let record: StateValueRecordV1 = norito::decode_from_bytes(bytes)
+        .map_err(|error| format!("decode state record: {error}"))?;
+    let canonical_record =
+        norito::to_bytes(&record).map_err(|error| format!("re-encode state record: {error}"))?;
+    if canonical_record != bytes {
+        return Err("state record is not canonically encoded".to_owned());
+    }
+    let schema = embedded_contract_state_value_schema(ty)
+        .ok_or_else(|| "embedded state schema is not a storable V1 value".to_owned())?;
+    let schema_payload = norito::to_bytes(&schema)
+        .map_err(|error| format!("encode embedded state schema: {error}"))?;
+    if record.schema_hash != state_value_schema_hash_v1(&schema_payload) {
+        return Err("state record schema hash does not match the deployed artifact".to_owned());
+    }
+    if !schema.validate_atoms(&record.atoms) {
+        return Err("state record atoms do not match the deployed artifact schema".to_owned());
+    }
+    let mut atom_index = 0;
+    let value = decode_contract_state_atoms_json(ty, &record.atoms, &mut atom_index)?;
+    if atom_index != record.atoms.len() {
+        return Err("state record contains trailing atoms".to_owned());
+    }
+    Ok(value)
 }
 
 #[cfg(feature = "app_api")]
@@ -13359,34 +13604,11 @@ fn decode_contract_state_value_json(
     ty: &ivm::EmbeddedStateType,
     get_value: &impl Fn(&str) -> Option<Vec<u8>>,
 ) -> core::result::Result<norito::json::Value, String> {
-    match ty {
-        ivm::EmbeddedStateType::Struct { fields, .. } => {
-            let mut object = norito::json::Map::new();
-            for field in fields {
-                let child = contract_state_child_base(base, &field.name);
-                object.insert(
-                    field.name.clone().into(),
-                    decode_contract_state_value_json(&child, &field.ty, get_value)?,
-                );
-            }
-            Ok(norito::json::Value::Object(object))
-        }
-        ivm::EmbeddedStateType::Tuple(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            for (index, item) in items.iter().enumerate() {
-                let child = contract_state_child_base(base, &index.to_string());
-                values.push(decode_contract_state_value_json(&child, item, get_value)?);
-            }
-            Ok(norito::json::Value::Array(values))
-        }
-        ivm::EmbeddedStateType::StateMap { .. } => {
-            Err("nested durable maps are not supported".into())
-        }
-        _ => {
-            let bytes = get_value(base).ok_or_else(|| format!("state path `{base}` not found"))?;
-            decode_contract_state_scalar_json(bytes.as_slice(), ty)
-        }
+    if matches!(ty, ivm::EmbeddedStateType::StateMap { .. }) {
+        return Err("durable maps must be decoded through a concrete key".to_owned());
     }
+    let bytes = get_value(base).ok_or_else(|| format!("state path `{base}` not found"))?;
+    decode_contract_state_scalar_json(bytes.as_slice(), ty)
 }
 
 #[cfg(feature = "app_api")]
@@ -13396,67 +13618,75 @@ fn decode_contract_state_map_value_json(
     key_suffix: &str,
     get_value: &impl Fn(&str) -> Option<Vec<u8>>,
 ) -> core::result::Result<norito::json::Value, String> {
-    match value_ty {
-        ivm::EmbeddedStateType::Struct { fields, .. } => {
-            let mut object = norito::json::Map::new();
-            for field in fields {
-                let child = contract_state_child_base(base, &field.name);
-                object.insert(
-                    field.name.clone().into(),
-                    decode_contract_state_map_value_json(&child, &field.ty, key_suffix, get_value)?,
-                );
-            }
-            Ok(norito::json::Value::Object(object))
-        }
-        ivm::EmbeddedStateType::Tuple(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            for (index, item) in items.iter().enumerate() {
-                let child = contract_state_child_base(base, &index.to_string());
-                values.push(decode_contract_state_map_value_json(
-                    &child, item, key_suffix, get_value,
-                )?);
-            }
-            Ok(norito::json::Value::Array(values))
-        }
-        ivm::EmbeddedStateType::StateMap { .. } => {
-            Err("nested durable maps are not supported".into())
-        }
-        _ => {
-            let path = format!("{base}/{key_suffix}");
-            let bytes = get_value(&path).ok_or_else(|| format!("state path `{path}` not found"))?;
-            decode_contract_state_scalar_json(bytes.as_slice(), value_ty)
-        }
+    if matches!(value_ty, ivm::EmbeddedStateType::StateMap { .. }) {
+        return Err("nested durable maps are not supported".to_owned());
     }
+    let path = format!("{base}/{key_suffix}");
+    let bytes = get_value(&path).ok_or_else(|| format!("state path `{path}` not found"))?;
+    decode_contract_state_scalar_json(bytes.as_slice(), value_ty)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_contract_state_stored_map_key_suffix(
+    key_ty: &ivm::EmbeddedStateType,
+    suffix: &str,
+) -> core::result::Result<(), String> {
+    if suffix.is_empty() || suffix.contains('/') {
+        return Err("durable map entry has an empty or nested key suffix".to_owned());
+    }
+    if suffix.len() % 2 != 0
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err("durable map entry key is not canonical lowercase hex".to_owned());
+    }
+    let encoded = hex::decode(suffix)
+        .map_err(|error| format!("decode durable map entry key hex: {error}"))?;
+    if encoded.is_empty() || encoded.len() > ivm::syscalls::STATE_MAP_MAX_KEY_BYTES {
+        return Err("durable map entry key exceeds the canonical V1 bounds".to_owned());
+    }
+    match key_ty {
+        ivm::EmbeddedStateType::Bool => {
+            let false_key = norito::to_bytes(&0_i64)
+                .map_err(|error| format!("encode canonical false map key: {error}"))?;
+            let true_key = norito::to_bytes(&1_i64)
+                .map_err(|error| format!("encode canonical true map key: {error}"))?;
+            if encoded != false_key && encoded != true_key {
+                return Err("durable Bool map key is not canonical false or true".to_owned());
+            }
+        }
+        ivm::EmbeddedStateType::Int
+        | ivm::EmbeddedStateType::Decimal
+        | ivm::EmbeddedStateType::Quantity
+        | ivm::EmbeddedStateType::String
+        | ivm::EmbeddedStateType::Bytes
+        | ivm::EmbeddedStateType::Name
+        | ivm::EmbeddedStateType::AccountId
+        | ivm::EmbeddedStateType::AssetDefinitionId
+        | ivm::EmbeddedStateType::AssetId
+        | ivm::EmbeddedStateType::NftId
+        | ivm::EmbeddedStateType::DomainId
+        | ivm::EmbeddedStateType::DataSpaceId => {
+            decode_contract_state_pointer_atom_json(&encoded, key_ty)
+                .map_err(|error| format!("invalid typed durable map key: {error}"))?;
+        }
+        _ => return Err("deployed durable map key schema is not supported by V1".to_owned()),
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
 fn match_contract_state_map_key_suffix(
     base: &str,
-    value_ty: &ivm::EmbeddedStateType,
+    key_ty: &ivm::EmbeddedStateType,
     stored_path: &str,
-) -> Option<String> {
-    match value_ty {
-        ivm::EmbeddedStateType::Struct { fields, .. } => fields.iter().find_map(|field| {
-            match_contract_state_map_key_suffix(
-                &contract_state_child_base(base, &field.name),
-                &field.ty,
-                stored_path,
-            )
-        }),
-        ivm::EmbeddedStateType::Tuple(items) => {
-            items.iter().enumerate().find_map(|(index, item)| {
-                match_contract_state_map_key_suffix(
-                    &contract_state_child_base(base, &index.to_string()),
-                    item,
-                    stored_path,
-                )
-            })
-        }
-        ivm::EmbeddedStateType::StateMap { .. } => None,
-        _ => stored_path
-            .strip_prefix(&format!("{base}/"))
-            .map(str::to_owned),
-    }
+) -> core::result::Result<Option<(String, String)>, String> {
+    let Some(suffix) = stored_path.strip_prefix(&format!("{base}/")) else {
+        return Ok(None);
+    };
+    validate_contract_state_stored_map_key_suffix(key_ty, suffix)?;
+    Ok(Some((format!("tlv-{suffix}"), suffix.to_owned())))
 }
 
 #[cfg(feature = "app_api")]
@@ -13480,8 +13710,10 @@ fn decode_contract_state_path_json(
     let Some(Some(ivm::EmbeddedStateType::StateMap { value, .. })) = registry.get(base) else {
         return Err(format!("state schema for `{base}` is ambiguous"));
     };
-    let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
-        .unwrap_or_else(|| key_suffix.to_owned());
+    let stored_key_suffix =
+        contract_state_stored_map_key_suffix(key, key_suffix).ok_or_else(|| {
+            format!("state map key `{key_suffix}` is not valid for the deployed key schema")
+        })?;
     decode_contract_state_map_value_json(base, value, &stored_key_suffix, get_value)
 }
 
@@ -13491,24 +13723,7 @@ fn contract_state_value_exists(
     ty: &ivm::EmbeddedStateType,
     has_value: &impl Fn(&str) -> bool,
 ) -> bool {
-    match ty {
-        ivm::EmbeddedStateType::Struct { fields, .. } => fields.iter().any(|field| {
-            contract_state_value_exists(
-                &contract_state_child_base(base, &field.name),
-                &field.ty,
-                has_value,
-            )
-        }),
-        ivm::EmbeddedStateType::Tuple(items) => items.iter().enumerate().any(|(index, item)| {
-            contract_state_value_exists(
-                &contract_state_child_base(base, &index.to_string()),
-                item,
-                has_value,
-            )
-        }),
-        ivm::EmbeddedStateType::StateMap { .. } => false,
-        _ => has_value(base),
-    }
+    !matches!(ty, ivm::EmbeddedStateType::StateMap { .. }) && has_value(base)
 }
 
 #[cfg(feature = "app_api")]
@@ -13518,26 +13733,8 @@ fn contract_state_map_entry_exists(
     stored_key_suffix: &str,
     has_value: &impl Fn(&str) -> bool,
 ) -> bool {
-    match value_ty {
-        ivm::EmbeddedStateType::Struct { fields, .. } => fields.iter().any(|field| {
-            contract_state_map_entry_exists(
-                &contract_state_child_base(base, &field.name),
-                &field.ty,
-                stored_key_suffix,
-                has_value,
-            )
-        }),
-        ivm::EmbeddedStateType::Tuple(items) => items.iter().enumerate().any(|(index, item)| {
-            contract_state_map_entry_exists(
-                &contract_state_child_base(base, &index.to_string()),
-                item,
-                stored_key_suffix,
-                has_value,
-            )
-        }),
-        ivm::EmbeddedStateType::StateMap { .. } => false,
-        _ => has_value(&format!("{base}/{stored_key_suffix}")),
-    }
+    !matches!(value_ty, ivm::EmbeddedStateType::StateMap { .. })
+        && has_value(&format!("{base}/{stored_key_suffix}"))
 }
 
 #[cfg(feature = "app_api")]
@@ -13557,8 +13754,10 @@ fn contract_state_logical_path_exists(
         };
         return match state_schema {
             ivm::EmbeddedStateType::StateMap { value, .. } => {
-                let stored_key_suffix = contract_state_stored_map_key_suffix(key, key_suffix)
-                    .unwrap_or_else(|| key_suffix.to_owned());
+                let Some(stored_key_suffix) = contract_state_stored_map_key_suffix(key, key_suffix)
+                else {
+                    return false;
+                };
                 contract_state_map_entry_exists(base, value, &stored_key_suffix, has_value)
             }
             _ => false,
@@ -13839,25 +14038,31 @@ pub async fn handle_get_contract_state(
     if let (Some(ContractStateDecodeMode::Json), Some(registry)) =
         (decode_mode, schema_registry.as_ref())
     {
-        if let Some(Some(ivm::EmbeddedStateType::StateMap { value, .. })) = registry.get(prefix_str)
+        if let Some(Some(ivm::EmbeddedStateType::StateMap {
+            key: map_key,
+            value,
+        })) = registry.get(prefix_str)
         {
-            let mut key_suffixes = BTreeSet::new();
-            for (key, _) in storage.range(storage_prefix_name.clone()..) {
-                let key_str = key.as_ref();
+            for (stored_name, _) in storage.range(storage_prefix_name.clone()..) {
+                let key_str = stored_name.as_ref();
                 if !key_str.starts_with(&storage_prefix_str) {
                     break;
                 }
                 let Some(logical_key) = strip_scope_prefix(key_str) else {
                     continue;
                 };
-                if let Some(key_suffix) =
-                    match_contract_state_map_key_suffix(prefix_str, value, logical_key.as_str())
-                {
-                    key_suffixes.insert(key_suffix);
-                }
-            }
-
-            for key_suffix in key_suffixes {
+                let (logical_key_suffix, stored_key_suffix) =
+                    match match_contract_state_map_key_suffix(
+                        prefix_str,
+                        map_key,
+                        logical_key.as_str(),
+                    ) {
+                        Ok(Some(key_suffixes)) => key_suffixes,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            return Err(contract_state_decode_failed(logical_key.as_str(), error));
+                        }
+                    };
                 if skipped < offset {
                     skipped += 1;
                     continue;
@@ -13866,11 +14071,11 @@ pub async fn handle_get_contract_state(
                     has_more = true;
                     break;
                 }
-                let logical_path = format!("{prefix_str}/{key_suffix}");
+                let logical_path = format!("{prefix_str}/{logical_key_suffix}");
                 let value_json = match decode_contract_state_map_value_json(
                     prefix_str,
                     value,
-                    &key_suffix,
+                    &stored_key_suffix,
                     &get_value,
                 ) {
                     Ok(value_json) => Some(value_json),
@@ -13972,6 +14177,20 @@ mod contract_state_tests {
         let digest: [u8; 32] = iroha_crypto::Hash::new(payload).into();
         bytes.extend_from_slice(&digest);
         bytes
+    }
+
+    fn make_state_record(
+        ty: &ivm::EmbeddedStateType,
+        atoms: Vec<ivm_abi::state_value::StateValueAtomV1>,
+    ) -> Vec<u8> {
+        let schema = embedded_contract_state_value_schema(ty).expect("valid embedded schema");
+        assert!(schema.validate_atoms(&atoms), "fixture atoms match schema");
+        let schema_payload = norito::to_bytes(&schema).expect("encode state schema");
+        let record = ivm_abi::state_value::StateValueRecordV1 {
+            schema_hash: ivm_abi::state_value::state_value_schema_hash_v1(&schema_payload),
+            atoms,
+        };
+        norito::to_bytes(&record).expect("encode persisted state record")
     }
 
     fn scoped_state_key(
@@ -14092,37 +14311,169 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_scalar_json_returns_lossless_strings_for_ints() {
-        let payload = norito::to_bytes(&9_223_372_036_854_775_000_i64).expect("encode int");
-        let decoded = decode_contract_state_scalar_json(
-            &make_tlv(PointerType::NoritoBytes, &payload),
-            &ivm::EmbeddedStateType::I64,
-        )
-        .expect("decode int");
+        use ivm_abi::state_value::StateValueAtomV1;
+
+        let ty = ivm::EmbeddedStateType::Int;
+        let value = "922337203685477500012345678901234567890"
+            .parse::<iroha_primitives::bigint::BigInt>()
+            .expect("parse wide int");
+        let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(value)
+            .expect("bounded int")
+            .encode_frame()
+            .expect("encode int frame");
+        let encoded = make_state_record(
+            &ty,
+            vec![StateValueAtomV1::Pointer(make_tlv(
+                PointerType::Int,
+                &frame,
+            ))],
+        );
+        let decoded =
+            decode_contract_state_scalar_json(&encoded, &ty).expect("decode state record");
         assert_eq!(
             decoded,
-            norito::json::Value::from("9223372036854775000".to_owned())
+            norito::json::Value::from("922337203685477500012345678901234567890".to_owned())
+        );
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_consumes_raw_persisted_records_not_transport_tlvs() {
+        let ty = ivm::EmbeddedStateType::Bool;
+        let persisted = make_state_record(
+            &ty,
+            vec![ivm_abi::state_value::StateValueAtomV1::Bool(true)],
+        );
+        assert_eq!(
+            decode_contract_state_scalar_json(&persisted, &ty).expect("decode persisted record"),
+            norito::json::Value::from(true)
+        );
+
+        let transport = make_tlv(PointerType::NoritoBytes, &persisted);
+        let error = decode_contract_state_scalar_json(&transport, &ty)
+            .expect_err("the WSV decoder must not accept a recreated VM transport envelope");
+        assert!(error.contains("decode state record"), "{error}");
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_preserves_exact_decimal_and_quantity_values() {
+        use iroha_primitives::{
+            numeric::{Numeric, Quantity},
+            numeric_abi::{DecimalValueV1, QuantityValueV1},
+        };
+        use ivm_abi::state_value::StateValueAtomV1;
+
+        let decimal_text = "-123456789012345678901234567890.1234567890123456789";
+        let decimal = DecimalValueV1::try_from_numeric(
+            decimal_text
+                .parse::<Numeric>()
+                .expect("parse exact decimal"),
+        )
+        .expect("canonical exact decimal")
+        .encode_frame()
+        .expect("encode exact decimal frame");
+        let decimal_ty = ivm::EmbeddedStateType::Decimal;
+        let decimal_record = make_state_record(
+            &decimal_ty,
+            vec![StateValueAtomV1::Pointer(make_tlv(
+                PointerType::Decimal,
+                &decimal,
+            ))],
+        );
+        assert_eq!(
+            decode_contract_state_scalar_json(&decimal_record, &decimal_ty)
+                .expect("decode exact decimal"),
+            norito::json::Value::from(decimal_text)
+        );
+
+        let quantity_text = "987654321098765432109876543210.000000000000000001";
+        let quantity = Quantity::try_from_numeric(
+            quantity_text
+                .parse::<Numeric>()
+                .expect("parse exact quantity"),
+        )
+        .expect("canonical exact quantity");
+        let quantity = QuantityValueV1::new(quantity)
+            .encode_frame()
+            .expect("encode exact quantity frame");
+        let quantity_ty = ivm::EmbeddedStateType::Quantity;
+        let quantity_record = make_state_record(
+            &quantity_ty,
+            vec![StateValueAtomV1::Pointer(make_tlv(
+                PointerType::Quantity,
+                &quantity,
+            ))],
+        );
+        assert_eq!(
+            decode_contract_state_scalar_json(&quantity_record, &quantity_ty)
+                .expect("decode exact quantity"),
+            norito::json::Value::from(quantity_text)
+        );
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_rejects_malformed_numeric_atoms_and_records() {
+        use iroha_primitives::numeric_abi::IntValueV1;
+        use ivm_abi::state_value::StateValueAtomV1;
+
+        let ty = ivm::EmbeddedStateType::Int;
+        let mut frame = IntValueV1::try_new("-7".parse().expect("parse int"))
+            .expect("bounded int")
+            .encode_frame()
+            .expect("encode int frame");
+        let last = frame.last_mut().expect("nonempty frame");
+        *last ^= 0x01;
+        let malformed = make_state_record(
+            &ty,
+            vec![StateValueAtomV1::Pointer(make_tlv(
+                PointerType::Int,
+                &frame,
+            ))],
+        );
+        assert!(
+            decode_contract_state_scalar_json(&malformed, &ty).is_err(),
+            "a numeric frame with a valid outer TLV but corrupt inner checksum must reject"
+        );
+
+        let wrong_type = make_state_record(
+            &ty,
+            vec![StateValueAtomV1::Pointer(make_tlv(
+                PointerType::Blob,
+                b"-7",
+            ))],
+        );
+        assert!(
+            decode_contract_state_scalar_json(&wrong_type, &ty).is_err(),
+            "a schema-compatible pointer atom with the wrong ABI type must reject"
+        );
+
+        let valid_frame = IntValueV1::try_new("-7".parse().expect("parse int"))
+            .expect("bounded int")
+            .encode_frame()
+            .expect("encode int frame");
+        let mut noncanonical_record = make_state_record(
+            &ty,
+            vec![StateValueAtomV1::Pointer(make_tlv(
+                PointerType::Int,
+                &valid_frame,
+            ))],
+        );
+        noncanonical_record.push(0);
+        assert!(
+            decode_contract_state_scalar_json(&noncanonical_record, &ty).is_err(),
+            "trailing bytes after a state record must reject"
         );
     }
 
     #[test]
     fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
-        let mut storage = BTreeMap::<String, Vec<u8>>::new();
-        let status_payload = norito::to_bytes(&1_i64).expect("encode status");
-        storage.insert(
-            "Requests_status/mr123".to_owned(),
-            make_tlv(PointerType::NoritoBytes, &status_payload),
-        );
-        storage.insert(
-            "Requests_approval_alias_fqn/mr123".to_owned(),
-            make_tlv(PointerType::Blob, b"banking@centralbank"),
-        );
+        use ivm_abi::state_value::StateValueAtomV1;
 
         let schema = ivm::EmbeddedStateType::Struct {
             name: "MintRequestRecord".to_owned(),
             fields: vec![
                 ivm::EmbeddedStateFieldDescriptor {
                     name: "status".to_owned(),
-                    ty: ivm::EmbeddedStateType::I64,
+                    ty: ivm::EmbeddedStateType::Int,
                 },
                 ivm::EmbeddedStateFieldDescriptor {
                     name: "approval_alias_fqn".to_owned(),
@@ -14130,6 +14481,22 @@ mod contract_state_tests {
                 },
             ],
         };
+        let status_frame =
+            iroha_primitives::numeric_abi::IntValueV1::try_new("1".parse().expect("parse status"))
+                .expect("bounded status")
+                .encode_frame()
+                .expect("encode status frame");
+        let mut storage = BTreeMap::<String, Vec<u8>>::new();
+        storage.insert(
+            "Requests/mr123".to_owned(),
+            make_state_record(
+                &schema,
+                vec![
+                    StateValueAtomV1::Pointer(make_tlv(PointerType::Int, &status_frame)),
+                    StateValueAtomV1::Pointer(make_tlv(PointerType::Blob, b"banking@centralbank")),
+                ],
+            ),
+        );
 
         let decoded = decode_contract_state_map_value_json("Requests", &schema, "mr123", &|path| {
             storage.get(path).cloned()
@@ -14152,7 +14519,7 @@ mod contract_state_tests {
             "BeneficiaryTrancheIndexByLookupKey".to_owned(),
             Some(ivm::EmbeddedStateType::StateMap {
                 key: Box::new(ivm::EmbeddedStateType::Name),
-                value: Box::new(ivm::EmbeddedStateType::I64),
+                value: Box::new(ivm::EmbeddedStateType::Int),
             }),
         );
 
@@ -14160,10 +14527,22 @@ mod contract_state_tests {
         let stored_key =
             contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Name, logical_key)
                 .expect("name map key should encode");
-        let value_payload = norito::to_bytes(&5_i64).expect("encode tranche index");
+        let value_ty = ivm::EmbeddedStateType::Int;
+        let value_frame = iroha_primitives::numeric_abi::IntValueV1::try_new(
+            "5".parse().expect("parse tranche index"),
+        )
+        .expect("bounded tranche index")
+        .encode_frame()
+        .expect("encode tranche index");
         let storage = BTreeMap::from([(
             format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}"),
-            make_tlv(PointerType::NoritoBytes, &value_payload),
+            make_state_record(
+                &value_ty,
+                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                    PointerType::Int,
+                    &value_frame,
+                ))],
+            ),
         )]);
 
         let decoded = decode_contract_state_path_json(
@@ -14183,7 +14562,7 @@ mod contract_state_tests {
             "BeneficiaryTrancheIndexByLookupKey".to_owned(),
             Some(ivm::EmbeddedStateType::StateMap {
                 key: Box::new(ivm::EmbeddedStateType::Name),
-                value: Box::new(ivm::EmbeddedStateType::I64),
+                value: Box::new(ivm::EmbeddedStateType::Int),
             }),
         );
 
@@ -14201,16 +14580,22 @@ mod contract_state_tests {
     }
 
     #[test]
-    fn decode_contract_state_scalar_json_unwraps_nested_json_payloads() {
+    fn decode_contract_state_scalar_json_decodes_schema_bound_json() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"marketId\":\"mkt-1\",\"status\":\"open\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
-        let nested = make_tlv(PointerType::Json, &json_payload);
+        let ty = ivm::EmbeddedStateType::Json;
         let decoded = decode_contract_state_scalar_json(
-            &make_tlv(PointerType::NoritoBytes, &nested),
-            &ivm::EmbeddedStateType::Json,
+            &make_state_record(
+                &ty,
+                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                    PointerType::Json,
+                    &json_payload,
+                ))],
+            ),
+            &ty,
         )
         .expect("decode json");
 
@@ -14221,22 +14606,205 @@ mod contract_state_tests {
     }
 
     #[test]
-    fn decode_contract_state_scalar_json_decodes_direct_norito_json_payloads() {
+    fn decode_contract_state_scalar_json_rejects_legacy_unbound_payloads() {
         let json_value = iroha_primitives::json::Json::from_str_norito(
             "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
-        let decoded = decode_contract_state_scalar_json(
+        let error = decode_contract_state_scalar_json(
             &make_tlv(PointerType::NoritoBytes, &json_payload),
             &ivm::EmbeddedStateType::Json,
         )
-        .expect("decode direct json");
+        .expect_err("first-release state decoding requires a schema-bound record");
+        assert!(error.contains("decode state record"), "{error}");
+    }
 
-        let mut expected = Map::new();
-        expected.insert("tranche_id".into(), Value::from("benefit-1"));
-        expected.insert("beneficiary_account_id".into(), Value::from("i105-user"));
-        assert_eq!(decoded, Value::Object(expected));
+    #[test]
+    fn decode_contract_state_scalar_json_rejects_schema_confusion() {
+        let int_ty = ivm::EmbeddedStateType::Int;
+        let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(
+            "7".parse().expect("parse int fixture"),
+        )
+        .expect("bounded int fixture")
+        .encode_frame()
+        .expect("encode int fixture");
+        let encoded = make_state_record(
+            &int_ty,
+            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                PointerType::Int,
+                &frame,
+            ))],
+        );
+
+        let error = decode_contract_state_scalar_json(&encoded, &ivm::EmbeddedStateType::Quantity)
+            .expect_err("a record cannot be decoded under a different deployed schema");
+        assert!(error.contains("schema hash"), "{error}");
+    }
+
+    #[test]
+    fn contract_state_quantity_map_keys_use_canonical_tlv_bytes() {
+        let ty = ivm::EmbeddedStateType::Quantity;
+        let canonical =
+            contract_state_stored_map_key_suffix(&ty, "7").expect("canonical quantity map key");
+        let equivalent =
+            contract_state_stored_map_key_suffix(&ty, "7.00").expect("equivalent quantity map key");
+        assert_eq!(canonical, equivalent);
+
+        let encoded = hex::decode(&canonical).expect("stored suffix is lowercase hex");
+        let tlv = ivm::pointer_abi::validate_tlv_bytes(&encoded).expect("stored suffix is a TLV");
+        assert_eq!(tlv.type_id, PointerType::Quantity);
+
+        assert_eq!(
+            contract_state_stored_map_key_suffix(&ty, &format!("tlv-{canonical}")),
+            Some(canonical.clone()),
+            "the explicit physical form must round-trip exact typed keys"
+        );
+        assert_eq!(
+            match_contract_state_map_key_suffix("Prices", &ty, "Other/path")
+                .expect("an unrelated path is not malformed"),
+            None
+        );
+        assert_eq!(
+            match_contract_state_map_key_suffix("Prices", &ty, &format!("Prices/{canonical}"))
+                .expect("canonical stored key"),
+            Some((format!("tlv-{canonical}"), canonical.clone()))
+        );
+
+        let uppercase = canonical.to_ascii_uppercase();
+        assert!(
+            match_contract_state_map_key_suffix("Prices", &ty, &format!("Prices/{uppercase}"))
+                .is_err(),
+            "uppercase physical keys are not canonical"
+        );
+        assert!(
+            match_contract_state_map_key_suffix("Prices", &ty, "Prices/abc").is_err(),
+            "odd-length physical keys must reject"
+        );
+        assert!(
+            match_contract_state_map_key_suffix("Prices", &ty, "Prices/zz").is_err(),
+            "non-hex physical keys must reject"
+        );
+        assert!(
+            match_contract_state_map_key_suffix(
+                "Prices",
+                &ivm::EmbeddedStateType::String,
+                &format!("Prices/{canonical}"),
+            )
+            .is_err(),
+            "a canonical key for the wrong embedded type must reject"
+        );
+        let mut corrupt = canonical.clone().into_bytes();
+        let last = corrupt.last_mut().expect("nonempty canonical suffix");
+        *last = if *last == b'0' { b'1' } else { b'0' };
+        let corrupt = String::from_utf8(corrupt).expect("ASCII hex fixture");
+        assert!(
+            match_contract_state_map_key_suffix("Prices", &ty, &format!("Prices/{corrupt}"))
+                .is_err(),
+            "a key with a corrupt TLV digest must reject"
+        );
+
+        let false_key = hex::encode(norito::to_bytes(&0_i64).expect("encode false key"));
+        let true_key = hex::encode(norito::to_bytes(&1_i64).expect("encode true key"));
+        let invalid_bool = hex::encode(norito::to_bytes(&2_i64).expect("encode invalid bool key"));
+        for key in [false_key, true_key] {
+            assert!(
+                match_contract_state_map_key_suffix(
+                    "Flags",
+                    &ivm::EmbeddedStateType::Bool,
+                    &format!("Flags/{key}"),
+                )
+                .expect("canonical Bool key")
+                .is_some()
+            );
+        }
+        assert!(
+            match_contract_state_map_key_suffix(
+                "Flags",
+                &ivm::EmbeddedStateType::Bool,
+                &format!("Flags/{invalid_bool}"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn contract_state_invalid_typed_map_keys_never_fall_back_to_raw_paths() {
+        let registry = BTreeMap::from([(
+            "Prices".to_owned(),
+            Some(ivm::EmbeddedStateType::StateMap {
+                key: Box::new(ivm::EmbeddedStateType::Quantity),
+                value: Box::new(ivm::EmbeddedStateType::Int),
+            }),
+        )]);
+        let raw_legacy_path = "Prices/not-a-quantity";
+        let storage = BTreeMap::from([(raw_legacy_path.to_owned(), vec![0x7f])]);
+
+        assert_eq!(
+            contract_state_logical_map_entry_value(&registry, raw_legacy_path, &|path| {
+                storage.get(path).cloned()
+            }),
+            None,
+            "an invalid typed key must not expose a same-named raw storage path"
+        );
+        assert!(!contract_state_logical_path_exists(
+            &registry,
+            raw_legacy_path,
+            &|path| storage.contains_key(path),
+        ));
+        let error = decode_contract_state_path_json(&registry, raw_legacy_path, &|path| {
+            storage.get(path).cloned()
+        })
+        .expect_err("invalid typed keys must fail before any raw-path lookup");
+        assert!(
+            error.contains("not valid for the deployed key schema"),
+            "{error}"
+        );
+
+        let canonical =
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Quantity, "7")
+                .expect("canonical quantity key");
+        let canonical_storage = BTreeMap::from([(format!("Prices/{canonical}"), vec![0x7f])]);
+        assert_eq!(
+            contract_state_logical_map_entry_value(
+                &registry,
+                &format!("Prices/{canonical}"),
+                &|path| canonical_storage.get(path).cloned(),
+            ),
+            None,
+            "bare physical suffixes must never bypass typed logical parsing"
+        );
+        assert_eq!(
+            contract_state_logical_map_entry_value(
+                &registry,
+                &format!("Prices/tlv-{canonical}"),
+                &|path| canonical_storage.get(path).cloned(),
+            ),
+            Some(vec![0x7f]),
+            "the explicit, validated physical form remains round-trippable"
+        );
+    }
+
+    #[test]
+    fn contract_state_logical_keys_can_escape_the_physical_tlv_namespace() {
+        for ty in [
+            ivm::EmbeddedStateType::String,
+            ivm::EmbeddedStateType::Bytes,
+            ivm::EmbeddedStateType::Name,
+        ] {
+            let expected = encode_contract_state_pointer_tlv_bytes(&ty, "tlv-deadbeef")
+                .expect("logical key encodes");
+            assert_eq!(
+                contract_state_stored_map_key_suffix(&ty, "logical-tlv-deadbeef"),
+                Some(hex::encode(expected)),
+                "the logical escape must preserve a key that starts with the physical tag"
+            );
+            assert_eq!(
+                contract_state_stored_map_key_suffix(&ty, "tlv-deadbeef"),
+                None,
+                "an unescaped physical tag must never be reinterpreted as logical text"
+            );
+        }
     }
 }
 
@@ -16936,13 +17504,17 @@ fn execute_contract_view(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_contract_runtime_context(
-        contract_address.clone(),
-        live_alias,
-        program.code_hash,
-        selector.to_owned(),
-        runtime_permission,
-    );
+    host.bind_authorized_deployed_contract_view_runtime_context(
+        &query_view,
+        contract_address,
+        live_alias.as_ref(),
+        program.prepared_contract(),
+        selector,
+    )
+    .map_err(|error| ContractViewExecutionError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+    })?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -17116,13 +17688,20 @@ fn execute_contract_call_simulation(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_contract_runtime_context(
-        contract_address.clone(),
-        live_alias,
-        program.code_hash,
-        selector.to_owned(),
-        runtime_permission,
-    );
+    host.bind_authorized_deployed_contract_runtime_context(
+        &query_view,
+        contract_address,
+        live_alias.as_ref(),
+        program.prepared_contract(),
+        selector,
+    )
+    .map_err(|error| ContractCallSimulationError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+        normalized_payload: normalized_payload.clone(),
+        gas_used: 0,
+        queued_instructions: Vec::new(),
+    })?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -24306,7 +24885,7 @@ fn multisig_spec_response(
     })
 }
 
-/// POST /v1/multisig/proposals/list — list multisig proposals for a multisig authority.
+/// POST /v1/multisig/proposals/query — list multisig proposals for a multisig authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_list(
@@ -24352,7 +24931,7 @@ fn multisig_proposals_list_response(
     })
 }
 
-/// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
+/// POST /v1/multisig/proposals/lookup — resolve a multisig selector and fetch a specific proposal.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_proposals_get(
@@ -24409,7 +24988,7 @@ fn multisig_proposals_get_response(
     })
 }
 
-/// POST /v1/multisig/approvals/list — list signer-visible multisig approvals.
+/// POST /v1/multisig/approvals/query — list signer-visible multisig approvals.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approvals_list(
@@ -24514,7 +25093,7 @@ fn multisig_approvals_list_response(
     Ok(MultisigApprovalsListResponseDto { items, next_cursor })
 }
 
-/// POST /v1/multisig/approvals/get — fetch a signer-visible multisig approval by id/hash.
+/// POST /v1/multisig/approvals/lookup — fetch a signer-visible multisig approval by id/hash.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_multisig_approvals_get(
@@ -29022,19 +29601,6 @@ pub struct RecordUptimeObservationResponseDto {
     pub uptime_secs: u64,
     /// Total seconds observed for the sample.
     pub observed_secs: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording a PoR challenge issued by governance.
-pub struct RecordPorChallengeDto {
-    /// Base64-encoded Norito `PorChallengeV1`.
-    pub challenge_b64: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -39679,9 +40245,9 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/list";
+pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
+pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/lookup";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
@@ -39808,12 +40374,12 @@ const CONTEXT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS: &str =
-    "/v1/nexus/public_lanes/{lane_id}/validators";
+    "/v1/nexus/public-lanes/{lane_id}/validators";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public_lanes/{lane_id}/stake";
+pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public-lanes/{lane_id}/stake";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS: &str =
-    "/v1/nexus/public_lanes/{lane_id}/rewards/pending";
+    "/v1/nexus/public-lanes/{lane_id}/rewards/pending";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY: &str =
     "/v1/nexus/dataspaces/accounts/{literal}/summary";
@@ -50536,6 +51102,67 @@ struct ContractEventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     state: Arc<CoreState>,
     pending: VecDeque<ContractEventProjection>,
+    last_block_height: Option<u64>,
+    terminal: bool,
+}
+
+#[cfg(not(test))]
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(25);
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct StreamErrorEvent {
+    code: String,
+    message: String,
+    dropped_messages: Option<u64>,
+    replay_available: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn stream_error_event(
+    code: &'static str,
+    message: impl Into<String>,
+    dropped_messages: Option<u64>,
+) -> SseEvent {
+    let payload = StreamErrorEvent {
+        code: code.to_owned(),
+        message: message.into(),
+        dropped_messages,
+        replay_available: false,
+    };
+    let data = norito::json::to_json(&payload).unwrap_or_else(|error| {
+        iroha_logger::error!(%error, code, "failed to encode SSE stream error payload");
+        "{\"code\":\"stream_internal_error\",\"message\":\"failed to encode stream error\",\"dropped_messages\":null,\"replay_available\":false}".to_owned()
+    });
+    SseEvent::default().event("stream_error").data(data)
+}
+
+/// Reject an SSE resume attempt before stream establishment.
+///
+/// The canonical live streams do not retain a replay log. Returning a native
+/// SSE error keeps the rejection compatible with `Accept: text/event-stream`
+/// while making the unsupported resume request explicit and machine-readable.
+#[cfg(feature = "app_api")]
+pub fn stream_resume_unsupported_response() -> Response {
+    let event = stream_error_event(
+        "stream_resume_unsupported",
+        "Last-Event-ID is unsupported because this live stream has no replay log.",
+        None,
+    );
+    let stream = stream::once(async move { Ok::<_, Infallible>(event) });
+    let mut response = Sse::new(stream).into_response();
+    *response.status_mut() = StatusCode::BAD_REQUEST;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-iroha-stream-error"),
+        axum::http::HeaderValue::from_static("stream_resume_unsupported"),
+    );
+    response
 }
 
 /// GET /v1/contracts/events/sse – Server-Sent Events stream of generic contract events.
@@ -50551,20 +51178,32 @@ pub fn handle_v1_contracts_events_sse(
             rx: events.subscribe(),
             state,
             pending: VecDeque::new(),
+            last_block_height: None,
+            terminal: false,
         },
         move |mut state| {
             let query = query.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
+                if state.terminal {
+                    return None;
+                }
                 loop {
                     if let Some(event) = state.pending.pop_front() {
                         let json_value = contract_event_projection_to_json_value(&event);
-                        let json =
-                            norito::json::to_json(&json_value).unwrap_or_else(|_| "{}".to_owned());
-                        let ev = SseEvent::default()
-                            .event("contract_event")
-                            .id(event.event_id.clone())
-                            .data(json);
+                        let ev = match norito::json::to_json(&json_value) {
+                            Ok(json) => SseEvent::default().event("contract_event").data(json),
+                            Err(error) => {
+                                iroha_logger::error!(%error, event_id = %event.event_id, "failed to encode contract SSE event");
+                                state.pending.clear();
+                                state.terminal = true;
+                                stream_error_event(
+                                    "stream_encode_error",
+                                    "The server could not encode a contract event.",
+                                    None,
+                                )
+                            }
+                        };
                         return Some((Ok(ev), state));
                     }
                     match state.rx.recv().await {
@@ -50572,6 +51211,13 @@ pub fn handle_v1_contracts_events_sse(
                             let Some(height) = committed_block_height(&event_box) else {
                                 continue;
                             };
+                            if state
+                                .last_block_height
+                                .is_some_and(|last_height| height <= last_height)
+                            {
+                                continue;
+                            }
+                            state.last_block_height = Some(height);
                             let Ok(height_usize) = usize::try_from(height) else {
                                 iroha_logger::warn!(
                                     height,
@@ -50589,18 +51235,36 @@ pub fn handle_v1_contracts_events_sse(
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(_)) => {
-                            let ev = SseEvent::default().comment("lagged");
+                        Err(RecvError::Lagged(dropped_messages)) => {
+                            state.pending.clear();
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_lagged",
+                                "The contract event stream lost buffered events and cannot replay them.",
+                                Some(dropped_messages),
+                            );
                             return Some((Ok(ev), state));
                         }
-                        Err(RecvError::Closed) => return None,
+                        Err(RecvError::Closed) => {
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_source_closed",
+                                "The contract event source closed.",
+                                None,
+                            );
+                            return Some((Ok(ev), state));
+                        }
                     }
                 }
             }
         },
     );
 
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(SSE_HEARTBEAT_INTERVAL)
+            .text("heartbeat"),
+    ))
 }
 
 /// GET /v1/events/sse – Server-Sent Events stream of JSON events.
@@ -50638,6 +51302,7 @@ pub fn handle_v1_events_sse(
         EventsSseState {
             rx: events.subscribe(),
             pending: VecDeque::new(),
+            terminal: false,
         },
         move |mut state| {
             let filters = filters.clone();
@@ -50646,12 +51311,25 @@ pub fn handle_v1_events_sse(
             let proof_envelope_hash = proof_envelope_hash.clone();
             async move {
                 use tokio::sync::broadcast::error::RecvError;
+                if state.terminal {
+                    return None;
+                }
                 loop {
                     if let Some(event_box) = state.pending.pop_front() {
                         let json_val = event_to_json_value(&event_box);
-                        let json =
-                            norito::json::to_json(&json_val).unwrap_or_else(|_| "{}".to_owned());
-                        let ev = SseEvent::default().data(json);
+                        let ev = match norito::json::to_json(&json_val) {
+                            Ok(json) => SseEvent::default().data(json),
+                            Err(error) => {
+                                iroha_logger::error!(%error, "failed to encode SSE event");
+                                state.pending.clear();
+                                state.terminal = true;
+                                stream_error_event(
+                                    "stream_encode_error",
+                                    "The server could not encode an event.",
+                                    None,
+                                )
+                            }
+                        };
                         return Some((Ok(ev), state));
                     }
                     match state.rx.recv().await {
@@ -50686,25 +51364,43 @@ pub fn handle_v1_events_sse(
                                 }
                             }
                         }
-                        Err(RecvError::Lagged(_)) => {
-                            // Skip lagged messages but keep the stream alive.
-                            let ev = SseEvent::default().comment("lagged");
+                        Err(RecvError::Lagged(dropped_messages)) => {
+                            state.pending.clear();
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_lagged",
+                                "The event stream lost buffered events and cannot replay them.",
+                                Some(dropped_messages),
+                            );
                             return Some((Ok(ev), state));
                         }
-                        Err(RecvError::Closed) => return None,
+                        Err(RecvError::Closed) => {
+                            state.terminal = true;
+                            let ev = stream_error_event(
+                                "stream_source_closed",
+                                "The event source closed.",
+                                None,
+                            );
+                            return Some((Ok(ev), state));
+                        }
                     }
                 }
             }
         },
     );
 
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(SSE_HEARTBEAT_INTERVAL)
+            .text("heartbeat"),
+    ))
 }
 
 #[cfg(feature = "app_api")]
 struct EventsSseState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     pending: VecDeque<EventBox>,
+    terminal: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -52259,7 +52955,7 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v1/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
+/// GET /v1/sumeragi/new-view/sse — SSE stream of NEW_VIEW counts polled periodically.
 pub fn handle_v1_new_view_sse(
     poll_ms: u64,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -57511,7 +58207,7 @@ pub async fn handle_v1_sumeragi_status(
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
@@ -58313,7 +59009,7 @@ fn rbc_status_summary_has_complete_delivery(summary: &rbc_status::Summary) -> bo
         && summary.received_chunks == summary.total_chunks
 }
 
-/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
+/// GET /v1/sumeragi/commit-qcs/{block_hash} — return the full commit QC record for a block hash.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -58330,7 +59026,7 @@ pub async fn handle_v1_sumeragi_commit_qc(
     let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
     let world = state.world_view();
     let qc_opt = world.commit_qcs().get(&typed).cloned();
-    let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
@@ -59096,6 +59792,7 @@ mod sse_filter_validation_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod sse_stream_tests {
+    use axum::body::Body;
     use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_crypto::{Hash, HashOf};
@@ -59110,6 +59807,31 @@ mod sse_stream_tests {
     use tokio::time::{Duration, timeout};
 
     use super::*;
+
+    async fn next_sse_chunk(body: &mut Body) -> String {
+        let frame = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("timeout waiting for SSE frame")
+            .expect("stream ended before SSE frame")
+            .expect("SSE body frame");
+        let data = frame.into_data().expect("SSE data frame");
+        std::str::from_utf8(&data)
+            .expect("UTF-8 SSE frame")
+            .to_owned()
+    }
+
+    fn queued_transaction_event(byte: u8) -> EventBox {
+        let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [byte; Hash::LENGTH],
+        ));
+        EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+            hash,
+            block_height: None,
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            status: TransactionStatus::Queued,
+        }))
+    }
 
     #[tokio::test]
     async fn sse_stream_expands_pipeline_batches() {
@@ -59133,13 +59855,7 @@ mod sse_stream_tests {
             })]);
         events.send(batch).expect("send batch event");
 
-        let frame = timeout(Duration::from_secs(1), body.frame())
-            .await
-            .expect("timeout waiting for SSE frame")
-            .expect("frame")
-            .expect("frame data");
-        let data = frame.into_data().expect("data frame");
-        let payload = std::str::from_utf8(&data).expect("utf8");
+        let payload = next_sse_chunk(&mut body).await;
         let data_line = payload
             .lines()
             .find(|line| line.starts_with("data: "))
@@ -59147,6 +59863,137 @@ mod sse_stream_tests {
         let json = data_line.trim_start_matches("data: ").trim();
         let value: norito::json::Value = norito::json::from_str(json).expect("json payload");
         assert!(matches!(value, norito::json::Value::Object(_)));
+    }
+
+    #[tokio::test]
+    async fn sse_stream_preserves_pipeline_batch_order() {
+        let events: EventsSender = tokio::sync::broadcast::channel(8).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        events
+            .send(EventBox::PipelineBatch(vec![
+                match queued_transaction_event(0x31) {
+                    EventBox::Pipeline(event) => event,
+                    _ => unreachable!(),
+                },
+                match queued_transaction_event(0x32) {
+                    EventBox::Pipeline(event) => event,
+                    _ => unreachable!(),
+                },
+            ]))
+            .expect("send batch");
+
+        let first = next_sse_chunk(&mut body).await;
+        let second = next_sse_chunk(&mut body).await;
+        assert!(first.contains(&Hash::prehashed([0x31; Hash::LENGTH]).to_string()));
+        assert!(second.contains(&Hash::prehashed([0x32; Hash::LENGTH]).to_string()));
+    }
+
+    #[tokio::test]
+    async fn sse_lag_is_machine_readable_and_terminal() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        events
+            .send(queued_transaction_event(0x41))
+            .expect("send first");
+        events
+            .send(queued_transaction_event(0x42))
+            .expect("send second");
+
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        let data = error_frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("stream error data");
+        let value: norito::json::Value = norito::json::from_str(data).expect("error JSON");
+        assert_eq!(value["code"].as_str(), Some("stream_lagged"));
+        assert_eq!(value["dropped_messages"].as_u64(), Some(1));
+        assert_eq!(value["replay_available"].as_bool(), Some(false));
+
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("terminal stream should not hang");
+        assert!(
+            terminal.is_none(),
+            "lagged stream must close after its error event"
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_idle_stream_emits_heartbeat_comment() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+
+        let heartbeat = next_sse_chunk(&mut body).await;
+        assert_eq!(heartbeat, ": heartbeat\n\n");
+    }
+
+    #[tokio::test]
+    async fn sse_source_shutdown_is_machine_readable_and_terminal() {
+        let events: EventsSender = tokio::sync::broadcast::channel(1).0;
+        let sse = handle_v1_events_sse(
+            events.clone(),
+            crate::NoritoQuery(EventsSseParams { filter: None }),
+        )
+        .expect("create SSE stream");
+        let mut body = sse.into_response().into_body();
+        drop(events);
+
+        let error_frame = next_sse_chunk(&mut body).await;
+        assert!(error_frame.contains("event: stream_error"));
+        assert!(error_frame.contains("\"code\":\"stream_source_closed\""));
+        let terminal = timeout(Duration::from_secs(1), body.frame())
+            .await
+            .expect("terminal stream should not hang");
+        assert!(terminal.is_none());
+    }
+
+    #[tokio::test]
+    async fn resume_rejection_uses_native_sse_error_contract() {
+        let response = stream_resume_unsupported_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-stream-error")
+                .and_then(|value| value.to_str().ok()),
+            Some("stream_resume_unsupported")
+        );
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect rejection")
+            .to_bytes();
+        let payload = std::str::from_utf8(&body).expect("UTF-8 rejection");
+        assert!(payload.contains("event: stream_error"));
+        assert!(payload.contains("stream_resume_unsupported"));
+        assert!(payload.contains("\"replay_available\":false"));
     }
 }
 
@@ -84782,27 +85629,6 @@ pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycl
     .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
 }
 
-/// Reject the retired node-local Nexus lane lifecycle mutation path.
-///
-/// Lane lifecycle changes must be submitted as signed transactions carrying a
-/// `SetParameter(nexus_lane_lifecycle_v1)` instruction. That path is permission
-/// checked, consensus replicated, and replay durable; mutating one Torii node
-/// directly would fork runtime topology from its peers.
-pub async fn handle_post_nexus_lane_lifecycle(
-    _state: Arc<CoreState>,
-    _queue: Arc<Queue>,
-) -> Result<Response> {
-    Err(Error::AppForbidden {
-        code: "local_lane_lifecycle_disabled",
-        message: concat!(
-            "node-local lane lifecycle mutation is disabled; submit a signed transaction with ",
-            "SetParameter custom id `nexus_lane_lifecycle_v1` from an account holding ",
-            "CanSetParameters"
-        )
-        .to_owned(),
-    })
-}
-
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
     use super::*;
@@ -84820,42 +85646,6 @@ mod nexus_lane_lifecycle_tests {
             })
             .expect("enable Nexus for lifecycle test");
         Arc::new(state)
-    }
-
-    fn queue_for_lifecycle_test() -> Arc<Queue> {
-        let (events_sender, _) = tokio::sync::broadcast::channel(8);
-        Arc::new(Queue::from_config(
-            iroha_config::parameters::actual::Queue::default(),
-            events_sender,
-        ))
-    }
-
-    #[tokio::test]
-    async fn direct_lane_lifecycle_endpoint_fails_closed_without_mutation() {
-        let state = enabled_state_for_lifecycle_test();
-        let queue = queue_for_lifecycle_test();
-        let lane_id = LaneId::new(1);
-        let before_nexus = state.nexus_snapshot();
-        let before_limits = queue.queue_limits().for_lane(lane_id);
-        let err =
-            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue)).await {
-                Ok(_) => panic!("node-local lifecycle mutation must remain disabled"),
-                Err(err) => err,
-            };
-
-        assert!(matches!(
-            err,
-            Error::AppForbidden {
-                code: "local_lane_lifecycle_disabled",
-                message,
-            } if message.contains("nexus_lane_lifecycle_v1")
-                && message.contains("CanSetParameters")
-        ));
-        assert_eq!(
-            state.nexus_snapshot().lane_catalog,
-            before_nexus.lane_catalog
-        );
-        assert_eq!(queue.queue_limits().for_lane(lane_id), before_limits);
     }
 
     #[test]
@@ -84904,6 +85694,42 @@ pub mod block {
 
     type Result<T> = core::result::Result<T, Error>;
 
+    #[cfg(not(test))]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+    #[cfg(test)]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+    fn close_frame_for_error(error: &Error) -> (u16, String) {
+        use crate::stream::{
+            CLOSE_INTERNAL_ERROR, CLOSE_INVALID_PAYLOAD, CLOSE_POLICY_VIOLATION,
+            CLOSE_TRY_AGAIN_LATER, Error as StreamError,
+        };
+
+        match error {
+            Error::Consumer(block::Error::Stream(StreamError::Decode(_)))
+            | Error::Consumer(block::Error::Stream(StreamError::UnexpectedFrame { .. })) => (
+                CLOSE_INVALID_PAYLOAD,
+                "invalid_subscription_payload".to_owned(),
+            ),
+            Error::Consumer(block::Error::Stream(StreamError::ReadTimeout)) => {
+                (CLOSE_POLICY_VIOLATION, "subscription_timeout".to_owned())
+            }
+            Error::Consumer(block::Error::InvalidHeight(_)) => (
+                CLOSE_POLICY_VIOLATION,
+                "invalid_block_subscription".to_owned(),
+            ),
+            Error::Consumer(block::Error::Stream(StreamError::SendTimeout)) => {
+                (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
+            }
+            Error::Consumer(block::Error::Stream(
+                StreamError::Encode(_) | StreamError::WebSocket(_),
+            )) => (CLOSE_INTERNAL_ERROR, "stream_internal_error".to_owned()),
+            Error::Consumer(block::Error::Stream(StreamError::Closed)) | Error::Close => {
+                (1000, "stream_closed".to_owned())
+            }
+        }
+    }
+
     #[iroha_futures::telemetry_future]
     pub async fn handle_blocks_stream(
         kura: Arc<Kura>,
@@ -84920,8 +85746,10 @@ pub mod block {
             Ok(()) => stream.close().await.map_err(Into::into),
             Err(Error::Close) => Ok(()),
             Err(err) => {
-                // NOTE: try close websocket and return initial error
-                let _ = stream.close().await;
+                let (code, reason) = close_frame_for_error(&err);
+                if let Err(close_error) = stream.close_with(code, reason).await {
+                    iroha_logger::debug!(%close_error, "failed to send block stream close frame");
+                }
                 Err(err.into())
             }
         }
@@ -84932,6 +85760,9 @@ pub mod block {
     /// Ideally should return `Result<!>` cause it either runs forever or returns error
     async fn subscribe_forever(consumer: &mut block::Consumer<'_>) -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
             tokio::select! {
                 // Wait for stream to be closed by client
@@ -84943,6 +85774,9 @@ pub mod block {
                 }
                 // This branch sends blocks
                 _ = interval.tick() => consumer.consume().await?,
+                _ = heartbeat.tick() => {
+                    consumer.stream.ping().await.map_err(block::Error::from)?;
+                }
             }
         }
     }
@@ -84976,6 +85810,49 @@ pub mod event {
 
     type Result<T> = core::result::Result<T, Error>;
 
+    #[cfg(not(test))]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+    #[cfg(test)]
+    const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+    fn close_frame_for_error(error: &Error) -> (u16, String) {
+        use crate::stream::{
+            CLOSE_INTERNAL_ERROR, CLOSE_INVALID_PAYLOAD, CLOSE_POLICY_VIOLATION,
+            CLOSE_TRY_AGAIN_LATER, Error as StreamError,
+        };
+
+        match error {
+            Error::Event(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => (
+                CLOSE_TRY_AGAIN_LATER,
+                format!("event_stream_lagged:{skipped}"),
+            ),
+            Error::Event(tokio::sync::broadcast::error::RecvError::Closed) => {
+                (CLOSE_INTERNAL_ERROR, "event_source_closed".to_owned())
+            }
+            Error::Consumer(event::Error::Stream(StreamError::Decode(_)))
+            | Error::Consumer(event::Error::Stream(StreamError::UnexpectedFrame { .. })) => (
+                CLOSE_INVALID_PAYLOAD,
+                "invalid_subscription_payload".to_owned(),
+            ),
+            Error::Consumer(event::Error::Stream(StreamError::ReadTimeout)) => {
+                (CLOSE_POLICY_VIOLATION, "subscription_timeout".to_owned())
+            }
+            Error::Consumer(event::Error::InvalidSubscription(_)) => (
+                CLOSE_POLICY_VIOLATION,
+                "invalid_event_subscription".to_owned(),
+            ),
+            Error::Consumer(event::Error::Stream(StreamError::SendTimeout)) => {
+                (CLOSE_TRY_AGAIN_LATER, "stream_backpressure".to_owned())
+            }
+            Error::Consumer(event::Error::Stream(
+                StreamError::Encode(_) | StreamError::WebSocket(_),
+            )) => (CLOSE_INTERNAL_ERROR, "stream_internal_error".to_owned()),
+            Error::Consumer(event::Error::Stream(StreamError::Closed)) | Error::Close => {
+                (1000, "stream_closed".to_owned())
+            }
+        }
+    }
+
     /// Subscribes `stream` for `events` filtered by filter that is
     /// received through the `stream`
     #[iroha_futures::telemetry_future]
@@ -85006,8 +85883,10 @@ pub mod event {
             Ok(()) => stream.close().await.map_err(Into::into),
             Err(Error::Close) => Ok(()),
             Err(err) => {
-                // NOTE: try close websocket and return initial error
-                let _ = stream.close().await;
+                let (code, reason) = close_frame_for_error(&err);
+                if let Err(close_error) = stream.close_with(code, reason).await {
+                    iroha_logger::debug!(%close_error, "failed to send event stream close frame");
+                }
                 Err(err.into())
             }
         }
@@ -85020,6 +85899,9 @@ pub mod event {
         events: &mut tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
         consumer: &mut event::Consumer<'_>,
     ) -> Result<()> {
+        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         loop {
             tokio::select! {
                 // Wait for stream to be closed by client
@@ -85036,11 +85918,11 @@ pub mod event {
                             iroha_logger::trace!(?event);
                             consumer.consume(event).await?;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            iroha_logger::warn!("event stream lagged; skipping buffered events");
-                        }
                         Err(err) => return Err(Error::Event(err)),
                     }
+                }
+                _ = heartbeat.tick() => {
+                    consumer.stream.ping().await.map_err(event::Error::from)?;
                 }
             }
         }
@@ -85099,24 +85981,6 @@ mod version_tests {
             "genesis not applied"
         );
     }
-}
-
-/// List supported Torii API versions and defaults.
-pub fn handle_api_versions(
-    policy: &api_version::ApiVersionPolicy,
-) -> crate::utils::NoritoBody<iroha_torii_shared::ApiVersionInfo> {
-    let supported = policy
-        .supported
-        .iter()
-        .copied()
-        .map(ApiVersion::to_label)
-        .collect();
-    crate::utils::NoritoBody(iroha_torii_shared::ApiVersionInfo {
-        default: policy.default.to_label(),
-        supported,
-        sunset_unix: policy.sunset_unix,
-        min_proof_version: policy.min_proof.to_label(),
-    })
 }
 
 #[cfg(feature = "telemetry")]
@@ -85582,7 +86446,7 @@ mod tests {
                 .expect("paths section");
             assert!(!paths.contains_key("/v1/aliases/voprf/evaluate"));
             assert!(paths.contains_key("/v1/aliases/resolve"));
-            assert!(paths.contains_key("/v1/aliases/resolve_index"));
+            assert!(paths.contains_key("/v1/aliases/resolve-index"));
         });
     }
 
@@ -86344,6 +87208,84 @@ mod event_stream_tests {
 
     use super::event::handle_events_stream_with_receiver;
 
+    async fn spawn_event_stream_server(
+        receiver: tokio::sync::broadcast::Receiver<EventBox>,
+    ) -> Option<std::net::SocketAddr> {
+        let rx_holder = Arc::new(Mutex::new(Some(receiver)));
+        let app = Router::new().route(
+            "/ws",
+            get({
+                let rx_holder = Arc::clone(&rx_holder);
+                move |ws: WebSocketUpgrade| {
+                    let rx_holder = Arc::clone(&rx_holder);
+                    async move {
+                        ws.on_upgrade(move |ws| async move {
+                            let mut guard = rx_holder.lock().await;
+                            let rx = guard.take().expect("event receiver already used");
+                            let _ = handle_events_stream_with_receiver(
+                                rx,
+                                ws,
+                                std::time::Duration::from_millis(
+                                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                                ),
+                            )
+                            .await;
+                        })
+                    }
+                }
+            }),
+        );
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => return None,
+            Err(err) => panic!("tcp bind failed: {err}"),
+        };
+        let addr = listener.local_addr().expect("listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("axum server");
+        });
+        Some(addr)
+    }
+
+    async fn connect_event_stream(
+        addr: std::net::SocketAddr,
+    ) -> Option<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    > {
+        match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+            Ok((stream, _response)) => Some(stream),
+            Err(tokio_tungstenite::tungstenite::Error::Io(io_err))
+                if io_err.kind() == ErrorKind::PermissionDenied =>
+            {
+                None
+            }
+            Err(err) => panic!("ws connect failed: {err}"),
+        }
+    }
+
+    async fn next_close_frame(
+        stream: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> tokio_tungstenite::tungstenite::protocol::CloseFrame {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match stream.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
+                        break frame;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => panic!("ws message error: {err}"),
+                    None => panic!("ws stream closed without a close frame"),
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for close frame")
+    }
+
     #[tokio::test]
     async fn ws_stream_receives_buffered_events() {
         let events: EventsSender = tokio::sync::broadcast::channel(16).0;
@@ -86451,7 +87393,7 @@ mod event_stream_tests {
     }
 
     #[tokio::test]
-    async fn ws_stream_survives_lagged_receiver() {
+    async fn ws_stream_reports_lag_and_closes() {
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let lagged_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
             [0x11; Hash::LENGTH],
@@ -86495,9 +87437,9 @@ mod event_stream_tests {
                             let _ = handle_events_stream_with_receiver(
                                 rx,
                                 ws,
-                            std::time::Duration::from_millis(
-                                iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
-                            ),
+                                std::time::Duration::from_millis(
+                                    iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
+                                ),
                             )
                             .await;
                         })
@@ -86540,28 +87482,136 @@ mod event_stream_tests {
             .await
             .expect("send subscription");
 
-        let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let close = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 match ws_stream.next().await {
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Binary(bytes))) => {
-                        let event_msg: EventMessage =
-                            decode_from_bytes(bytes.as_ref()).expect("decode event message");
-                        let event_box: EventBox = event_msg.into();
-                        if let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event_box
-                        {
-                            break event;
-                        }
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(Some(frame)))) => {
+                        break frame;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(err)) => panic!("ws message error: {err}"),
-                    None => panic!("ws stream closed before event received"),
+                    None => panic!("ws stream closed without a close frame"),
                 }
             }
         })
         .await
-        .expect("timed out waiting for event");
+        .expect("timed out waiting for close frame");
 
-        assert_eq!(event.hash(), &wanted_hash);
-        assert_eq!(event.status(), &TransactionStatus::Queued);
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_TRY_AGAIN_LATER);
+        assert_eq!(close.reason, "event_stream_lagged:1");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_text_subscription_payload() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                "not-norito".into(),
+            ))
+            .await
+            .expect("send text subscription");
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
+        assert_eq!(close.reason, "invalid_subscription_payload");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_empty_event_filter_set() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(Vec::new());
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                to_bytes(&subscription)
+                    .expect("encode empty subscription")
+                    .into(),
+            ))
+            .await
+            .expect("send empty subscription");
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_POLICY_VIOLATION);
+        assert_eq!(close.reason, "invalid_event_subscription");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_rejects_data_after_subscription() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default().into(),
+        )]);
+        let bytes = to_bytes(&subscription).expect("encode subscription");
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                bytes.clone().into(),
+            ))
+            .await
+            .expect("send subscription");
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                bytes.into(),
+            ))
+            .await
+            .expect("send unexpected second request");
+
+        let close = next_close_frame(&mut ws_stream).await;
+        assert_eq!(u16::from(close.code), crate::stream::CLOSE_INVALID_PAYLOAD);
+        assert_eq!(close.reason, "invalid_subscription_payload");
+    }
+
+    #[tokio::test]
+    async fn ws_stream_emits_transport_heartbeat() {
+        let events: EventsSender = tokio::sync::broadcast::channel(4).0;
+        let Some(addr) = spawn_event_stream_server(events.subscribe()).await else {
+            return;
+        };
+        let Some(mut ws_stream) = connect_event_stream(addr).await else {
+            return;
+        };
+
+        let subscription = EventSubscriptionRequest::new(vec![EventFilterBox::Pipeline(
+            TransactionEventFilter::default().into(),
+        )]);
+        ws_stream
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                to_bytes(&subscription).expect("encode subscription").into(),
+            ))
+            .await
+            .expect("send subscription");
+
+        let heartbeat = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                match ws_stream.next().await {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(payload))) => {
+                        break payload;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => panic!("ws heartbeat error: {err}"),
+                    None => panic!("ws stream closed before heartbeat"),
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for heartbeat");
+        assert!(heartbeat.is_empty());
     }
 }

@@ -16,13 +16,13 @@ translator: manual
 
 ## コンセンサス（Sumeragi）
 
-- `GET /v1/sumeragi/new_view`
+- `GET /v1/sumeragi/new-view`
   - `(height, view)` ごとの NEW_VIEW 受信数スナップショット。
   - 形式: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
-  - 例: `curl -s http://127.0.0.1:8080/v1/sumeragi/new_view | jq .`
-- `GET /v1/sumeragi/new_view/sse` (SSE)
+  - 例: `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
+- `GET /v1/sumeragi/new-view/sse` (SSE)
   - 約 1 秒間隔で同じペイロードを配信する SSE ストリーム。ダッシュボード向け。
-  - 例: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
+  - 例: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - メトリクス: `sumeragi_new_view_receipts_by_hv{height,view}` ゲージが同じカウントを公開。
 - `GET /v1/sumeragi/status`
   - リーダーインデックス、Highest/Locked QCs（`highest_qc`/`locked_qc` の高さ・ビュー・サブジェクトハッシュ）、コレクタ／VRF カウンター、ペースメーカーの猶予、トランザクションキュー深さ、RBC ストア状態（`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`）を取得。
@@ -97,7 +97,7 @@ TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
 while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new_view" \
+  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
     | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
   sleep "$INTERVAL"
 done
@@ -112,7 +112,7 @@ TORII="${TORII:-http://127.0.0.1:8080}"
 TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new_view/sse" \
+curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
   | awk '/^data:/{sub(/^data: /,""); print}' \
   | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
 ```

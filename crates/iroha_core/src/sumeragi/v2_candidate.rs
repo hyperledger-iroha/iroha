@@ -29,7 +29,7 @@ use iroha_data_model::{
     da::{commitment::DaCommitmentBundle, pin_intent::DaPinIntentBundle},
     events::pipeline::PipelineEventBox,
     merge::MergeLedgerEntry,
-    transaction::{SignedTransaction, TransactionEntrypoint},
+    transaction::TransactionEntrypoint,
 };
 use iroha_primitives::time::TimeSource;
 use iroha_sumeragi_core::EventTag;
@@ -77,21 +77,6 @@ impl CandidateLimits {
             max_payload_bytes,
             max_queue_scan,
         })
-    }
-
-    /// Maximum number of external transactions in one candidate.
-    pub(crate) const fn max_transactions(self) -> NonZeroUsize {
-        self.max_transactions
-    }
-
-    /// Maximum exact canonical body size in bytes.
-    pub(crate) const fn max_payload_bytes(self) -> NonZeroUsize {
-        self.max_payload_bytes
-    }
-
-    /// Maximum number of pending queue entries inspected per attempt.
-    pub(crate) const fn max_queue_scan(self) -> NonZeroUsize {
-        self.max_queue_scan
     }
 }
 
@@ -157,6 +142,7 @@ pub(crate) struct PreparedCandidateWork {
 impl PreparedCandidateWork {
     /// Construct work for a batch containing only available single-route entries.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn single_route_batch(candidate_count: usize) -> Self {
         Self {
             native_amx_receipts: vec![None; candidate_count],
@@ -214,8 +200,10 @@ pub(crate) trait CandidateWorkProvider {
 /// reported unavailable and therefore remain in the queue without preventing
 /// an honest leader from producing a heartbeat or single-route block.
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg(test)]
 pub(crate) struct SingleRouteWorkProvider;
 
+#[cfg(test)]
 impl CandidateWorkProvider for SingleRouteWorkProvider {
     fn prepare(
         &mut self,
@@ -281,8 +269,6 @@ pub(crate) struct AssembledV2Candidate {
     block: SignedBlock,
     canonical_wire: Vec<u8>,
     encoded_payload: EncodedV2Payload,
-    selected_transaction_hashes: Vec<HashOf<SignedTransaction>>,
-    selected_entrypoint_hashes: Vec<HashOf<TransactionEntrypoint>>,
     events: Vec<PipelineEventBox>,
     scan_report: CandidateScanReport,
 }
@@ -296,31 +282,6 @@ impl AssembledV2Candidate {
     /// Borrow the signed canonical successor block.
     pub(crate) const fn block(&self) -> &SignedBlock {
         &self.block
-    }
-
-    /// Exact canonical `SignedBlockWire` bytes committed by the manifest.
-    pub(crate) fn canonical_wire(&self) -> &[u8] {
-        &self.canonical_wire
-    }
-
-    /// Borrow the deterministic manifest and chunk sequence.
-    pub(crate) const fn encoded_payload(&self) -> &EncodedV2Payload {
-        &self.encoded_payload
-    }
-
-    /// Queue transaction hashes included in the candidate.
-    pub(crate) fn selected_transaction_hashes(&self) -> &[HashOf<SignedTransaction>] {
-        &self.selected_transaction_hashes
-    }
-
-    /// Canonical external-entrypoint order committed by the candidate.
-    pub(crate) fn selected_entrypoint_hashes(&self) -> &[HashOf<TransactionEntrypoint>] {
-        &self.selected_entrypoint_hashes
-    }
-
-    /// Pipeline events emitted when the block was constructed.
-    pub(crate) fn events(&self) -> &[PipelineEventBox] {
-        &self.events
     }
 
     /// Bounded queue-selection diagnostics.
@@ -515,14 +476,6 @@ impl V2CandidateAssembler {
                 block,
                 canonical_wire,
                 encoded_payload,
-                selected_transaction_hashes: selected
-                    .iter()
-                    .map(|candidate| candidate.transaction.hash())
-                    .collect(),
-                selected_entrypoint_hashes: selected
-                    .iter()
-                    .map(|candidate| candidate.entrypoint_hash)
-                    .collect(),
                 events,
                 scan_report: report,
             });
@@ -908,6 +861,7 @@ fn validate_prepared_work(
     Ok(())
 }
 
+#[cfg(test)]
 fn unavailable_native_amx_indices(candidates: &[CandidateDescriptor<'_>]) -> BTreeSet<usize> {
     candidates
         .iter()
@@ -1170,6 +1124,7 @@ mod tests {
         let mut native = record(2, "native", 1);
         native.routing_plan = RoutingPlan::native_amx(coordinator, vec![participant]);
         let candidates = [single.descriptor(), native.descriptor()];
+        let _provider = SingleRouteWorkProvider;
         assert_eq!(
             unavailable_native_amx_indices(&candidates),
             BTreeSet::from([1])

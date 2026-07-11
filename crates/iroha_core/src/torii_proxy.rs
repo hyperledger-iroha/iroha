@@ -371,11 +371,11 @@ pub enum ToriiReadEndpointV1 {
     NftsList,
     /// `POST /v1/nfts/query`
     NftsQuery,
-    /// `GET /v1/nexus/public_lanes/{lane_id}/validators`
+    /// `GET /v1/nexus/public-lanes/{lane_id}/validators`
     NexusPublicLaneValidators,
-    /// `GET /v1/nexus/public_lanes/{lane_id}/stake`
+    /// `GET /v1/nexus/public-lanes/{lane_id}/stake`
     NexusPublicLaneStake,
-    /// `GET /v1/nexus/public_lanes/{lane_id}/rewards/pending`
+    /// `GET /v1/nexus/public-lanes/{lane_id}/rewards/pending`
     NexusPublicLaneRewards,
     /// `GET /v1/nexus/dataspaces/accounts/{literal}/summary`
     NexusDataspacesAccountSummary,
@@ -389,9 +389,9 @@ pub enum ToriiReadEndpointV1 {
     RwasQuery,
     /// `POST /v1/aliases/resolve`
     AliasResolve,
-    /// `POST /v1/aliases/resolve_index`
+    /// `POST /v1/aliases/resolve-index`
     AliasResolveIndex,
-    /// `POST /v1/aliases/by_account`
+    /// `POST /v1/aliases/by-account`
     AliasLookupByAccount,
     /// `GET /v1/explorer/asset-definitions/{id}`
     ExplorerAssetDefinitionDetail,

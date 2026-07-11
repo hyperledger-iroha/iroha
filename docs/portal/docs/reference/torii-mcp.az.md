@@ -97,7 +97,6 @@ Torii alət göndərilməsi üçün daxil olan auth ilə əlaqəli başlıqları
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 Müştərilər həmçinin `arguments.headers` vasitəsilə zəng başına əlavə başlıqlar təqdim edə bilərlər.
 `content-length`, `host` və `arguments.headers`-dən `connection` nəzərə alınmır.

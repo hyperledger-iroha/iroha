@@ -657,8 +657,6 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
         key_pair: key_pair.clone(),
         basic_auth: None,
         torii_api_url: format!("http://{addr}/").parse().expect("torii url"),
-        torii_api_version: iroha::config::default_torii_api_version(),
-        torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
         torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
         transaction_ttl: std::time::Duration::from_secs(5),
         transaction_status_timeout: std::time::Duration::from_secs(10),

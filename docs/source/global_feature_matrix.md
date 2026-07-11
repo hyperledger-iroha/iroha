@@ -71,7 +71,7 @@ Legend: `◉` fully implemented · `○` mostly implemented · `▲` partially i
 | Pointer-ABI strict validation & doc sync | ◉ | TLV policy enforced across host/IVM with golden tests and generated docs. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | ZK syscall gating via CoreHost | ◉ | Per-op queues gate verified envelopes and enforce hash matching before ISI execution. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama pointer-ABI docs & grammar | ◉ | Grammar/docs synced with live constructors and SCALL mappings. | status.md:299-301 |
-| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/status/{MsgId}` API exposed. | status.md:65-70 |
+| ISO 20022 schema-driven engine & Torii bridge | ◉ | Canonical ISO 20022 schemas embedded, deterministic XML parsing, and `/v1/iso20022/messages/{MsgId}` API exposed. | status.md:65-70 |
 
 ## Hardware Acceleration
 

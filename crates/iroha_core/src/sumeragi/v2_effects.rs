@@ -196,21 +196,6 @@ impl BodyFetchTask {
         self.id
     }
 
-    /// Original reducer incarnation tag.
-    pub(crate) const fn tag(&self) -> EventTag {
-        self.tag
-    }
-
-    /// Exact proposal round.
-    pub(crate) const fn round(&self) -> wire::ConsensusRound {
-        self.round
-    }
-
-    /// Exact requested block subject.
-    pub(crate) const fn subject(&self) -> wire::BlockSubject {
-        self.subject
-    }
-
     /// Manifest known before reconstruction, if any.
     pub(crate) const fn manifest(&self) -> Option<&wire::PayloadManifest> {
         self.manifest.as_ref()
@@ -346,6 +331,7 @@ impl ApplyTask {
     }
 
     /// Original reducer incarnation tag.
+    #[cfg(test)]
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
@@ -1624,6 +1610,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
     /// Fail closed when the asynchronous body-store/validation worker cannot
     /// complete a still-pending exact task.
+    #[cfg(test)]
     pub(crate) fn body_service_failed<S: V2EffectServices>(
         &mut self,
         work_id: EffectWorkId,
@@ -1840,6 +1827,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     /// Borrow the durable finality values returned by Kura after application.
+    #[cfg(test)]
     pub(crate) fn durable_finality(
         &self,
     ) -> Option<(&KuraV2CommitReceipt, &wire::finality::V2FinalityArtifact)> {

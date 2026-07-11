@@ -97,7 +97,6 @@ Torii は、ツールのディスパッチのために受信認証関連ヘッ�
 - `x-api-token`
 - `x-iroha-account`
 - `x-iroha-signature`
-- `x-iroha-api-version`
 
 クライアントは、`arguments.headers` 経由で追加の呼び出しごとのヘッダーを提供することもできます。
 `arguments.headers` からの `content-length`、`host`、および `connection` は無視されます。

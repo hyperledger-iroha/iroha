@@ -191,7 +191,7 @@ yasna = "0.5.2"
 indexmap = "2.12.0"
 arc-swap = "1.7.1"
 
-[target.'cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android", target_os = "redox"))'.dependencies]
+[target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
@@ -199,6 +199,13 @@ criterion = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
+# The KZG/Poseidon recursion compatibility gate is test-only until it is wired
+# into a production adapter. The manifest selects halo2-lib's audited v0.5.3
+# tag and Cargo.lock pins it to c54cbac60da598e8e484b8aea858e0bf3c51a857;
+# snark-verifier is pinned directly to its reviewed commit.
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
+halo2-ecc = { git = "https://github.com/axiom-crypto/halo2-lib.git", tag = "v0.5.3", default-features = false, features = ["halo2-axiom"] }
+snark-verifier = { git = "https://github.com/axiom-crypto/snark-verifier.git", rev = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853", default-features = false, features = ["loader_halo2", "halo2-axiom"] }
 
 hex = { workspace = true }
 expect-test = { workspace = true }

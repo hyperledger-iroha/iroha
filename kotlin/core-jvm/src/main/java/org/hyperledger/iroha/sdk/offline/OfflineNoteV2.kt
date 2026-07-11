@@ -565,6 +565,88 @@ object OfflineNoteV2 {
         recentBlockHash: ByteArray,
         val expiresAtMs: Long,
     ) {
+        companion object {
+            /**
+             * Build the platform challenge before App Attest reveals its assertion public key.
+             *
+             * Chain admission later binds the credential and certificate keys from the returned
+             * attestation evidence to [DeviceAttestationRegistrationV2.assertionPublicKey], so the
+             * assertion key is deliberately absent from this pre-attestation input.
+             */
+            @JvmStatic
+            fun preAttestationChallengeHash(
+                version: Int = KEY_CERTIFICATE_VERSION,
+                platform: String,
+                keyId: String,
+                deviceId: String,
+                accountId: String,
+                assetDefinitionId: String? = null,
+                iosTeamId: String? = null,
+                iosBundleId: String? = null,
+                iosEnvironment: String? = null,
+                androidPackageName: String? = null,
+                androidSigningCertificateSha256: ByteArray? = null,
+                publicKey: ByteArray,
+                assertionScheme: String,
+                assertionKeyAlgorithm: String,
+                assertionUsageCountLimit: Int?,
+                oneUse: Boolean = true,
+                recentBlockHeight: Long,
+                recentBlockHash: ByteArray,
+                expiresAtMs: Long,
+            ): ByteArray {
+                val checkedPublicKey = publicKey.copyOf()
+                val checkedRecentBlockHash = recentBlockHash.copyOf()
+                val checkedSigningCertificate = androidSigningCertificateSha256?.copyOf()
+                requireCertificateCore(version, accountId, checkedPublicKey, oneUse)
+                requireAttestationIdentity(keyId, deviceId)
+                requireOptionalAttestationMetadata(
+                    iosTeamId = iosTeamId,
+                    iosBundleId = iosBundleId,
+                    iosEnvironment = iosEnvironment,
+                    androidPackageName = androidPackageName,
+                )
+                assetDefinitionId?.let { AssetDefinitionIdEncoder.parseAddressBytes(it) }
+                requireNonBlankUnpadded(assertionScheme, "assertion_scheme")
+                requireNonBlankUnpadded(assertionKeyAlgorithm, "assertion_key_algorithm")
+                require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
+                    "assertion usage count limit must be non-negative"
+                }
+                if (checkedSigningCertificate != null) {
+                    require(checkedSigningCertificate.size == 32) {
+                        "android_signing_certificate_sha256 must be 32 bytes"
+                    }
+                }
+                requireHash(checkedRecentBlockHash, "recent_block_hash")
+                return hash(NoritoCodec.encode(
+                    DeviceAttestationChallengePreimage(
+                        version = version,
+                        platform = platform,
+                        keyId = keyId,
+                        deviceId = deviceId,
+                        accountId = accountId,
+                        assetDefinitionId = assetDefinitionId,
+                        iosTeamId = iosTeamId,
+                        iosBundleId = iosBundleId,
+                        iosEnvironment = iosEnvironment,
+                        androidPackageName = androidPackageName,
+                        androidSigningCertificateSha256 = checkedSigningCertificate,
+                        publicKey = checkedPublicKey,
+                        assertionScheme = assertionScheme,
+                        assertionKeyAlgorithm = assertionKeyAlgorithm,
+                        assertionUsageCountLimit = assertionUsageCountLimit,
+                        oneUse = oneUse,
+                        recentBlockHeight = recentBlockHeight,
+                        recentBlockHash = checkedRecentBlockHash,
+                        expiresAtMs = expiresAtMs,
+                    ),
+                    DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
+                    DeviceAttestationChallengePreimageAdapter,
+                    NoritoHeader.COMPACT_LEN,
+                ))
+            }
+        }
+
         private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
         private val _publicKey = publicKey.copyOf()
         private val _assertionPublicKey = assertionPublicKey.copyOf()
@@ -700,34 +782,27 @@ object OfflineNoteV2 {
         fun keyCertificatePayloadHash(): ByteArray = keyCertificatePayload().payloadHash()
         fun noritoEncoded(): ByteArray = encodeDeviceAttestationRegistration(this)
 
-        private fun computeChallengeHash(): ByteArray =
-            hash(NoritoCodec.encode(
-                DeviceAttestationChallengePreimage(
-                    version = version,
-                    platform = platform,
-                    keyId = keyId,
-                    deviceId = deviceId,
-                    accountId = accountId,
-                    assetDefinitionId = assetDefinitionId,
-                    iosTeamId = iosTeamId,
-                    iosBundleId = iosBundleId,
-                    iosEnvironment = iosEnvironment,
-                    androidPackageName = androidPackageName,
-                    androidSigningCertificateSha256 = androidSigningCertificateSha256(),
-                    publicKey = publicKey(),
-                    assertionScheme = assertionScheme,
-                    assertionKeyAlgorithm = assertionKeyAlgorithm,
-                    assertionPublicKey = assertionPublicKey(),
-                    assertionUsageCountLimit = assertionUsageCountLimit,
-                    oneUse = oneUse,
-                    recentBlockHeight = recentBlockHeight,
-                    recentBlockHash = recentBlockHash(),
-                    expiresAtMs = expiresAtMs,
-                ),
-                DEVICE_ATTESTATION_CHALLENGE_PREIMAGE_SCHEMA,
-                DeviceAttestationChallengePreimageAdapter,
-                NoritoHeader.COMPACT_LEN,
-            ))
+        private fun computeChallengeHash(): ByteArray = preAttestationChallengeHash(
+            version = version,
+            platform = platform,
+            keyId = keyId,
+            deviceId = deviceId,
+            accountId = accountId,
+            assetDefinitionId = assetDefinitionId,
+            iosTeamId = iosTeamId,
+            iosBundleId = iosBundleId,
+            iosEnvironment = iosEnvironment,
+            androidPackageName = androidPackageName,
+            androidSigningCertificateSha256 = androidSigningCertificateSha256(),
+            publicKey = publicKey(),
+            assertionScheme = assertionScheme,
+            assertionKeyAlgorithm = assertionKeyAlgorithm,
+            assertionUsageCountLimit = assertionUsageCountLimit,
+            oneUse = oneUse,
+            recentBlockHeight = recentBlockHeight,
+            recentBlockHash = recentBlockHash(),
+            expiresAtMs = expiresAtMs,
+        )
     }
 
     private class DeviceAttestationChallengePreimage(
@@ -746,7 +821,6 @@ object OfflineNoteV2 {
         publicKey: ByteArray,
         val assertionScheme: String,
         val assertionKeyAlgorithm: String,
-        assertionPublicKey: ByteArray,
         val assertionUsageCountLimit: Int?,
         val oneUse: Boolean,
         val recentBlockHeight: Long,
@@ -755,12 +829,10 @@ object OfflineNoteV2 {
     ) {
         private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
         private val _publicKey = publicKey.copyOf()
-        private val _assertionPublicKey = assertionPublicKey.copyOf()
         private val _recentBlockHash = recentBlockHash.copyOf()
 
         fun androidSigningCertificateSha256(): ByteArray? = _androidSigningCertificateSha256?.copyOf()
         fun publicKey(): ByteArray = _publicKey.copyOf()
-        fun assertionPublicKey(): ByteArray = _assertionPublicKey.copyOf()
         fun recentBlockHash(): ByteArray = _recentBlockHash.copyOf()
     }
 
@@ -1302,7 +1374,6 @@ object OfflineNoteV2 {
             writeField(encoder) { writeBytesVec(it, value.publicKey()) }
             writeField(encoder) { writeString(it, value.assertionScheme) }
             writeField(encoder) { writeString(it, value.assertionKeyAlgorithm) }
-            writeField(encoder) { writeBytesVec(it, value.assertionPublicKey()) }
             writeField(encoder) { writeOptionU32(it, value.assertionUsageCountLimit) }
             writeField(encoder) { it.writeByte(if (value.oneUse) 1 else 0) }
             writeField(encoder) { it.writeUInt(value.recentBlockHeight, 64) }
@@ -1327,7 +1398,6 @@ object OfflineNoteV2 {
                 publicKey = readField(decoder) { readBytesVec(it) },
                 assertionScheme = readField(decoder) { readString(it) },
                 assertionKeyAlgorithm = readField(decoder) { readString(it) },
-                assertionPublicKey = readField(decoder) { readBytesVec(it) },
                 assertionUsageCountLimit = readField(decoder) { readOptionU32(it) },
                 oneUse = readField(decoder) { readBool(it) },
                 recentBlockHeight = readField(decoder) { it.readUInt(64) },

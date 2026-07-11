@@ -90,6 +90,7 @@ class ToriiEventStreamClient(
         headers.putIfAbsent("Cache-Control", "no-cache")
         headers.putIfAbsent("Connection", "keep-alive")
         options.headers.forEach { (k, v) -> headers[k] = v }
+        rejectUnsupportedCanonicalResume(path, target, headers)
         TransportSecurity.requireHttpRequestAllowed(
             "ToriiEventStreamClient",
             baseUri,
@@ -267,10 +268,11 @@ class ToriiEventStreamClient(
         parseError: Throwable?,
     ) {
         stream.closeStreamResponse()
-        if (parseError != null && parseError !is CancellationException) {
-            stream.signalFailure(parseError)
-            notifyFailure(request, parseError)
-            listener.onError(parseError)
+        val cause = parseError?.let(::unwrapCompletion)
+        if (cause != null && cause !is CancellationException) {
+            stream.signalFailure(cause)
+            notifyFailure(request, cause)
+            listener.onError(cause)
         } else if (!stream.closedByCaller()) {
             listener.onClosed()
             stream.signalSuccess()
@@ -313,6 +315,29 @@ class ToriiEventStreamClient(
             sb.append(query)
             return URI.create(sb.toString())
         }
+
+        private fun rejectUnsupportedCanonicalResume(
+            requestedPath: String?,
+            target: URI,
+            headers: Map<String, String>,
+        ) {
+            if (!isCanonicalLiveSsePath(requestedPath, target)) return
+            if (headers.keys.none { it.equals("Last-Event-ID", ignoreCase = true) }) return
+            throw IllegalArgumentException(
+                "Last-Event-ID is unsupported for canonical live SSE streams because they have no replay log",
+            )
+        }
+
+        private fun isCanonicalLiveSsePath(requestedPath: String?, target: URI): Boolean {
+            val requestedRawPath = requestedPath
+                ?.takeIf { it.isNotBlank() }
+                ?.let { runCatching { URI.create(it).rawPath }.getOrNull() }
+            return isCanonicalLiveSseRawPath(requestedRawPath) ||
+                isCanonicalLiveSseRawPath(target.rawPath)
+        }
+
+        private fun isCanonicalLiveSseRawPath(rawPath: String?): Boolean =
+            rawPath == "/v1/events/sse" || rawPath == "/v1/contracts/events/sse"
 
         private fun normalizeEventSseUriFilter(target: URI): URI {
             val rawQuery = target.rawQuery ?: return target

@@ -131,7 +131,7 @@ final class ToriiDaClientTests: XCTestCase {
 
     func testGetDaProofPoliciesUsesEndpoint() async throws {
         ToriiDaStubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/da/proof_policies")
+            XCTAssertEqual(request.url?.path, "/v1/da/proof-policies")
             XCTAssertEqual(request.httpMethod, "GET")
             let body = try JSONSerialization.data(withJSONObject: [
                 "version": 1,
@@ -184,7 +184,7 @@ final class ToriiDaClientTests: XCTestCase {
 
     func testProveDaPinIntentHandlesNullResponse() async throws {
         ToriiDaStubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/da/pin_intents/prove")
+            XCTAssertEqual(request.url?.path, "/v1/da/pin-intents/prove")
             XCTAssertEqual(request.httpMethod, "POST")
             return (200, ["Content-Type": "application/json"], Data("null".utf8))
         }

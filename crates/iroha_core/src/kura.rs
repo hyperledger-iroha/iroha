@@ -57,6 +57,7 @@ use iroha_data_model::{
         decode_framed_signed_block,
     },
     consensus::{Qc, ValidatorSetCheckpoint},
+    isi::offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
     merge::{
         MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch,
@@ -64,7 +65,10 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
     peer::PeerId,
-    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    transaction::{
+        Executable,
+        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
+    },
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -444,6 +448,7 @@ type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
 type BlockHeightIndex = BTreeMap<HashOf<BlockHeader>, NonZeroUsize>;
 type TransactionEntrypointHeights = BTreeMap<HashOf<TransactionEntrypoint>, BTreeSet<NonZeroUsize>>;
 type TransactionHashHeights = BTreeMap<HashOf<SignedTransaction>, BTreeSet<NonZeroUsize>>;
+type OfflineOperationHeights = BTreeMap<(AccountId, [u8; 32]), BTreeSet<NonZeroUsize>>;
 type TransactionAuthorityHeights = BTreeMap<AccountId, BTreeSet<NonZeroUsize>>;
 type TransactionTimestampHeights = BTreeMap<u64, BTreeSet<NonZeroUsize>>;
 type TransactionResultStatusHeights = BTreeMap<bool, BTreeSet<NonZeroUsize>>;
@@ -608,6 +613,7 @@ struct TransactionEntrypointIndex {
     incomplete_merge_heights: BTreeSet<NonZeroUsize>,
     heights_by_entrypoint: TransactionEntrypointHeights,
     heights_by_transaction: TransactionHashHeights,
+    heights_by_offline_operation_id: OfflineOperationHeights,
     heights_by_authority: TransactionAuthorityHeights,
     heights_by_timestamp_ms: TransactionTimestampHeights,
     heights_by_result_status: TransactionResultStatusHeights,
@@ -621,6 +627,7 @@ impl TransactionEntrypointIndex {
             incomplete_merge_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_transaction: BTreeMap::new(),
+            heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -662,6 +669,73 @@ pub(crate) struct CommitManifest {
     post_state_root: Option<Hash>,
     wsv_checkpoint_hash: Hash,
     commit_qc_hash: Option<Hash>,
+}
+
+/// Known immutable Kagemusha top-up finality sidecar formats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum KagemushaTopUpFinalitySidecarFormat {
+    /// Canonical bounded block-local top-up tree and Commit-QC binding.
+    #[codec(index = 1)]
+    Current,
+}
+
+/// One canonical Kagemusha top-up anchor and its block-local Merkle path.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct KagemushaTopUpFinalityLeaf {
+    /// Top-up operation identifier (the bytes following witness key tag `0xD1`).
+    pub operation_id: [u8; 32],
+    /// Digest of the complete on-chain top-up anchor.
+    pub anchor_digest: [u8; 32],
+    /// Zero-based position in canonical operation-id order.
+    pub leaf_index: u32,
+    /// Number of real leaves in the block-local tree.
+    pub leaf_count: u32,
+    /// Merkle siblings from leaf level to root.
+    pub siblings: Vec<Hash>,
+}
+
+/// Immutable Kura record used to serve a finalized Kagemusha top-up proof.
+///
+/// The sidecar intentionally retains only the bounded top-up subtree, the
+/// ordinary-write root needed to reconstruct the consensus post-state root,
+/// and the exact Commit QC. Unrelated execution-witness values are not copied.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct KagemushaTopUpFinalitySidecar {
+    /// Schema/evolution discriminator.
+    pub format: KagemushaTopUpFinalitySidecarFormat,
+    /// Numeric format version, bound independently from the enum codec index.
+    pub version: u16,
+    /// Canonical block height.
+    pub height: u64,
+    /// Canonical block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Root of all non-Kagemusha writes in the execution witness.
+    pub ordinary_writes_root: Hash,
+    /// Root of the canonical bounded top-up tree.
+    pub topup_anchor_root: Hash,
+    /// Consensus post-state root certified by `commit_qc`.
+    pub post_state_root: Hash,
+    /// Exact Commit QC which finalized this block and post-state root.
+    pub commit_qc: Qc,
+    /// Canonically sorted top-up leaves and their exact paths.
+    pub leaves: Vec<KagemushaTopUpFinalityLeaf>,
+}
+
+impl KagemushaTopUpFinalitySidecar {
+    /// Current numeric sidecar version.
+    pub const VERSION: u16 = 1;
+
+    /// Return the proof leaf for an exact operation id.
+    #[must_use]
+    pub fn leaf_for_operation(
+        &self,
+        operation_id: &[u8; 32],
+    ) -> Option<&KagemushaTopUpFinalityLeaf> {
+        self.leaves
+            .binary_search_by_key(operation_id, |leaf| leaf.operation_id)
+            .ok()
+            .and_then(|index| self.leaves.get(index))
+    }
 }
 
 impl CommitManifest {
@@ -1436,6 +1510,7 @@ impl Kura {
             incomplete_merge_heights: BTreeSet::new(),
             heights_by_entrypoint: BTreeMap::new(),
             heights_by_transaction: BTreeMap::new(),
+            heights_by_offline_operation_id: BTreeMap::new(),
             heights_by_authority: BTreeMap::new(),
             heights_by_timestamp_ms: BTreeMap::new(),
             heights_by_result_status: BTreeMap::new(),
@@ -1476,6 +1551,9 @@ impl Kura {
                 .insert(height);
         }
         let entrypoints = block.entrypoints_cloned().collect::<Vec<_>>();
+        for entrypoint in &entrypoints {
+            Self::insert_offline_operation_id_heights(index, height, entrypoint);
+        }
         for hash in crate::state::committed_transaction_hashes_for_entrypoints(&entrypoints) {
             index
                 .heights_by_transaction
@@ -1503,6 +1581,43 @@ impl Kura {
             index
                 .heights_by_result_status
                 .entry(result.as_ref().is_ok())
+                .or_default()
+                .insert(height);
+        }
+    }
+
+    fn insert_offline_operation_id_heights(
+        index: &mut TransactionEntrypointIndex,
+        height: NonZeroUsize,
+        entrypoint: &TransactionEntrypoint,
+    ) {
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::PrivateKaigi(_)
+            | TransactionEntrypoint::Time(_) => return,
+        };
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return;
+        };
+        let transaction_authority = transaction.authority();
+        for instruction in instructions.iter() {
+            let any = instruction.as_any();
+            let operation_id = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV2>()
+            {
+                top_up.request.authorization.operation_id
+            } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+                redeem.request.authorization.operation_id
+            } else {
+                continue;
+            };
+            if operation_id == [0; 32] {
+                continue;
+            }
+            index
+                .heights_by_offline_operation_id
+                .entry((transaction_authority.clone(), operation_id))
                 .or_default()
                 .insert(height);
         }
@@ -1571,6 +1686,7 @@ impl Kura {
     ) {
         for execution in &batch.lanes {
             for entrypoint in &execution.entrypoints {
+                Self::insert_offline_operation_id_heights(index, height, entrypoint);
                 index
                     .heights_by_entrypoint
                     .entry(entrypoint.hash())
@@ -1620,6 +1736,10 @@ impl Kura {
             heights.remove(&height);
             !heights.is_empty()
         });
+        index.heights_by_offline_operation_id.retain(|_, heights| {
+            heights.remove(&height);
+            !heights.is_empty()
+        });
         index.heights_by_authority.retain(|_, heights| {
             heights.remove(&height);
             !heights.is_empty()
@@ -1641,12 +1761,14 @@ impl Kura {
         height: usize,
         block: &SignedBlock,
         chain_len: usize,
+        merge_entry: Option<&MergeLedgerEntry>,
     ) {
-        let merge_association_complete = Self::block_merge_reference(block).is_none();
+        let merge_association_complete =
+            Self::block_merge_reference(block).is_none() || merge_entry.is_some();
         self.set_transaction_entrypoint_index_entry_with_merge(
             height,
             block,
-            None,
+            merge_entry,
             chain_len,
             merge_association_complete,
         );
@@ -1696,6 +1818,7 @@ impl Kura {
             .retain(|indexed_height| indexed_height.get() <= keep);
         Self::truncate_transaction_heights(&mut index.heights_by_entrypoint, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_transaction, keep);
+        Self::truncate_transaction_heights(&mut index.heights_by_offline_operation_id, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_authority, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_timestamp_ms, keep);
         Self::truncate_transaction_heights(&mut index.heights_by_result_status, keep);
@@ -1870,16 +1993,77 @@ impl Kura {
             >= self.eviction_required_replicas.get()
     }
 
-    /// Initialize Kura.
+    /// Initialize a fresh Kura with the canonical single-lane storage geometry.
     ///
     /// This does _not_ start the thread which receives and stores new blocks, see [`Self::start`].
+    /// Outside crate unit tests, this compatibility constructor accepts only an
+    /// exact [`LaneConfig::default`] and a missing or empty, non-symlink store
+    /// root. Persistent or custom-geometry stores must use
+    /// [`Self::new_with_configured_lane_catalog`] so their storage paths are
+    /// authenticated before Kura opens them.
     ///
     /// # Errors
     /// Fails if there are filesystem errors when trying
     /// to access the block store indicated by the provided
     /// path.
     pub fn new(config: &Config, lane_config: &LaneConfig) -> Result<(Arc<Self>, BlockCount)> {
+        #[cfg(not(test))]
+        Self::validate_unauthenticated_fresh_store(config, lane_config)?;
         Self::new_inner(config, lane_config, None)
+    }
+
+    #[cfg(not(test))]
+    fn validate_unauthenticated_fresh_store(
+        config: &Config,
+        lane_config: &LaneConfig,
+    ) -> Result<()> {
+        Self::validate_unauthenticated_fresh_store_inputs(config, lane_config)
+    }
+
+    fn validate_unauthenticated_fresh_store_inputs(
+        config: &Config,
+        lane_config: &LaneConfig,
+    ) -> Result<()> {
+        let store_root = config.store_dir.resolve_relative_path();
+        if *lane_config != LaneConfig::default() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "Kura::new only accepts the canonical single-lane geometry; use Kura::new_with_configured_lane_catalog for custom lane storage",
+                ),
+                store_root,
+            ));
+        }
+
+        let metadata = match std::fs::symlink_metadata(&store_root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::IO(error, store_root)),
+        };
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura::new requires a missing or empty, non-symlink store root; use Kura::new_with_configured_lane_catalog for persistent storage",
+                ),
+                store_root,
+            ));
+        }
+
+        let mut entries =
+            std::fs::read_dir(&store_root).map_err(|error| Error::IO(error, store_root.clone()))?;
+        if let Some(entry) = entries.next() {
+            let entry = entry.map_err(|error| Error::IO(error, store_root.clone()))?;
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura::new cannot open a nonempty store without an authenticated configured lane catalog; use Kura::new_with_configured_lane_catalog",
+                ),
+                entry.path(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Initialize Kura after authenticating the process-configured lane catalog.
@@ -2829,12 +3013,14 @@ impl Kura {
             .collect()
     }
 
+    #[cfg(test)]
     fn set_lane_storage_entry(&self, entry: &LaneConfigEntry) {
         self.lane_storage_entries
             .lock()
             .insert(entry.lane_id, entry.clone());
     }
 
+    #[cfg(test)]
     fn remove_lane_storage_entry(&self, lane_id: LaneId) {
         self.lane_storage_entries.lock().remove(&lane_id);
     }
@@ -2895,16 +3081,16 @@ impl Kura {
         Ok(())
     }
 
-    /// Reconcile lane storage topology, provisioning directories for new lanes,
-    /// archiving storage for retired lanes, and replacing same-id lane incarnations.
+    /// Provision an unauthenticated lane-storage fixture for unit tests.
     ///
-    /// Replacement pairs are fresh lane incarnations rather than alias relabels.
-    /// The old segment is archived before the new segment is provisioned so the
-    /// new lane cannot inherit stale block or merge-ledger files.
+    /// Production topology changes must use the authenticated geometry journal.
+    /// This helper is absent from release builds and exists only for consensus
+    /// tests whose subject is unrelated to storage lifecycle authentication.
     ///
     /// # Errors
     /// Returns an [`Error`] if preparing or retiring storage directories fails for any entry.
-    pub fn reconcile_lane_segments(
+    #[cfg(test)]
+    pub(crate) fn reconcile_lane_segments_for_testing(
         &self,
         added: &[&LaneConfigEntry],
         retired: &[&LaneConfigEntry],
@@ -2948,99 +3134,22 @@ impl Kura {
         Ok(())
     }
 
-    /// Restore the effective lane catalog recorded in a trusted WSV snapshot.
-    ///
-    /// Kura is opened before the WSV snapshot is decoded, so its in-memory lane
-    /// map initially reflects static configuration. This operation provisions all
-    /// snapshot lanes and atomically replaces that map without archiving inactive
-    /// static-config directories; those directories may contain data needed for an
-    /// operator-directed rollback. The primary lane must retain the active block
-    /// and merge-log paths selected when Kura was opened.
-    ///
-    /// # Errors
-    /// Returns an [`Error`] if the snapshot changes the active primary storage
-    /// paths or any restored lane storage cannot be validated or provisioned.
-    pub fn restore_lane_segments(&self, lane_config: &LaneConfig) -> Result<()> {
-        let restored_entries = Self::lane_storage_entries_from_config(lane_config);
-        if self.store_root.as_os_str().is_empty() {
-            *self.lane_storage_entries.lock() = restored_entries;
-            return Ok(());
-        }
-
-        let primary = lane_config.primary();
-        let primary_blocks_dir = primary.blocks_dir(&self.store_root);
-        let active_blocks_dir = self.active_blocks_dir.lock().clone();
-        if primary_blocks_dir != active_blocks_dir {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "snapshot primary lane block path differs from the active Kura path",
-                ),
-                primary_blocks_dir,
-            ));
-        }
-        let primary_merge_path = primary.merge_log_path(&self.store_root);
-        let active_merge_path = self.active_merge_path.lock().clone();
-        if primary_merge_path != active_merge_path {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidInput,
-                    "snapshot primary lane merge path differs from the active Kura path",
-                ),
-                primary_merge_path,
-            ));
-        }
-
-        for entry in lane_config.entries() {
-            self.preflight_prepare_lane_storage(entry)?;
-        }
-        for entry in lane_config.entries() {
-            self.prepare_lane_storage(entry)?;
-        }
-        *self.lane_storage_entries.lock() = restored_entries;
-        if let Err(err) = self.refresh_disk_usage_bytes() {
-            warn!(
-                ?err,
-                "failed to refresh disk usage after snapshot lane restore"
-            );
-        }
-        Ok(())
-    }
-
-    /// Restore snapshot lane storage through the durable geometry journal.
-    ///
-    /// Unlike [`Self::restore_lane_segments`], this recovery path never creates
-    /// an empty active dynamic-lane segment. It first rolls retained filesystem
-    /// transitions forward or backward to the snapshot-authoritative catalog,
-    /// then verifies the incarnation marker for every active segment.
-    ///
-    /// # Errors
-    /// Returns an [`Error`] if the journal is corrupt, its transition history
-    /// cannot reach the authoritative catalog, an active dynamic segment is
-    /// missing, or a path/marker does not match the restored incarnation.
-    pub fn restore_lane_segments_with_geometry(
-        &self,
-        lane_config: &LaneConfig,
-        incarnations: &BTreeMap<LaneId, Hash>,
-        activation_heights: &BTreeMap<LaneId, u64>,
-    ) -> Result<()> {
-        self.recover_lane_geometry_journal(lane_config, incarnations, activation_heights)?;
-        self.finish_restored_lane_segments_with_geometry(lane_config)
-    }
-
-    /// Restore snapshot lane storage at an exact committed transition height.
-    pub fn restore_lane_segments_with_geometry_at_height(
+    /// Restore snapshot lane storage at an exact committed transition height
+    /// and retained-lineage commitment.
+    pub(crate) fn restore_lane_segments_with_geometry_at_height_and_lineage_root(
         &self,
         lane_config: &LaneConfig,
         incarnations: &BTreeMap<LaneId, Hash>,
         activation_heights: &BTreeMap<LaneId, u64>,
         authoritative_height: u64,
+        lineage_root: Hash,
     ) -> Result<()> {
-        self.recover_lane_geometry_journal_at_height(
+        self.recover_lane_geometry_journal_at_height_with_lineage_root(
             lane_config,
             incarnations,
             activation_heights,
             authoritative_height,
+            lineage_root,
         )?;
         self.finish_restored_lane_segments_with_geometry(lane_config)
     }
@@ -3049,17 +3158,19 @@ impl Kura {
     ///
     /// Startup replay uses this for the genesis/configuration height, where more than one
     /// transition can legitimately share the same height and must be retried in journal order.
-    pub fn restore_lane_segments_with_geometry_before_first_transition_at_height(
+    pub(crate) fn restore_lane_segments_with_geometry_before_first_transition_at_height(
         &self,
         lane_config: &LaneConfig,
         incarnations: &BTreeMap<LaneId, Hash>,
         activation_heights: &BTreeMap<LaneId, u64>,
+        lineage_root: Hash,
         transition_height: u64,
     ) -> Result<()> {
-        self.recover_lane_geometry_journal_before_first_transition_at_height(
+        self.recover_lane_geometry_journal_before_first_transition_at_height_with_lineage_root(
             lane_config,
             incarnations,
             activation_heights,
+            lineage_root,
             transition_height,
         )?;
         self.finish_restored_lane_segments_with_geometry(lane_config)
@@ -3169,186 +3280,7 @@ impl Kura {
         self.preflight_prepare_lane_storage(current)
     }
 
-    /// Rename lane storage directories when lane aliases change.
-    ///
-    /// The migrations slice pairs the previous and current lane entries; each
-    /// pair triggers a best-effort `std::fs::rename` so block data continues to
-    /// live under the new alias without re-syncing from peers. Missing or
-    /// conflicting directories are logged and skipped so existing data is not
-    /// destroyed. Callers that bind the result to catalog state must call
-    /// [`Self::preflight_lane_segments`] first so occupied targets abort before
-    /// higher-level state changes are committed.
-    /// Move per-lane block directories when a lane's configuration alias changes.
-    ///
-    /// Each tuple in `migrations` pairs the previous configuration entry with the
-    /// new one. When the underlying storage path differs we rename the directory,
-    /// creating the new parent path if needed.
-    ///
-    /// # Errors
-    /// Returns an error if preparing lane storage, creating directories, renaming,
-    /// or retargeting the block store fails.
-    pub fn relabel_lane_segments(
-        &self,
-        migrations: &[(&LaneConfigEntry, &LaneConfigEntry)],
-    ) -> Result<()> {
-        if self.store_root.as_os_str().is_empty() {
-            return Ok(());
-        }
-        for (previous, current) in migrations {
-            if previous.kura_segment == current.kura_segment {
-                self.set_lane_storage_entry(current);
-                continue;
-            }
-            let old_dir = previous.blocks_dir(&self.store_root);
-            let new_dir = current.blocks_dir(&self.store_root);
-            if old_dir == new_dir {
-                self.set_lane_storage_entry(current);
-                continue;
-            }
-            if !old_dir.exists() {
-                self.prepare_lane_storage(current)?;
-                self.set_lane_storage_entry(current);
-                continue;
-            }
-            if let Some(parent) = new_dir.parent() {
-                create_dir_all_with_context(parent)?;
-            }
-            if new_dir.exists() {
-                iroha_logger::warn!(
-                    old = %old_dir.display(),
-                    new = %new_dir.display(),
-                    "lane storage relabel skipped because target directory already exists"
-                );
-                continue;
-            }
-            std::fs::rename(&old_dir, &new_dir).map_err(|err| Error::IO(err, old_dir.clone()))?;
-            let new_parent = new_dir.parent();
-            let old_parent = old_dir.parent();
-            if let Some(parent) = new_parent {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
-            if let Some(parent) = old_parent {
-                if Some(parent) != new_parent {
-                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-                }
-            }
-
-            {
-                let mut plain_text = self.block_plain_text_path.lock();
-                if let Some(path) = plain_text.as_mut() {
-                    if let Ok(suffix) = path.strip_prefix(&old_dir) {
-                        *path = new_dir.join(suffix);
-                    }
-                }
-            }
-
-            {
-                let mut active_dir = self.active_blocks_dir.lock();
-                if *active_dir == old_dir {
-                    active_dir.clone_from(&new_dir);
-                    let _write_guard = self.block_store_write_lock.lock();
-                    self.block_store.lock().retarget_path(new_dir.clone())?;
-                    self.invalidate_durable_budget_snapshot();
-                }
-            }
-
-            self.relabel_merge_log(previous, current)?;
-            self.set_lane_storage_entry(current);
-
-            iroha_logger::info!(
-                lane = %current.lane_id.as_u32(),
-                alias_before = previous.alias,
-                alias_after = current.alias,
-                source = %old_dir.display(),
-                target = %new_dir.display(),
-                "lane storage relabelled to match updated alias"
-            );
-        }
-
-        Ok(())
-    }
-
-    fn relabel_merge_log(
-        &self,
-        previous: &LaneConfigEntry,
-        current: &LaneConfigEntry,
-    ) -> Result<()> {
-        let old_path = previous.merge_log_path(&self.store_root);
-        let new_path = current.merge_log_path(&self.store_root);
-        if old_path == new_path {
-            return Ok(());
-        }
-
-        if !old_path.exists() {
-            if let Some(parent) = new_path.parent() {
-                create_dir_all_with_context(parent)?;
-            }
-            if !new_path.exists() {
-                FileWrap::open_with(new_path.clone(), |opts| {
-                    opts.read(true).write(true).create(true).append(true);
-                })?;
-            }
-            return Ok(());
-        }
-
-        if let Some(parent) = new_path.parent() {
-            create_dir_all_with_context(parent)?;
-        }
-        if new_path.exists() {
-            let retired_root = self.store_root.join("retired").join("merge_ledger");
-            create_dir_all_with_context(&retired_root)?;
-            let dest = unique_retired_path(&retired_root, &current.merge_segment, Some("log"));
-            std::fs::rename(&new_path, &dest).map_err(|err| Error::IO(err, new_path.clone()))?;
-            let dest_parent = dest.parent();
-            let new_parent = new_path.parent();
-            if let Some(parent) = dest_parent {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
-            if let Some(parent) = new_parent {
-                if Some(parent) != dest_parent {
-                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-                }
-            }
-            iroha_logger::info!(
-                lane = %current.lane_id.as_u32(),
-                alias = current.alias,
-                source = %new_path.display(),
-                target = %dest.display(),
-                "archived conflicting merge-ledger log before relabel"
-            );
-        }
-
-        std::fs::rename(&old_path, &new_path).map_err(|err| Error::IO(err, old_path.clone()))?;
-        let new_parent = new_path.parent();
-        let old_parent = old_path.parent();
-        if let Some(parent) = new_parent {
-            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-        }
-        if let Some(parent) = old_parent {
-            if Some(parent) != new_parent {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
-        }
-
-        {
-            let mut active_merge = self.active_merge_path.lock();
-            if *active_merge == old_path {
-                active_merge.clone_from(&new_path);
-            }
-        }
-
-        iroha_logger::info!(
-            lane = %current.lane_id.as_u32(),
-            alias_before = previous.alias,
-            alias_after = current.alias,
-            source = %old_path.display(),
-            target = %new_path.display(),
-            "lane merge-ledger relabelled"
-        );
-
-        Ok(())
-    }
-
+    #[cfg(test)]
     fn prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
         let active = {
@@ -3490,6 +3422,7 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(test)]
     fn retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
         {
@@ -3898,9 +3831,10 @@ impl Kura {
         Ok(())
     }
 
-    fn validate_merge_carrier_record(
+    fn validate_merge_carrier_record_against_block(
         &self,
         record: MergeLedgerCarrierRecord,
+        block: &SignedBlock,
     ) -> Result<MergeLedgerEntry> {
         let persisted = self
             .read_merge_carrier_path(&self.merge_carrier_path(record.block_height))?
@@ -3924,13 +3858,7 @@ impl Kura {
                 record.entry_hash, record.block_height
             )));
         }
-        let block = self.get_block(height).ok_or_else(|| {
-            Error::MergeCarrierConflict(format!(
-                "carrier block {} body is unavailable; compact merge reference cannot be revalidated",
-                record.block_height
-            ))
-        })?;
-        let reference = Self::block_merge_reference(&block).ok_or_else(|| {
+        let reference = Self::block_merge_reference(block).ok_or_else(|| {
             Error::MergeCarrierConflict(format!(
                 "carrier block {} no longer contains a compact merge reference",
                 record.block_height
@@ -3970,6 +3898,58 @@ impl Kura {
         Ok(entry)
     }
 
+    fn validate_merge_carrier_record(
+        &self,
+        record: MergeLedgerCarrierRecord,
+    ) -> Result<MergeLedgerEntry> {
+        let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
+            .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
+        let block = self.get_block(height).ok_or_else(|| {
+            Error::MergeCarrierConflict(format!(
+                "carrier block {} body is unavailable; compact merge reference cannot be revalidated",
+                record.block_height
+            ))
+        })?;
+        self.validate_merge_carrier_record_against_block(record, block.as_ref())
+    }
+
+    fn merge_carrier_record_for_block(
+        &self,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Result<Option<MergeLedgerCarrierRecord>> {
+        let record = {
+            let _guard = self.merge_carrier_lock.lock();
+            let _ = self.merge_carrier_records_unlocked()?;
+            self.merge_carrier_index
+                .lock()
+                .by_height
+                .get(&block_height)
+                .copied()
+        };
+        match record {
+            None => Ok(None),
+            Some(record) if record.block_hash == block_hash => Ok(Some(record)),
+            Some(record) => Err(Error::MergeCarrierConflict(format!(
+                "carrier record for block {} binds hash {} instead of canonical hash {}",
+                block_height, record.block_hash, block_hash
+            ))),
+        }
+    }
+
+    fn merge_entry_for_loaded_carrier(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        let Some(record) =
+            self.merge_carrier_record_for_block(block.header().height().get(), block.hash())?
+        else {
+            return Ok(None);
+        };
+        self.validate_merge_carrier_record_against_block(record, block)
+            .map(Some)
+    }
+
     /// Resolve the exact canonical carrier for a committed merge entry hash.
     ///
     /// # Errors
@@ -4003,31 +3983,29 @@ impl Kura {
         block_height: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Result<Option<MergeLedgerEntry>> {
-        let record = {
-            let _guard = self.merge_carrier_lock.lock();
-            self.ensure_merge_carrier_index_initialized_unlocked()?;
-            self.merge_carrier_index
-                .lock()
-                .by_height
-                .get(&block_height)
-                .copied()
-        };
-        let Some(record) = record.filter(|record| record.block_hash == block_hash) else {
+        let Some(record) = self.merge_carrier_record_for_block(block_height, block_hash)? else {
             return Ok(None);
         };
         let entry = self.validate_merge_carrier_record(record)?;
         Ok(Some(entry))
     }
 
-    /// Resolve a complete execution entry carried by an exact global block.
-    pub(crate) fn merge_execution_entry_for_carrier(
+    /// Resolve the complete committed merge entry carried at a canonical block height.
+    ///
+    /// The lookup is index-backed and validates the sparse carrier record, canonical
+    /// block hash, compact block reference, and full merge-log entry before returning.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical carrier metadata or full merge entry is
+    /// unavailable, malformed, or inconsistent with the block log.
+    pub fn get_merge_entry_by_carrier_height(
         &self,
-        block_height: u64,
-        block_hash: HashOf<BlockHeader>,
+        block_height: NonZeroUsize,
     ) -> Result<Option<MergeLedgerEntry>> {
-        Ok(self
-            .merge_entry_for_carrier(block_height, block_hash)?
-            .filter(|entry| entry.execution_batch.is_some()))
+        let Some(block_hash) = self.get_block_hash(block_height) else {
+            return Ok(None);
+        };
+        self.merge_entry_for_carrier(u64::try_from(block_height.get())?, block_hash)
     }
 
     /// Return every globally carried execution entry in sparse carrier order.
@@ -4107,12 +4085,11 @@ impl Kura {
                 )));
             }
             self.append_committed_merge_entry_for_block_if_missing(&block, &entry)?;
-            self.set_transaction_entrypoint_index_entry_with_merge(
+            self.set_transaction_entrypoint_index_entry(
                 height.get(),
                 &block,
-                Some(&entry),
                 block_count,
-                true,
+                Some(&entry),
             );
             self.remove_pending_certified_merge_entry(reference.entry_hash)?;
         }
@@ -4603,6 +4580,7 @@ impl Kura {
     /// # Errors
     /// Returns an error when the pending directory is unreadable, exceeds its
     /// hard entry-count/byte caps, or contains a malformed sidecar.
+    #[cfg(test)]
     pub(crate) fn select_pending_certified_merge_entry(
         &self,
     ) -> Result<Option<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
@@ -5353,6 +5331,28 @@ impl Kura {
         })
     }
 
+    /// Resolve the earliest block height containing an issuer-bound offline operation.
+    ///
+    /// The outer `None` means the in-memory transaction index is partial. An inner `None`
+    /// means the complete index contains no operation with both the requested outer transaction
+    /// authority and signed operation identifier. Binding the lookup to the outer authority keeps
+    /// a rejected transaction from another authority from shadowing a Torii-issued operation.
+    /// Returning only the earliest height bounds request-time work even if invalid historical data
+    /// reused an identifier within one issuer namespace.
+    pub fn get_earliest_block_height_by_offline_operation_id(
+        &self,
+        issuer: &AccountId,
+        operation_id: [u8; 32],
+    ) -> Option<Option<NonZeroUsize>> {
+        let index = self.transaction_entrypoint_index.lock();
+        index.complete.then(|| {
+            index
+                .heights_by_offline_operation_id
+                .get(&(issuer.clone(), operation_id))
+                .and_then(|heights| heights.first().copied())
+        })
+    }
+
     /// Resolve block heights containing committed transactions with the given authority.
     ///
     /// Returns `None` when the in-memory transaction index is known to be partial.
@@ -5606,16 +5606,29 @@ impl Kura {
 
         let block_arc = Arc::new(block);
         let merge_reference_present = Self::block_merge_reference(&block_arc).is_some();
-        let associated_merge_entry = match self.associated_merge_entry_for_block(&block_arc) {
-            Ok(entry) => entry,
-            Err(error) => {
-                error!(
-                    ?error,
-                    block_index,
-                    "Failed to authenticate merge association while indexing loaded block"
-                );
-                return None;
+        let associated_merge_entry = if merge_reference_present {
+            match self.merge_entry_for_loaded_carrier(block_arc.as_ref()) {
+                Ok(Some(entry)) => Some(entry),
+                Ok(None) => {
+                    error!(
+                        carrier_height = block_index.saturating_add(1),
+                        ?expected_hash,
+                        "Loaded merge carrier block has no committed merge entry; marking its transaction index incomplete"
+                    );
+                    None
+                }
+                Err(error) => {
+                    error!(
+                        ?error,
+                        carrier_height = block_index.saturating_add(1),
+                        ?expected_hash,
+                        "Failed to authenticate merge association while indexing loaded block"
+                    );
+                    return None;
+                }
             }
+        } else {
+            None
         };
         self.set_transaction_entrypoint_index_entry_with_merge(
             block_index.saturating_add(1),
@@ -5660,12 +5673,10 @@ impl Kura {
     }
 
     /// Force a stored block height into hash-only form when constructing snapshot tests.
+    #[doc(hidden)]
     #[cfg(any(test, feature = "iroha-core-tests"))]
     #[allow(dead_code)]
-    pub(crate) fn force_hash_only_block_for_testing(
-        &self,
-        block_height: NonZeroUsize,
-    ) -> Result<()> {
+    pub fn force_hash_only_block_for_testing(&self, block_height: NonZeroUsize) -> Result<()> {
         let idx = block_height.get().saturating_sub(1);
         let (block_hash, block_count) = {
             let mut data = self.block_data.lock();
@@ -6642,6 +6653,7 @@ impl Kura {
                         actual_height_usize,
                         block,
                         chain_len,
+                        None,
                     );
                 }
                 debug!(
@@ -6704,7 +6716,12 @@ impl Kura {
                 );
                 self.remove_pending_certified_merge_entry(entry.canonical_hash())?;
             } else {
-                self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
+                self.set_transaction_entrypoint_index_entry(
+                    actual_height_usize,
+                    block,
+                    chain_len,
+                    None,
+                );
             }
             debug!(
                 height = actual_height,
@@ -6745,17 +6762,10 @@ impl Kura {
         );
         let new_len = block_data.len();
         self.set_block_height_index_entry(actual_height_usize, block_hash);
-        if merge_entry.is_some() {
-            self.set_transaction_entrypoint_index_entry_with_merge(
-                actual_height_usize,
-                block,
-                None,
-                new_len,
-                false,
-            );
-        } else {
-            self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len);
-        }
+        // The canonical block is now durable, but its compact merge reference
+        // is not query-complete until the full entry and sparse carrier record
+        // are both durable. Passing no entry records that partial frontier.
+        self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len, None);
         drop(block_data);
         self.append_debug_block_dump(block);
 
@@ -7745,7 +7755,7 @@ impl Kura {
                 self.ensure_durable_block_at_height(height, block_hash)?;
                 self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
                 self.set_block_height_index_entry(height_usize, block_hash);
-                self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
+                self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
                 return Ok(());
             }
         }
@@ -7763,7 +7773,7 @@ impl Kura {
             self.ensure_durable_block_at_height(height, block_hash)?;
             self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
             self.set_block_height_index_entry(height_usize, block_hash);
-            self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
+            self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
             return Ok(());
         }
 
@@ -7775,7 +7785,7 @@ impl Kura {
         Self::drop_persisted_blocks(&mut data, height_usize, self.blocks_in_memory.get());
         let chain_len = data.len();
         self.set_block_height_index_entry(height_usize, block_hash);
-        self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len);
+        self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
         drop(data);
         self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
@@ -9094,31 +9104,6 @@ impl AutonomousLaneMergeBundleV1 {
     /// Exact producer-authenticated executable payload.
     pub(crate) const fn executable_payload(&self) -> &LaneExecutablePayloadV1 {
         &self.autonomous.executable_payload
-    }
-
-    /// Peers cryptographically committed to holding or producing the payload.
-    pub(crate) fn availability_holders(&self) -> Vec<PeerId> {
-        let mut holders = BTreeSet::from([self.autonomous.executable_payload.producer.clone()]);
-        if let Some(deliver) = &self.autonomous.availability_certificate {
-            for (byte_index, byte) in deliver
-                .certificate
-                .signers_bitmap
-                .iter()
-                .copied()
-                .enumerate()
-            {
-                for bit in 0..8 {
-                    if byte & (1_u8 << bit) == 0 {
-                        continue;
-                    }
-                    if let Some(peer) = deliver.certificate.validator_set.get(byte_index * 8 + bit)
-                    {
-                        holders.insert(peer.clone());
-                    }
-                }
-            }
-        }
-        holders.into_iter().collect()
     }
 }
 
@@ -12892,6 +12877,7 @@ impl Kura {
     /// Returns an error when the execution input is no longer canonical, the
     /// preflight result is internally inconsistent, the lane has no configured
     /// storage segment, or the sidecar write fails.
+    #[cfg(test)]
     pub(crate) fn persist_lane_block_execution_preflight(
         &self,
         input: &LaneBlockExecutionInputArtifact,
@@ -12926,6 +12912,7 @@ impl Kura {
         self.write_lane_block_execution_preflight_artifact(&artifact)
     }
 
+    #[cfg(test)]
     fn write_lane_block_execution_preflight_artifact(
         &self,
         artifact: &LaneBlockExecutionPreflightArtifact,
@@ -13097,20 +13084,30 @@ impl Kura {
     ) -> bool {
         let descriptor = &proposal.descriptor;
         let previous_height = descriptor.previous_lane_block_height;
-        if previous_height == 0 {
-            return true;
+        if descriptor.lane_block_height == 1 {
+            return previous_height == 0
+                && descriptor.previous_lane_block_descriptor_hash.is_none();
+        }
+        if previous_height == 0
+            || previous_height.checked_add(1) != Some(descriptor.lane_block_height)
+        {
+            return false;
         }
         let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
-            return true;
+            return false;
         };
         let Some(receipt) =
             self.read_lane_block_application_receipt(descriptor.lane_id, previous_height)
         else {
             return false;
         };
-        receipt.proposal.descriptor.dataspace_id == descriptor.dataspace_id
-            && receipt.proposal.descriptor.lane_block_height == previous_height
-            && receipt.proposal.descriptor.descriptor_hash == previous_descriptor_hash
+        let predecessor = &receipt.proposal.descriptor;
+        predecessor.lane_id == descriptor.lane_id
+            && predecessor.dataspace_id == descriptor.dataspace_id
+            && predecessor.lane_incarnation == descriptor.lane_incarnation
+            && predecessor.lane_block_height == previous_height
+            && predecessor.proposal_height < descriptor.proposal_height
+            && predecessor.descriptor_hash == previous_descriptor_hash
             && self.lane_block_application_receipt_available(&receipt.proposal)
     }
 
@@ -14308,6 +14305,7 @@ impl Kura {
     /// Artifacts are sorted by lane-local height first so recovery can rebuild
     /// predecessor-gated lane sessions before later blocks that depend on them.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn lane_block_artifacts_snapshot(&self) -> Vec<LaneBlockArtifact> {
         let lane_ids = self
             .lane_storage_entries
@@ -14331,6 +14329,7 @@ impl Kura {
         artifacts
     }
 
+    #[cfg(test)]
     fn lane_block_artifacts_for_lane(&self, lane_id: LaneId) -> Vec<LaneBlockArtifact> {
         let Some(entry) = self.lane_storage_entry(lane_id).ok() else {
             return Vec::new();
@@ -18266,6 +18265,7 @@ fn sync_dir(path: &Path) -> std::io::Result<()> {
     file.sync_all()
 }
 
+#[cfg(test)]
 fn unique_retired_path(base: &Path, stem: &str, extension: Option<&str>) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -18476,10 +18476,14 @@ mod tests {
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
+        asset::{AssetDefinitionId, AssetId},
         block::{
             BlockExecutionContextBundle, BlockHeader, CertifiedMergeLedgerReference,
             ExternalExecutionContext,
-            consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
+            consensus::{
+                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
+                LaneBlockQcV1, SumeragiLanePayloadOwnership,
+            },
             consensus_v2::{
                 BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
                 GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
@@ -18490,7 +18494,15 @@ mod tests {
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
         merge::MergeQuorumCertificate,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{
+            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
+            LaneVisibility,
+        },
+        offline::{
+            KagemushaRecursiveSpendTopUpRequestV2, KagemushaRequestAuthorizationV2,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
+        },
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
         transaction::{
@@ -18511,6 +18523,9 @@ mod tests {
     use super::*;
     use crate::{
         block::{BlockBuilder, ValidBlock},
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
         prelude::{AcceptedTransaction, StateReadOnly, World},
         query::store::LiveQueryStore,
         smartcontracts::Registrable,
@@ -18520,6 +18535,209 @@ mod tests {
             network_topology::Topology,
         },
     };
+
+    fn offline_top_up_entrypoint_for_index(
+        request_operation_id: [u8; 32],
+        authorization_operation_id: [u8; 32],
+    ) -> TransactionEntrypoint {
+        offline_top_up_entrypoint_for_index_with_outer_authority(
+            request_operation_id,
+            authorization_operation_id,
+            &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+        )
+    }
+
+    fn offline_top_up_entrypoint_for_index_with_outer_authority(
+        request_operation_id: [u8; 32],
+        authorization_operation_id: [u8; 32],
+        outer_authority: &KeyPair,
+    ) -> TransactionEntrypoint {
+        let chain_id = ChainId::from("kura-offline-operation-index");
+        let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
+        let definition = AssetDefinitionId::new(
+            domain_id,
+            "cash".parse().expect("fixture asset definition name"),
+        );
+        let amount = KagemushaScaledAmountV2 {
+            atomic_units: 7,
+            scale: 0,
+        };
+        let request = KagemushaRecursiveSpendTopUpRequestV2 {
+            asset: AssetId::new(definition.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone()),
+            amount,
+            current_note: KagemushaSpendableNoteDescriptorV2 {
+                chain_id: chain_id.clone(),
+                asset: definition.clone(),
+                note_commitment: [0x31; 32],
+                spend_nullifier: [0x32; 32],
+                amount,
+            },
+            record_bundle: KagemushaVerifiedFoldRecordBundle {
+                bundle: KagemushaVerifiedFoldBundle {
+                    chain_id,
+                    asset: definition,
+                    steps: Vec::new(),
+                },
+                verifier_records: Vec::new(),
+            },
+            pallas_open_envelopes_archive: Vec::new(),
+            artifact_generation: "kura-operation-index-fixture".to_owned(),
+            operation_id: request_operation_id,
+            authorization: KagemushaRequestAuthorizationV2 {
+                authority: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                device_id: "kura-operation-index-device".to_owned(),
+                operation_id: authorization_operation_id,
+                issued_at_ms: 1,
+                expires_at_ms: u64::MAX,
+                nonce: [0x33; 32],
+                payload_digest: [0x34; 32],
+                app_attest_evidence_sha256: None,
+                app_attest_evidence: None,
+                signature: Signature::new(
+                    SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                    b"kura offline operation index fixture",
+                ),
+            },
+        };
+        let outer_authority_id = AccountId::new(outer_authority.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("kura-offline-operation-index"),
+            outer_authority_id,
+        )
+        .with_instructions([TopUpKagemushaRecursiveV2::new(request)])
+        .sign(outer_authority.private_key());
+        TransactionEntrypoint::External(transaction)
+    }
+
+    fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> MergeLedgerEntry {
+        let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
+        let results = vec![TransactionResult::from(Ok(DataTriggerSequence::default()))];
+        let result_hashes = results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect::<Vec<_>>();
+        let validator_set = Vec::<PeerId>::new();
+        let lane_incarnation = Hash::new(b"kura-index-refresh-lane-incarnation");
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            proposal_height: 2,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"kura-index-refresh-subject"),
+            payload_ownership_hash: Hash::new(b"kura-index-refresh-ownership"),
+            rbc_instance_hash: Hash::new(b"kura-index-refresh-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: entrypoint_hashes.clone(),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 0,
+            min_quorum: 0,
+            qc_mode_tag: "kura-index-refresh-test".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let lane_qc = |phase| LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+            payload_availability_qc: None,
+        };
+        let prepare_qc = lane_qc(CertPhase::Prepare);
+        let commit_qc = lane_qc(CertPhase::Commit);
+        let settlement_commitment = LaneBlockCommitment {
+            block_height: 1,
+            lane_id: LaneId::SINGLE,
+            lane_incarnation,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let execution = MergeLaneExecution {
+            source_bundle: vec![1],
+            source_bundle_hash: Hash::new(b"kura-index-refresh-source"),
+            proposal: proposal.clone(),
+            origin_proposal: proposal,
+            prepare_qc,
+            commit_qc,
+            signer_proofs: Vec::new(),
+            autonomous_chain_id_hash: Hash::new(b"kura-index-refresh-chain"),
+            autonomous_epoch: 0,
+            autonomous_payload_hash: Hash::new(b"kura-index-refresh-payload"),
+            entrypoint_hashes,
+            entrypoints: vec![entrypoint],
+            reservation_keys: vec![vec![1]],
+            routing_plans: vec![vec![2]],
+            native_amx_receipts: vec![None],
+            result_hashes,
+            results,
+            settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
+                &settlement_commitment,
+            )
+            .expect("fixture settlement hashes canonically"),
+            settlement_commitment,
+        };
+        let lanes = vec![execution];
+        let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
+            .expect("fixture has an entrypoint");
+        let result_merkle_root =
+            crate::merge::merge_execution_result_merkle_root(&lanes).expect("fixture has a result");
+        let base_state_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"kura-index-refresh-base-state"));
+        let write_set_root = Hash::new(b"kura-index-refresh-write-set");
+        let mut batch = MergeExecutionBatch {
+            version: 1,
+            base_state_height: 1,
+            base_state_hash,
+            application_block_header: BlockHeader::new(
+                nonzero!(2_u64),
+                Some(HashOf::from_untyped_unchecked(Hash::new(
+                    b"kura-index-refresh-parent",
+                ))),
+                None,
+                None,
+                1,
+                0,
+            ),
+            execution_root: crate::merge::merge_execution_root(&lanes),
+            lanes,
+            entrypoint_count: 1,
+            entrypoint_merkle_root,
+            result_merkle_root,
+            application_write_set_root: Hash::new(b"kura-index-refresh-application-write-set"),
+            write_set_root,
+            expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
+                1,
+                base_state_hash,
+                write_set_root,
+            ),
+            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+        let mut entry = sample_merge_entry(1);
+        entry.execution_batch = Some(batch);
+        entry
+    }
 
     fn v2_finality_artifact_for_block(block: &SignedBlock) -> V2FinalityArtifact {
         let mut roster = (0..4)
@@ -18805,7 +19023,7 @@ mod tests {
             .entry(LaneId::from(2))
             .expect("lane 2 entry");
 
-        kura.reconcile_lane_segments(&[lane2_entry], &[], &[])
+        kura.reconcile_lane_segments_for_testing(&[lane2_entry], &[], &[])
             .expect("provision lane 2");
 
         let lane2_blocks = lane2_entry.blocks_dir(&store_root);
@@ -18826,7 +19044,7 @@ mod tests {
             "lane 2 merge ledger missing"
         );
 
-        kura.reconcile_lane_segments(&[], &[lane1_entry], &[])
+        kura.reconcile_lane_segments_for_testing(&[], &[lane1_entry], &[])
             .expect("retire lane 1");
 
         assert!(
@@ -18875,7 +19093,7 @@ mod tests {
         let entry = lane_config.entry(LaneId::from(1)).expect("lane entry");
 
         let kura = Kura::blank_kura_for_testing();
-        kura.reconcile_lane_segments(&[entry], &[], &[])
+        kura.reconcile_lane_segments_for_testing(&[entry], &[], &[])
             .expect("no-op reconcile");
 
         assert!(
@@ -18889,7 +19107,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_lane_restore_rebinds_map_without_destroying_inactive_config_storage() {
+    fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let store_root = temp_dir.path().join("kura");
         let lane0 = ModelLaneConfig::default();
@@ -18933,9 +19151,70 @@ mod tests {
             LaneCatalog::new(nonzero!(2_u32), vec![lane0, restored_lane.clone()])
                 .expect("restored catalog");
         let restored = RuntimeLaneConfig::from_catalog(&restored_catalog);
+        let primary_incarnation = Hash::new(b"snapshot restore primary incarnation");
+        let stale_incarnation = Hash::new(b"snapshot restore stale incarnation");
+        let restored_incarnation = Hash::new(b"snapshot restore active incarnation");
+        let configured_incarnations = BTreeMap::from([
+            (LaneId::SINGLE, primary_incarnation),
+            (stale_config_lane.id, stale_incarnation),
+        ]);
+        let configured_activations =
+            BTreeMap::from([(LaneId::SINGLE, 0), (stale_config_lane.id, 0)]);
+        let configured_lineage_root = Hash::new(b"snapshot restore configured lineage");
+        let restored_incarnations = BTreeMap::from([
+            (LaneId::SINGLE, primary_incarnation),
+            (restored_lane.id, restored_incarnation),
+        ]);
+        let restored_activations = BTreeMap::from([(LaneId::SINGLE, 0), (restored_lane.id, 1)]);
+        let restored_lineage_root = Hash::new(b"snapshot restore active lineage");
 
-        kura.restore_lane_segments(&restored)
-            .expect("restore snapshot lane map");
+        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
+            &configured,
+            &restored,
+            &configured_incarnations,
+            &restored_incarnations,
+            &configured_activations,
+            &restored_activations,
+            configured_lineage_root,
+            restored_lineage_root,
+            &BTreeSet::new(),
+            1,
+        )
+        .expect("apply authenticated post-snapshot geometry transition");
+        kura.mark_lane_geometry_catalog_published_with_lineage_root(
+            &restored,
+            &restored_incarnations,
+            &restored_activations,
+            restored_lineage_root,
+            None,
+        )
+        .expect("publish authenticated post-snapshot geometry transition");
+
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &configured,
+            &configured_incarnations,
+            &configured_activations,
+            0,
+            configured_lineage_root,
+        )
+        .expect("restore exact pre-transition snapshot geometry");
+        assert!(
+            kura.lane_storage_entry(restored_lane.id).is_err(),
+            "a lane introduced after the snapshot must not remain active"
+        );
+        assert!(
+            stale_dir.exists(),
+            "snapshot-authoritative lane must be restored"
+        );
+
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &restored,
+            &restored_incarnations,
+            &restored_activations,
+            1,
+            restored_lineage_root,
+        )
+        .expect("restore exact post-transition snapshot geometry");
 
         let restored_entry = kura
             .lane_storage_entry(restored_lane.id)
@@ -18947,13 +19226,13 @@ mod tests {
             "static-only lane must not remain active after snapshot restore"
         );
         assert!(
-            stale_dir.exists(),
-            "restart reconciliation must leave inactive configuration storage recoverable"
+            !stale_dir.exists(),
+            "replaying the authenticated post-transition cursor must retire the stale lane again"
         );
     }
 
     #[test]
-    fn snapshot_lane_restore_rejects_primary_path_drift_atomically() {
+    fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let store_root = temp_dir.path().join("kura");
         let configured_catalog =
@@ -18975,6 +19254,18 @@ mod tests {
                 iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &configured).expect("init Kura");
+        let configured_incarnation = Hash::new(b"configured primary restore incarnation");
+        let configured_incarnations = BTreeMap::from([(LaneId::SINGLE, configured_incarnation)]);
+        let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let configured_lineage_root = Hash::new(b"configured primary restore lineage");
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &configured,
+            &configured_incarnations,
+            &configured_activations,
+            0,
+            configured_lineage_root,
+        )
+        .expect("authenticate configured primary geometry");
         let drifted_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![ModelLaneConfig {
@@ -18985,8 +19276,17 @@ mod tests {
         .expect("drifted catalog");
         let drifted = RuntimeLaneConfig::from_catalog(&drifted_catalog);
 
-        kura.restore_lane_segments(&drifted)
-            .expect_err("primary storage path drift must fail closed");
+        let drifted_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, Hash::new(b"drifted primary incarnation"))]);
+        let drifted_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &drifted,
+            &drifted_incarnations,
+            &drifted_activations,
+            0,
+            Hash::new(b"drifted primary lineage"),
+        )
+        .expect_err("primary storage path drift must fail closed");
 
         assert_eq!(
             kura.lane_storage_entry(LaneId::SINGLE)
@@ -19050,7 +19350,7 @@ mod tests {
         std::fs::File::create(&conflict_dir).expect("seed conflicting file");
 
         let err = kura
-            .reconcile_lane_segments(&[conflicting_entry], &[], &[])
+            .reconcile_lane_segments_for_testing(&[conflicting_entry], &[], &[])
             .expect_err("expected lane provisioning to surface error");
         match err {
             Error::MkDir(_, path) => assert_eq!(path, conflict_dir),
@@ -19114,8 +19414,31 @@ mod tests {
             .entry(LaneId::SINGLE)
             .expect("lane entry");
 
-        kura.relabel_lane_segments(&[(initial_entry, updated_entry)])
-            .expect("relabel lane storage");
+        let incarnation = Hash::new(b"authenticated primary relabel incarnation");
+        let incarnations = BTreeMap::from([(LaneId::SINGLE, incarnation)]);
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        let lineage_root = Hash::new(b"authenticated primary relabel lineage");
+        kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
+            &initial_lane_config,
+            &updated_lane_config,
+            &incarnations,
+            &incarnations,
+            &activation_heights,
+            &activation_heights,
+            lineage_root,
+            lineage_root,
+            &BTreeSet::new(),
+            1,
+        )
+        .expect("apply authenticated lane-storage relabel");
+        kura.mark_lane_geometry_catalog_published_with_lineage_root(
+            &updated_lane_config,
+            &incarnations,
+            &activation_heights,
+            lineage_root,
+            None,
+        )
+        .expect("publish authenticated lane-storage relabel");
 
         let new_dir = updated_entry.blocks_dir(&kura.store_root);
         let new_merge = updated_entry.merge_log_path(&kura.store_root);
@@ -19450,6 +19773,169 @@ mod tests {
             }],
         )
         .expect("configured primary-lane catalog")
+    }
+
+    #[test]
+    fn unauthenticated_new_preflight_rejects_custom_single_lane_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let store_root = temp.path().join("custom-kura");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+        let custom_catalog = configured_primary_catalog("custom-primary-path");
+        let custom_config = RuntimeLaneConfig::from_catalog(&custom_catalog);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(&config, &custom_config)
+            .expect_err("custom single-lane geometry requires catalog authentication");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidInput
+                    && source.to_string().contains("new_with_configured_lane_catalog")
+                    && path == &store_root
+        ));
+        assert!(
+            !store_root.exists(),
+            "rejected custom geometry must not create its store root"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_new_preflight_rejects_multilane_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let store_root = temp.path().join("multilane-kura");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+        let lane_zero = ModelLaneConfig::default();
+        let lane_one = ModelLaneConfig {
+            id: LaneId::new(1),
+            alias: "secondary".to_owned(),
+            ..ModelLaneConfig::default()
+        };
+        let catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![lane_zero, lane_one]).expect("two-lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(&config, &lane_config)
+            .expect_err("multilane geometry requires catalog authentication");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidInput
+                    && source.to_string().contains("new_with_configured_lane_catalog")
+                    && path == &store_root
+        ));
+        assert!(
+            !store_root.exists(),
+            "rejected multilane geometry must not create its store root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unauthenticated_new_preflight_rejects_symlink_root_without_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary parent directory");
+        let target = temp.path().join("target");
+        fs::create_dir(&target).expect("create symlink target");
+        let store_root = temp.path().join("kura-link");
+        symlink(&target, &store_root).expect("create Kura root symlink");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect_err("a symlink store root must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string().contains("non-symlink store root")
+                    && path == &store_root
+        ));
+        assert!(
+            fs::read_dir(&target)
+                .expect("read unchanged symlink target")
+                .next()
+                .is_none(),
+            "rejected symlink root must not provision its target"
+        );
+        assert!(
+            fs::symlink_metadata(&store_root)
+                .expect("symlink remains present")
+                .file_type()
+                .is_symlink(),
+            "rejected root identity must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_new_preflight_rejects_nonempty_root_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let store_root = temp.path().join("legacy-kura");
+        fs::create_dir(&store_root).expect("create legacy root");
+        let sentinel = store_root.join("blocks.data");
+        let sentinel_bytes = b"unbound legacy Kura bytes";
+        fs::write(&sentinel, sentinel_bytes).expect("write legacy sentinel");
+        let entries_before = fs::read_dir(&store_root)
+            .expect("read legacy root")
+            .map(|entry| entry.expect("legacy entry").file_name())
+            .collect::<Vec<_>>();
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+
+        let error = Kura::validate_unauthenticated_fresh_store_inputs(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect_err("a nonempty root without a catalog journal must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidData
+                    && source.to_string().contains("nonempty store")
+                    && source.to_string().contains("new_with_configured_lane_catalog")
+                    && path == &sentinel
+        ));
+        assert_eq!(
+            fs::read(&sentinel).expect("read unchanged sentinel"),
+            sentinel_bytes
+        );
+        assert_eq!(
+            fs::read_dir(&store_root)
+                .expect("read rejected legacy root")
+                .map(|entry| entry.expect("legacy entry").file_name())
+                .collect::<Vec<_>>(),
+            entries_before,
+            "rejected nonempty root must not gain geometry or storage artifacts"
+        );
+    }
+
+    #[test]
+    fn unauthenticated_new_preflight_accepts_missing_or_empty_default_root_without_mutation() {
+        let temp = TempDir::new().expect("temporary parent directory");
+        let missing_root = temp.path().join("missing-kura");
+        let missing_config = kura_config_for_path(&missing_root, BLOCKS_IN_MEMORY);
+        Kura::validate_unauthenticated_fresh_store_inputs(
+            &missing_config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("missing canonical root is fresh");
+        assert!(!missing_root.exists());
+
+        let empty_root = temp.path().join("empty-kura");
+        fs::create_dir(&empty_root).expect("create empty canonical root");
+        let empty_config = kura_config_for_path(&empty_root, BLOCKS_IN_MEMORY);
+        Kura::validate_unauthenticated_fresh_store_inputs(
+            &empty_config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("empty canonical root is fresh");
+        assert!(
+            fs::read_dir(&empty_root)
+                .expect("read empty root")
+                .next()
+                .is_none(),
+            "fresh-store validation itself must not provision storage"
+        );
     }
 
     fn publish_configured_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
@@ -20170,8 +20656,18 @@ mod tests {
         let parent = blocks.next();
         let mut entry1 = sample_merge_entry(1);
         let block1 = next_merge_carrier(&mut blocks, &mut entry1);
+        let block1_height = NonZeroUsize::new(
+            usize::try_from(block1.header().height().get()).expect("carrier height fits usize"),
+        )
+        .expect("carrier height is non-zero");
+        let block1_hash = block1.hash();
         let mut entry2 = sample_merge_entry(2);
         let block2 = next_merge_carrier(&mut blocks, &mut entry2);
+        let block2_height = NonZeroUsize::new(
+            usize::try_from(block2.header().height().get()).expect("carrier height fits usize"),
+        )
+        .expect("carrier height is non-zero");
+        let block2_hash = block2.hash();
         kura.store_block(parent).expect("store carrier parent");
         kura.store_block_with_merge_entry(block1, &entry1)
             .expect("store block+entry1");
@@ -20189,6 +20685,20 @@ mod tests {
             2,
             "merge log should survive with paired blocks"
         );
+        for (height, hash, expected) in [
+            (block1_height, block1_hash, &entry1),
+            (block2_height, block2_hash, &entry2),
+        ] {
+            let block = kura_reloaded
+                .get_block(height)
+                .expect("reloaded merge carrier body");
+            assert_eq!(block.hash(), hash);
+            let resolved = kura_reloaded
+                .get_merge_entry_by_carrier_height(height)
+                .expect("validate reloaded merge carrier")
+                .expect("merge entry at carrier height");
+            assert_eq!(resolved.canonical_hash(), expected.canonical_hash());
+        }
     }
 
     #[test]
@@ -20392,7 +20902,84 @@ mod tests {
             .expect("store block with merge entry");
 
         assert_eq!(kura.blocks_count(), 2);
+        kura.block_data.lock()[1].1 = None;
+        assert_eq!(
+            kura.get_merge_entry_by_carrier_height(nonzero!(2_usize))
+                .expect("resolve exact canonical carrier after a block-cache miss"),
+            Some(expected.clone())
+        );
         assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
+    }
+
+    #[test]
+    fn corrupted_merge_carrier_fails_closed_after_block_cache_miss() {
+        #[derive(Clone, Copy)]
+        enum Corruption {
+            BlockHash,
+            EntryHash,
+            Epoch,
+        }
+
+        for (corruption, label) in [
+            (Corruption::BlockHash, "block hash"),
+            (Corruption::EntryHash, "entry hash"),
+            (Corruption::Epoch, "epoch"),
+        ] {
+            let kura = Kura::blank_kura_for_testing();
+            let mut blocks = DummyBlocks::new();
+            let parent = blocks.next();
+            let mut entry = sample_merge_entry(1);
+            let block = next_merge_carrier(&mut blocks, &mut entry);
+            let height = NonZeroUsize::new(
+                usize::try_from(block.header().height().get()).expect("carrier height fits usize"),
+            )
+            .expect("carrier height is non-zero");
+
+            kura.store_block(parent).expect("store carrier parent");
+            kura.store_block_with_merge_entry(block, &entry)
+                .expect("store block with merge entry");
+
+            let mut record = kura
+                .merge_carrier_for_entry(entry.canonical_hash())
+                .expect("load canonical carrier index")
+                .expect("canonical carrier record");
+            match corruption {
+                Corruption::BlockHash => {
+                    record.block_hash = HashOf::from_untyped_unchecked(Hash::new(
+                        b"adversarial merge carrier block hash",
+                    ));
+                }
+                Corruption::EntryHash => {
+                    record.entry_hash = HashOf::from_untyped_unchecked(Hash::new(
+                        b"adversarial merge carrier entry hash",
+                    ));
+                }
+                Corruption::Epoch => record.epoch_id = record.epoch_id.saturating_add(1),
+            }
+            let path = kura.merge_carrier_path(record.block_height);
+            let corrupted_bytes = norito::to_bytes(&record).expect("encode corrupt carrier record");
+            std::fs::write(&path, &corrupted_bytes).expect("persist corrupt carrier fixture");
+            *kura.merge_carrier_index.lock() = MergeCarrierIndex::default();
+            kura.block_data.lock()[height.get() - 1].1 = None;
+
+            let error = kura
+                .get_merge_entry_by_carrier_height(height)
+                .expect_err("corrupt carrier must fail closed");
+            assert!(
+                matches!(error, Error::MergeCarrierConflict(_)),
+                "{label} corruption returned the wrong error: {error}"
+            );
+            assert_eq!(
+                std::fs::read(&path).expect("reread corrupt carrier fixture"),
+                corrupted_bytes,
+                "{label} corruption must not be repaired or rewritten during lookup"
+            );
+            assert_eq!(
+                kura.merge_ledger_snapshot(),
+                vec![entry],
+                "{label} corruption must not mutate the committed merge log"
+            );
+        }
     }
 
     #[test]
@@ -20409,6 +20996,14 @@ mod tests {
             .expect("store block and original merge entry");
         kura.truncate_merge_log_to_len(0)
             .expect("simulate missing merge log after durable carrier publication");
+        kura.block_data.lock()[1].1 = None;
+        let error = kura
+            .get_merge_entry_by_carrier_height(nonzero!(2_usize))
+            .expect_err("a carrier with no merge-log frame must fail closed");
+        assert!(
+            matches!(error, Error::MergeCarrierConflict(_)),
+            "missing merge-log frame returned the wrong error: {error}"
+        );
         kura.store_block_with_merge_entry(block.clone(), &entry)
             .expect("backfill merge entry");
         kura.store_block_with_merge_entry(block, &entry)
@@ -22637,6 +23232,189 @@ mod tests {
     }
 
     #[test]
+    fn offline_operation_index_distinguishes_missing_partial_and_earliest_height() {
+        let kura = Kura::blank_kura_for_testing();
+        let operation_id = [0xA5; 32];
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(None),
+            "an empty complete index reports a definite miss"
+        );
+
+        {
+            let mut index = kura.transaction_entrypoint_index.lock();
+            index.heights_by_offline_operation_id.insert(
+                (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id),
+                BTreeSet::from([nonzero!(3_usize), nonzero!(1_usize)]),
+            );
+            index.indexed_heights =
+                BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize), nonzero!(3_usize)]);
+        }
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(Some(nonzero!(1_usize)))
+        );
+
+        kura.truncate_transaction_entrypoint_index(2);
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(Some(nonzero!(1_usize))),
+            "truncation retains the earliest surviving occurrence"
+        );
+
+        kura.transaction_entrypoint_index.lock().complete = false;
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            None,
+            "a partial index must not turn an unknown result into a miss"
+        );
+    }
+
+    #[test]
+    fn offline_operation_index_extracts_authorized_ids_and_ignores_zero_or_unrelated_entries() {
+        let operation_id = [0xA6; 32];
+        let top_level_mismatch = [0xA7; 32];
+        let entrypoint = offline_top_up_entrypoint_for_index(top_level_mismatch, operation_id);
+        let mut index = TransactionEntrypointIndex::complete_empty();
+
+        Kura::insert_offline_operation_id_heights(&mut index, nonzero!(3_usize), &entrypoint);
+        Kura::insert_offline_operation_id_heights(&mut index, nonzero!(1_usize), &entrypoint);
+        let operation_key = (SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id);
+        assert_eq!(
+            index.heights_by_offline_operation_id.get(&operation_key),
+            Some(&BTreeSet::from([nonzero!(1_usize), nonzero!(3_usize)])),
+            "the signed authorization id is the canonical retry identity"
+        );
+        assert!(
+            !index
+                .heights_by_offline_operation_id
+                .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), top_level_mismatch)),
+            "a malformed duplicate top-level id must not create a second lookup identity"
+        );
+
+        let zero = offline_top_up_entrypoint_for_index([0; 32], [0; 32]);
+        Kura::insert_offline_operation_id_heights(&mut index, nonzero!(2_usize), &zero);
+        assert!(
+            !index
+                .heights_by_offline_operation_id
+                .contains_key(&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), [0; 32]))
+        );
+
+        let unrelated = TransactionBuilder::new(
+            ChainId::from("kura-offline-operation-index"),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        )
+        .with_instructions([Log::new(Level::INFO, "unrelated".to_owned())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(2_usize),
+            &TransactionEntrypoint::External(unrelated),
+        );
+        assert_eq!(index.heights_by_offline_operation_id.len(), 1);
+
+        Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(1_usize));
+        assert_eq!(
+            index
+                .heights_by_offline_operation_id
+                .get(&operation_key)
+                .and_then(|heights| heights.first().copied()),
+            Some(nonzero!(3_usize))
+        );
+        Kura::remove_transaction_entrypoint_height(&mut index, nonzero!(3_usize));
+        assert!(index.heights_by_offline_operation_id.is_empty());
+    }
+
+    #[test]
+    fn offline_operation_index_cannot_be_shadowed_by_another_outer_authority() {
+        let operation_id = [0xA7; 32];
+        let front_runner = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("derive unauthorized offline front-run fixture key");
+        let front_runner_id = AccountId::new(front_runner.public_key().clone());
+        let rejected_front_run = offline_top_up_entrypoint_for_index_with_outer_authority(
+            operation_id,
+            operation_id,
+            &front_runner,
+        );
+        let issuer_submission = offline_top_up_entrypoint_for_index(operation_id, operation_id);
+        let mut index = TransactionEntrypointIndex::complete_empty();
+
+        // The first transaction carries the observed signed request but uses an outer
+        // authority that is not the configured Torii issuer, so execution can reject it.
+        // Its earlier height must not shadow the later canonical issuer submission.
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(1_usize),
+            &rejected_front_run,
+        );
+        Kura::insert_offline_operation_id_heights(
+            &mut index,
+            nonzero!(2_usize),
+            &issuer_submission,
+        );
+        index.indexed_heights = BTreeSet::from([nonzero!(1_usize), nonzero!(2_usize)]);
+
+        let kura = Kura::blank_kura_for_testing();
+        *kura.transaction_entrypoint_index.lock() = index;
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(
+                &SAMPLE_GENESIS_ACCOUNT_ID,
+                operation_id,
+            ),
+            Some(Some(nonzero!(2_usize))),
+            "the configured issuer lookup must skip an earlier foreign-authority transaction"
+        );
+        assert_eq!(
+            kura.get_earliest_block_height_by_offline_operation_id(&front_runner_id, operation_id,),
+            Some(Some(nonzero!(1_usize))),
+            "the foreign transaction remains isolated in its own authority namespace"
+        );
+    }
+
+    #[test]
+    fn transaction_index_refresh_reapplies_merge_side_entries_atomically() {
+        let kura = Kura::blank_kura_for_testing();
+        let operation_id = [0xA8; 32];
+        let merge_entry = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
+            operation_id,
+            operation_id,
+        ));
+        let block = DummyBlocks::new().next();
+
+        for _ in 0..2 {
+            kura.set_transaction_entrypoint_index_entry(1, &block, 1, Some(&merge_entry));
+            assert_eq!(
+                kura.get_earliest_block_height_by_offline_operation_id(
+                    &SAMPLE_GENESIS_ACCOUNT_ID,
+                    operation_id,
+                ),
+                Some(Some(nonzero!(1_usize))),
+                "ordinary-index refresh must not discard an operation carried by the merge sidecar"
+            );
+            let index = kura.transaction_entrypoint_index.lock();
+            assert!(index.complete);
+            assert_eq!(
+                index.heights_by_offline_operation_id
+                    [&(SAMPLE_GENESIS_ACCOUNT_ID.clone(), operation_id)],
+                BTreeSet::from([nonzero!(1_usize)]),
+                "repeated refreshes must remain idempotent"
+            );
+        }
+    }
+
+    #[test]
     fn drop_persisted_blocks_keeps_genesis_and_recent_blocks() {
         let mut generator = DummyBlocks::new();
         let mut block_data: BlockData = (0..4)
@@ -22697,7 +23475,10 @@ mod tests {
     #[test]
     fn get_block_returns_none_when_data_missing() {
         let temp_dir = TempDir::new().unwrap();
-        populate_store(&temp_dir, 2);
+        // Keep a genesis block and one cached tail block around the non-cached block under test.
+        // Otherwise `get_block` correctly serves the requested block from memory after the data
+        // file is removed, and the test never exercises its missing-disk-data path.
+        populate_store(&temp_dir, 3);
 
         let (kura, _) = Kura::new(
             &Config {
@@ -22707,7 +23488,7 @@ mod tests {
                 ),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-                blocks_in_memory: BLOCKS_IN_MEMORY,
+                blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity:
                     iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -22729,7 +23510,7 @@ mod tests {
         std::fs::remove_file(&data_path).unwrap();
 
         assert!(
-            kura.get_block(nonzero!(1_usize)).is_none(),
+            kura.get_block(nonzero!(2_usize)).is_none(),
             "expected missing block to yield None"
         );
     }
@@ -24355,6 +25136,29 @@ mod tests {
             Arc::clone(&kura),
             live_query_store,
         );
+        let genesis_validator = ManifestValidatorBinding {
+            validator: genesis_id.clone(),
+            peer_id: PeerId::new(genesis_key_pair.public_key().clone()),
+            torii_url: None,
+        };
+        let lane_manifest = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "default".to_owned(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("genesis".to_owned()),
+            manifest_path: Some(temp_dir.path().join("lane-0-manifest.json")),
+            governance_rules: Some(GovernanceRules {
+                validators: vec![genesis_id.clone()],
+                validator_bindings: vec![genesis_validator],
+                ..GovernanceRules::default()
+            }),
+            privacy_commitments: Vec::new(),
+        };
+        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
+            BTreeMap::from([(LaneId::SINGLE, lane_manifest)]),
+        )));
 
         let genesis =
             GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
@@ -26540,7 +27344,41 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_predecessor_receipt_allows_compatibility_anchor_without_descriptor() {
+    fn first_lane_block_requires_the_canonical_zero_predecessor() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1);
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+
+        assert!(
+            kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "lane-local height one must use the canonical zero/None predecessor"
+        );
+
+        let mut malformed = proposal;
+        malformed.descriptor.previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"unexpected height-one predecessor"));
+        malformed.descriptor.descriptor_hash = malformed.descriptor.computed_descriptor_hash();
+        malformed.proposal_hash = malformed.computed_proposal_hash();
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&malformed),
+            "lane-local height one must reject any predecessor descriptor"
+        );
+    }
+
+    #[test]
+    fn lane_block_predecessor_receipt_rejects_missing_non_genesis_descriptor() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -26552,30 +27390,22 @@ mod tests {
             lane_entry.dataspace_id,
             lane_block_height,
         );
-        let mut ownership = block
+        let ownership = block
             .execution_context()
             .expect("execution context")
             .lane_payload_ownerships
             .first()
             .expect("lane ownership")
             .clone();
-        ownership.previous_lane_block_descriptor_hash = None;
-        let replay_hashes = ownership
-            .compute_replay_hashes()
-            .expect("compatibility anchor replay hashes compute");
-        ownership.subject_hash = replay_hashes.subject_hash;
-        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
-        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
-        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
-        ownership
-            .validate_replay_material()
-            .expect("compatibility anchor ownership remains replayable");
-        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let mut proposal = lane_block_proposal_from_ownership(&ownership);
+        proposal.descriptor.previous_lane_block_descriptor_hash = None;
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
 
         let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
         assert!(
-            kura.lane_block_predecessor_application_receipt_available(&proposal),
-            "a missing predecessor descriptor marks the first executable segment for a lane incarnation"
+            !kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "a missing non-genesis predecessor descriptor must never bypass lane continuity"
         );
     }
 
@@ -26679,6 +27509,53 @@ mod tests {
             )
             .is_some(),
             "clean successor preflight should be exposed after canonical predecessor application"
+        );
+
+        let canonical_proposal_for = |mut ownership: SumeragiLanePayloadOwnership| {
+            let replay_hashes = ownership
+                .compute_replay_hashes()
+                .expect("adversarial successor fixture remains internally canonical");
+            ownership.subject_hash = replay_hashes.subject_hash;
+            ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+            ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+            ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+            lane_block_proposal_from_ownership(&ownership)
+        };
+
+        let mut wrong_hash = successor_ownership.clone();
+        wrong_hash.previous_lane_block_descriptor_hash =
+            Some(Hash::new(b"wrong predecessor descriptor"));
+        let wrong_hash_proposal = canonical_proposal_for(wrong_hash);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_hash_proposal),
+            "a different declared predecessor descriptor must not authorize a successor"
+        );
+
+        let mut non_increasing_global_height = successor_ownership.clone();
+        non_increasing_global_height.proposal_height = predecessor_ownership.proposal_height;
+        let non_increasing_global_height_proposal =
+            canonical_proposal_for(non_increasing_global_height);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(
+                &non_increasing_global_height_proposal
+            ),
+            "a predecessor must be anchored at an earlier global proposal height"
+        );
+
+        let mut wrong_dataspace = successor_ownership.clone();
+        wrong_dataspace.dataspace_id = DataSpaceId::new(dataspace_id.as_u64().saturating_add(1));
+        let wrong_dataspace_proposal = canonical_proposal_for(wrong_dataspace);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_dataspace_proposal),
+            "a predecessor receipt from another dataspace must not authorize a successor"
+        );
+
+        let mut wrong_incarnation = successor_ownership;
+        wrong_incarnation.lane_incarnation = Hash::new(b"different successor lane incarnation");
+        let wrong_incarnation_proposal = canonical_proposal_for(wrong_incarnation);
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&wrong_incarnation_proposal),
+            "a predecessor receipt from another lane incarnation must not authorize a successor"
         );
     }
 

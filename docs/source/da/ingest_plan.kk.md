@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 Ішкі қате | Күтпеген сәтсіздік (жүйеге жазылған + ескерту). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ DA міндеттемелерін немесе дәлелдемелерін те
 белсенді саясат жинағына дәлелді байланыстыру үшін қосымша бару қажет емес.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

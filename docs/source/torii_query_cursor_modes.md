@@ -23,6 +23,8 @@ The `/v1/query` endpoint accepts optional query-string parameters (reserved for 
 - `cursor_mode`: `ephemeral` | `stored`
 - `gas_units`: integer; required when `pipeline.query_stored_min_gas_units > 0` and `cursor_mode=stored`. When insufficient, the server rejects the request with a validation error.
 - Stored `Continue` requests embed the gas budget in the Norito payload via `ForwardCursor.gas_budget` so the server can re-validate stored cursors.
+- The normative storage, authorization, expiry, and count rules are defined in
+  [Cursor pagination](torii/cursor_pagination.md).
 
 Notes:
 - If `cursor_mode` is omitted, the server uses the default from `pipeline.query_default_cursor_mode`.
@@ -39,7 +41,10 @@ When telemetry is enabled (`telemetry_enabled=true`):
 
 ### Determinism and Snapshot Semantics
 
-- All queries execute against a captured `StateView`; live state changes made after capture do not affect an in-flight stored-cursor continuation.
+- The initial request executes against a captured `StateView`. Exact or
+  materialized stored queries retain their iterator, while bounded unsorted
+  continuations may replay against a fresh view. See
+  [Cursor pagination](torii/cursor_pagination.md) for the precise lifecycle.
 - Ephemeral mode materializes the first batch and returns it. Clients must paginate by issuing new Start requests with updated pagination.
 
 ### Examples (Conceptual)
@@ -61,4 +66,3 @@ If `pipeline.query_stored_min_gas_units=200`, the above is rejected with NotPerm
 ---
 
 For the canonical list of Torii endpoints, see the Reference section. This page covers only mode selection and behavior for snapshot-lane query execution.
-

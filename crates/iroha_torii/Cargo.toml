@@ -116,7 +116,7 @@ prometheus = { workspace = true, optional = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
-axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros"] }
+axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros", "matched-path"] }
 tower-http = { version = "0.6.6", features = ["cors", "trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
@@ -218,6 +218,11 @@ required-features = ["app_api"]
 [[test]]
 name = "offline_v2_kagemusha_redeem_smoke"
 path = "tests/offline_v2_kagemusha_redeem_smoke.rs"
+required-features = ["app_api"]
+
+[[test]]
+name = "offline_v2_kagemusha_topup_smoke"
+path = "tests/offline_v2_kagemusha_topup_smoke.rs"
 required-features = ["app_api"]
 
 [[test]]

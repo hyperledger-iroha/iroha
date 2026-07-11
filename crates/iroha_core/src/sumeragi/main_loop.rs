@@ -4005,7 +4005,7 @@ fn exec_roots_for_state_block(
     block_hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
-) -> Option<StateRoots> {
+) -> Result<Option<StateRoots>, BlockValidationError> {
     let exec_witness = state_block.take_exec_witness().or_else(|| {
         warn!(
             height,
@@ -4016,10 +4016,15 @@ fn exec_roots_for_state_block(
         state_block.capture_exec_witness();
         state_block.take_exec_witness()
     });
-    exec_witness.map(|witness| StateRoots {
+    let Some(witness) = exec_witness else {
+        return Ok(None);
+    };
+    let post_state_root = crate::sumeragi::exec::try_post_state_from_witness(&witness)
+        .map_err(|error| BlockValidationError::ExecutionContextInvalid(error.to_owned()))?;
+    Ok(Some(StateRoots {
         parent_state_root: parent_state_from_witness(&witness),
-        post_state_root: post_state_from_witness(&witness),
-    })
+        post_state_root,
+    }))
 }
 
 /// Run stateless and stateful validation for a block before emitting votes.
@@ -4107,7 +4112,7 @@ fn validate_block_for_voting_with_timings(
         Ok((_validated, mut state_block)) => {
             let roots = exec_roots_for_state_block(&mut state_block, block_hash, height, view);
             drop(state_block);
-            Ok(roots)
+            roots
         }
         Err((_block, err)) => Err(*err),
     };
@@ -14043,7 +14048,7 @@ impl CommittedLaneBlockQueue {
     fn unapplied_lane_ids_for_admissible_lanes_for_state(
         &self,
         state: &crate::state::State,
-        admissible_lane: impl Fn(LaneId, DataSpaceId, u64, u64) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, Hash, u64, u64) -> bool,
     ) -> BTreeSet<LaneId> {
         self.pending
             .iter()
@@ -14057,6 +14062,7 @@ impl CommittedLaneBlockQueue {
                 admissible_lane(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
                     descriptor.lane_block_height,
                     descriptor.proposal_height,
                 )
@@ -24901,6 +24907,10 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.lane_block_votes");
             self.broadcast_ready_local_lane_block_votes()
         };
+        let lane_block_rebroadcast_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.lane_block_rebroadcast");
+            self.rebroadcast_cached_lane_block_bundles_if_due(now) > 0
+        };
         let committed_lane_block_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.committed_lane_blocks");
             self.queue_committed_lane_block_sessions()
@@ -25041,6 +25051,7 @@ impl Actor {
             || committed_progress
             || merge_sidecar_progress
             || lane_block_vote_progress
+            || lane_block_rebroadcast_progress
             || committed_lane_block_progress
             || deferred_qc_progress
             || deferred_missing_payload_progress

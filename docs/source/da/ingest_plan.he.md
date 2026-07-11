@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 שגיאה פנימית | כשל בלתי צפוי (נרשם + התראה). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 לא צריך נסיעה נוספת הלוך ושוב כדי לאגד הוכחה למערכת המדיניות הפעילה.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

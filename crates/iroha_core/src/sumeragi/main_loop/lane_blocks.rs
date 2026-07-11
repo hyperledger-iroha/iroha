@@ -2076,25 +2076,6 @@ impl Actor {
         cached
     }
 
-    fn lane_block_artifact_has_matching_application_receipt(
-        kura: &crate::kura::Kura,
-        artifact: &crate::kura::LaneBlockArtifact,
-    ) -> bool {
-        let ownership = &artifact.ownership;
-        let Some(receipt) = kura
-            .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
-        else {
-            return false;
-        };
-        let descriptor = &receipt.proposal.descriptor;
-        descriptor.lane_id == ownership.lane_id
-            && descriptor.dataspace_id == ownership.dataspace_id
-            && descriptor.lane_block_height == ownership.lane_block_height
-            && descriptor.lane_block_view == ownership.lane_block_view
-            && Some(descriptor.descriptor_hash) == ownership.lane_block_descriptor_hash
-            && receipt.artifact.ownership == *ownership
-    }
-
     pub(super) fn shared_lane_block_authority_for_ingress(
         &self,
         target_height: u64,

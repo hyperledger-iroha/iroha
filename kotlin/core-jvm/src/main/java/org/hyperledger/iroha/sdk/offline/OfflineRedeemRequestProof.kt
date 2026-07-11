@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-/** Redeem-request proof payload submitted with a `/v1/offline/cash/redeem` call. */
+/** Proof artifact binding an offline redemption request to its public inputs. */
 class OfflineRedeemRequestProof(
     val backend: String,
     val circuitId: String,

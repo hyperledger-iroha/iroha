@@ -40,11 +40,6 @@ impl EncodedV2Payload {
         &self.manifest
     }
 
-    /// Borrow encoded chunks in manifest-index order.
-    pub(crate) fn chunks(&self) -> &[Vec<u8>] {
-        &self.chunks
-    }
-
     /// Consume the encoded payload.
     pub(crate) fn into_parts(self) -> (wire::PayloadManifest, Vec<Vec<u8>>) {
         (self.manifest, self.chunks)
@@ -184,17 +179,6 @@ impl V2ChunkSession {
             return Err(V2ChunkError::PayloadMismatch);
         }
         Ok(Some(payload))
-    }
-
-    /// Remove this transport session after a matching Kura receipt authorized
-    /// higher-level retirement.
-    pub(crate) fn retire(self) -> Result<(), V2ChunkError> {
-        let parent = self.directory.parent().map(Path::to_path_buf);
-        fs::remove_dir_all(&self.directory).map_err(|source| io_error(&self.directory, source))?;
-        if let Some(parent) = parent {
-            sync_directory(&parent)?;
-        }
-        Ok(())
     }
 
     fn replay_chunks(&mut self) -> Result<(), V2ChunkError> {

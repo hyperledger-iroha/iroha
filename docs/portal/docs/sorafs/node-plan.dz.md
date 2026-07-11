@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3852a0f039b664344f9cbce7d2514172cfe97cd838b68755f764d4fe183b22cc
+source_hash: c516f77520bb3562ff1d06794ed8fcf14e6a3f98d7e2a6ca99ae0ff2b8f4536d
 source_last_modified: "2026-01-05T09:28:11.898207+00:00"
 translation_last_reviewed: 2026-02-07
 id: node-plan
@@ -52,7 +52,7 @@ SF-3 གིས་ I18NI000000028X cret འདི་ I18NT000000009X/I18NT0000000
 | `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
 | `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
 | `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
-| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample` | Report peer/storage state and request bounded local PoR samples. Proof and verdict admission use the authenticated capacity lifecycle; direct storage mutation routes are not mounted. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
 
 
 རན་ཊའིམ་ཆུ་གཡུར་གྱི་ཐགསཔ་ཚུ་ Norito བརྒྱུད་དེ་ བརྡ་རྟགས་འདི་གིས་ I18NI000000066X, I18NI000000057X, དང་ `AuditVerdictV1` རེ་ལུ་ཐོ་བཀོད་འབདཝ་ཨིན། I18NT0000015X ཚད་མ།【crates/sorafs_node/src/schenuler.rs#L147】

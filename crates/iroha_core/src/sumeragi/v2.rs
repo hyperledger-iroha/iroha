@@ -302,22 +302,10 @@ pub(crate) struct AdapterOutcome {
 /// A consumed reducer height whose exact decision is durable in Kura.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FinalizedV2Height {
-    context: wire::HeightContext,
-    decision: wire::QuorumCertificate,
     wal_retirement_warning: Option<String>,
 }
 
 impl FinalizedV2Height {
-    /// Frozen wire context which governed the finalized height.
-    pub(crate) const fn context(&self) -> &wire::HeightContext {
-        &self.context
-    }
-
-    /// Exact cryptographically verified CommitQC stored by Kura.
-    pub(crate) const fn decision(&self) -> &wire::QuorumCertificate {
-        &self.decision
-    }
-
     /// Cleanup diagnostic after Kura already made the decision durable.
     ///
     /// A retained WAL is safe and replayable; it must be retried or reported,
@@ -398,6 +386,7 @@ impl AdapterOutcome {
     }
 
     /// Borrow the effects now safe for asynchronous execution.
+    #[cfg(test)]
     pub(crate) fn effects(&self) -> &[AdapterEffect] {
         &self.effects
     }
@@ -1245,8 +1234,6 @@ impl SumeragiV2Adapter {
         let _closed = self.reducer.finish_height(reducer_receipt)?;
         let wal_retirement_warning = self.wal.retire().err().map(|error| error.to_string());
         Ok(FinalizedV2Height {
-            context: self.wire_context,
-            decision: wire_decision,
             wal_retirement_warning,
         })
     }

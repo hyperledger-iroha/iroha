@@ -6167,7 +6167,7 @@ public sealed class ToriiClientTests
         using var handler = new RecordingHandler(request =>
         {
             var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/aliases/by_account", request.RequestUri!.AbsolutePath);
+            Assert.Equal("/v1/aliases/by-account", request.RequestUri!.AbsolutePath);
             Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal("universal", payload.RootElement.GetProperty("dataspace").GetString());
             Assert.Equal("paynet", payload.RootElement.GetProperty("domain").GetString());
@@ -6295,7 +6295,7 @@ public sealed class ToriiClientTests
 
         Assert.Contains(expectedField, error.Message);
         Assert.Contains(expectedMessage, error.Message);
-        Assert.Equal("/v1/aliases/by_account", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/aliases/by-account", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object[]> InvalidRawAccountAliasLookupItems()
@@ -10168,7 +10168,7 @@ public sealed class ToriiClientTests
         using var response = await client.OpenSoraFsCidContentAsync("bafyroot", cancellationToken: TestContext.Current.CancellationToken);
         var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("/sorafs/cid/bafyroot/", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/sorafs/cid/bafyroot", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("<html/>", System.Text.Encoding.UTF8.GetString(bytes));
         Assert.Equal("bafyroot", response.Headers.GetValues("sora-content-cid").Single());
     }
@@ -10276,7 +10276,7 @@ public sealed class ToriiClientTests
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var content = await client.GetSoraFsCidContentAsync("bafyroot", cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("/sorafs/cid/bafyroot/", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/sorafs/cid/bafyroot", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Null(content.ContentCid);
         Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(content.Bytes));
     }
@@ -10314,7 +10314,7 @@ public sealed class ToriiClientTests
 
         Assert.Contains(expectedField, error.Message);
         Assert.Contains(expectedMessage, error.Message);
-        Assert.Equal("/sorafs/cid/bafyroot/", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/sorafs/cid/bafyroot", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object?[]> InvalidVpnAndSoraFsRouteIdentifiers()
@@ -10540,31 +10540,34 @@ public sealed class ToriiClientTests
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        using var response = await client.OpenEventSseAsync("scope=auto", "resume-id", cancellationToken: TestContext.Current.CancellationToken);
+        using var response = await client.OpenEventSseAsync("scope=auto", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/v1/events/sse", handler.LastRequest!.RequestUri!.AbsolutePath);
         Assert.Equal("scope=auto", handler.LastRequest.RequestUri.Query.TrimStart('?'));
-        Assert.Equal("resume-id", handler.LastRequest.Headers.GetValues("Last-Event-ID").Single());
+        Assert.False(handler.LastRequest.Headers.Contains("Last-Event-ID"));
         Assert.Contains(handler.LastRequest.Headers.Accept, static value => value.MediaType == "text/event-stream");
         Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
     }
 
-    [Theory]
-    [InlineData(" resume-id")]
-    [InlineData("resume-id ")]
-    [InlineData("resume-id\n")]
-    [InlineData("resume-id\u0001")]
-    public async Task OpenEventSseAsyncRejectsNonExactLastEventIdsBeforeDispatch(string lastEventId)
+    [Fact]
+    public void CanonicalEventSseHelpersDoNotExposeResumeParameters()
     {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("non-exact Last-Event-ID reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
-            client.OpenEventSseAsync(lastEventId: lastEventId, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal("lastEventId", error.ParamName);
-        Assert.Null(handler.LastRequest);
+        foreach (var methodName in new[]
+        {
+            nameof(ToriiClient.OpenEventSseAsync),
+            nameof(ToriiClient.StreamEventsAsync),
+            nameof(ToriiClient.StreamPipelineEventsAsync),
+            nameof(ToriiClient.StreamProofEventsAsync),
+        })
+        {
+            var methods = typeof(ToriiClient).GetMethods()
+                .Where(method => string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                .ToArray();
+            var method = Assert.Single(methods);
+            Assert.DoesNotContain(
+                method.GetParameters(),
+                parameter => string.Equals(parameter.Name, "lastEventId", StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -11099,6 +11102,123 @@ public sealed class ToriiClientTests
         var removed = Assert.Single(pruned.Removed!);
         Assert.Equal("halo2/ipa", removed.Backend);
         Assert.Equal(new string('4', 64), removed.ProofHash);
+    }
+
+    [Fact]
+    public async Task StreamPipelineEventsAsyncSurfacesTerminalStreamErrorBeforeCategoryFiltering()
+    {
+        using var handler = new RecordingHandler(_ => EventStreamResponse("""
+            event: stream_error
+            data: {"code":"stream_lagged","message":"The stream lost buffered events.","dropped_messages":7,"replay_available":false}
+
+            """));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ToriiStreamException>(async () =>
+        {
+            await foreach (var _ in client.StreamPipelineEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
+            {
+            }
+        });
+
+        Assert.Equal("stream_lagged", error.Code);
+        Assert.Equal("The stream lost buffered events.", error.Message);
+        Assert.Equal((ulong)7, error.DroppedMessages);
+        Assert.False(error.ReplayAvailable);
+    }
+
+    [Fact]
+    public async Task StreamProofEventsAsyncSurfacesTerminalStreamErrorBeforeCategoryFiltering()
+    {
+        using var handler = new RecordingHandler(_ => EventStreamResponse("""
+            event: stream_error
+            data: {"code":"stream_source_closed","message":"The event source closed.","dropped_messages":null,"replay_available":false}
+
+            """));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ToriiStreamException>(async () =>
+        {
+            await foreach (var _ in client.StreamProofEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
+            {
+            }
+        });
+
+        Assert.Equal("stream_source_closed", error.Code);
+        Assert.Equal("The event source closed.", error.Message);
+        Assert.Null(error.DroppedMessages);
+        Assert.False(error.ReplayAvailable);
+    }
+
+    public static IEnumerable<object[]> MalformedTerminalStreamErrorPayloads()
+    {
+        yield return new object[] { "null", "valid non-null JSON" };
+        yield return new object[]
+        {
+            "{\"code\":\"stream_lagged\",\"code\":\"stream_source_closed\",\"message\":\"closed\",\"dropped_messages\":null,\"replay_available\":false}",
+            "must not appear more than once",
+        };
+        yield return new object[]
+        {
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":null}",
+            "replay_available is required",
+        };
+        yield return new object[]
+        {
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":-1,\"replay_available\":false}",
+            "dropped_messages must be null or an unsigned integer",
+        };
+        yield return new object[]
+        {
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":null,\"replay_available\":\"false\"}",
+            "replay_available must be a boolean",
+        };
+        yield return new object[]
+        {
+            "{\"code\":\"stream_lagged\",\"message\":\"closed\",\"dropped_messages\":null,\"replay_available\":false,\"category\":\"Pipeline\"}",
+            "category is not part of the v1 stream error schema",
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedTerminalStreamErrorPayloads))]
+    public async Task TypedEventStreamsFailClosedOnMalformedTerminalStreamErrors(
+        string payload,
+        string expectedMessage)
+    {
+        using var handler = new RecordingHandler(_ =>
+            EventStreamResponse($"event: stream_error\ndata: {payload}\n\n"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<JsonException>(async () =>
+        {
+            await foreach (var _ in client.StreamPipelineEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
+            {
+            }
+        });
+
+        Assert.Contains(expectedMessage, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RawEventStreamPreservesTerminalStreamErrorFrame()
+    {
+        using var handler = new RecordingHandler(_ => EventStreamResponse("""
+            event: stream_error
+            data: {"code":"stream_lagged","message":"closed","dropped_messages":1,"replay_available":false}
+
+            """));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var events = new List<ToriiServerSentEvent>();
+        await foreach (var sseEvent in client.StreamEventsAsync(cancellationToken: TestContext.Current.CancellationToken))
+        {
+            events.Add(sseEvent);
+        }
+
+        var terminal = Assert.Single(events);
+        Assert.Equal("stream_error", terminal.Event);
+        Assert.Equal("stream_lagged", terminal.JsonData!["code"]!.GetValue<string>());
     }
 
     public static IEnumerable<object?[]> InvalidPipelineSsePayloads()
@@ -12387,7 +12507,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         Assert.Contains(expectedField, error.Message);
         Assert.Contains(expectedMessage, error.Message);
-        Assert.Equal("/v1/aliases/resolve_index", handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/aliases/resolve-index", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
     public static IEnumerable<object[]> InvalidRawAccountAliasIndexResponses()
@@ -23853,6 +23973,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new HttpResponseMessage(statusCode)
         {
             Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private static HttpResponseMessage EventStreamResponse(string body)
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, System.Text.Encoding.UTF8, "text/event-stream"),
         };
     }
 

@@ -409,23 +409,18 @@ async function dialWithTelemetry(client: ToriiClient) {
 стандарт `connect.queue_depth`, `connect.queue_overflow_total`, ба
 Замын зураг дээр дурдсан `connect.queue_expired_total` хэмжүүрүүд.
 
-## Дамжуулж буй ажиглагчид болон үйл явдлын курсорууд
+## Live event streams
 
-`ToriiClient.streamEvents()` нь `/v1/events/sse`-г автоматаар асинхронгүй давталт болгон харуулж байна.
-дахин оролдох тул Node/Bun CLI нь Rust CLI-тай адил дамжуулах хоолойн үйл ажиллагааг зогсоож чадна.
-Runbook олдворуудын хажууд `Last-Event-ID` курсорыг байрлуулснаар операторууд боломжтой болно.
-процессыг дахин эхлүүлэх үед үйл явдлыг алгасахгүйгээр урсгалыг үргэлжлүүлэх.
+`ToriiClient.streamEvents()` exposes `/v1/events/sse` as a live-only async
+iterator. Torii retains no replay log for this route, so the helper has no
+`lastEventId` option and reconnecting can leave a gap. A terminal
+`event: stream_error` is yielded before the iterator ends; handle it explicitly
+instead of treating closure as a lossless continuation point.
 
-```ts
-import fs from "node:fs/promises";
+```js
 import { ToriiClient, extractPipelineStatusKind } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080");
-const cursorFile = process.env.STREAM_CURSOR_FILE ?? ".cache/torii.cursor";
-const resumeId = await fs
-  .readFile(cursorFile, "utf8")
-  .then((value) => value.trim())
-  .catch(() => null);
 const controller = new AbortController();
 
 process.once("SIGINT", () => controller.abort());
@@ -433,28 +428,26 @@ process.once("SIGTERM", () => controller.abort());
 
 for await (const event of torii.streamEvents({
   filter: { Pipeline: { Transaction: { status: "Committed" } } },
-  lastEventId: resumeId || undefined,
   signal: controller.signal,
 })) {
-  if (event.id) {
-    await fs.writeFile(cursorFile, `${event.id}\n`, "utf8");
+  if (event.event === "stream_error") {
+    console.error("terminal stream error", event.data);
+    break;
   }
   const status = event.data ? extractPipelineStatusKind(event.data) : null;
-  console.log(`[${event.event}] id=${event.id ?? "∅"} status=${status ?? "n/a"}`);
+  console.log(`[${event.event}] status=${status ?? "n/a"}`);
 }
 ```
 
-- `PIPELINE_STATUS` шилжүүлэгч (жишээ нь `Pending`, `Applied`, эсвэл `Approved`) эсвэл тохируулах
-  `STREAM_FILTER_JSON` нь CLI-ийн хүлээн зөвшөөрсөн шүүлтүүрүүдийг дахин тоглуулах.
-- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` нь давталтыг a хүртэл амьд байлгадаг
-  дохио хүлээн авсан; Эхний хэдэн үйл явдал танд хэрэгтэй үед `STREAM_MAX_EVENTS=25`-г дамжуулаарай
-  утааны шинжилгээнд зориулагдсан.
-- `ToriiClient.streamSumeragiStatus()` нь ижил интерфэйсийг харуулдаг
-  `/v1/sumeragi/status/sse` тиймээс зөвшилцлийн телеметрийг тусад нь авч үзэх боломжтой бөгөөд
-  давталт нь `Last-Event-ID`-г мөн адил хүндэтгэдэг.
-- Түлхүүр гардуулах CLI-г `javascript/iroha_js/recipes/streaming.mjs` харна уу (курсорын тогтвортой байдал
-  env-var шүүлтүүрийг дарж, JS4-д ашигласан `extractPipelineStatusKind` бүртгэл)
-  streaming/WebSocket замын зураглалыг хүргэх боломжтой.
+- Switch `PIPELINE_STATUS` (for example `Pending`, `Applied`, or `Approved`) or set
+  `STREAM_FILTER_JSON` to use the same filters the CLI accepts.
+- `STREAM_MAX_EVENTS=0 node ./recipes/streaming.mjs` keeps the iterator alive until a
+  signal is received; pass `STREAM_MAX_EVENTS=25` when you only need the first few events
+  for a smoke test.
+- `ToriiClient.streamSumeragiStatus()` exposes the separate
+  `/v1/sumeragi/status/sse` consensus telemetry feed.
+- See `javascript/iroha_js/recipes/streaming.mjs` for a live-only turnkey CLI with
+  environment-driven filters and explicit terminal-error handling.
 
 ## UAID портфолио ба Сансрын лавлах
 

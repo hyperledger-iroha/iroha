@@ -1,7 +1,10 @@
 //! Utilities for Norito encoding and Axum integration.
 
-use std::any::TypeId;
-use std::future::Future;
+use std::{
+    any::{Any, TypeId},
+    future::Future,
+    sync::Arc,
+};
 
 use axum::{
     http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
@@ -11,6 +14,7 @@ use iroha_data_model::{
     query::{SignedQuery, json_wrappers::SignedQueryJson},
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
+use iroha_torii_shared::ErrorEnvelope;
 use iroha_version::Version;
 use norito::{
     json::{self, JsonDeserializeOwned, JsonSerialize, Value},
@@ -19,8 +23,165 @@ use norito::{
 
 /// MIME used in Torii for Norito encoding
 // note: no elegant way to associate it with generic `NoritoBody<T>`
-pub const NORITO_MIME_TYPE: &'_ str = "application/x-norito";
+pub const NORITO_MIME_TYPE: &str = "application/x-norito";
 const JSON_MIME_TYPE: &str = "application/json";
+pub(crate) const MAX_ERROR_MESSAGE_CHARACTERS: usize = 1024;
+pub(crate) const MAX_ERROR_DETAIL_CHARACTERS: usize = 1024;
+pub(crate) const MAX_REJECT_CODE_BYTES: usize = 128;
+
+/// Bounded stable error code copied into response extensions for telemetry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HttpErrorCode(Arc<str>);
+
+impl HttpErrorCode {
+    /// Return the bounded metric-label value.
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn new(code: &str) -> Self {
+        if is_valid_error_code(code) {
+            Self(Arc::from(code))
+        } else {
+            Self(Arc::from("invalid_error_code"))
+        }
+    }
+
+    pub(crate) fn from_envelope(envelope: &ErrorEnvelope) -> Self {
+        Self::new(envelope.code())
+    }
+}
+
+/// Return whether a public error code is a bounded lower-snake-case identifier.
+#[must_use]
+pub(crate) fn is_valid_error_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 64
+        && code.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || (byte == b'_' && index > 0)
+        })
+}
+
+/// Return whether a public error message is safe, exact human-readable text.
+///
+/// Messages are deliberately not stable identifiers, but the public envelope
+/// still requires a non-empty value without surrounding whitespace or control
+/// characters so every first-party SDK observes the same finite contract.
+#[must_use]
+pub(crate) fn is_valid_error_message(message: &str) -> bool {
+    is_valid_bounded_public_text(message, MAX_ERROR_MESSAGE_CHARACTERS)
+}
+
+/// Return whether a public detail string is bounded exact text.
+#[must_use]
+pub(crate) fn is_valid_error_detail_text(value: &str) -> bool {
+    is_valid_bounded_public_text(value, MAX_ERROR_DETAIL_CHARACTERS)
+}
+
+/// Return whether a protocol/domain rejection identifier is safe to expose.
+#[must_use]
+pub(crate) fn is_valid_reject_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= MAX_REJECT_CODE_BYTES
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
+}
+
+fn is_valid_bounded_public_text(value: &str, max_characters: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_characters.saturating_mul(4)
+        && value.trim() == value
+        && value.chars().take(max_characters + 1).count() <= max_characters
+        && !value.chars().any(char::is_control)
+}
+
+#[cfg(test)]
+mod public_error_grammar_tests {
+    use super::{MAX_ERROR_MESSAGE_CHARACTERS, is_valid_error_message, is_valid_reject_code};
+
+    #[test]
+    fn error_messages_require_exact_non_control_text() {
+        for valid in [
+            "invalid request",
+            "再試行してください",
+            "proof rejected: 42",
+        ] {
+            assert!(is_valid_error_message(valid), "valid message: {valid:?}");
+        }
+        for invalid in [
+            "",
+            " leading",
+            "trailing ",
+            "line\nbreak",
+            "nul\0byte",
+            "\u{85}",
+        ] {
+            assert!(
+                !is_valid_error_message(invalid),
+                "invalid message: {invalid:?}"
+            );
+        }
+        assert!(!is_valid_error_message(
+            &"x".repeat(MAX_ERROR_MESSAGE_CHARACTERS + 1)
+        ));
+        assert!(is_valid_error_message(
+            &"界".repeat(MAX_ERROR_MESSAGE_CHARACTERS)
+        ));
+    }
+
+    #[test]
+    fn reject_codes_are_bounded_printable_identifiers() {
+        for valid in ["queue_full", "PRTRY:BAD", "ISO-20022.CODE"] {
+            assert!(is_valid_reject_code(valid), "valid code: {valid:?}");
+        }
+        for invalid in ["", " leading", "has/slash", "line\nbreak", "quote\""] {
+            assert!(!is_valid_reject_code(invalid), "invalid code: {invalid:?}");
+        }
+        assert!(!is_valid_reject_code(&"x".repeat(129)));
+    }
+}
+
+fn serialization_failure_response(format: ResponseFormat) -> Response {
+    let envelope = ErrorEnvelope::new(
+        "response_serialization_failed",
+        "Torii could not encode the response payload.",
+    );
+    let (content_type, bytes) = match format {
+        ResponseFormat::Norito => {
+            let mut bytes = Vec::new();
+            if let Err(error) = norito::core::to_bytes_in(&envelope, &mut bytes) {
+                iroha_logger::error!(?error, "failed to encode fallback Norito error envelope");
+                bytes.clear();
+            }
+            (NORITO_MIME_TYPE, bytes)
+        }
+        ResponseFormat::Json => {
+            let bytes = norito::json::to_vec(&envelope).unwrap_or_else(|error| {
+                iroha_logger::error!(?error, "failed to encode fallback JSON error envelope");
+                Vec::new()
+            });
+            (JSON_MIME_TYPE, bytes)
+        }
+    };
+    let mut response = Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header(CONTENT_TYPE, content_type)
+        .body(axum::body::Body::from(bytes))
+        .expect("build response serialization error");
+    response
+        .extensions_mut()
+        .insert(HttpErrorCode::from_envelope(&envelope));
+    response
+}
+
+fn telemetry_error_code<T: Any>(value: &T) -> Option<HttpErrorCode> {
+    let value: &dyn Any = value;
+    value
+        .downcast_ref::<ErrorEnvelope>()
+        .map(HttpErrorCode::from_envelope)
+}
 
 fn base_media_type(raw: &str) -> &str {
     raw.split(';').next().map(str::trim).unwrap_or_default()
@@ -36,10 +197,26 @@ fn is_json_media_type(raw: &str) -> bool {
     if base.is_empty() {
         return false;
     }
-    if base.eq_ignore_ascii_case(JSON_MIME_TYPE) || base.eq_ignore_ascii_case("text/json") {
+    if base.eq_ignore_ascii_case(JSON_MIME_TYPE) {
         return true;
     }
-    base.to_ascii_lowercase().ends_with("+json")
+    let lower = base.to_ascii_lowercase();
+    lower.starts_with("application/") && lower.ends_with("+json")
+}
+
+/// Classify a response `Content-Type` as one of Torii's two typed representations.
+///
+/// Protocol-native media types such as SSE, Prometheus text, WebSocket upgrades,
+/// raw blobs, and hosted content return `None` and retain their own negotiation rules.
+#[must_use]
+pub fn typed_response_format_for_content_type(raw: &str) -> Option<ResponseFormat> {
+    if is_json_media_type(raw) {
+        Some(ResponseFormat::Json)
+    } else if is_norito_media_type(raw) {
+        Some(ResponseFormat::Norito)
+    } else {
+        None
+    }
 }
 
 /// Preferred response encoding negotiated from the `Accept` header.
@@ -72,6 +249,65 @@ pub fn current_response_format() -> ResponseFormat {
         .unwrap_or(ResponseFormat::Norito)
 }
 
+fn not_acceptable(message: impl Into<String>) -> Response {
+    // When no requested representation can be selected there is no negotiated
+    // format to honor. The first-release contract uses a typed JSON envelope as
+    // the deterministic fallback for the 406 itself.
+    respond_with_status_and_format(
+        StatusCode::NOT_ACCEPTABLE,
+        iroha_torii_shared::ErrorEnvelope::new("response_not_acceptable", message),
+        ResponseFormat::Json,
+    )
+}
+
+fn parse_accept_qvalue(raw: &str) -> Option<u16> {
+    let (whole, fraction) = raw.split_once('.').map_or((raw, ""), |parts| parts);
+    if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let padded_fraction = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<u16>().ok()?.checked_mul(100)?,
+        2 => fraction.parse::<u16>().ok()?.checked_mul(10)?,
+        3 => fraction.parse::<u16>().ok()?,
+        _ => return None,
+    };
+    match whole {
+        "0" => Some(padded_fraction),
+        "1" if padded_fraction == 0 => Some(1_000),
+        _ => None,
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_accept_quality<I, S>(params: I) -> Result<u16, Response>
+where
+    I: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut quality = 1_000;
+    let mut quality_seen = false;
+    for param in params {
+        let param = param.as_ref().trim();
+        let Some((name, value)) = param.split_once('=') else {
+            if param.eq_ignore_ascii_case("q") {
+                return Err(not_acceptable("invalid q-value in Accept header"));
+            }
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("q") {
+            continue;
+        }
+        if quality_seen {
+            return Err(not_acceptable("duplicate q-value in Accept header"));
+        }
+        quality_seen = true;
+        quality = parse_accept_qvalue(value.trim())
+            .ok_or_else(|| not_acceptable("invalid q-value in Accept header"))?;
+    }
+    Ok(quality)
+}
+
 /// Negotiate the response format from an optional `Accept` header value.
 ///
 /// Returns an HTTP response carrying status `406 Not Acceptable` when the header
@@ -79,17 +315,6 @@ pub fn current_response_format() -> ResponseFormat {
 #[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
 pub fn negotiate_response_format(accept: Option<&HeaderValue>) -> Result<ResponseFormat, Response> {
     negotiate_response_format_with_default(accept, ResponseFormat::Norito)
-}
-
-/// Negotiate a response format for REST-style routes that are JSON by default.
-///
-/// Explicit `application/x-norito` requests still receive Norito, but omitted
-/// or wildcard `Accept` headers receive JSON to match ordinary HTTP clients.
-#[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
-pub fn negotiate_json_preferred_response_format(
-    accept: Option<&HeaderValue>,
-) -> Result<ResponseFormat, Response> {
-    negotiate_response_format_with_default(accept, ResponseFormat::Json)
 }
 
 #[allow(clippy::result_large_err)] // callers expect to bubble the full HTTP response on negotiation failure
@@ -104,24 +329,22 @@ fn negotiate_response_format_with_default(
     let raw = match header.to_str() {
         Ok(h) => h,
         Err(_) => {
-            return Err((
-                StatusCode::NOT_ACCEPTABLE,
+            return Err(not_acceptable(
                 "invalid Accept header encoding; supported: application/json, application/x-norito",
-            )
-                .into_response());
+            ));
         }
     };
 
-    #[derive(Copy, Clone)]
-    struct Candidate {
-        format: ResponseFormat,
-        quality: f32,
+    #[derive(Copy, Clone, Debug)]
+    struct MediaRange {
+        quality: u16,
+        specificity: u8,
         index: usize,
-        explicit: bool,
+        matches_json: bool,
+        matches_norito: bool,
     }
 
-    const EPS: f32 = 1e-6;
-    let mut best: Option<Candidate> = None;
+    let mut ranges = Vec::new();
 
     for (idx, entry) in raw.split(',').enumerate() {
         let trimmed = entry.trim();
@@ -130,81 +353,89 @@ fn negotiate_response_format_with_default(
         }
         let mut parts = trimmed.split(';');
         let media_type = parts.next().unwrap().trim();
-        let mut quality = 1.0_f32;
-        for param in parts {
-            let p = param.trim();
-            let p_lower = p.to_ascii_lowercase();
-            if let Some(rest) = p_lower.strip_prefix("q=") {
-                let parsed = rest.parse::<f32>().map_err(|_| {
-                    (
-                        StatusCode::NOT_ACCEPTABLE,
-                        "invalid q-value in Accept header",
-                    )
-                        .into_response()
-                })?;
-                if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
-                    return Err((
-                        StatusCode::NOT_ACCEPTABLE,
-                        "invalid q-value in Accept header",
-                    )
-                        .into_response());
-                }
-                quality = parsed;
-            }
-        }
+        let quality = parse_accept_quality(parts)?;
 
-        if quality <= 0.0 {
-            continue;
-        }
-
-        let candidate_format = if is_norito_media_type(media_type) {
-            Some((ResponseFormat::Norito, true))
-        } else if media_type.eq_ignore_ascii_case("application/*")
-            || media_type.eq_ignore_ascii_case("*/*")
-        {
-            Some((default_format, false))
+        let (specificity, matches_json, matches_norito) = if is_norito_media_type(media_type) {
+            (2, false, true)
         } else if is_json_media_type(media_type) {
-            Some((ResponseFormat::Json, true))
+            (2, true, false)
+        } else if media_type.eq_ignore_ascii_case("application/*") {
+            (1, true, true)
+        } else if media_type.eq_ignore_ascii_case("*/*") {
+            (0, true, true)
         } else {
-            None
-        };
-
-        let Some((format, explicit)) = candidate_format else {
             continue;
         };
-
-        let candidate = Candidate {
-            format,
+        ranges.push(MediaRange {
             quality,
+            specificity,
             index: idx,
-            explicit,
-        };
-
-        match best {
-            None => best = Some(candidate),
-            Some(current) => {
-                if candidate.quality > current.quality + EPS
-                    || ((candidate.quality - current.quality).abs() <= EPS
-                        && ((candidate.explicit && !current.explicit)
-                            || (candidate.explicit == current.explicit
-                                && ((candidate.format == ResponseFormat::Norito
-                                    && current.format == ResponseFormat::Json)
-                                    || (candidate.format == current.format
-                                        && candidate.index < current.index)))))
-                {
-                    best = Some(candidate);
-                }
-            }
-        }
+            matches_json,
+            matches_norito,
+        });
     }
 
-    best.map(|c| c.format).ok_or_else(|| {
-        (
-            StatusCode::NOT_ACCEPTABLE,
+    #[derive(Copy, Clone)]
+    struct EffectivePreference {
+        format: ResponseFormat,
+        quality: u16,
+        specificity: u8,
+    }
+
+    let effective = |format: ResponseFormat| {
+        ranges
+            .iter()
+            .filter(|range| match format {
+                ResponseFormat::Json => range.matches_json,
+                ResponseFormat::Norito => range.matches_norito,
+            })
+            // RFC-style precedence: the most-specific media range determines
+            // the quality for a representation. This is important for an
+            // explicit `q=0`, which must not be undone by a wildcard.
+            .max_by_key(|range| (range.specificity, core::cmp::Reverse(range.index)))
+            .map(|range| EffectivePreference {
+                format,
+                quality: range.quality,
+                specificity: range.specificity,
+            })
+    };
+
+    let json = effective(ResponseFormat::Json).filter(|candidate| candidate.quality > 0);
+    let norito = effective(ResponseFormat::Norito).filter(|candidate| candidate.quality > 0);
+    let selected = match (json, norito) {
+        (Some(json), Some(norito)) => {
+            if json.quality > norito.quality {
+                json
+            } else if norito.quality > json.quality {
+                norito
+            } else if json.specificity > norito.specificity {
+                json
+            } else if norito.specificity > json.specificity {
+                norito
+            } else if json.specificity == 2 {
+                // Equal explicit preferences use Torii's binary-first tie
+                // break. Wildcard-only ties retain the endpoint's default.
+                norito
+            } else if default_format == ResponseFormat::Json {
+                json
+            } else {
+                norito
+            }
+        }
+        (Some(candidate), None) | (None, Some(candidate)) => candidate,
+        (None, None) => {
+            return Err(not_acceptable(
+                "unsupported Accept header; use application/json or application/x-norito",
+            ));
+        }
+    };
+
+    if selected.quality == 0 {
+        return Err(not_acceptable(
             "unsupported Accept header; use application/json or application/x-norito",
-        )
-            .into_response()
-    })
+        ));
+    }
+    Ok(selected.format)
 }
 
 /// Validate `Accept` for JSON-only dynamic endpoints.
@@ -214,74 +445,161 @@ fn negotiate_response_format_with_default(
 /// reject clients that explicitly ask for Norito without accepting JSON.
 #[allow(clippy::result_large_err)] // callers bubble the full HTTP response on negotiation failure
 pub fn negotiate_json_only_response(accept: Option<&HeaderValue>) -> Result<(), Response> {
+    negotiate_single_typed_response(accept, ResponseFormat::Json)
+}
+
+/// Validate `Accept` for a response that is available only as Norito.
+///
+/// The most-specific matching range wins, so an explicit `application/x-norito;q=0`
+/// cannot be overridden by a positive wildcard.
+#[allow(clippy::result_large_err)] // callers bubble the full HTTP response on negotiation failure
+pub fn negotiate_norito_only_response(accept: Option<&HeaderValue>) -> Result<(), Response> {
+    negotiate_single_typed_response(accept, ResponseFormat::Norito)
+}
+
+/// Validate whether `format` is acceptable without selecting between representations.
+///
+/// This is used after safe requests run so protocol-native handlers can advertise their
+/// actual media type instead of being rejected by the JSON/Norito negotiation layer.
+#[allow(clippy::result_large_err)] // callers bubble the full HTTP response on negotiation failure
+pub fn ensure_typed_response_format_acceptable(
+    accept: Option<&HeaderValue>,
+    format: ResponseFormat,
+) -> Result<(), Response> {
+    negotiate_single_typed_response(accept, format)
+}
+
+/// Validate a protocol-native response media type against `Accept`.
+///
+/// The handler remains responsible for selecting its actual SSE, metrics,
+/// artifact, image, or other native representation. This check applies the
+/// client's exact media ranges after a safe handler has produced that response.
+#[allow(clippy::result_large_err)]
+pub fn ensure_response_media_type_acceptable(
+    accept: Option<&HeaderValue>,
+    actual_content_type: &str,
+) -> Result<(), Response> {
+    let Some(header) = accept else {
+        return Ok(());
+    };
+    let actual = base_media_type(actual_content_type);
+    let Some((actual_type, actual_subtype)) = actual.split_once('/') else {
+        return Err(not_acceptable(
+            "response Content-Type is invalid and cannot be negotiated",
+        ));
+    };
+    if actual_type.is_empty() || actual_subtype.is_empty() {
+        return Err(not_acceptable(
+            "response Content-Type is invalid and cannot be negotiated",
+        ));
+    }
+    let raw = header
+        .to_str()
+        .map_err(|_| not_acceptable("invalid Accept header encoding for protocol response"))?;
+    let mut effective: Option<(u8, usize, u16)> = None;
+    for (index, entry) in raw.split(',').enumerate() {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.split(';');
+        let media_range = parts.next().unwrap().trim();
+        let quality = parse_accept_quality(parts)?;
+        let specificity = if media_range.eq_ignore_ascii_case(actual) {
+            2
+        } else if media_range.eq_ignore_ascii_case("*/*") {
+            0
+        } else if media_range
+            .split_once('/')
+            .is_some_and(|(range_type, range_subtype)| {
+                range_subtype == "*" && range_type.eq_ignore_ascii_case(actual_type)
+            })
+        {
+            1
+        } else {
+            continue;
+        };
+        if effective.is_none_or(|(current_specificity, current_index, _)| {
+            specificity > current_specificity
+                || (specificity == current_specificity && index < current_index)
+        }) {
+            effective = Some((specificity, index, quality));
+        }
+    }
+    if effective.is_some_and(|(_, _, quality)| quality > 0) {
+        return Ok(());
+    }
+    Err(not_acceptable(format!(
+        "requested content type is not acceptable for this endpoint; response uses {actual}"
+    )))
+}
+
+#[allow(clippy::result_large_err)] // callers bubble the full HTTP response on negotiation failure
+fn negotiate_single_typed_response(
+    accept: Option<&HeaderValue>,
+    format: ResponseFormat,
+) -> Result<(), Response> {
     let Some(header) = accept else {
         return Ok(());
     };
 
+    let supported = match format {
+        ResponseFormat::Json => JSON_MIME_TYPE,
+        ResponseFormat::Norito => NORITO_MIME_TYPE,
+    };
     let raw = match header.to_str() {
         Ok(h) => h,
         Err(_) => {
-            return Err((
-                StatusCode::NOT_ACCEPTABLE,
-                "invalid Accept header encoding; supported: application/json",
-            )
-                .into_response());
+            return Err(not_acceptable(format!(
+                "invalid Accept header encoding; supported: {supported}"
+            )));
         }
     };
 
-    for entry in raw.split(',') {
+    let mut effective: Option<(u8, usize, u16)> = None;
+    for (index, entry) in raw.split(',').enumerate() {
         let trimmed = entry.trim();
         if trimmed.is_empty() {
             continue;
         }
         let mut parts = trimmed.split(';');
         let media_type = parts.next().unwrap().trim();
-        let mut quality = 1.0_f32;
-        for param in parts {
-            let p = param.trim();
-            let p_lower = p.to_ascii_lowercase();
-            if let Some(rest) = p_lower.strip_prefix("q=") {
-                let parsed = rest.parse::<f32>().map_err(|_| {
-                    (
-                        StatusCode::NOT_ACCEPTABLE,
-                        "invalid q-value in Accept header",
-                    )
-                        .into_response()
-                })?;
-                if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
-                    return Err((
-                        StatusCode::NOT_ACCEPTABLE,
-                        "invalid q-value in Accept header",
-                    )
-                        .into_response());
-                }
-                quality = parsed;
-            }
-        }
+        let quality = parse_accept_quality(parts)?;
 
-        if quality <= 0.0 {
+        let exact_match = match format {
+            ResponseFormat::Json => is_json_media_type(media_type),
+            ResponseFormat::Norito => is_norito_media_type(media_type),
+        };
+        let specificity = if exact_match {
+            2
+        } else if media_type.eq_ignore_ascii_case("application/*") {
+            1
+        } else if media_type.eq_ignore_ascii_case("*/*") {
+            0
+        } else {
             continue;
-        }
-
-        if is_json_media_type(media_type)
-            || media_type.eq_ignore_ascii_case("application/*")
-            || media_type.eq_ignore_ascii_case("*/*")
-        {
-            return Ok(());
+        };
+        if effective.is_none_or(|(current_specificity, current_index, _)| {
+            specificity > current_specificity
+                || (specificity == current_specificity && index < current_index)
+        }) {
+            effective = Some((specificity, index, quality));
         }
     }
 
-    Err((
-        StatusCode::NOT_ACCEPTABLE,
-        "requested content type is not acceptable for this endpoint; supported: application/json",
-    )
-        .into_response())
+    if effective.is_some_and(|(_, _, quality)| quality > 0) {
+        return Ok(());
+    }
+
+    Err(not_acceptable(format!(
+        "requested content type is not acceptable for this endpoint; supported: {supported}"
+    )))
 }
 
 /// Encode a response payload using the negotiated format.
 pub fn respond_with_format<T>(value: T, format: ResponseFormat) -> Response
 where
-    T: JsonSerialize + norito::core::NoritoSerialize,
+    T: JsonSerialize + norito::core::NoritoSerialize + 'static,
 {
     respond_with_status_and_format(StatusCode::OK, value, format)
 }
@@ -293,9 +611,10 @@ pub fn respond_with_status_and_format<T>(
     format: ResponseFormat,
 ) -> Response
 where
-    T: JsonSerialize + norito::core::NoritoSerialize,
+    T: JsonSerialize + norito::core::NoritoSerialize + 'static,
 {
-    match format {
+    let error_code = telemetry_error_code(&value);
+    let mut response = match format {
         ResponseFormat::Norito => {
             let mut bytes = Vec::new();
             match norito::core::to_bytes_in(&value, &mut bytes) {
@@ -306,11 +625,7 @@ where
                     .expect("build Norito response"),
                 Err(err) => {
                     iroha_logger::error!(?err, "failed to serialise response payload");
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to serialise response",
-                    )
-                        .into_response()
+                    serialization_failure_response(ResponseFormat::Norito)
                 }
             }
         }
@@ -322,14 +637,14 @@ where
                 .expect("build JSON response"),
             Err(err) => {
                 iroha_logger::error!(?err, "failed to serialise response payload");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to serialise response",
-                )
-                    .into_response()
+                serialization_failure_response(ResponseFormat::Json)
             }
         },
+    };
+    if let Some(error_code) = error_code {
+        response.extensions_mut().insert(error_code);
     }
+    response
 }
 
 /// Encode a dynamically constructed Norito JSON value as JSON.
@@ -440,6 +755,52 @@ mod response_format_tests {
         assert_eq!(decoded, payload);
     }
 
+    #[test]
+    fn typed_error_response_carries_bounded_telemetry_code() {
+        let response = respond_with_status_and_format(
+            StatusCode::CONFLICT,
+            ErrorEnvelope::new("idempotency_key_conflict", "conflict"),
+            ResponseFormat::Json,
+        );
+        assert_eq!(
+            response
+                .extensions()
+                .get::<HttpErrorCode>()
+                .map(HttpErrorCode::as_str),
+            Some("idempotency_key_conflict")
+        );
+
+        let response = respond_with_status_and_format(
+            StatusCode::BAD_REQUEST,
+            ErrorEnvelope::new("raw/value/from/request", "invalid"),
+            ResponseFormat::Norito,
+        );
+        assert_eq!(
+            response
+                .extensions()
+                .get::<HttpErrorCode>()
+                .map(HttpErrorCode::as_str),
+            Some("invalid_error_code")
+        );
+    }
+
+    #[tokio::test]
+    async fn unacceptable_representation_uses_typed_json_fallback() {
+        let header = HeaderValue::from_static("image/png");
+        let response = negotiate_response_format(Some(&header))
+            .expect_err("unsupported representation must be rejected");
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(
+            parts.headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(JSON_MIME_TYPE))
+        );
+        let bytes = body.collect().await.expect("collect error body").to_bytes();
+        let envelope: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&bytes).expect("decode typed error envelope");
+        assert_eq!(envelope.code(), "response_not_acceptable");
+    }
+
     #[tokio::test]
     async fn respond_value_with_format_keeps_dynamic_payloads_json_only() {
         let value = json::Value::from(7_u64);
@@ -505,14 +866,18 @@ mod response_format_tests {
 #[derive(Debug)]
 pub struct NoritoBody<T>(pub T);
 
-impl<T: NoritoSerialize + Send> IntoResponse for NoritoBody<T> {
+impl<T: NoritoSerialize + Send + 'static> IntoResponse for NoritoBody<T> {
     fn into_response(self) -> Response {
+        let error_code = telemetry_error_code(&self.0);
         // Encode with Norito header + checksum so clients can reliably decode.
         let mut buf = Vec::new();
         norito::core::to_bytes_in(&self.0, &mut buf).expect("norito serialization failed");
         let mut res = Response::new(buf.into());
         res.headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE));
+        if let Some(error_code) = error_code {
+            res.extensions_mut().insert(error_code);
+        }
         res
     }
 }
@@ -533,13 +898,17 @@ impl IntoResponse for JsonValueBody {
 #[derive(Debug)]
 pub struct JsonBody<T>(pub T);
 
-impl<T: JsonSerialize + Send> IntoResponse for JsonBody<T> {
+impl<T: JsonSerialize + Send + 'static> IntoResponse for JsonBody<T> {
     fn into_response(self) -> Response {
+        let error_code = telemetry_error_code(&self.0);
         // Serialize using Norito's JSON codec and attach the appropriate MIME type header.
         let buf = norito::json::to_vec(&self.0).expect("json serialization failed");
         let mut res = Response::new(buf.into());
         res.headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        if let Some(error_code) = error_code {
+            res.extensions_mut().insert(error_code);
+        }
         res
     }
 }
@@ -558,6 +927,35 @@ pub mod extractors {
 
     use super::*;
 
+    fn typed_request_rejection(
+        status: StatusCode,
+        code: &'static str,
+        message: impl Into<String>,
+    ) -> Response {
+        super::respond_with_status_and_format(
+            status,
+            iroha_torii_shared::ErrorEnvelope::new(code, message),
+            super::current_response_format(),
+        )
+    }
+
+    fn typed_body_rejection(rejection: axum::extract::rejection::BytesRejection) -> Response {
+        let status = rejection.into_response().status();
+        if status == StatusCode::PAYLOAD_TOO_LARGE {
+            return typed_request_rejection(
+                status,
+                "request_payload_too_large",
+                "The request body exceeds the configured size limit.",
+            );
+        }
+
+        typed_request_rejection(
+            status,
+            "request_body_unreadable",
+            "The request body could not be read.",
+        )
+    }
+
     /// Extractor of Norito-encoded, versioned data from the request body.
     ///
     /// Missing or unsupported `Content-Type` yields `415 Unsupported Media Type`;
@@ -567,7 +965,7 @@ pub mod extractors {
 
     impl<S, T> FromRequest<S> for Norito<T>
     where
-        Bytes: FromRequest<S>,
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
         T: SupportsNoritoDecode + Send + 'static,
     {
@@ -606,7 +1004,7 @@ pub mod extractors {
 
             let body = Bytes::from_request(req, state)
                 .await
-                .map_err(IntoResponse::into_response)?;
+                .map_err(typed_body_rejection)?;
 
             decode_as_norito::<T>(&body).map(Norito)
         }
@@ -629,7 +1027,7 @@ pub mod extractors {
 
     impl<S> FromRequest<S> for NoritoVersionedBytes
     where
-        Bytes: FromRequest<S>,
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
     {
         type Rejection = Response;
@@ -668,13 +1066,13 @@ pub mod extractors {
             Bytes::from_request(req, state)
                 .await
                 .map(NoritoVersionedBytes)
-                .map_err(IntoResponse::into_response)
+                .map_err(typed_body_rejection)
         }
     }
 
     impl<S, T> FromRequest<S> for NoritoVersioned<T>
     where
-        Bytes: FromRequest<S>,
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
         // Accept payloads encoded with Norito + iroha_version leading byte
         T: iroha_version::codec::DecodeVersioned,
@@ -715,7 +1113,7 @@ pub mod extractors {
 
             let body = Bytes::from_request(req, state)
                 .await
-                .map_err(IntoResponse::into_response)?;
+                .map_err(typed_body_rejection)?;
 
             match <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body) {
                 Ok(val) => Ok(NoritoVersioned(val)),
@@ -842,7 +1240,7 @@ pub mod extractors {
 
     impl<S, T> FromRequest<S> for JsonOrNoritoVersioned<T>
     where
-        Bytes: FromRequest<S>,
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
         T: iroha_version::codec::DecodeVersioned + SupportsVersionedJsonDecode + 'static,
     {
@@ -870,7 +1268,7 @@ pub mod extractors {
 
             let body = Bytes::from_request(req, state)
                 .await
-                .map_err(IntoResponse::into_response)?;
+                .map_err(typed_body_rejection)?;
 
             if super::is_norito_media_type(raw) {
                 return <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body)
@@ -954,7 +1352,11 @@ pub mod extractors {
     #[allow(clippy::result_large_err)] // extraction needs to return a fully-formed HTTP rejection response
     fn decode_as_json<T: JsonDeserializeOwned>(body: &Bytes) -> Result<T, Response> {
         norito::json::from_slice::<T>(body.as_ref()).map_err(|e| {
-            (StatusCode::BAD_REQUEST, format!("invalid JSON body: {e}")).into_response()
+            typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_json_invalid",
+                format!("Invalid JSON body: {e}"),
+            )
         })
     }
 
@@ -976,7 +1378,11 @@ pub mod extractors {
     fn decode_as_norito<T: SupportsNoritoDecode + 'static>(body: &Bytes) -> Result<T, Response> {
         T::decode_norito(body.as_ref()).map_err(|e| {
             record_payload_decode_failure::<T>(&e);
-            (StatusCode::BAD_REQUEST, format!("invalid Norito body: {e}")).into_response()
+            typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_norito_invalid",
+                format!("Invalid Norito body: {e}"),
+            )
         })
     }
 
@@ -1021,35 +1427,75 @@ pub mod extractors {
     #[cfg(not(feature = "telemetry"))]
     fn record_norito_decode_failure(_: &'static str, _: &norito::Error) {}
 
+    #[derive(Clone, Copy, Debug)]
+    enum NoritoJsonFormat {
+        Json,
+        Norito,
+    }
+
     #[allow(clippy::result_large_err)]
-    fn decode_body_as_norito_or_json<T: JsonDeserializeOwned + SupportsNoritoDecode + 'static>(
-        body: &Bytes,
-        declared: Option<&str>,
-    ) -> Result<T, Response> {
-        let Some(ct) = declared else {
-            return Err((
+    fn norito_json_format(headers: &axum::http::HeaderMap) -> Result<NoritoJsonFormat, Response> {
+        let mut content_types = headers.get_all(CONTENT_TYPE).iter();
+        let Some(value) = content_types.next() else {
+            return Err(typed_request_rejection(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request_content_type_missing",
                 format!(
                     "missing Content-Type; use application/json or {}",
                     super::NORITO_MIME_TYPE
                 ),
-            )
-                .into_response());
+            ));
         };
-        if super::is_norito_media_type(ct) {
-            return decode_as_norito::<T>(body);
+        if content_types.next().is_some() {
+            return Err(typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_content_type_invalid",
+                "Content-Type must appear exactly once.",
+            ));
         }
-        if super::is_json_media_type(ct) {
-            return decode_as_json::<T>(body);
+        let declared = value.to_str().map_err(|_| {
+            typed_request_rejection(
+                StatusCode::BAD_REQUEST,
+                "request_content_type_invalid",
+                "Content-Type is not valid ASCII.",
+            )
+        })?;
+        let declared = declared.trim();
+        if declared.is_empty() {
+            return Err(typed_request_rejection(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request_content_type_missing",
+                format!(
+                    "missing Content-Type; use application/json or {}",
+                    super::NORITO_MIME_TYPE
+                ),
+            ));
         }
-        Err((
+        if super::is_norito_media_type(declared) {
+            return Ok(NoritoJsonFormat::Norito);
+        }
+        if super::is_json_media_type(declared) {
+            return Ok(NoritoJsonFormat::Json);
+        }
+        Err(typed_request_rejection(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_unsupported",
             format!(
-                "unsupported Content-Type `{ct}`; use application/json or {}",
+                "unsupported Content-Type `{declared}`; use application/json or {}",
                 super::NORITO_MIME_TYPE
             ),
-        )
-            .into_response())
+        ))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn decode_body_as_norito_or_json<T: JsonDeserializeOwned + SupportsNoritoDecode + 'static>(
+        body: &Bytes,
+        format: NoritoJsonFormat,
+    ) -> Result<T, Response> {
+        match format {
+            NoritoJsonFormat::Json => decode_as_json::<T>(body),
+            NoritoJsonFormat::Norito => decode_as_norito::<T>(body),
+        }
     }
 
     /// Extractor for request bodies supporting both Norito and JSON payloads.
@@ -1058,7 +1504,7 @@ pub mod extractors {
 
     impl<S, T> FromRequest<S> for NoritoJson<T>
     where
-        Bytes: FromRequest<S>,
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
         T: JsonDeserializeOwned + Send + 'static,
         T: SupportsNoritoDecode,
@@ -1066,17 +1512,12 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let content_type = req.headers().get(CONTENT_TYPE).cloned();
+            let format = norito_json_format(req.headers())?;
             let body = Bytes::from_request(req, state)
                 .await
-                .map_err(IntoResponse::into_response)?;
-            let declared = content_type
-                .as_ref()
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty());
+                .map_err(typed_body_rejection)?;
 
-            decode_body_as_norito_or_json::<T>(&body, declared).map(NoritoJson)
+            decode_body_as_norito_or_json::<T>(&body, format).map(NoritoJson)
         }
     }
 
@@ -1091,7 +1532,7 @@ pub mod extractors {
 
     impl<S, T> FromRequest<S> for NoritoJsonWithBytes<T>
     where
-        Bytes: FromRequest<S>,
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
         T: JsonDeserializeOwned + Send + 'static,
         T: SupportsNoritoDecode,
@@ -1099,17 +1540,12 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let content_type = req.headers().get(CONTENT_TYPE).cloned();
+            let format = norito_json_format(req.headers())?;
             let body = Bytes::from_request(req, state)
                 .await
-                .map_err(IntoResponse::into_response)?;
-            let declared = content_type
-                .as_ref()
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty());
+                .map_err(typed_body_rejection)?;
 
-            decode_body_as_norito_or_json::<T>(&body, declared)
+            decode_body_as_norito_or_json::<T>(&body, format)
                 .map(|value| NoritoJsonWithBytes { value, raw: body })
         }
     }
@@ -1120,7 +1556,7 @@ pub mod extractors {
 
     impl<S, T> FromRequest<S> for JsonOnly<T>
     where
-        Bytes: FromRequest<S>,
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
         T: JsonDeserializeOwned + Send,
     {
@@ -1130,7 +1566,7 @@ pub mod extractors {
             let content_type = req.headers().get(CONTENT_TYPE).cloned();
             let body = Bytes::from_request(req, state)
                 .await
-                .map_err(IntoResponse::into_response)?;
+                .map_err(typed_body_rejection)?;
             let declared = content_type
                 .as_ref()
                 .and_then(|hv| hv.to_str().ok())
@@ -1141,9 +1577,7 @@ pub mod extractors {
                 if !super::is_json_media_type(ct) {
                     return Err((
                         StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                        format!(
-                            "unsupported Content-Type `{ct}`; expected application/json or text/json"
-                        ),
+                        format!("unsupported Content-Type `{ct}`; expected application/json"),
                     )
                         .into_response());
                 }
@@ -1171,11 +1605,11 @@ pub mod extractors {
             let query = parts.uri.query().unwrap_or("");
             match decode_query::<T>(query) {
                 Ok(value) => Ok(NoritoQuery(value)),
-                Err(e) => Err((
+                Err(e) => Err(typed_request_rejection(
                     StatusCode::BAD_REQUEST,
+                    "request_query_invalid",
                     format!("invalid query params: {e}"),
-                )
-                    .into_response()),
+                )),
             }
         }
     }
@@ -1199,29 +1633,46 @@ pub mod extractors {
             let query = parts.uri.query().unwrap_or("");
             match decode_string_query::<T>(query) {
                 Ok(value) => Ok(NoritoStringQuery(value)),
-                Err(e) => Err((
+                Err(e) => Err(typed_request_rejection(
                     StatusCode::BAD_REQUEST,
+                    "request_query_invalid",
                     format!("invalid query params: {e}"),
-                )
-                    .into_response()),
+                )),
             }
         }
     }
 
     fn decode_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+        let pairs = query_pairs(query);
+        reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
-        for (key, value) in query_pairs(query) {
+        for (key, value) in pairs {
             object.insert(key, scalar_to_value(&value));
         }
         json::from_value(Value::Object(object))
     }
 
     fn decode_string_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+        let pairs = query_pairs(query);
+        reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
-        for (key, value) in query_pairs(query) {
+        for (key, value) in pairs {
             object.insert(key, Value::String(value));
         }
         json::from_value(Value::Object(object))
+    }
+
+    fn reject_duplicate_query_keys(pairs: &[(String, String)]) -> Result<(), json::Error> {
+        // Structured query DTOs have exactly one value per field. Keep this
+        // check local to the DTO decoders so protocol-specific parsers can
+        // still define ordered or repeated-key semantics explicitly.
+        let mut seen = std::collections::BTreeSet::new();
+        for (key, _) in pairs {
+            if !seen.insert(key.as_str()) {
+                return Err(json::Error::duplicate_field(key));
+            }
+        }
+        Ok(())
     }
 
     fn query_pairs(query: &str) -> Vec<(String, String)> {
@@ -1269,7 +1720,7 @@ pub mod extractors {
     mod tests {
         use axum::{
             body::Body,
-            extract::FromRequestParts,
+            extract::{DefaultBodyLimit, FromRequestParts},
             http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
         };
         use http_body_util::BodyExt as _;
@@ -1288,6 +1739,104 @@ pub mod extractors {
             null_like: Option<String>,
             bool_like: Option<String>,
             label: Option<String>,
+        }
+
+        #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
+        struct RequiredQueryForTest {
+            asset_definition_id: String,
+        }
+
+        #[tokio::test]
+        async fn malformed_query_uses_typed_error_envelope() {
+            let (mut parts, _) = Request::builder()
+                .uri("/?unexpected=value")
+                .body(())
+                .expect("request")
+                .into_parts();
+            let response = super::super::with_current_response_format(
+                super::super::ResponseFormat::Json,
+                NoritoQuery::<RequiredQueryForTest>::from_request_parts(&mut parts, &()),
+            )
+            .await
+            .expect_err("missing required query field must fail");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                response.headers().get(CONTENT_TYPE),
+                Some(&HeaderValue::from_static("application/json"))
+            );
+            let bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect typed query error")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&bytes).expect("decode typed query error");
+            assert_eq!(envelope.code(), "request_query_invalid");
+        }
+
+        #[tokio::test]
+        async fn duplicate_query_fields_are_rejected_before_deserialization() {
+            for query in [
+                "asset_definition_id=first&asset_definition_id=second",
+                "asset_definition_id=first&asset%5fdefinition%5fid=second",
+            ] {
+                let request = Request::builder()
+                    .uri(format!("/?{query}"))
+                    .body(())
+                    .expect("request");
+                let (mut parts, _) = request.into_parts();
+
+                let response = super::super::with_current_response_format(
+                    super::super::ResponseFormat::Json,
+                    NoritoQuery::<RequiredQueryForTest>::from_request_parts(&mut parts, &()),
+                )
+                .await
+                .expect_err("duplicate query field must fail");
+
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
+                let bytes = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("collect duplicate-query error")
+                    .to_bytes();
+                let envelope: iroha_torii_shared::ErrorEnvelope =
+                    norito::json::from_slice(&bytes).expect("decode duplicate-query error");
+                assert_eq!(envelope.code(), "request_query_invalid", "query={query}");
+                assert!(
+                    envelope.message().contains("duplicate field"),
+                    "query={query}, envelope={envelope:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn duplicate_string_query_fields_are_rejected_before_deserialization() {
+            let request = Request::builder()
+                .uri("/?asset_definition_id=first&asset_definition_id=second")
+                .body(())
+                .expect("request");
+            let (mut parts, _) = request.into_parts();
+
+            let response = super::super::with_current_response_format(
+                super::super::ResponseFormat::Json,
+                NoritoStringQuery::<RequiredQueryForTest>::from_request_parts(&mut parts, &()),
+            )
+            .await
+            .expect_err("duplicate string query field must fail");
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect duplicate string-query error")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&bytes).expect("decode duplicate string-query error");
+            assert_eq!(envelope.code(), "request_query_invalid");
+            assert!(envelope.message().contains("duplicate field"));
         }
 
         impl Version for Dummy {
@@ -1539,34 +2088,32 @@ pub mod extractors {
         }
 
         #[test]
-        fn negotiate_json_preferred_defaults_json() {
-            let format =
-                super::super::negotiate_json_preferred_response_format(None).expect("format");
+        fn negotiate_accept_header_explicit_zero_overrides_wildcard() {
+            let header = HeaderValue::from_static("application/x-norito;q=0, */*;q=1");
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
             assert_eq!(format, super::super::ResponseFormat::Json);
         }
 
         #[test]
-        fn negotiate_json_preferred_wildcard_defaults_json() {
-            let header = HeaderValue::from_static("*/*");
-            let format = super::super::negotiate_json_preferred_response_format(Some(&header))
-                .expect("format");
-            assert_eq!(format, super::super::ResponseFormat::Json);
-        }
-
-        #[test]
-        fn negotiate_json_preferred_preserves_explicit_norito() {
-            let header = HeaderValue::from_static("application/x-norito");
-            let format = super::super::negotiate_json_preferred_response_format(Some(&header))
-                .expect("format");
+        fn negotiate_accept_header_uses_wildcard_quality_per_representation() {
+            let header = HeaderValue::from_static("application/json;q=0.8, */*;q=0.9");
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
             assert_eq!(format, super::super::ResponseFormat::Norito);
         }
 
         #[test]
-        fn negotiate_json_preferred_explicit_tie_prefers_norito() {
-            let header =
-                HeaderValue::from_static("application/json;q=0.7, application/x-norito;q=0.7");
-            let format = super::super::negotiate_json_preferred_response_format(Some(&header))
-                .expect("format");
+        fn negotiate_accept_header_prefers_more_specific_equal_quality() {
+            let header = HeaderValue::from_static("application/json, application/*");
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
+            assert_eq!(format, super::super::ResponseFormat::Json);
+        }
+
+        #[test]
+        fn negotiate_uses_first_equally_specific_range() {
+            let header = HeaderValue::from_static(
+                "application/json;q=0.2, application/json;q=0.9, application/x-norito;q=0.5",
+            );
+            let format = super::super::negotiate_response_format(Some(&header)).expect("format");
             assert_eq!(format, super::super::ResponseFormat::Norito);
         }
 
@@ -1586,9 +2133,47 @@ pub mod extractors {
 
         #[test]
         fn negotiate_rejects_invalid_q_value() {
-            let header = HeaderValue::from_static("application/json;q=2");
-            let err = super::super::negotiate_response_format(Some(&header)).unwrap_err();
-            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+            for raw in [
+                "application/json;q=2",
+                "application/json;q=.5",
+                "application/json;q=0.1234",
+                "application/json;q=1.001",
+                "application/json;q=-0.1",
+                "application/json;q",
+                "application/json;q=0.5;q=0.7",
+            ] {
+                let header = raw
+                    .parse::<HeaderValue>()
+                    .expect("syntactically valid header bytes");
+                let err = super::super::negotiate_response_format(Some(&header))
+                    .expect_err("malformed q-value must fail closed");
+                assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE, "header={raw}");
+            }
+        }
+
+        #[test]
+        fn negotiate_accepts_exact_http_qvalue_boundaries() {
+            for raw in [
+                "application/json;q=0",
+                "application/json;q=0.001",
+                "application/json;q=0.999",
+                "application/json;q=1",
+                "application/json;q=1.000",
+            ] {
+                let header = raw
+                    .parse::<HeaderValue>()
+                    .expect("syntactically valid header bytes");
+                let result = super::super::negotiate_response_format(Some(&header));
+                if raw.ends_with("q=0") {
+                    assert!(result.is_err(), "zero quality forbids the only range");
+                } else {
+                    assert_eq!(
+                        result.expect("valid q-value"),
+                        super::super::ResponseFormat::Json,
+                        "header={raw}"
+                    );
+                }
+            }
         }
 
         #[test]
@@ -1605,6 +2190,82 @@ pub mod extractors {
             let header = HeaderValue::from_static("application/x-norito");
             let err = super::super::negotiate_json_only_response(Some(&header)).unwrap_err();
             assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn negotiate_json_only_exact_zero_overrides_wildcard() {
+            let header = HeaderValue::from_static("application/json;q=0, */*;q=1");
+            let err = super::super::negotiate_json_only_response(Some(&header)).unwrap_err();
+            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn negotiate_norito_only_honors_specific_zero_and_application_wildcard() {
+            let wildcard = HeaderValue::from_static("application/*;q=0.7");
+            assert!(super::super::negotiate_norito_only_response(Some(&wildcard)).is_ok());
+
+            let explicit_zero = HeaderValue::from_static("application/x-norito;q=0, */*;q=1");
+            let err = super::super::negotiate_norito_only_response(Some(&explicit_zero))
+                .expect_err("specific q=0 must override wildcard");
+            assert_eq!(err.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn protocol_media_negotiation_honors_type_wildcards_and_specific_zero() {
+            for accepted in ["text/event-stream", "text/*", "*/*"] {
+                let header = accepted.parse::<HeaderValue>().expect("Accept header");
+                super::super::ensure_response_media_type_acceptable(
+                    Some(&header),
+                    "text/event-stream; charset=utf-8",
+                )
+                .expect("matching native media type");
+            }
+            let header = HeaderValue::from_static("text/event-stream;q=0, */*;q=1");
+            let error = super::super::ensure_response_media_type_acceptable(
+                Some(&header),
+                "text/event-stream",
+            )
+            .expect_err("specific zero must override wildcard");
+            assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn protocol_media_negotiation_rejects_unrelated_media() {
+            let header = HeaderValue::from_static("application/json, image/*;q=0.5");
+            let error = super::super::ensure_response_media_type_acceptable(
+                Some(&header),
+                "application/octet-stream",
+            )
+            .expect_err("unrelated media ranges must not match");
+            assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE);
+        }
+
+        #[test]
+        fn typed_response_content_type_classifier_excludes_protocol_media() {
+            assert_eq!(
+                super::super::typed_response_format_for_content_type(
+                    "application/problem+json; charset=utf-8"
+                ),
+                Some(super::super::ResponseFormat::Json)
+            );
+            assert_eq!(
+                super::super::typed_response_format_for_content_type(
+                    "application/x-norito; profile=torii-v1"
+                ),
+                Some(super::super::ResponseFormat::Norito)
+            );
+            for native in [
+                "text/event-stream",
+                "text/plain; version=0.0.4",
+                "application/octet-stream",
+                "image/png",
+            ] {
+                assert_eq!(
+                    super::super::typed_response_format_for_content_type(native),
+                    None,
+                    "protocol media type must not enter typed negotiation: {native}"
+                );
+            }
         }
 
         #[tokio::test]
@@ -1659,6 +2320,64 @@ pub mod extractors {
                 .await
                 .expect("extract json");
             assert_eq!(extracted.0.value, 7);
+        }
+
+        #[tokio::test]
+        async fn norito_json_body_limit_uses_typed_error_envelope() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload {
+                value: u32,
+            }
+
+            let body_bytes = norito::json::to_vec(&Payload { value: 7 }).expect("json encode");
+            for (format, expected_content_type) in [
+                (
+                    super::super::ResponseFormat::Json,
+                    super::super::JSON_MIME_TYPE,
+                ),
+                (
+                    super::super::ResponseFormat::Norito,
+                    super::super::NORITO_MIME_TYPE,
+                ),
+            ] {
+                let mut req = Request::builder()
+                    .method("POST")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body_bytes.clone()))
+                    .expect("build request");
+                DefaultBodyLimit::max(4).apply(&mut req);
+                let response = super::super::with_current_response_format(
+                    format,
+                    NoritoJson::<Payload>::from_request(req, &()),
+                )
+                .await
+                .expect_err("oversized typed request must fail");
+
+                assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+                assert_eq!(
+                    response.headers().get(CONTENT_TYPE),
+                    Some(&HeaderValue::from_static(expected_content_type))
+                );
+                let body = http_body_util::BodyExt::collect(response.into_body())
+                    .await
+                    .expect("collect typed body-limit response")
+                    .to_bytes();
+                let envelope: iroha_torii_shared::ErrorEnvelope =
+                    match format {
+                        super::super::ResponseFormat::Json => norito::json::from_slice(&body)
+                            .expect("decode JSON body-limit envelope"),
+                        super::super::ResponseFormat::Norito => norito::decode_from_bytes(&body)
+                            .expect("decode Norito body-limit envelope"),
+                    };
+                assert_eq!(envelope.code(), "request_payload_too_large");
+            }
         }
 
         #[tokio::test]
@@ -1741,6 +2460,74 @@ pub mod extractors {
                 .await
                 .expect_err("missing content-type");
             assert_eq!(err.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        }
+
+        #[tokio::test]
+        async fn norito_json_rejects_invalid_content_type_before_body_collection() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload;
+
+            let mut duplicate = Request::builder()
+                .method("POST")
+                .body(Body::from("oversized"))
+                .expect("build duplicate-header request");
+            duplicate
+                .headers_mut()
+                .append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            duplicate.headers_mut().append(
+                CONTENT_TYPE,
+                HeaderValue::from_static(super::super::NORITO_MIME_TYPE),
+            );
+            DefaultBodyLimit::max(1).apply(&mut duplicate);
+            let duplicate_error = NoritoJson::<Payload>::from_request(duplicate, &())
+                .await
+                .expect_err("duplicate Content-Type must fail");
+            assert_eq!(duplicate_error.status(), StatusCode::BAD_REQUEST);
+
+            let mut non_ascii = Request::builder()
+                .method("POST")
+                .header(
+                    CONTENT_TYPE,
+                    HeaderValue::from_bytes(&[0x80]).expect("opaque header value"),
+                )
+                .body(Body::from("oversized"))
+                .expect("build non-ASCII-header request");
+            DefaultBodyLimit::max(1).apply(&mut non_ascii);
+            let non_ascii_error = NoritoJson::<Payload>::from_request(non_ascii, &())
+                .await
+                .expect_err("non-ASCII Content-Type must fail");
+            assert_eq!(non_ascii_error.status(), StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn norito_json_with_bytes_rejects_media_type_before_body_collection() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload;
+
+            let mut request = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "text/plain")
+                .body(Body::from("oversized"))
+                .expect("build unsupported-media request");
+            DefaultBodyLimit::max(1).apply(&mut request);
+            let error = NoritoJsonWithBytes::<Payload>::from_request(request, &())
+                .await
+                .expect_err("unsupported Content-Type must fail");
+            assert_eq!(error.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
 
         #[tokio::test]

@@ -52,7 +52,7 @@ Payload არის Norito-ში კოდირებული `DaIngestReque
 | 500 შიდა შეცდომა | მოულოდნელი მარცხი (რეგისტრირებული + გაფრთხილება). |
 
 ```
-GET /v1/da/proof_policies
+GET /v1/da/proof-policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 არ დაგჭირდებათ დამატებითი ორმხრივი მგზავრობა, რომ დამადასტურებელი საბუთი დააკავშიროთ აქტიურ პოლიტიკას.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v1/da/proof-policies/snapshot
 Accept: application/json | application/x-norito
 ```
 

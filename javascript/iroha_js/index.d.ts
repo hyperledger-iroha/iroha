@@ -2955,7 +2955,6 @@ export interface BlockListOptions {
 
 export interface EventStreamOptions {
   filter?: string | Record<string, unknown>;
-  lastEventId?: string;
   signal?: AbortSignal;
 }
 
@@ -2971,7 +2970,6 @@ export interface ContractEventStreamOptions {
   sinceTimestampMs?: NumericLike;
   untilTimestampMs?: NumericLike;
   resultOk?: boolean;
-  lastEventId?: string;
   signal?: AbortSignal;
 }
 
@@ -3251,11 +3249,6 @@ export interface RetailRecipientLookupResponse {
   alias_fqn?: string;
   fi_id?: string;
   full_name?: string;
-}
-
-export interface AliasVoprfEvaluateResponse {
-  evaluated_element_hex: string;
-  backend: string;
 }
 
 export interface RbcSampleRequestOptions {
@@ -6464,20 +6457,158 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
-export interface ToriiOfflineReadinessResponse {
-  offline_kagemusha_recursive_compact_available: boolean;
-  offline_kagemusha_recursive_compact_mode: string;
-  offline_kagemusha_recursive_compact_required_native_bridge_abi_version: number;
-  offline_kagemusha_recursive_compact_circuit_id: string;
-  offline_kagemusha_recursive_compact_artifacts_available: boolean;
-  offline_telemetry: boolean;
-  offline_note?: boolean;
-  offline_one_use_keys?: boolean;
-  offline_recursive_note_proof?: boolean;
-  offline_fountain_qr?: boolean;
-  offline_sync_optional?: boolean;
-  [key: string]: unknown;
+export type OfflineByteArray = ReadonlyArray<number>;
+export type OfflineJsonUnsignedInteger = number | bigint;
+
+export interface OfflineScaledAmountJson {
+  atomic_units: OfflineJsonUnsignedInteger;
+  scale: OfflineJsonUnsignedInteger;
 }
+
+export interface OfflineAuthorizationJson extends Record<string, unknown> {
+  operation_id: OfflineByteArray;
+}
+
+export interface OfflineTopUpRequestJson extends Record<string, unknown> {
+  asset: string;
+  amount: OfflineScaledAmountJson;
+  current_note: Record<string, unknown>;
+  record_bundle: Record<string, unknown>;
+  pallas_open_envelopes_archive: OfflineByteArray;
+  artifact_generation: string;
+  operation_id: OfflineByteArray;
+  authorization: OfflineAuthorizationJson;
+}
+
+export interface OfflineRedeemRequestJson extends Record<string, unknown> {
+  bundle: Record<string, unknown>;
+  recipient: string;
+  amount: OfflineScaledAmountJson;
+  redeem_proof: Record<string, unknown>;
+  redemption: Record<string, unknown>;
+  lineage_witness?: Record<string, unknown> | null;
+  lineage_verifier_record: Record<string, unknown>;
+  offline_change?: Record<string, unknown> | null;
+  block_height: OfflineJsonUnsignedInteger;
+  operation_id: OfflineByteArray;
+  authorization: OfflineAuthorizationJson;
+}
+
+export interface ToriiOfflineReadinessBlocker {
+  code: string;
+  message: string;
+}
+
+export interface ToriiOfflineReadinessResponse {
+  asset_definition_id: string;
+  evaluated_block_height: number | bigint;
+  evaluated_block_hash: string;
+  ready: boolean;
+  blockers: ToriiOfflineReadinessBlocker[];
+}
+
+export type OfflineOperationKindTag = {
+  kind: "top_up" | "redeem";
+  value: null;
+};
+
+export type OfflinePendingStateTag = {
+  state: "pending";
+  value: null;
+};
+
+export interface OfflineOperationReference {
+  operation_id: string;
+  kind: OfflineOperationKindTag;
+  state: OfflinePendingStateTag;
+  transaction_hash: string;
+  status_uri: string;
+  submitted_at_ms: number | bigint;
+}
+
+export interface OfflineTopUpResult {
+  transaction_hash: string;
+  finalized_block_height: number | bigint;
+  server_time_ms: number | bigint;
+  anchor: Record<string, unknown>;
+}
+
+export interface OfflineRedeemResult {
+  transaction_hash: string;
+  finalized_block_height: number | bigint;
+  server_time_ms: number | bigint;
+}
+
+export type OfflineOperationResult =
+  | { kind: "top_up"; result: OfflineTopUpResult }
+  | { kind: "redeem"; result: OfflineRedeemResult };
+
+export interface OfflineQueueErrorDetails {
+  state: string;
+  queued: number | bigint;
+  capacity: number | bigint;
+  saturated: boolean;
+}
+
+export interface OfflineAxtErrorDetails {
+  code?: string;
+  reason?: string;
+  snapshot_version?: number | bigint;
+  dataspace?: number | bigint;
+  lane?: number | bigint;
+  next_min_handle_era?: number | bigint;
+  next_min_sub_nonce?: number | bigint;
+}
+
+export interface OfflineErrorDetails {
+  layer?: string;
+  reject_code?: string;
+  queue?: OfflineQueueErrorDetails;
+  retry_after_seconds?: number | bigint;
+  endpoint?: string;
+  field?: string;
+  expected?: string;
+  actual?: string;
+  profile?: string;
+  chain_discriminant?: number | bigint;
+  tx_hash?: string;
+  last_status?: string;
+  hint?: string;
+  axt?: OfflineAxtErrorDetails;
+}
+
+export interface OfflineErrorEnvelope {
+  code: string;
+  message: string;
+  details?: OfflineErrorDetails;
+}
+
+export type OfflineOperationStatus =
+  | {
+      state: "pending";
+      value: {
+        operation_id: string;
+        kind: OfflineOperationKindTag;
+        transaction_hash: string;
+        submitted_at_ms: number | bigint;
+      };
+    }
+  | {
+      state: "applied";
+      value: {
+        operation_id: string;
+        result: OfflineOperationResult;
+      };
+    }
+  | {
+      state: "rejected";
+      value: {
+        operation_id: string;
+        kind: OfflineOperationKindTag;
+        transaction_hash: string;
+        error: OfflineErrorEnvelope;
+      };
+    };
 
 export interface ToriiStatusPayload {
   observed_at_ms: number;
@@ -9339,11 +9470,6 @@ export interface SorafsPorVerdictResponse {
   status: string;
 }
 
-export interface SorafsPorObservationResponse {
-  status: string;
-  success: boolean;
-}
-
 export interface DaManifestFetchResponse {
   storage_ticket_hex: string;
   client_blob_id_hex: string;
@@ -11136,6 +11262,22 @@ export declare class ToriiBrowserClient {
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  getOfflineReadiness(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineReadinessResponse>;
+  submitOfflineTopUp(
+    request: OfflineTopUpRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  submitOfflineRedeem(
+    request: OfflineRedeemRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  getOfflineOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationStatus>;
   getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
@@ -11558,11 +11700,6 @@ export declare class ToriiClient {
     observedSecs: number;
     signal?: AbortSignal;
   }): Promise<SorafsUptimeObservationResponse>;
-  recordSorafsPorChallenge(input: {
-    challenge?: string | ArrayBuffer | ArrayBufferView | Buffer;
-    challengeB64?: string;
-    signal?: AbortSignal;
-  }): Promise<SorafsPorSubmissionResponse>;
   recordSorafsPorProof(input: {
     proof?: string | ArrayBuffer | ArrayBufferView | Buffer;
     proofB64?: string;
@@ -11573,10 +11710,6 @@ export declare class ToriiClient {
     verdictB64?: string;
     signal?: AbortSignal;
   }): Promise<SorafsPorVerdictResponse>;
-  submitSorafsPorObservation(input: {
-    success: boolean;
-    signal?: AbortSignal;
-  }): Promise<SorafsPorObservationResponse>;
   getSorafsPorStatus(options?: SorafsPorStatusOptions): Promise<Buffer>;
   exportSorafsPorStatus(options?: SorafsPorExportOptions): Promise<Buffer>;
   getSorafsPorWeeklyReport(
@@ -12370,9 +12503,22 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  getOfflineReadiness(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiOfflineReadinessResponse>;
+  getOfflineReadiness(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineReadinessResponse>;
+  submitOfflineTopUp(
+    request: OfflineTopUpRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  submitOfflineRedeem(
+    request: OfflineRedeemRequestJson,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationReference>;
+  getOfflineOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<OfflineOperationStatus>;
 }
 
 export interface NoritoRpcClientOptions {
@@ -12588,7 +12734,7 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: "kag
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-append-v1";
 export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS: 64;
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64;
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: true;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: false;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1;
 export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608;
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;

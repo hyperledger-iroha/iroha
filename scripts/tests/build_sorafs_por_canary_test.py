@@ -160,7 +160,6 @@ def test_response_file_can_build_reporting_archive_canary(tmp_path: Path) -> Non
     assert MODULE.main([f"@{args_file}"]) == 0
 
     payload = json.loads(canary_path(tmp_path, "reporting_archive").read_text("utf-8"))
-    assert payload["manual_trigger_route_state"] == "retired"
     assert payload["archive_backend"] == "parquet"
     assert payload["governance_archive_handoff_digest_hex"] == HANDOFF_DIGEST
     assert payload["routes"][0]["name"] == MODULE.REQUIRED_REPORTING_ROUTES[0]

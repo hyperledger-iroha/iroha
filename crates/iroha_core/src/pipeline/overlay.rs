@@ -1460,6 +1460,7 @@ impl TxOverlay {
         }
     }
 
+    #[cfg(test)]
     fn from_ivm_proved_instructions(
         instrs: Vec<InstructionBox>,
         authority: &AccountId,

@@ -39,10 +39,10 @@ blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
 rand = { version = "0.9.3", default-features = false, features = ["std", "std_rng"] }
 tracing.workspace = true
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests", "zk-halo2-ipa"] }
-tempfile = { workspace = true }
 sorafs_chunker = { workspace = true }
 
 [build-dependencies]

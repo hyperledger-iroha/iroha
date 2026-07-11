@@ -15406,6 +15406,36 @@ pub mod isi {
                 .into());
             }
 
+            let proposal_height = envelope.block_header.height().get();
+            let verified_at_height = state_transaction.block_height();
+            if proposal_height > verified_at_height {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "lane relay proposal height is in the future".into(),
+                    ),
+                )
+                .into());
+            }
+            let expected_incarnation = state_transaction
+                .lane_incarnation_at_height(envelope.lane_id, proposal_height)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane {} has no active incarnation at proposal height {proposal_height}",
+                            envelope.lane_id.as_u32()
+                        )),
+                    )
+                })?;
+            if envelope.lane_incarnation != expected_incarnation {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "lane {} relay incarnation does not match the active proposal-height incarnation",
+                        envelope.lane_id.as_u32()
+                    )),
+                )
+                .into());
+            }
+
             let manifest_root = envelope.manifest_root.ok_or_else(|| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     "lane relay envelope is missing manifest_root".into(),
@@ -15447,7 +15477,6 @@ pub mod isi {
                 .into());
             }
 
-            let verified_at_height = state_transaction.block_height();
             let material_verified_at_height = fastpq_material.verified_at_height;
             if material_verified_at_height > verified_at_height {
                 return Err(InstructionExecutionError::InvalidParameter(

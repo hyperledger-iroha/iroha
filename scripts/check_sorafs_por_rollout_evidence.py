@@ -118,7 +118,6 @@ REQUIRED_RUNTIME_ROUTES = (
     "por_export",
     "por_report",
     "por_ingestion",
-    "capacity_por_challenge",
     "capacity_por_proof",
     "capacity_por_verdict",
 )
@@ -134,8 +133,6 @@ REQUIRED_METRICS = (
     "sorafs_vrf_missing_total",
     "sorafs_por_seed_verification_failures_total",
 )
-REQUIRED_MANUAL_TRIGGER_STATE = "retired"
-ALLOWED_MANUAL_TRIGGER_STATES = (REQUIRED_MANUAL_TRIGGER_STATE,)
 SEED_REPLAY_BOUND_KINDS = (
     "scheduler_runtime",
     "validator_replay",
@@ -273,8 +270,6 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "archive_retention_bound",
         "operator_archive_decision_recorded",
         "archive_backend",
-        "manual_trigger_route_decided",
-        "manual_trigger_route_state",
         "report_latency_ms",
         "seed_replay_digest_hex",
         "report_digest_hex",
@@ -571,13 +566,6 @@ def validate_reporting_archive(
     archive_backend = require_string(payload, "archive_backend", errors)
     if archive_backend and archive_backend not in ALLOWED_ARCHIVE_BACKENDS:
         errors.append("archive_backend must be `sql` or `parquet`")
-    require_bool_true(payload, "manual_trigger_route_decided", errors)
-    require_string_equal(
-        payload,
-        "manual_trigger_route_state",
-        REQUIRED_MANUAL_TRIGGER_STATE,
-        errors,
-    )
     require_maximum_int(
         payload,
         "report_latency_ms",
