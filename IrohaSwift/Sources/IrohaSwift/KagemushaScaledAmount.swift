@@ -1,0 +1,143 @@
+import Foundation
+
+/// An exact positive offline-cash amount expressed in the asset's atomic units.
+///
+/// Kagemusha proofs use an unsigned 128-bit integer amount, while public asset
+/// balances use Iroha `Numeric` values. Keeping the asset scale beside the
+/// atomic value prevents callers from accidentally charging or minting the
+/// atomic integer as a scale-zero public amount.
+public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
+    public static let maximumScale: UInt32 = 28
+    public static let maximumAtomicUnits = "340282366920938463463374607431768211455"
+
+    /// Canonical positive `u128` decimal without leading zeroes.
+    public let atomicUnits: String
+    /// Authoritative scale from the on-chain asset definition.
+    public let scale: UInt32
+
+    /// Builds an amount from canonical atomic units and an asset scale.
+    public init(atomicUnits: String, scale: UInt32) throws {
+        guard scale <= Self.maximumScale else {
+            throw KagemushaScaledAmountError.scaleTooLarge
+        }
+        guard Self.isCanonicalPositiveInteger(atomicUnits) else {
+            throw KagemushaScaledAmountError.invalidAtomicUnits
+        }
+        guard Self.fitsU128(atomicUnits) else {
+            throw KagemushaScaledAmountError.atomicUnitsOverflow
+        }
+        self.atomicUnits = atomicUnits
+        self.scale = scale
+    }
+
+    /// Converts a canonical decimal amount to atomic units exactly.
+    ///
+    /// The conversion never rounds. A fractional component wider than the
+    /// asset scale is rejected, including extra trailing zeroes.
+    public init(decimal: String, scale: UInt32) throws {
+        guard scale <= Self.maximumScale else {
+            throw KagemushaScaledAmountError.scaleTooLarge
+        }
+        let components = decimal.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count <= 2,
+              let integerPart = components.first,
+              !integerPart.isEmpty,
+              integerPart.allSatisfy(\.isASCIIWholeNumber),
+              integerPart == "0" || integerPart.first != "0"
+        else {
+            throw KagemushaScaledAmountError.invalidDecimal
+        }
+        let fractionalPart = components.count == 2 ? components[1] : Substring()
+        guard components.count == 1 || !fractionalPart.isEmpty,
+              fractionalPart.allSatisfy(\.isASCIIWholeNumber)
+        else {
+            throw KagemushaScaledAmountError.invalidDecimal
+        }
+        guard fractionalPart.count <= Int(scale) else {
+            throw KagemushaScaledAmountError.excessPrecision
+        }
+
+        let paddedFraction = String(fractionalPart)
+            + String(repeating: "0", count: Int(scale) - fractionalPart.count)
+        let combined = Self.strippingLeadingZeroes(String(integerPart) + paddedFraction)
+        try self.init(atomicUnits: combined, scale: scale)
+    }
+
+    /// Public Iroha `Numeric` spelling at the authoritative asset scale.
+    ///
+    /// For example, `atomicUnits=10750000000, scale=9` is
+    /// `10.750000000`, never the scale-zero value `10750000000`.
+    public var scaledNumericDecimal: String {
+        guard scale > 0 else { return atomicUnits }
+        var digits = atomicUnits
+        let requiredDigits = Int(scale) + 1
+        if digits.count < requiredDigits {
+            digits = String(repeating: "0", count: requiredDigits - digits.count) + digits
+        }
+        let splitIndex = digits.index(digits.endIndex, offsetBy: -Int(scale))
+        return String(digits[..<splitIndex]) + "." + String(digits[splitIndex...])
+    }
+
+    /// Minimal user-facing decimal spelling without insignificant zeroes.
+    public var displayDecimal: String {
+        guard scale > 0 else { return atomicUnits }
+        var value = scaledNumericDecimal
+        while value.last == "0" { value.removeLast() }
+        if value.last == "." { value.removeLast() }
+        return value
+    }
+
+    private static func isCanonicalPositiveInteger(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.allSatisfy(\.isASCIIWholeNumber)
+            && value != "0"
+            && (value.count == 1 || value.first != "0")
+    }
+
+    private static func fitsU128(_ value: String) -> Bool {
+        value.count < maximumAtomicUnits.count
+            || (value.count == maximumAtomicUnits.count && value <= maximumAtomicUnits)
+    }
+
+    static func compareAtomicUnits(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        if lhs.count != rhs.count {
+            return lhs.count < rhs.count ? .orderedAscending : .orderedDescending
+        }
+        if lhs == rhs { return .orderedSame }
+        return lhs < rhs ? .orderedAscending : .orderedDescending
+    }
+
+    private static func strippingLeadingZeroes(_ value: String) -> String {
+        let stripped = value.drop(while: { $0 == "0" })
+        return stripped.isEmpty ? "0" : String(stripped)
+    }
+}
+
+public enum KagemushaScaledAmountError: Error, Equatable, LocalizedError {
+    case invalidDecimal
+    case excessPrecision
+    case invalidAtomicUnits
+    case atomicUnitsOverflow
+    case scaleTooLarge
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidDecimal:
+            return "Kagemusha amount must be a canonical positive decimal."
+        case .excessPrecision:
+            return "Kagemusha amount has more fractional digits than the asset supports."
+        case .invalidAtomicUnits:
+            return "Kagemusha atomic amount must be a canonical positive integer."
+        case .atomicUnitsOverflow:
+            return "Kagemusha atomic amount does not fit in u128."
+        case .scaleTooLarge:
+            return "Kagemusha asset scale exceeds Iroha Numeric's supported range."
+        }
+    }
+}
+
+private extension Character {
+    var isASCIIWholeNumber: Bool {
+        self >= "0" && self <= "9"
+    }
+}

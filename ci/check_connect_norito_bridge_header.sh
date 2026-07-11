@@ -93,6 +93,11 @@ required_abi6 = {
     "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
     "connect_norito_kagemusha_recursive_spend_verify",
     "connect_norito_kagemusha_recursive_spend_redeem",
+    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_topup_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v2",
+    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v2",
 }
 
 def const_u8_ptr(name):
@@ -136,6 +141,31 @@ expected_recursive_signatures = {
         "connect_norito_kagemusha_recursive_spend_append",
         "out_bundle_ptr",
         "out_bundle_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_init_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_init_v2",
+        "out_bundle_ptr",
+        "out_bundle_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_topup_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_topup_v2",
+        "out_instruction_ptr",
+        "out_instruction_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_append_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_append_v2",
+        "out_split_result_ptr",
+        "out_split_result_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_verify_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_verify_v2",
+        "out_result_ptr",
+        "out_result_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_redeem_v2": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_redeem_v2",
+        "out_instruction_ptr",
+        "out_instruction_len",
     ),
     "connect_norito_kagemusha_recursive_spend_topup": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_topup",

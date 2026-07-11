@@ -1188,6 +1188,18 @@ impl From<crate::isi::offline::RedeemKagemushaRecursive> for InstructionBox {
     }
 }
 
+impl From<crate::isi::offline::TopUpKagemushaRecursiveV2> for InstructionBox {
+    fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV2) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::RedeemKagemushaRecursiveV2> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV2) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of oracle feed instructions.
 impl From<crate::isi::oracle::RegisterOracleFeed> for InstructionBox {
     fn from(i: crate::isi::oracle::RegisterOracleFeed) -> Self {

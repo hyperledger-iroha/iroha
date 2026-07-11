@@ -99,16 +99,19 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
     public let recordBundle: Data
     public let pallasOpenEnvelopes: Data
     public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
-    public let lineageVerifierKey: Data
-    public let lineageProvingKeyArchive: Data
+    /// Optional Reserved-lineage verifier key. Supplying neither lineage
+    /// artifact selects semantic recursive aggregation, matching the Rust V1
+    /// request contract. The two artifacts are an all-or-none package.
+    public let lineageVerifierKey: Data?
+    public let lineageProvingKeyArchive: Data?
     public let blockHeight: UInt64?
 
     public init(
         recordBundle: Data,
         pallasOpenEnvelopes: Data,
         currentNote: KagemushaRecursiveSpendableNoteDescriptor,
-        lineageVerifierKey: Data,
-        lineageProvingKeyArchive: Data,
+        lineageVerifierKey: Data? = nil,
+        lineageProvingKeyArchive: Data? = nil,
         blockHeight: UInt64? = nil
     ) throws {
         let recordBundlePayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
@@ -126,16 +129,23 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
             field: "pallasOpenEnvelopes",
             maxBytes: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
         )
-        guard !lineageVerifierKey.isEmpty else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageVerifierKey")
+        let suppliedLineageVerifierKey = lineageVerifierKey != nil
+        let suppliedLineageProvingKey = lineageProvingKeyArchive != nil
+        guard suppliedLineageVerifierKey == suppliedLineageProvingKey else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageKeyArtifacts")
         }
-        guard !lineageProvingKeyArchive.isEmpty else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageProvingKeyArchive")
+        if let lineageVerifierKey, let lineageProvingKeyArchive {
+            guard !lineageVerifierKey.isEmpty else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageVerifierKey")
+            }
+            guard !lineageProvingKeyArchive.isEmpty else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageProvingKeyArchive")
+            }
+            try KagemushaRecursiveSpendRequestCodecs.validateLineageKeyArtifactsForInit(
+                lineageVerifierKey: lineageVerifierKey,
+                lineageProvingKeyArchive: lineageProvingKeyArchive
+            )
         }
-        try KagemushaRecursiveSpendRequestCodecs.validateLineageKeyArtifactsForInit(
-            lineageVerifierKey: lineageVerifierKey,
-            lineageProvingKeyArchive: lineageProvingKeyArchive
-        )
         self.recordBundle = recordBundle
         self.pallasOpenEnvelopes = pallasOpenEnvelopes
         self.currentNote = currentNote
@@ -670,7 +680,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         ))
         writer.writeField(encodeBytesVec(request.pallasOpenEnvelopes))
         writer.writeField(try encodeSpendableNote(request.currentNote))
-        writer.writeField(encodeOptionRaw(verifyingKeyBoxPayload(request.lineageVerifierKey)))
+        writer.writeField(encodeOptionRaw(request.lineageVerifierKey.map(verifyingKeyBoxPayload)))
         writer.writeField(encodeOptionBytesVec(request.lineageProvingKeyArchive))
         writer.writeField(encodeOptionUInt64(request.blockHeight))
         return noritoEncode(typeName: initRequestWireName, payload: writer.data, flags: requestFlags)

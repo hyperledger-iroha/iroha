@@ -317,6 +317,44 @@ fi
 IOS_HASH=$(shasum -a 256 "$IOS_BIN" | awk '{print $1}')
 SIM_HASH=$(shasum -a 256 "$SIM_BIN" | awk '{print $1}')
 MAC_HASH=$(shasum -a 256 "$MAC_BIN" | awk '{print $1}')
+HEADER_HASH=$(shasum -a 256 "$INC_DIR/connect_norito_bridge.h" | awk '{print $1}')
+BRIDGE_ABI_VERSION=$(sed -nE \
+  's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' \
+  "$CRATE_DIR/src/lib.rs" | head -n1)
+if [[ -z "$BRIDGE_ABI_VERSION" ]]; then
+  echo "[-] Unable to determine native bridge ABI version" >&2
+  exit 1
+fi
+SOURCE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
+SOURCE_TREE_DIRTY=false
+if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- crates/connect_norito_bridge IrohaSwift/Sources/IrohaSwift)" ]]; then
+  SOURCE_TREE_DIRTY=true
+fi
+SOURCE_FINGERPRINT=$(python3 - "$ROOT_DIR" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+source_roots = [root / "crates/connect_norito_bridge", root / "IrohaSwift/Sources/IrohaSwift"]
+paths = [
+    path.relative_to(root).as_posix()
+    for source_root in source_roots
+    for path in source_root.rglob("*")
+    if path.is_file() and not path.is_symlink()
+]
+digest = hashlib.sha256()
+for relative in sorted(paths):
+    path = root / relative
+    if not path.is_file():
+        continue
+    digest.update(relative.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest())
+PY
+)
 PRIVACY_PRODUCTION_JSON=false
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
@@ -325,7 +363,112 @@ fi
 cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
 {
   "version": "$BRIDGE_VERSION",
+  "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
+  "source_commit": "$SOURCE_COMMIT",
+  "source_tree_dirty": $SOURCE_TREE_DIRTY,
+  "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
+  "bridge_header_sha256": "$HEADER_HASH",
+  "required_symbols": [
+    "connect_norito_bridge_abi_version",
+    "connect_norito_kagemusha_recursive_spend_init",
+    "connect_norito_kagemusha_recursive_spend_append",
+    "connect_norito_kagemusha_recursive_spend_verify",
+    "connect_norito_kagemusha_recursive_spend_redeem",
+    "connect_norito_kagemusha_recursive_spend_topup",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_topup_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v2",
+    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v2"
+  ],
+  "kagemusha_mobile_artifact_roles": [
+    {
+      "role": "native_bridge",
+      "purpose": "typed Norito codecs and privacy proof execution",
+      "circuit_id": null,
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "xcframework",
+      "delivery": "bridge_embedded",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "transfer_proving_key",
+      "purpose": "prove exact confidential top-up and offline split transitions",
+      "circuit_id": "confidential-transfer-v2",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "halo2_ipa_proving_key",
+      "delivery": "bridge_runtime_generated",
+      "production_ready": false,
+      "required_by": ["topup", "peer_send"]
+    },
+    {
+      "role": "transfer_verifier_record",
+      "purpose": "verify top-up and offline split evidence at an active height",
+      "circuit_id": "confidential-transfer-v2",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["topup", "peer_send", "peer_receive"]
+    },
+    {
+      "role": "unshield_proving_key",
+      "purpose": "prove full or partial offline-to-online redemption",
+      "circuit_id": "confidential-unshield-v3",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "halo2_ipa_proving_key",
+      "delivery": "bridge_runtime_generated",
+      "production_ready": false,
+      "required_by": ["redemption"]
+    },
+    {
+      "role": "unshield_verifier_record",
+      "purpose": "verify proof-bound public credit and optional offline change",
+      "circuit_id": "confidential-unshield-v3",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["redemption"]
+    },
+    {
+      "role": "reserved_lineage_init_keys",
+      "purpose": "prove witnessless first-hop lineage",
+      "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendLineageKeyArtifactsV1",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup"]
+    },
+    {
+      "role": "reserved_lineage_append_keys",
+      "purpose": "prove witnessless recursive lineage append",
+      "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendLineageKeyArtifactsV1",
+      "delivery": "content_addressed_external",
+      "required_by": ["peer_send"]
+    },
+    {
+      "role": "reserved_lineage_init_verifier_record",
+      "purpose": "verify witnessless first-hop lineage",
+      "circuit_id": "kagemusha-recursive-spend-lineage-onehop-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["topup", "peer_receive", "redemption"]
+    },
+    {
+      "role": "reserved_lineage_append_verifier_record",
+      "purpose": "verify witnessless appended lineage",
+      "circuit_id": "kagemusha-recursive-spend-lineage-append-v1",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "norito_verifying_key_record",
+      "delivery": "torii_readiness_snapshot",
+      "required_by": ["peer_send", "peer_receive", "redemption"]
+    }
+  ],
   "hashes": {
     "ios-arm64": "$IOS_HASH",
     "ios-arm64_x86_64-simulator": "$SIM_HASH",
@@ -334,3 +477,4 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
 }
 EOF
 echo "[+] Wrote artifact manifest: $OUT_DIR/NoritoBridge.artifacts.json" >&2
+bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
