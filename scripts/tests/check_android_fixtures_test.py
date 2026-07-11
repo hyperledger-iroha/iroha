@@ -9,6 +9,8 @@ import sys
 from typing import Optional
 from pathlib import Path
 
+import pytest
+
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_android_fixtures.py"
 SPEC = importlib.util.spec_from_file_location("check_android_fixtures", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -18,7 +20,23 @@ SPEC.loader.exec_module(MODULE)
 
 
 def _write_payloads(path: Path, entries: list[dict]) -> Path:
-    path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    enriched: list[dict] = []
+    for original in entries:
+        entry = dict(original)
+        encoded = entry.get("encoded")
+        name = entry.get("name")
+        if isinstance(encoded, str) and isinstance(name, str):
+            payload_bytes = base64.b64decode(encoded, validate=True)
+            signed_bytes = f"{name}-signed".encode()
+            entry.setdefault("payload_base64", encoded)
+            entry.setdefault("payload_hash", MODULE.iroha_hash(payload_bytes))
+            entry.setdefault("signed_base64", base64.b64encode(signed_bytes).decode())
+            entry.setdefault(
+                "signed_hash",
+                MODULE.signed_transaction_entrypoint_hash(signed_bytes),
+            )
+        enriched.append(entry)
+    path.write_text(json.dumps(enriched, indent=2), encoding="utf-8")
     return path
 
 
@@ -47,7 +65,7 @@ def _fixture_entry(
         "payload_hash": MODULE.iroha_hash(payload),  # type: ignore[attr-defined]
         "encoded_len": len(payload),
         "signed_base64": signed_b64,
-        "signed_hash": MODULE.iroha_hash(signed),  # type: ignore[attr-defined]
+        "signed_hash": MODULE.signed_transaction_entrypoint_hash(signed),  # type: ignore[attr-defined]
         "signed_len": len(signed),
         "creation_time_ms": creation_time_ms,
         "chain": chain,
@@ -55,6 +73,96 @@ def _fixture_entry(
         "time_to_live_ms": time_to_live_ms,
         "nonce": nonce,
     }
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        "YQ!!",
+        "Y Q==",
+        "YQ=",
+        "YQ===",
+        "YR==",
+    ],
+    ids=["invalid-char", "whitespace", "missing-padding", "excess-padding", "noncanonical-bits"],
+)
+def test_decode_base64_rejects_noncanonical_encodings(encoded: str) -> None:
+    with pytest.raises(ValueError, match="(?:invalid|non-canonical) base64"):
+        MODULE.decode_base64(encoded, "adversarial fixture")
+
+
+def test_payload_loader_rejects_duplicate_fixture_names(tmp_path: Path) -> None:
+    entry = {
+        "name": "duplicate",
+        "encoded": base64.b64encode(b"payload").decode(),
+        "chain": "00000002",
+        "authority": "sorau-example",
+        "creation_time_ms": 1,
+        "time_to_live_ms": None,
+        "nonce": None,
+    }
+    path = _write_payloads(tmp_path / "transaction_payloads.json", [entry, entry])
+
+    with pytest.raises(ValueError, match="duplicate fixture name 'duplicate'"):
+        MODULE.load_payload_fixtures(path)
+
+
+def test_payload_loader_rejects_renamed_cloned_payloads(tmp_path: Path) -> None:
+    first = {
+        "name": "first",
+        "encoded": base64.b64encode(b"payload").decode(),
+        "chain": "00000002",
+        "authority": "sorau-example",
+        "creation_time_ms": 1,
+        "time_to_live_ms": None,
+        "nonce": None,
+    }
+    second = {**first, "name": "renamed-clone"}
+    path = _write_payloads(tmp_path / "transaction_payloads.json", [first, second])
+
+    with pytest.raises(ValueError, match="duplicate fixture payload bytes for 'renamed-clone'"):
+        MODULE.load_payload_fixtures(path)
+
+
+def test_manifest_checker_rejects_duplicate_names_and_files(tmp_path: Path) -> None:
+    entry = _fixture_entry(
+        "duplicate",
+        "duplicate.norito",
+        b"payload",
+        b"signed",
+        1,
+        "00000002",
+        "sorau-example",
+        None,
+        None,
+    )
+
+    errors = MODULE.compare(tmp_path, {"fixtures": [entry, entry]}, {})
+
+    assert "manifest contains duplicate fixture name: duplicate" in errors
+    assert "manifest contains duplicate encoded_file: duplicate.norito" in errors
+
+
+def test_manifest_checker_rejects_renamed_cloned_payloads(tmp_path: Path) -> None:
+    first = _fixture_entry(
+        "first",
+        "first.norito",
+        b"payload",
+        b"signed",
+        1,
+        "00000002",
+        "sorau-example",
+        None,
+        None,
+    )
+    clone = {**first, "name": "renamed-clone", "encoded_file": "renamed-clone.norito"}
+
+    errors = MODULE.compare(tmp_path, {"fixtures": [first, clone]}, {})
+
+    assert f"manifest contains duplicate payload_hash: {first['payload_hash']}" in errors
+    assert "manifest contains duplicate payload bytes: renamed-clone" in errors
+    assert f"manifest contains duplicate signed_hash: {first['signed_hash']}" in errors
+    assert "manifest contains duplicate signed bytes: renamed-clone" in errors
 
 
 def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
@@ -126,6 +234,16 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
     assert artifacts["payloads"]["sha256"] == MODULE.sha256_file(payloads_path)  # type: ignore[attr-defined]
     assert artifacts["encoded"]["file_count"] == 1
     assert artifacts["encoded"]["aggregate_sha256"] == MODULE.hash_encoded_directory(resources)  # type: ignore[attr-defined]
+
+
+def test_signed_hash_uses_compact_external_entrypoint_domain() -> None:
+    signed = b"x" * 128
+    expected_prefix = b"\x00\x00\x00\x00\x80\x01"
+    assert MODULE.compact_length(len(signed)) == b"\x80\x01"  # type: ignore[attr-defined]
+    assert MODULE.signed_transaction_entrypoint_hash(signed) == MODULE.iroha_hash(  # type: ignore[attr-defined]
+        expected_prefix + signed
+    )
+    assert MODULE.signed_transaction_entrypoint_hash(signed) != MODULE.iroha_hash(signed)  # type: ignore[attr-defined]
 
 
 def test_errors_propagate_into_summary(tmp_path: Path) -> None:

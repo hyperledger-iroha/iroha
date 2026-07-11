@@ -178,6 +178,24 @@ def _payload_hash_hex(payload_bytes: bytes) -> str:
     return hash_blake2b_32(payload_bytes).hex()
 
 
+def _exact_hash_hex(value: Any, field: str, error_code: str) -> str:
+    if not isinstance(value, str):
+        raise NexusAppError(
+            error_code,
+            f"{field} must be exactly 64 lowercase hexadecimal characters",
+        )
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise NexusAppError(
+            error_code,
+            f"{field} must be exactly 64 lowercase hexadecimal characters",
+        )
+    return value
+
+
+def _exact_transaction_hash_hex(value: Any, field: str) -> str:
+    return _exact_hash_hex(value, field, "invalid_transaction_hash")
+
+
 def _account_ed25519_public_key(account_id: str) -> bytes:
     from .address import AccountAddress, CurveId
 
@@ -676,12 +694,29 @@ class NexusAppClient:
                 payload_result.get("payload_bytes", payload_result.get("payloadBytes")),
                 "payload_bytes",
             )
-            payload_hash_hex = str(
-                payload_result.get(
-                    "payload_hash_hex",
-                    payload_result.get("payloadHashHex", _payload_hash_hex(payload_bytes)),
+            computed_payload_hash_hex = _payload_hash_hex(payload_bytes)
+            snake_hash = payload_result.get("payload_hash_hex")
+            camel_hash = payload_result.get("payloadHashHex")
+            if snake_hash is not None and camel_hash is not None and snake_hash != camel_hash:
+                raise NexusAppError(
+                    "invalid_payload_hash",
+                    "transaction codec returned conflicting payload_hash_hex and payloadHashHex values",
+                )
+            supplied_hash = snake_hash if snake_hash is not None else camel_hash
+            payload_hash_hex = (
+                computed_payload_hash_hex
+                if supplied_hash is None
+                else _exact_hash_hex(
+                    supplied_hash,
+                    "transaction codec payload_hash_hex",
+                    "invalid_payload_hash",
                 )
             )
+            if payload_hash_hex != computed_payload_hash_hex:
+                raise NexusAppError(
+                    "payload_hash_mismatch",
+                    "transaction codec payload_hash_hex does not match payload_bytes",
+                )
             native = payload_result.get("native")
         else:
             payload_bytes = _bytes(payload_result, "payload_bytes")
@@ -717,7 +752,13 @@ class NexusAppClient:
         wait: bool = True,
         wait_options: Optional[Mapping[str, Any]] = None,
     ) -> NexusTransferReceipt:
-        """Finalize the signed transaction, submit it to Torii, and optionally wait for status."""
+        """Finalize, submit, and optionally wait for status.
+
+        Custom codecs must return a mapping containing the signed transaction and its exact
+        canonical 32-byte transaction hash as 64 lowercase hexadecimal characters. The SDK cannot
+        infer the hash domain from opaque bare or versioned signed bytes and therefore fails closed
+        when the hash is absent.
+        """
 
         _normalize_algorithm(signable.signature_algorithm)
         normalized = _normalize_signature(signature)
@@ -742,20 +783,26 @@ class NexusAppClient:
             normalized,
             signing_public_key,
         )
-        if isinstance(finalized, Mapping):
-            signed_transaction = _bytes(
-                finalized.get("signed_transaction", finalized.get("signedTransaction")),
-                "signed_transaction",
+        if not isinstance(finalized, Mapping):
+            raise NexusAppError(
+                "invalid_transaction_hash",
+                "transaction finalizer must return a mapping with signed_transaction and hash_hex",
             )
-            hash_hex = str(
-                finalized.get(
-                    "hash_hex",
-                    finalized.get("hashHex", _payload_hash_hex(signed_transaction)),
-                )
+        signed_transaction = _bytes(
+            finalized.get("signed_transaction", finalized.get("signedTransaction")),
+            "signed_transaction",
+        )
+        snake_hash = finalized.get("hash_hex")
+        camel_hash = finalized.get("hashHex")
+        if snake_hash is not None and camel_hash is not None and snake_hash != camel_hash:
+            raise NexusAppError(
+                "invalid_transaction_hash",
+                "transaction finalizer returned conflicting hash_hex and hashHex values",
             )
-        else:
-            signed_transaction = _bytes(finalized, "signed_transaction")
-            hash_hex = _payload_hash_hex(signed_transaction)
+        hash_hex = _exact_transaction_hash_hex(
+            snake_hash if snake_hash is not None else camel_hash,
+            "transaction finalizer hash_hex",
+        )
 
         submission = None
         status = None

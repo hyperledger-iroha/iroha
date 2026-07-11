@@ -14,11 +14,114 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
     func testSignedTransactionFixturesRoundTrip() throws {
         let loader = try NoritoRpcFixtureLoader()
         for name in Self.fixtureNames {
-            try assertFixtureRoundTrips(loader: loader, name: name)
+            try assertFixtureIntegrity(loader: loader, name: name)
+        }
+
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native decoder not linked")
+        }
+        for name in Self.fixtureNames {
+            try assertFixtureNativeRoundTrip(loader: loader, name: name)
         }
     }
 
-    private func assertFixtureRoundTrips(loader: NoritoRpcFixtureLoader, name: String) throws {
+    func testFixtureLoaderRejectsDuplicateNamesAndFiles() throws {
+        let first = NoritoRpcFixtureLoader.Entry(
+            name: "duplicate",
+            authority: "authority",
+            chain: "00000001",
+            creationTimeMs: 1,
+            timeToLiveMs: nil,
+            nonce: nil,
+            encodedFile: "shared.norito",
+            encodedLen: 0,
+            signedLen: 0,
+            payloadBase64: "AA==",
+            signedBase64: "AQ==",
+            payloadHash: "payload-hash",
+            signedHash: "signed-hash"
+        )
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatedEntries([first, first])
+        ) { error in
+            guard case FixtureError.duplicateFixtureName("duplicate") = error else {
+                return XCTFail("unexpected duplicate-name error: \(error)")
+            }
+        }
+
+        let second = NoritoRpcFixtureLoader.Entry(
+            name: "other",
+            authority: first.authority,
+            chain: first.chain,
+            creationTimeMs: first.creationTimeMs,
+            timeToLiveMs: first.timeToLiveMs,
+            nonce: first.nonce,
+            encodedFile: first.encodedFile,
+            encodedLen: first.encodedLen,
+            signedLen: first.signedLen,
+            payloadBase64: first.payloadBase64,
+            signedBase64: first.signedBase64,
+            payloadHash: first.payloadHash,
+            signedHash: first.signedHash
+        )
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatedEntries([first, second])
+        ) { error in
+            guard case FixtureError.duplicateEncodedFile("shared.norito") = error else {
+                return XCTFail("unexpected duplicate-file error: \(error)")
+            }
+        }
+
+        let renamedClone = NoritoRpcFixtureLoader.Entry(
+            name: "renamed-clone",
+            authority: first.authority,
+            chain: first.chain,
+            creationTimeMs: first.creationTimeMs,
+            timeToLiveMs: first.timeToLiveMs,
+            nonce: first.nonce,
+            encodedFile: "renamed-clone.norito",
+            encodedLen: first.encodedLen,
+            signedLen: first.signedLen,
+            payloadBase64: first.payloadBase64,
+            signedBase64: first.signedBase64,
+            payloadHash: first.payloadHash,
+            signedHash: first.signedHash
+        )
+        XCTAssertThrowsError(
+            try NoritoRpcFixtureLoader.validatedEntries([first, renamedClone])
+        ) { error in
+            guard case FixtureError.duplicatePayloadHash("payload-hash") = error else {
+                return XCTFail("unexpected renamed-clone error: \(error)")
+            }
+        }
+
+        for malformed in ["YQ!!", "Y Q==", "YQ=", "YQ===", "YR=="] {
+            let invalid = NoritoRpcFixtureLoader.Entry(
+                name: "invalid-base64",
+                authority: first.authority,
+                chain: first.chain,
+                creationTimeMs: first.creationTimeMs,
+                timeToLiveMs: first.timeToLiveMs,
+                nonce: first.nonce,
+                encodedFile: "invalid-base64.norito",
+                encodedLen: first.encodedLen,
+                signedLen: first.signedLen,
+                payloadBase64: malformed,
+                signedBase64: first.signedBase64,
+                payloadHash: first.payloadHash,
+                signedHash: first.signedHash
+            )
+            XCTAssertThrowsError(
+                try NoritoRpcFixtureLoader.validatedEntries([invalid])
+            ) { error in
+                guard case FixtureError.invalidBase64("invalid-base64.payload_base64") = error else {
+                    return XCTFail("unexpected base64 error for \(malformed): \(error)")
+                }
+            }
+        }
+    }
+
+    private func assertFixtureIntegrity(loader: NoritoRpcFixtureLoader, name: String) throws {
         let fixture = try loader.fixture(named: name)
         let payloadBytes = fixture.payloadBytes
         XCTAssertEqual(
@@ -45,12 +148,24 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         )
         let payloadHash = IrohaHash.hash(payloadBytes).hexLowercased()
         XCTAssertEqual(payloadHash, fixture.entry.payloadHash, "payload hash mismatch for \(name)")
-        let signedHash = IrohaHash.hash(signedBytes).hexLowercased()
+        var entrypoint = OfflineCompactNoritoWriter()
+        entrypoint.writeUInt32LE(0)
+        entrypoint.writeField(signedBytes)
+        let signedHash = IrohaHash.hash(entrypoint.data).hexLowercased()
         XCTAssertEqual(signedHash, fixture.entry.signedHash, "signed hash mismatch for \(name)")
+        XCTAssertNotEqual(
+            IrohaHash.hash(signedBytes).hexLowercased(),
+            fixture.entry.signedHash,
+            "raw signed bytes must not alias the compact External hash for \(name)"
+        )
+    }
 
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native decoder not linked")
-        }
+    private func assertFixtureNativeRoundTrip(loader: NoritoRpcFixtureLoader, name: String) throws {
+        let fixture = try loader.fixture(named: name)
+        let signedBytes = try XCTUnwrap(
+            Data(base64Encoded: fixture.entry.signedBase64),
+            "signed_base64 missing or invalid for \(name)"
+        )
         let expectedAuthority = try expectedAuthorityLiteral(from: fixture.entry.authority)
         let json = NoritoNativeBridge.shared.withChainDiscriminant(FixtureConstants.networkPrefix) {
             NoritoNativeBridge.shared.decodeSignedTransaction(signedBytes)
@@ -143,12 +258,54 @@ private struct NoritoRpcFixtureLoader {
         let manifestURL = root.appendingPathComponent("fixtures/norito_rpc/transaction_fixtures.manifest.json")
         let decoder = JSONDecoder()
         let manifest = try decoder.decode(Manifest.self, from: Data(contentsOf: manifestURL))
-        var map: [String: Entry] = [:]
-        for entry in manifest.fixtures {
-            map[entry.name] = entry
-        }
-        self.entries = map
+        self.entries = try Self.validatedEntries(manifest.fixtures)
         self.root = root
+    }
+
+    static func validatedEntries(_ fixtures: [Entry]) throws -> [String: Entry] {
+        var names = Set<String>()
+        var encodedFiles = Set<String>()
+        var payloadHashes = Set<String>()
+        var payloadBytesValues = Set<Data>()
+        var signedHashes = Set<String>()
+        var signedBytesValues = Set<Data>()
+        for entry in fixtures {
+            guard names.insert(entry.name).inserted else {
+                throw FixtureError.duplicateFixtureName(entry.name)
+            }
+            guard encodedFiles.insert(entry.encodedFile).inserted else {
+                throw FixtureError.duplicateEncodedFile(entry.encodedFile)
+            }
+            guard payloadHashes.insert(entry.payloadHash).inserted else {
+                throw FixtureError.duplicatePayloadHash(entry.payloadHash)
+            }
+            let payloadBytes = try decodeCanonicalBase64(
+                entry.payloadBase64,
+                context: "\(entry.name).payload_base64"
+            )
+            guard payloadBytesValues.insert(payloadBytes).inserted else {
+                throw FixtureError.duplicatePayloadBytes(entry.name)
+            }
+            guard signedHashes.insert(entry.signedHash).inserted else {
+                throw FixtureError.duplicateSignedHash(entry.signedHash)
+            }
+            let signedBytes = try decodeCanonicalBase64(
+                entry.signedBase64,
+                context: "\(entry.name).signed_base64"
+            )
+            guard signedBytesValues.insert(signedBytes).inserted else {
+                throw FixtureError.duplicateSignedBytes(entry.name)
+            }
+        }
+        return Dictionary(uniqueKeysWithValues: fixtures.map { ($0.name, $0) })
+    }
+
+    private static func decodeCanonicalBase64(_ value: String, context: String) throws -> Data {
+        guard let decoded = Data(base64Encoded: value),
+              decoded.base64EncodedString() == value else {
+            throw FixtureError.invalidBase64(context)
+        }
+        return decoded
     }
 
     func fixture(named name: String) throws -> NoritoRpcFixture {
@@ -235,4 +392,11 @@ private enum FixtureError: Error {
     case missingFixture(String)
     case invalidAuthority(String)
     case bridgeKeypairUnavailable
+    case duplicateFixtureName(String)
+    case duplicateEncodedFile(String)
+    case duplicatePayloadHash(String)
+    case duplicatePayloadBytes(String)
+    case duplicateSignedHash(String)
+    case duplicateSignedBytes(String)
+    case invalidBase64(String)
 }

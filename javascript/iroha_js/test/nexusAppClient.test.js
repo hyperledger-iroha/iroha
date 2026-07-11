@@ -7,6 +7,7 @@ import {
   NexusAppError,
   nexusPayloadHashHex,
 } from "../src/nexusApp.js";
+import { finalizeBrowserSignedTransaction } from "../src/transactionCodec.js";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -23,6 +24,19 @@ const fixtureWalletSignature = Buffer.from(
   fixture.expected.wallet_signature_hex,
   "hex",
 );
+const fixtureFinalized = finalizeBrowserSignedTransaction(
+  {
+    payloadBytes: fixturePayloadBytes,
+    payloadHashHex: fixture.expected.payload_hash_hex,
+    authority: fixture.transfer_input.authority,
+    signingPublicKey: fixturePublicKey,
+    signatureAlgorithm: "ed25519",
+  },
+  fixtureWalletSignature,
+  fixturePublicKey,
+);
+const fixtureSignedTransaction = fixtureFinalized.signedTransaction;
+const fixtureSignedTransactionHashHex = fixtureFinalized.hashHex;
 const unsupportedSignatureAlgorithms = [
   "secp256k1",
   "",
@@ -56,6 +70,52 @@ const unsupportedSignatureAlgorithms = [
   Buffer.from("ed25519"),
   ["ed25519"],
 ];
+
+function fixtureSignable(overrides = {}) {
+  return {
+    payloadBytes: Buffer.from(fixturePayloadBytes),
+    payloadHashHex: fixture.expected.payload_hash_hex,
+    authority: fixture.transfer_input.authority,
+    signingPublicKey: Buffer.from(fixturePublicKey),
+    signatureAlgorithm: "ed25519",
+    ...overrides,
+  };
+}
+
+function draftClient(transactionCodec) {
+  return new NexusAppClient({
+    chainId: "test-chain",
+    authority: "approved-account-i105",
+    signingPublicKey: fixturePublicKey,
+    transactionCodec,
+  });
+}
+
+function finalizationHarness(finalizedResult, submission = { accepted: true }) {
+  const calls = { finalized: 0, submitted: 0, waited: 0 };
+  const client = new NexusAppClient({
+    signingPublicKey: fixturePublicKey,
+    transactionCodec: {
+      finalizeSignedTransaction() {
+        calls.finalized += 1;
+        return typeof finalizedResult === "function"
+          ? finalizedResult()
+          : finalizedResult;
+      },
+    },
+    toriiClient: {
+      async submitTransaction() {
+        calls.submitted += 1;
+        return typeof submission === "function" ? submission() : submission;
+      },
+      async waitForTransactionStatus() {
+        calls.waited += 1;
+        return { status: "Applied" };
+      },
+    },
+  });
+  return { client, calls };
+}
 
 test("NexusAppClient builds a signable transfer draft", () => {
   const payloadBytes = Buffer.from("canonical-transfer-payload");
@@ -130,11 +190,174 @@ test("NexusAppClient payload hashing matches the shared Nexus fixture", () => {
   assert.deepEqual(draft.signable.payloadBytes, payloadBytes);
 });
 
+test("NexusAppClient default browser codec reproduces the shared Nexus fixture", () => {
+  const client = new NexusAppClient({
+    chainId: fixture.transfer_input.chain_id,
+    authority: fixture.transfer_input.authority,
+    signingPublicKey: fixture.connect.approval_frame.signing_public_key_hex,
+  });
+  const draft = client.buildTransferDraft({
+    sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
+    quantity: fixture.transfer_input.quantity,
+    destinationAccountId: fixture.transfer_input.destination_account_id,
+    creationTimeMs: fixture.transfer_input.creation_time_ms,
+    ttlMs: fixture.transfer_input.ttl_ms,
+    nonce: fixture.transfer_input.nonce,
+    metadata: fixture.transfer_input.metadata,
+  });
+
+  assert.deepEqual(draft.signable.payloadBytes, fixturePayloadBytes);
+  assert.equal(draft.signable.payloadHashHex, fixture.expected.payload_hash_hex);
+});
+
+test("NexusAppClient verifies custom payload bytes and hash aliases", () => {
+  const expectedHash = fixture.expected.payload_hash_hex;
+  const positive = draftClient({
+    buildTransferPayload() {
+      return {
+        payloadBytes: fixturePayloadBytes,
+        payload_bytes: Uint8Array.from(fixturePayloadBytes),
+        payloadHashHex: expectedHash,
+        hash: Buffer.from(expectedHash, "hex"),
+      };
+    },
+    payloadHashHex() {
+      return expectedHash;
+    },
+  }).buildTransferDraft({
+    sourceAssetHoldingId: "asset#approved-account-i105",
+    quantity: "1",
+    destinationAccountId: "destination-i105",
+  });
+  assert.deepEqual(positive.signable.payloadBytes, fixturePayloadBytes);
+  assert.equal(positive.signable.payloadHashHex, expectedHash);
+
+  const conflictingBytes = Buffer.from(fixturePayloadBytes);
+  conflictingBytes[0] ^= 0xff;
+  for (const [codec, code] of [
+    [
+      {
+        buildTransferPayload() {
+          return {
+            payloadBytes: fixturePayloadBytes,
+            payload_bytes: conflictingBytes,
+          };
+        },
+      },
+      "invalid_payload",
+    ],
+    [
+      {
+        buildTransferPayload() {
+          return {
+            payloadBytes: fixturePayloadBytes,
+            payloadHashHex: expectedHash,
+            hash_hex: "d".repeat(64),
+          };
+        },
+      },
+      "payload_hash_mismatch",
+    ],
+    [
+      {
+        buildTransferPayload() {
+          return fixturePayloadBytes;
+        },
+        payloadHashHex() {
+          return "d".repeat(64);
+        },
+      },
+      "payload_hash_mismatch",
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        draftClient(codec).buildTransferDraft({
+          sourceAssetHoldingId: "asset#approved-account-i105",
+          quantity: "1",
+          destinationAccountId: "destination-i105",
+        }),
+      (error) => error instanceof NexusAppError && error.code === code,
+    );
+  }
+
+  for (const malformed of [
+    "a".repeat(63),
+    "A".repeat(64),
+    `0x${"a".repeat(64)}`,
+    ` ${"a".repeat(64)}`,
+    "g".repeat(64),
+  ]) {
+    assert.throws(
+      () =>
+        draftClient({
+          buildTransferPayload() {
+            return fixturePayloadBytes;
+          },
+          payloadHashHex() {
+            return malformed;
+          },
+        }).buildTransferDraft({
+          sourceAssetHoldingId: "asset#approved-account-i105",
+          quantity: "1",
+          destinationAccountId: "destination-i105",
+        }),
+      (error) => error instanceof NexusAppError && error.code === "invalid_payload_hash",
+    );
+  }
+});
+
+test("NexusAppClient bounds and validates custom payload byte containers before copying", () => {
+  const oversizedArray = [];
+  oversizedArray.length = 1024 * 1024 + 1;
+  const malformedArrays = [
+    [-1],
+    [256],
+    [1.5],
+    Object.assign([1], { custom: true }),
+    Array(1),
+    oversizedArray,
+  ];
+  for (const payloadBytes of malformedArrays) {
+    assert.throws(
+      () =>
+        draftClient({
+          buildTransferPayload() {
+            return payloadBytes;
+          },
+        }).buildTransferDraft({
+          sourceAssetHoldingId: "asset#approved-account-i105",
+          quantity: "1",
+          destinationAccountId: "destination-i105",
+        }),
+      TypeError,
+    );
+  }
+  for (const payloadBytes of [
+    new ArrayBuffer(1024 * 1024 + 1),
+    new Uint8Array(new ArrayBuffer(1024 * 1024 + 1)),
+  ]) {
+    assert.throws(
+      () =>
+        draftClient({
+          buildTransferPayload() {
+            return payloadBytes;
+          },
+        }).buildTransferDraft({
+          sourceAssetHoldingId: "asset#approved-account-i105",
+          quantity: "1",
+          destinationAccountId: "destination-i105",
+        }),
+      TypeError,
+    );
+  }
+});
+
 test("NexusAppClient runs connect approval, wallet signature, finalize, submit, wait", async () => {
   const payloadBytes = fixturePayloadBytes;
   const walletSignature = fixtureWalletSignature;
-  const signedTransaction = Buffer.from("signed-transaction");
-  const hashHex = "a".repeat(64);
+  const signedTransaction = fixtureSignedTransaction;
+  const hashHex = fixtureSignedTransactionHashHex;
   const submitted = [];
   const waited = [];
   const requested = [];
@@ -212,8 +435,8 @@ test("NexusAppClient accepts raw wallet signature byte inputs", async () => {
     signatureAlgorithm: "ed25519",
   };
   const walletSignature = fixtureWalletSignature;
-  const signedTransaction = Buffer.from("signed-transaction");
-  const hashHex = "d".repeat(64);
+  const signedTransaction = fixtureSignedTransaction;
+  const hashHex = fixtureSignedTransactionHashHex;
   let finalizedSignature = null;
   let submittedPayload = null;
 
@@ -246,6 +469,173 @@ test("NexusAppClient accepts raw wallet signature byte inputs", async () => {
   assert.deepEqual(finalizedSignature, walletSignature);
   assert.deepEqual(receipt.signedTransaction, signedTransaction);
   assert.deepEqual(submittedPayload, signedTransaction);
+});
+
+test("NexusAppClient independently verifies finalized bytes and hash aliases", async () => {
+  const canonicalHash = fixtureSignedTransactionHashHex;
+  const positiveResult = {
+    signedTransaction: fixtureSignedTransaction,
+    signed_transaction: Uint8Array.from(fixtureSignedTransaction),
+    bytes: fixtureSignedTransaction.toString("hex"),
+    hashHex: canonicalHash,
+    hash: Buffer.from(canonicalHash, "hex"),
+    signedTransactionHashHex: canonicalHash,
+  };
+  const positive = finalizationHarness(positiveResult);
+  const receipt = await positive.client.finalizeAndSubmit(
+    fixtureSignable(),
+    fixtureWalletSignature,
+    { wait: false },
+  );
+  assert.deepEqual(receipt.signedTransaction, fixtureSignedTransaction);
+  assert.equal(receipt.signedTransactionHashHex, canonicalHash);
+  assert.deepEqual(positive.calls, { finalized: 1, submitted: 1, waited: 0 });
+
+  const conflictingBytes = Buffer.from(fixtureSignedTransaction);
+  conflictingBytes[0] ^= 0xff;
+  const oversizedSigned = [];
+  oversizedSigned.length = 1024 * 1024 + 4097;
+  const cases = [
+    [fixtureSignedTransaction, "invalid_transaction_hash"],
+    [{ signedTransaction: fixtureSignedTransaction }, "invalid_transaction_hash"],
+    [
+      { signedTransaction: Buffer.from("opaque"), hashHex: "a".repeat(64) },
+      "invalid_signed_transaction",
+    ],
+    [
+      { signedTransaction: fixtureSignedTransaction, hashHex: "A".repeat(64) },
+      "invalid_transaction_hash",
+    ],
+    [
+      { signedTransaction: fixtureSignedTransaction, hashHex: "d".repeat(64) },
+      "transaction_hash_mismatch",
+    ],
+    [
+      {
+        signedTransaction: fixtureSignedTransaction,
+        signed_transaction: conflictingBytes,
+        hashHex: canonicalHash,
+      },
+      "invalid_signed_transaction",
+    ],
+    [
+      {
+        signedTransaction: fixtureSignedTransaction,
+        hashHex: canonicalHash,
+        hash: Buffer.alloc(32, 0xdd),
+      },
+      "transaction_hash_mismatch",
+    ],
+    [
+      { signedTransaction: [256], hashHex: canonicalHash },
+      "invalid_signed_transaction",
+    ],
+    [
+      { signedTransaction: oversizedSigned, hashHex: canonicalHash },
+      "invalid_signed_transaction",
+    ],
+    [
+      {
+        signedTransaction: new ArrayBuffer(1024 * 1024 + 4097),
+        hashHex: canonicalHash,
+      },
+      "invalid_signed_transaction",
+    ],
+  ];
+  for (const [result, code] of cases) {
+    const harness = finalizationHarness(result);
+    await assert.rejects(
+      () =>
+        harness.client.finalizeAndSubmit(
+          fixtureSignable(),
+          fixtureWalletSignature,
+          { wait: false },
+        ),
+      (error) => error instanceof NexusAppError && error.code === code,
+    );
+    assert.equal(harness.calls.submitted, 0, `${code} must fail before submit`);
+    assert.equal(harness.calls.waited, 0, `${code} must fail before wait`);
+  }
+});
+
+test("NexusAppClient rechecks signable payload hashes before finalization", async () => {
+  for (const [payloadHashHex, code] of [
+    [undefined, "invalid_payload_hash"],
+    ["A".repeat(64), "invalid_payload_hash"],
+    [`0x${"a".repeat(64)}`, "invalid_payload_hash"],
+    ["d".repeat(64), "payload_hash_mismatch"],
+  ]) {
+    const harness = finalizationHarness({
+      signedTransaction: fixtureSignedTransaction,
+      hashHex: fixtureSignedTransactionHashHex,
+    });
+    await assert.rejects(
+      () =>
+        harness.client.finalizeAndSubmit(
+          fixtureSignable({ payloadHashHex }),
+          fixtureWalletSignature,
+          { wait: false },
+        ),
+      (error) => error instanceof NexusAppError && error.code === code,
+    );
+    assert.deepEqual(harness.calls, { finalized: 0, submitted: 0, waited: 0 });
+  }
+});
+
+test("NexusAppClient snapshots signature descriptors and rejects ambiguous aliases", async () => {
+  const signatureTarget = {
+    algorithm: "ed25519",
+    signature: fixtureWalletSignature,
+  };
+  let signatureGets = 0;
+  const proxiedSignature = new Proxy(signatureTarget, {
+    get(target, property, receiver) {
+      signatureGets += 1;
+      target.algorithm = "secp256k1";
+      if (property === "signature") return Buffer.alloc(64);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const positive = finalizationHarness({
+    signedTransaction: fixtureSignedTransaction,
+    hashHex: fixtureSignedTransactionHashHex,
+  });
+  await positive.client.finalizeAndSubmit(fixtureSignable(), proxiedSignature, {
+    wait: false,
+  });
+  assert.equal(signatureGets, 0);
+  assert.equal(signatureTarget.algorithm, "ed25519");
+
+  let accessorReads = 0;
+  const accessor = { algorithm: "ed25519" };
+  Object.defineProperty(accessor, "signature", {
+    enumerable: true,
+    get() {
+      accessorReads += 1;
+      return fixtureWalletSignature;
+    },
+  });
+  for (const signature of [
+    {
+      algorithm: "ed25519",
+      signature: fixtureWalletSignature,
+      bytes: Buffer.alloc(64),
+    },
+    { algorithm: "ed25519", alg: "secp256k1", signature: fixtureWalletSignature },
+    accessor,
+    new Array(65).fill(1),
+  ]) {
+    const harness = finalizationHarness({
+      signedTransaction: fixtureSignedTransaction,
+      hashHex: fixtureSignedTransactionHashHex,
+    });
+    await assert.rejects(
+      () => harness.client.finalizeAndSubmit(fixtureSignable(), signature, { wait: false }),
+    );
+    assert.equal(harness.calls.finalized, 0);
+    assert.equal(harness.calls.submitted, 0);
+  }
+  assert.equal(accessorReads, 0);
 });
 
 test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
@@ -304,8 +694,8 @@ test("NexusAppClient rejects non-Ed25519 wallet signatures", async () => {
 
 test("NexusAppClient accepts exact numeric and string Ed25519 signature algorithm tags", async () => {
   const payload = fixturePayloadBytes;
-  const signedTransaction = Buffer.from("signed");
-  const hashHex = "b".repeat(64);
+  const signedTransaction = fixtureSignedTransaction;
+  const hashHex = fixtureSignedTransactionHashHex;
   const finalized = [];
   const submitted = [];
   const client = new NexusAppClient({
@@ -420,8 +810,8 @@ test("NexusAppClient rejects authority mismatch before wallet signature request"
 
 test("NexusAppClient accepts shared approvedAccount session field", async () => {
   const payloadBytes = fixturePayloadBytes;
-  const signedTransaction = Buffer.from("signed");
-  const hashHex = "c".repeat(64);
+  const signedTransaction = fixtureSignedTransaction;
+  const hashHex = fixtureSignedTransactionHashHex;
   let requestedAuthority = null;
 
   const client = new NexusAppClient({
@@ -523,8 +913,8 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
     signatureAlgorithm: "ed25519",
   };
   const signature = { algorithm: "ed25519", signature: fixtureWalletSignature };
-  const signedTransaction = Buffer.from("signed-transaction");
-  const localHash = "a".repeat(64);
+  const signedTransaction = fixtureSignedTransaction;
+  const localHash = fixtureSignedTransactionHashHex;
 
   const mismatchClient = new NexusAppClient({
     signingPublicKey: fixturePublicKey,
@@ -585,4 +975,52 @@ test("NexusAppClient rejects Torii hash mismatches and maps submit/status failur
     (error) =>
       error instanceof NexusAppError && error.code === "status_wait_failed",
   );
+});
+
+test("NexusAppClient conflict-checks all Torii hash aliases before waiting", async () => {
+  const canonicalHash = fixtureSignedTransactionHashHex;
+  const finalizer = {
+    signedTransaction: fixtureSignedTransaction,
+    hashHex: canonicalHash,
+  };
+  for (const [submission, code] of [
+    [
+      { hashHex: canonicalHash, tx_hash: "d".repeat(64) },
+      "transaction_hash_mismatch",
+    ],
+    [
+      { hashHex: canonicalHash, payload: { signed_transaction_hash: "d".repeat(64) } },
+      "transaction_hash_mismatch",
+    ],
+    [{ hashHex: "A".repeat(64) }, "invalid_transaction_hash"],
+    [{ txHash: [256] }, "invalid_transaction_hash"],
+  ]) {
+    const harness = finalizationHarness(finalizer, submission);
+    await assert.rejects(
+      () =>
+        harness.client.finalizeAndSubmit(
+          fixtureSignable(),
+          fixtureWalletSignature,
+        ),
+      (error) => error instanceof NexusAppError && error.code === code,
+    );
+    assert.equal(harness.calls.submitted, 1);
+    assert.equal(harness.calls.waited, 0);
+  }
+
+  const equivalent = finalizationHarness(finalizer, {
+    hashHex: canonicalHash,
+    hash: Buffer.from(canonicalHash, "hex"),
+    tx_hash: Buffer.from(canonicalHash, "hex"),
+    payload: {
+      signedTransactionHashHex: canonicalHash,
+      signed_transaction_hash: Buffer.from(canonicalHash, "hex"),
+    },
+  });
+  const receipt = await equivalent.client.finalizeAndSubmit(
+    fixtureSignable(),
+    fixtureWalletSignature,
+  );
+  assert.equal(receipt.signedTransactionHashHex, canonicalHash);
+  assert.deepEqual(equivalent.calls, { finalized: 1, submitted: 1, waited: 1 });
 });

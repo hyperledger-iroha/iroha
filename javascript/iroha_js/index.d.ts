@@ -22389,3 +22389,4 @@ export function privateUploadedModelReceiptInstruction(
 ): SoracloudTxInstruction;
 
 export * from "./nexus-app";
+export * from "./transaction-codec.js";

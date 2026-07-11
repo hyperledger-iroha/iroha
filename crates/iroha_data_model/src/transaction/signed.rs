@@ -1394,8 +1394,7 @@ impl TransactionBuilder {
     /// Returns a Norito error when `bytes` is malformed, non-canonical for the
     /// default v1 layout, or contains trailing bytes.
     pub fn decode_payload(bytes: &[u8]) -> Result<Self, norito::core::Error> {
-        let _guard =
-            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let (payload, used) = TransactionPayload::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -1732,7 +1731,10 @@ mod tests {
         assert!(TransactionBuilder::decode_payload(&[]).is_err());
 
         let canonical = builder.encode_payload();
-        assert!(canonical[0] < 0x80, "fixture starts with a compact field length");
+        assert!(
+            canonical[0] < 0x80,
+            "fixture starts with a compact field length"
+        );
         let mut overlong = Vec::with_capacity(canonical.len() + 1);
         overlong.push(canonical[0] | 0x80);
         overlong.push(0);
@@ -2992,7 +2994,7 @@ mod norito_rpc_fixture_tests {
         core::DecodeFromSlice,
         json::{self, Value},
     };
-    use std::{fs, path::PathBuf};
+    use std::{collections::HashSet, fs, path::PathBuf};
 
     fn manifest_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3001,6 +3003,77 @@ mod norito_rpc_fixture_tests {
             .join("fixtures")
             .join("norito_rpc")
             .join("transaction_fixtures.manifest.json")
+    }
+
+    fn compact_hash_fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("fixtures")
+            .join("norito_rpc")
+            .join("iroha_compact_hash_vector.properties")
+    }
+
+    fn compact_hash_fixture() -> std::collections::BTreeMap<String, String> {
+        let path = compact_hash_fixture_path();
+        let raw = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        parse_compact_hash_fixture(&raw)
+    }
+
+    fn parse_compact_hash_fixture(raw: &str) -> std::collections::BTreeMap<String, String> {
+        const EXPECTED_KEYS: [&str; 13] = [
+            "schema.version",
+            "source.tag",
+            "source.commit",
+            "reference",
+            "versioned.bytes",
+            "versioned.sha256",
+            "bare.bytes",
+            "compact.length.hex",
+            "canonical.prefix.hex",
+            "canonical.hash",
+            "payload.prehash",
+            "pinned.sdk.defective.hash",
+            "versioned.base64",
+        ];
+        let mut properties = std::collections::BTreeMap::new();
+        for line in raw
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        {
+            let (key, value) = line
+                .split_once('=')
+                .unwrap_or_else(|| panic!("malformed compact hash fixture line: {line}"));
+            assert!(
+                !key.is_empty() && !value.is_empty(),
+                "malformed compact hash fixture line: {line}"
+            );
+            assert!(
+                properties
+                    .insert(key.to_owned(), value.to_owned())
+                    .is_none(),
+                "duplicate compact hash fixture key: {key}"
+            );
+        }
+        let actual_keys: HashSet<&str> = properties.keys().map(String::as_str).collect();
+        let expected_keys: HashSet<&str> = EXPECTED_KEYS.into_iter().collect();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "compact hash fixture keys must match the required set"
+        );
+        let versioned_base64 = properties
+            .get("versioned.base64")
+            .expect("required versioned.base64 property");
+        let versioned = BASE64
+            .decode(versioned_base64)
+            .expect("versioned.base64 must be valid canonical base64");
+        assert_eq!(
+            BASE64.encode(versioned),
+            *versioned_base64,
+            "versioned.base64 must be canonical"
+        );
+        properties
     }
 
     fn require_object<'a>(value: &'a Value, context: &str) -> &'a json::Map {
@@ -3068,6 +3141,38 @@ mod norito_rpc_fixture_tests {
     )]
     #[test]
     fn norito_rpc_fixture_manifest_roundtrips() {
+        // Most fixtures are produced by SDK schemas that intentionally exercise instructions
+        // newer than the Rust data model in this checkout. Keep that compatibility boundary
+        // explicit: a new failure, a changed failure mode, or a fixture becoming decodable must
+        // all be reviewed instead of being silently skipped.
+        const EXPECTED_RUST_DECODE_UNSUPPORTED: &[&str] = &[
+            "register_asset_definition",
+            "transfer_asset",
+            "transfer_domain",
+            "transfer_asset_definition",
+            "transfer_nft_demo",
+            "mint_asset",
+            "burn_asset",
+            "grant_revoke_permission",
+            "grant_revoke_role",
+            "grant_revoke_role_permission",
+            "asset_metadata_parity",
+            "set_parameter_next_mode",
+            "executor_upgrade_demo",
+            "register_peer_with_pop_demo",
+            "unregister_peer_demo",
+            "register_role_demo",
+            "register_nft_demo",
+            "trigger_repetitions_demo",
+            "register_time_trigger_demo",
+            "register_precommit_trigger_demo",
+            "register_pipeline_trigger_demo",
+            "repo_initiate_tri_party",
+            "repo_reverse_unwind",
+            "settlement_dvp_atomic",
+            "settlement_pvp_net",
+        ];
+
         let path = manifest_path();
         let raw = fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read {path:?}: {err}"));
@@ -3079,13 +3184,41 @@ mod norito_rpc_fixture_tests {
             |value| require_array(value, "manifest.fixtures"),
         );
 
+        let mut names = HashSet::with_capacity(fixtures.len());
+        let mut encoded_files = HashSet::with_capacity(fixtures.len());
+        let mut payload_hashes = HashSet::with_capacity(fixtures.len());
+        let mut payload_bytes_values = HashSet::with_capacity(fixtures.len());
+        let mut signed_hashes = HashSet::with_capacity(fixtures.len());
+        let mut signed_bytes_values = HashSet::with_capacity(fixtures.len());
+        let expected_decode_unsupported: HashSet<&str> =
+            EXPECTED_RUST_DECODE_UNSUPPORTED.iter().copied().collect();
+        assert_eq!(
+            expected_decode_unsupported.len(),
+            EXPECTED_RUST_DECODE_UNSUPPORTED.len(),
+            "Rust decode incompatibility allowlist must not contain duplicates"
+        );
+        let mut seen_decode_unsupported = HashSet::with_capacity(expected_decode_unsupported.len());
         for fixture in fixtures {
             let entry = require_object(fixture, "fixture");
             let name = require_str(entry, "name", "fixture");
+            let encoded_file = require_str(entry, "encoded_file", name);
             let payload_base64 = require_str(entry, "payload_base64", name);
             let signed_base64 = require_str(entry, "signed_base64", name);
             let payload_hash = require_str(entry, "payload_hash", name);
             let signed_hash = require_str(entry, "signed_hash", name);
+            assert!(names.insert(name), "duplicate fixture name: {name}");
+            assert!(
+                encoded_files.insert(encoded_file),
+                "duplicate fixture encoded_file: {encoded_file}"
+            );
+            assert!(
+                payload_hashes.insert(payload_hash),
+                "duplicate fixture payload_hash: {payload_hash}"
+            );
+            assert!(
+                signed_hashes.insert(signed_hash),
+                "duplicate fixture signed_hash: {signed_hash}"
+            );
             let encoded_len = require_u64(entry, "encoded_len", name);
             let signed_len = require_u64(entry, "signed_len", name);
             let chain = require_str(entry, "chain", name);
@@ -3101,6 +3234,24 @@ mod norito_rpc_fixture_tests {
             let signed_bytes = BASE64
                 .decode(signed_base64.as_bytes())
                 .unwrap_or_else(|err| panic!("{name}: invalid signed_base64: {err}"));
+            assert_eq!(
+                BASE64.encode(&payload_bytes),
+                payload_base64,
+                "{name}: payload_base64 must be canonical"
+            );
+            assert_eq!(
+                BASE64.encode(&signed_bytes),
+                signed_base64,
+                "{name}: signed_base64 must be canonical"
+            );
+            assert!(
+                payload_bytes_values.insert(payload_bytes.clone()),
+                "duplicate fixture payload bytes: {name}"
+            );
+            assert!(
+                signed_bytes_values.insert(signed_bytes.clone()),
+                "duplicate fixture signed bytes: {name}"
+            );
             assert_eq!(
                 payload_bytes.len() as u64,
                 encoded_len,
@@ -3118,15 +3269,42 @@ mod norito_rpc_fixture_tests {
                 "{name}: payload_hash mismatch"
             );
 
-            let computed_signed_hash = Hash::new(&signed_bytes).to_string();
+            let mut signed_entrypoint = Vec::with_capacity(
+                4 + norito::core::len_prefix_len(signed_bytes.len()) + signed_bytes.len(),
+            );
+            signed_entrypoint.extend_from_slice(&0_u32.to_le_bytes());
+            norito::core::write_len_to_vec(&mut signed_entrypoint, signed_bytes.len() as u64);
+            signed_entrypoint.extend_from_slice(&signed_bytes);
+            let computed_signed_hash = Hash::new(signed_entrypoint).to_string();
             assert_eq!(
                 computed_signed_hash, signed_hash,
                 "{name}: signed_hash mismatch"
             );
 
             let (signed_tx, used) = match SignedTransaction::decode_from_slice(&signed_bytes) {
-                Ok(decoded) => decoded,
-                Err(_) => continue,
+                Ok(decoded) => {
+                    assert!(
+                        !expected_decode_unsupported.contains(name),
+                        "{name}: fixture is now Rust-decodable; remove it from the explicit incompatibility allowlist and review its semantic roundtrip"
+                    );
+                    decoded
+                }
+                Err(err) => {
+                    assert!(
+                        expected_decode_unsupported.contains(name),
+                        "{name}: unexpected Rust signed transaction decode failure: {err}"
+                    );
+                    assert_eq!(
+                        err.to_string(),
+                        "length mismatch",
+                        "{name}: reviewed Rust decode incompatibility changed failure mode"
+                    );
+                    assert!(
+                        seen_decode_unsupported.insert(name),
+                        "duplicate Rust decode incompatibility fixture: {name}"
+                    );
+                    continue;
+                }
             };
             assert_eq!(
                 used,
@@ -3240,5 +3418,92 @@ mod norito_rpc_fixture_tests {
                 "{name}: signed bytes mismatch after re-encode"
             );
         }
+
+        assert_eq!(
+            seen_decode_unsupported, expected_decode_unsupported,
+            "Rust decode incompatibility allowlist must exactly match the manifest failures"
+        );
+    }
+
+    #[test]
+    fn compact_hash_fixture_rejects_duplicate_property_keys() {
+        let raw =
+            fs::read_to_string(compact_hash_fixture_path()).expect("read compact hash fixture");
+        let duplicated = format!("{raw}\ncanonical.hash=duplicate\n");
+        let panic = std::panic::catch_unwind(|| parse_compact_hash_fixture(&duplicated));
+        assert!(
+            panic.is_err(),
+            "duplicate compact fixture keys must fail closed"
+        );
+    }
+
+    #[test]
+    fn compact_external_entrypoint_golden_matches_native_hash_and_rejects_alias_encodings() {
+        use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+        use sha2::Digest as _;
+
+        let fixture = compact_hash_fixture();
+        let versioned = BASE64
+            .decode(fixture["versioned.base64"].as_bytes())
+            .expect("compact hash fixture must contain valid base64");
+        assert_eq!(
+            versioned.len(),
+            fixture["versioned.bytes"].parse::<usize>().unwrap()
+        );
+        assert_eq!(versioned.first(), Some(&1));
+        assert_eq!(
+            hex::encode(sha2::Sha256::digest(&versioned)),
+            fixture["versioned.sha256"]
+        );
+
+        let transaction = SignedTransaction::decode_all_versioned(&versioned)
+            .expect("compact hash fixture must decode as an exact versioned transaction");
+        assert_eq!(transaction.encode_versioned(), versioned);
+        assert_eq!(
+            hex::encode(HashOf::new(transaction.payload()).as_ref()),
+            fixture["payload.prehash"],
+            "decoded payload prehash must match the shared signer golden"
+        );
+        let bare = norito::codec::encode_adaptive(&transaction);
+        assert_eq!(bare.len(), fixture["bare.bytes"].parse::<usize>().unwrap());
+        assert_eq!(bare, versioned[1..]);
+
+        let entrypoint = TransactionEntrypoint::External(transaction);
+        let canonical = norito::codec::encode_adaptive(&entrypoint);
+        let expected_prefix = hex::decode(&fixture["canonical.prefix.hex"]).unwrap();
+        assert!(canonical.starts_with(&expected_prefix));
+        assert_eq!(
+            hex::encode(entrypoint.hash().as_ref()),
+            fixture["canonical.hash"],
+            "Rust entrypoint hash must match the shared Android/browser golden"
+        );
+
+        let mut overlong_signed = Vec::with_capacity(versioned.len() + 1);
+        overlong_signed.extend_from_slice(&versioned[..2]);
+        assert_eq!(versioned[1..3], [0x8a, 0x01]);
+        overlong_signed.extend_from_slice(&[0x81, 0x00]);
+        overlong_signed.extend_from_slice(&versioned[3..]);
+        SignedTransaction::decode_all_versioned(&overlong_signed)
+            .expect_err("overlong signed-transaction field length must be rejected");
+
+        assert_eq!(canonical[..6], [0, 0, 0, 0, 0xb4, 0x04]);
+        let mut overlong_entrypoint = Vec::with_capacity(canonical.len() + 1);
+        overlong_entrypoint.extend_from_slice(&canonical[..5]);
+        overlong_entrypoint.extend_from_slice(&[0x84, 0x00]);
+        overlong_entrypoint.extend_from_slice(&canonical[6..]);
+        assert!(
+            norito::codec::decode_adaptive::<TransactionEntrypoint>(&overlong_entrypoint).is_err(),
+            "overlong External field length must be rejected"
+        );
+
+        let mut fixed_width_entrypoint = Vec::with_capacity(canonical.len() + 6);
+        fixed_width_entrypoint.extend_from_slice(&canonical[..4]);
+        fixed_width_entrypoint.extend_from_slice(&(bare.len() as u64).to_le_bytes());
+        fixed_width_entrypoint.extend_from_slice(&bare);
+        assert!(
+            norito::codec::decode_adaptive::<TransactionEntrypoint>(&fixed_width_entrypoint)
+                .is_err(),
+            "fixed-u64 External field length must not alias canonical COMPACT_LEN bytes"
+        );
     }
 }

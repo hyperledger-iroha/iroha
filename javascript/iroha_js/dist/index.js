@@ -361,6 +361,14 @@ export {
   submitTransactionEntrypoint,
 } from "./transaction.js";
 export {
+  BrowserTransactionCodecError,
+  browserSignedTransactionHashHex,
+  browserTransactionCodec,
+  browserTransactionPayloadHashHex,
+  buildBrowserTransferPayload,
+  finalizeBrowserSignedTransaction,
+} from "./transactionCodec.js";
+export {
   OfflineQrPayloadKind,
   OfflineQrStreamDecoder,
   OfflineQrStreamEncoder,

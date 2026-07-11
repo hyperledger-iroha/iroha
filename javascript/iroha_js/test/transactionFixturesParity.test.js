@@ -20,6 +20,21 @@ const sourcePayloadFixtures = loadJsonRelative(
   "java/iroha_android/src/test/resources/transaction_payloads.json",
 );
 
+function decodeCanonicalBase64(value, context) {
+  if (
+    typeof value !== "string" ||
+    value.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)
+  ) {
+    throw new Error(`${context} is invalid base64`);
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) {
+    throw new Error(`${context} is non-canonical base64`);
+  }
+  return decoded;
+}
+
 function selectFixture(fixtures, name) {
   const match = fixtures.find((fixture) => fixture?.name === name);
   if (!match) {
@@ -27,6 +42,95 @@ function selectFixture(fixtures, name) {
   }
   return match;
 }
+
+function assertUniqueFixtureIdentities(fixtures, { requireEncodedFile = false } = {}) {
+  assert.ok(Array.isArray(fixtures), "fixture collection must be an array");
+  const names = new Set();
+  const encodedFiles = new Set();
+  const payloadHashes = new Set();
+  const payloadBytesValues = new Set();
+  const signedHashes = new Set();
+  const signedBytesValues = new Set();
+  for (const fixture of fixtures) {
+    assert.equal(typeof fixture?.name, "string", "fixture name must be a string");
+    assert.ok(!names.has(fixture.name), `duplicate fixture name: ${fixture.name}`);
+    names.add(fixture.name);
+    if (requireEncodedFile) {
+      assert.equal(
+        typeof fixture.encoded_file,
+        "string",
+        `${fixture.name}: encoded_file must be a string`,
+      );
+      assert.ok(
+        !encodedFiles.has(fixture.encoded_file),
+        `duplicate fixture encoded_file: ${fixture.encoded_file}`,
+      );
+      encodedFiles.add(fixture.encoded_file);
+    }
+    assert.equal(
+      typeof fixture.payload_hash,
+      "string",
+      `${fixture.name}: payload_hash must be a string`,
+    );
+    assert.equal(
+      typeof fixture.payload_base64,
+      "string",
+      `${fixture.name}: payload_base64 must be a string`,
+    );
+    assert.equal(
+      typeof fixture.signed_hash,
+      "string",
+      `${fixture.name}: signed_hash must be a string`,
+    );
+    assert.equal(
+      typeof fixture.signed_base64,
+      "string",
+      `${fixture.name}: signed_base64 must be a string`,
+    );
+    assert.ok(
+      !payloadHashes.has(fixture.payload_hash),
+      `duplicate fixture payload_hash: ${fixture.payload_hash}`,
+    );
+    payloadHashes.add(fixture.payload_hash);
+    const payloadBytes = decodeCanonicalBase64(
+      fixture.payload_base64,
+      `${fixture.name}.payload_base64`,
+    );
+    const payloadIdentity = payloadBytes.toString("hex");
+    assert.ok(
+      !payloadBytesValues.has(payloadIdentity),
+      `duplicate fixture payload bytes: ${fixture.name}`,
+    );
+    payloadBytesValues.add(payloadIdentity);
+    assert.ok(
+      !signedHashes.has(fixture.signed_hash),
+      `duplicate fixture signed_hash: ${fixture.signed_hash}`,
+    );
+    signedHashes.add(fixture.signed_hash);
+    const signedBytes = decodeCanonicalBase64(
+      fixture.signed_base64,
+      `${fixture.name}.signed_base64`,
+    );
+    const signedIdentity = signedBytes.toString("hex");
+    assert.ok(
+      !signedBytesValues.has(signedIdentity),
+      `duplicate fixture signed bytes: ${fixture.name}`,
+    );
+    signedBytesValues.add(signedIdentity);
+  }
+}
+
+function validateLoadedFixtureCollections() {
+  assertUniqueFixtureIdentities(sourcePayloadFixtures);
+  assertUniqueFixtureIdentities(canonicalManifest.fixtures, { requireEncodedFile: true });
+  assert.deepEqual(
+    sourcePayloadFixtures.map(({ name }) => name).sort(),
+    canonicalManifest.fixtures.map(({ name }) => name).sort(),
+    "source payloads and manifest must contain exactly the same fixture names",
+  );
+}
+
+validateLoadedFixtureCollections();
 
 function irohaHashHex(bytes) {
   const digest = Buffer.from(blake2b256(bytes));
@@ -36,9 +140,80 @@ function irohaHashHex(bytes) {
   return digest.toString("hex");
 }
 
+function compactLength(value) {
+  let remaining = BigInt(value);
+  const output = [];
+  do {
+    let byte = Number(remaining & 0x7fn);
+    remaining >>= 7n;
+    if (remaining !== 0n) byte |= 0x80;
+    output.push(byte);
+  } while (remaining !== 0n);
+  return Buffer.from(output);
+}
+
+function signedTransactionHashHex(canonicalBareSignedTransaction) {
+  return irohaHashHex(
+    Buffer.concat([
+      Buffer.alloc(4),
+      compactLength(canonicalBareSignedTransaction.length),
+      canonicalBareSignedTransaction,
+    ]),
+  );
+}
+
+test("fixture collections reject duplicate names and encoded files before lookup", () => {
+  const fixture = {
+    name: "first",
+    encoded_file: "first.norito",
+    payload_hash: "payload-hash",
+    payload_base64: "AA==",
+    signed_hash: "signed-hash",
+    signed_base64: "AQ==",
+  };
+  assert.throws(
+    () => assertUniqueFixtureIdentities([fixture, { ...fixture }]),
+    /duplicate fixture name: first/,
+  );
+  assert.throws(
+    () =>
+      assertUniqueFixtureIdentities(
+        [
+          { ...fixture, encoded_file: "shared.norito" },
+          { ...fixture, name: "second", encoded_file: "shared.norito" },
+        ],
+        { requireEncodedFile: true },
+      ),
+    /duplicate fixture encoded_file: shared\.norito/,
+  );
+  assert.throws(
+    () =>
+      assertUniqueFixtureIdentities(
+        [
+          fixture,
+          { ...fixture, name: "renamed-clone", encoded_file: "renamed-clone.norito" },
+        ],
+        { requireEncodedFile: true },
+      ),
+    /duplicate fixture payload_hash: payload-hash/,
+  );
+});
+
+test("fixture collections reject invalid and non-canonical base64", () => {
+  for (const encoded of ["YQ!!", "Y Q==", "YQ=", "YQ===", "YR=="]) {
+    assert.throws(
+      () => decodeCanonicalBase64(encoded, "adversarial fixture"),
+      /(?:invalid|non-canonical) base64/,
+    );
+  }
+});
+
 test("fixture base64 hashes match manifest", () => {
   for (const fixture of canonicalManifest.fixtures) {
-    const payloadBytes = Buffer.from(fixture.payload_base64, "base64");
+    const payloadBytes = decodeCanonicalBase64(
+      fixture.payload_base64,
+      `${fixture.name}.payload_base64`,
+    );
     assert.equal(
       payloadBytes.length,
       fixture.encoded_len,
@@ -50,16 +225,24 @@ test("fixture base64 hashes match manifest", () => {
       `${fixture.name}: payload hash mismatch`,
     );
 
-    const signedBytes = Buffer.from(fixture.signed_base64, "base64");
+    const signedBytes = decodeCanonicalBase64(
+      fixture.signed_base64,
+      `${fixture.name}.signed_base64`,
+    );
     assert.equal(
       signedBytes.length,
       fixture.signed_len,
       `${fixture.name}: signed length mismatch`,
     );
     assert.equal(
-      irohaHashHex(signedBytes),
+      signedTransactionHashHex(signedBytes),
       fixture.signed_hash,
       `${fixture.name}: signed hash mismatch`,
+    );
+    assert.notEqual(
+      irohaHashHex(signedBytes),
+      fixture.signed_hash,
+      `${fixture.name}: raw signed bytes must not alias compact External hash`,
     );
   }
 });

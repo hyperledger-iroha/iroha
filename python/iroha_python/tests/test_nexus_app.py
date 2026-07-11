@@ -129,6 +129,35 @@ class FakeCodec:
         return {"signed_transaction": self.signed, "hash_hex": self.hash_hex}
 
 
+class FinalizedResultCodec(FakeCodec):
+    def __init__(self, result):
+        super().__init__(
+            FIXTURE_PAYLOAD,
+            b"signed",
+            "c" * 64,
+            expected_authority="account-i105",
+            expected_signature=FIXTURE_SIGNATURE,
+            expected_signing_public_key=FIXTURE_PUBLIC_KEY,
+        )
+        self.result = result
+
+    def finalize_signed_transaction(self, signable, signature, signing_public_key):
+        super().finalize_signed_transaction(signable, signature, signing_public_key)
+        return self.result
+
+
+class PayloadResultCodec(FakeCodec):
+    def __init__(self, result):
+        super().__init__(FIXTURE_PAYLOAD, b"signed", "c" * 64)
+        self.result = result
+
+    def build_transfer_payload(self, payload_input):
+        assert payload_input["chain_id"] == "test-chain"
+        assert payload_input["authority"] == "approved-account-i105"
+        assert payload_input["destination_account_id"] == "destination-i105"
+        return self.result
+
+
 class FakeTorii:
     def __init__(self, *, submit_hash_hex=None, submit_error=None, wait_error=None):
         self.submitted = []
@@ -171,6 +200,129 @@ def test_nexus_app_builds_transfer_draft_and_computes_payload_hash():
 
     assert draft.signable.payload_bytes == payload
     assert len(draft.signable.payload_hash_hex) == 64
+
+
+@pytest.mark.parametrize("hash_field", ["payload_hash_hex", "payloadHashHex"])
+def test_nexus_app_accepts_exact_custom_payload_hash(hash_field):
+    expected_hash = FIXTURE["expected"]["payload_hash_hex"]
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="approved-account-i105",
+            signing_public_key=bytes([1]) * 32,
+        ),
+        transaction_codec=PayloadResultCodec(
+            {"payload_bytes": FIXTURE_PAYLOAD, hash_field: expected_hash}
+        ),
+    )
+
+    draft = client.build_transfer_draft(
+        NexusTransferInput(
+            source_asset_id="asset#approved-account-i105",
+            quantity=1,
+            destination_account_id="destination-i105",
+        )
+    )
+
+    assert draft.signable.payload_hash_hex == expected_hash
+
+
+@pytest.mark.parametrize(
+    "hash_hex",
+    [
+        "a" * 63,
+        "a" * 65,
+        "g" * 64,
+        "A" * 64,
+        "0x" + "a" * 64,
+        " " + "a" * 64,
+        bytes.fromhex("aa" * 32),
+    ],
+    ids=[
+        "short",
+        "long",
+        "non-hex",
+        "uppercase",
+        "prefixed",
+        "whitespace",
+        "raw-bytes",
+    ],
+)
+def test_nexus_app_rejects_noncanonical_custom_payload_hash(hash_hex):
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="approved-account-i105",
+            signing_public_key=bytes([1]) * 32,
+        ),
+        transaction_codec=PayloadResultCodec(
+            {"payload_bytes": FIXTURE_PAYLOAD, "payload_hash_hex": hash_hex}
+        ),
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.build_transfer_draft(
+            NexusTransferInput(
+                source_asset_id="asset#approved-account-i105",
+                quantity=1,
+                destination_account_id="destination-i105",
+            )
+        )
+
+    assert excinfo.value.code == "invalid_payload_hash"
+
+
+def test_nexus_app_rejects_mismatched_custom_payload_hash():
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="approved-account-i105",
+            signing_public_key=bytes([1]) * 32,
+        ),
+        transaction_codec=PayloadResultCodec(
+            {"payload_bytes": FIXTURE_PAYLOAD, "payload_hash_hex": "d" * 64}
+        ),
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.build_transfer_draft(
+            NexusTransferInput(
+                source_asset_id="asset#approved-account-i105",
+                quantity=1,
+                destination_account_id="destination-i105",
+            )
+        )
+
+    assert excinfo.value.code == "payload_hash_mismatch"
+
+
+def test_nexus_app_rejects_conflicting_custom_payload_hash_aliases():
+    expected_hash = FIXTURE["expected"]["payload_hash_hex"]
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="approved-account-i105",
+            signing_public_key=bytes([1]) * 32,
+        ),
+        transaction_codec=PayloadResultCodec(
+            {
+                "payload_bytes": FIXTURE_PAYLOAD,
+                "payload_hash_hex": expected_hash,
+                "payloadHashHex": "d" * 64,
+            }
+        ),
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.build_transfer_draft(
+            NexusTransferInput(
+                source_asset_id="asset#approved-account-i105",
+                quantity=1,
+                destination_account_id="destination-i105",
+            )
+        )
+
+    assert excinfo.value.code == "invalid_payload_hash"
 
 
 def test_nexus_app_default_codec_matches_shared_fixture():
@@ -347,6 +499,124 @@ def test_nexus_app_accepts_exact_zero_signature_algorithm_alias():
     assert receipt.signed_transaction == b"signed"
     assert receipt.signed_transaction_hash_hex == "c" * 64
     assert torii.submitted == [b"signed"]
+
+
+def _client_for_finalized_result(result):
+    torii = FakeTorii()
+    client = NexusAppClient(
+        NexusAppConfig(
+            chain_id="test-chain",
+            authority="account-i105",
+            signing_public_key=FIXTURE_PUBLIC_KEY,
+        ),
+        transaction_codec=FinalizedResultCodec(result),
+        torii_client=torii,
+    )
+    draft = client.build_transfer_draft(
+        NexusTransferInput(
+            source_asset_id="asset#account-i105",
+            quantity=1,
+            destination_account_id="destination-i105",
+        )
+    )
+    return client, draft, torii
+
+
+@pytest.mark.parametrize(
+    "finalized",
+    [
+        b"signed",
+        {"signed_transaction": b"signed"},
+        {"signedTransaction": b"signed", "hashHex": None},
+    ],
+    ids=["bytes-only", "missing-hash", "null-hash"],
+)
+def test_nexus_app_requires_custom_finalizer_transaction_hash(finalized):
+    client, draft, torii = _client_for_finalized_result(finalized)
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            draft.signable,
+            NexusWalletSignature(FIXTURE_SIGNATURE),
+            wait=False,
+        )
+
+    assert excinfo.value.code == "invalid_transaction_hash"
+    assert torii.submitted == []
+
+
+@pytest.mark.parametrize(
+    "hash_hex",
+    [
+        "a" * 63,
+        "a" * 65,
+        "g" * 64,
+        "A" * 64,
+        "0x" + "a" * 64,
+        " " + "a" * 64,
+        bytes.fromhex("aa" * 32),
+    ],
+    ids=[
+        "short",
+        "long",
+        "non-hex",
+        "uppercase",
+        "prefixed",
+        "whitespace",
+        "raw-bytes",
+    ],
+)
+def test_nexus_app_rejects_noncanonical_custom_finalizer_hash(hash_hex):
+    client, draft, torii = _client_for_finalized_result(
+        {"signed_transaction": b"signed", "hash_hex": hash_hex}
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            draft.signable,
+            NexusWalletSignature(FIXTURE_SIGNATURE),
+            wait=False,
+        )
+
+    assert excinfo.value.code == "invalid_transaction_hash"
+    assert torii.submitted == []
+
+
+def test_nexus_app_accepts_exact_custom_finalizer_hash_and_camel_case_fields():
+    hash_hex = "c" * 64
+    client, draft, torii = _client_for_finalized_result(
+        {"signedTransaction": b"signed", "hashHex": hash_hex}
+    )
+
+    receipt = client.finalize_and_submit(
+        draft.signable,
+        NexusWalletSignature(FIXTURE_SIGNATURE),
+        wait=False,
+    )
+
+    assert receipt.signed_transaction == b"signed"
+    assert receipt.signed_transaction_hash_hex == hash_hex
+    assert torii.submitted == [b"signed"]
+
+
+def test_nexus_app_rejects_conflicting_custom_finalizer_hash_aliases():
+    client, draft, torii = _client_for_finalized_result(
+        {
+            "signed_transaction": b"signed",
+            "hash_hex": "c" * 64,
+            "hashHex": "d" * 64,
+        }
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            draft.signable,
+            NexusWalletSignature(FIXTURE_SIGNATURE),
+            wait=False,
+        )
+
+    assert excinfo.value.code == "invalid_transaction_hash"
+    assert torii.submitted == []
 
 
 def test_nexus_app_rejects_missing_approval_fields():

@@ -238,6 +238,92 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
+### Browser-safe external transaction signing
+
+Use `@iroha/iroha-js/transaction-codec` when a browser wallet needs to build
+and finalize a canonical transparent transfer without loading the native Node
+binding. This deliberately narrow surface supports one `Transfer::Asset`
+instruction, single-key Ed25519 I105 authorities, canonical asset identifiers,
+and accounts sharing one Taira-style network prefix/chain discriminant.
+
+```js
+import {
+  browserTransactionPayloadHashHex,
+  buildBrowserTransferPayload,
+  finalizeBrowserSignedTransaction,
+} from "@iroha/iroha-js/transaction-codec";
+
+const payloadBytes = buildBrowserTransferPayload({
+  chainId,
+  authority,
+  sourceAssetHoldingId: `${assetDefinitionId}#${authority}`,
+  quantity: "1.25",
+  destinationAccountId,
+  metadata: { memo: "wallet transfer" },
+  creationTimeMs: Date.now(),
+  ttlMs: 30_000,
+  nonce: 42,
+  networkPrefix,
+});
+
+// Sign the exact 32-byte Iroha prehash, not the payload bytes or hex text.
+const payloadHashHex = browserTransactionPayloadHashHex(payloadBytes);
+const payloadHash = Uint8Array.from(
+  payloadHashHex.match(/../g),
+  (octet) => Number.parseInt(octet, 16),
+);
+const signature = await wallet.signEd25519(payloadHash);
+
+const finalized = finalizeBrowserSignedTransaction(
+  {
+    payloadBytes,
+    payloadHashHex,
+    authority,
+    signingPublicKey: wallet.publicKey,
+    signatureAlgorithm: "ed25519",
+  },
+  { algorithm: "ed25519", signature },
+  wallet.publicKey,
+);
+
+console.log(finalized.hashHex, finalized.signedTransaction);
+```
+
+Finalization fails closed when the payload, asserted prehash, authority,
+signing key, signature, metadata limits, or canonical Norito framing disagree.
+Ed25519 verification uses the same strict, uncofactored equation as the Rust
+node and rejects ZIP-215/mixed-torsion aliases. Metadata arrays must be dense
+plain arrays containing data elements only; metadata numbers must be safe
+integers (encode decimal values as strings), and all strings must contain
+well-formed Unicode scalar values. Metadata supplied as a JSON string must
+already use the exact canonical encoding; use an object when canonicalization
+is desired. Transfer quantities use positive plain-decimal syntax, at most 28
+fractional digits, and the current Rust 64-byte signed-integer positive range
+(`2^511 - 1`).
+The codec only returns verified bytes and the canonical compact-entrypoint
+pipeline hash: importing it does not enable Nexus, connect a wallet, submit to
+Torii, or turn on live-send behavior. Applications must authorize and perform
+those steps separately.
+
+The `@iroha/iroha-js/nexus-app` export is also a browser-only dependency graph:
+it uses the browser codec and strict browser Ed25519 verifier by default and
+contains no native binding or `node:` imports. Supplying `toriiBaseUrl` gives
+the facade a bounded Fetch-based pipeline submit/status client; applications
+may instead inject `toriiClient` and `transactionCodec`. Torii response bodies
+are capped at 64 KiB, submission requests time out after 15 seconds, polling
+defaults to a 30-second budget, and credentials/query/fragment components are
+rejected in the configured Torii base URL. Requests omit ambient credentials
+and referrers and reject redirects.
+
+When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
+aliases must be exact lowercase 64-character hex and must match the returned
+payload bytes. Finalization must return canonical version-1, single-signature
+`Transfer::Asset` bytes plus the exact compact-entrypoint hash. Before any
+submission, the facade independently finalizes and hashes those bytes with the
+browser codec, rejects conflicting byte/hash aliases, and rechecks the signable
+payload prehash. Torii response hash aliases are likewise conflict-checked
+before status polling or receipt construction.
+
 For offline cash screens and headless wallet flows, use the dedicated
 `offline-cash` subpath. It validates cached setup for local exchange, syncs
 pending audit receipts before loading more cash, and hides NFC unless the app
@@ -2994,7 +3080,7 @@ if (features.rbcSampling?.enabled) {
 
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the Node test suite so the JS-10 gate matches what the publish workflow executes.
-- Prefer Node LTS releases (currently 18 and 20) alongside the `rust-toolchain.toml` version to minimise drift across environments.
+- Test the declared minimum Node 18 runtime plus the maintained even-numbered Node release lines alongside the `rust-toolchain.toml` version to minimise drift across environments.
 - Use `node --test` for quick smoke runs when native artifacts are already built (for example after `npm run build:native` in a cached workspace); keep `npm run lint:test` in CI to cover the full pipeline.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `docs/source/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.

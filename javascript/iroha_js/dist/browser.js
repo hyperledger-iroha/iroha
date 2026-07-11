@@ -13,6 +13,15 @@ export {
 } from "./instructionBuilders.js";
 
 export {
+  BrowserTransactionCodecError,
+  browserSignedTransactionHashHex,
+  browserTransactionCodec,
+  browserTransactionPayloadHashHex,
+  buildBrowserTransferPayload,
+  finalizeBrowserSignedTransaction,
+} from "./transactionCodec.js";
+
+export {
   noritoDecodeInstruction,
   noritoEncodeInstruction,
   noritoEncodeMultisigContractCallApproveRequest,
