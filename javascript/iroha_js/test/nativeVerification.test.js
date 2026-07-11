@@ -65,10 +65,22 @@ test("getNativeBinding rejects checksum mismatches", async () => {
         )}\n`,
       );
       process.env.IROHA_JS_NATIVE_DIR = dir;
-      assert.throws(() => getNativeBinding(), /checksum mismatch/);
+      assert.throws(
+        () => getNativeBinding(),
+        (error) => {
+          assert.match(error.message, /checksum mismatch/u);
+          assert.equal(error.code, "ERR_IROHA_NATIVE_BINDING");
+          assert.equal(error.nativeStatus, "hash_mismatch");
+          return true;
+        },
+      );
     });
   } finally {
-    process.env.IROHA_JS_NATIVE_DIR = previousOverride;
+    if (previousOverride === undefined) {
+      delete process.env.IROHA_JS_NATIVE_DIR;
+    } else {
+      process.env.IROHA_JS_NATIVE_DIR = previousOverride;
+    }
     __resetNativeStateForTests();
   }
 });
@@ -97,7 +109,15 @@ test("getNativeBinding throws when binding is missing", async () => {
   try {
     await withTempDir(async (dir) => {
       process.env.IROHA_JS_NATIVE_DIR = dir;
-      assert.throws(() => getNativeBinding(), /binding missing/);
+      assert.throws(
+        () => getNativeBinding(),
+        (error) => {
+          assert.match(error.message, /binding missing/u);
+          assert.equal(error.code, "ERR_IROHA_NATIVE_BINDING");
+          assert.equal(error.nativeStatus, "missing_file");
+          return true;
+        },
+      );
     });
   } finally {
     if (previousOverride === undefined) {

@@ -3988,6 +3988,49 @@ async fn check_proof_access(
 // request burst. Body bytes are bounded separately by `max_body_bytes`.
 const PROOF_REQUEST_RATE_COST: u64 = 1;
 
+async fn collect_proof_body_with_deadline(
+    request: axum::http::Request<Body>,
+    max_bytes: usize,
+    deadline: Duration,
+) -> Result<axum::http::Request<Body>, Response> {
+    let (parts, body) = request.into_parts();
+    let bytes = match tokio::time::timeout(deadline, axum::body::to_bytes(body, max_bytes)).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) => {
+            let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+            let mut length_limited = false;
+            while let Some(current) = source {
+                if current.is::<http_body_util::LengthLimitError>() {
+                    length_limited = true;
+                    break;
+                }
+                source = current.source();
+            }
+            let (status, message) = if length_limited {
+                (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "proof request body exceeds the configured byte limit",
+                )
+            } else {
+                iroha_logger::warn!(%error, "failed to read proof request body stream");
+                (
+                    StatusCode::BAD_REQUEST,
+                    "proof request body stream ended with a protocol error",
+                )
+            };
+            return Err((status, message).into_response());
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::REQUEST_TIMEOUT,
+                "proof request body was not completed before the absolute read deadline",
+            )
+                .into_response());
+        }
+    };
+    Ok(axum::http::Request::from_parts(parts, Body::from(bytes)))
+}
+
 async fn proof_body_admission_middleware(
     State(app): State<SharedAppState>,
     request: axum::http::Request<Body>,
@@ -4001,6 +4044,20 @@ async fn proof_body_admission_middleware(
                 retry_after_secs: app.proof_limits.retry_after.as_secs().max(1),
             }
             .into_response();
+        }
+    };
+    let max_bytes = usize::try_from(app.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
+    let request = match collect_proof_body_with_deadline(
+        request,
+        max_bytes,
+        app.proof_limits.body_read_timeout,
+    )
+    .await
+    {
+        Ok(request) => request,
+        Err(response) => {
+            drop(permit);
+            return response;
         }
     };
     let response = next.run(request).await;
@@ -4047,13 +4104,11 @@ fn require_proof_json_content_type(
     if content_type.is_some_and(|value| value.eq_ignore_ascii_case("application/json")) {
         return Ok(());
     }
-    Err(Error::Query(
-        iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "{hint} requires Content-Type: application/json"
-            )),
-        ),
-    ))
+    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+            "{hint} requires Content-Type: application/json"
+        )),
+    )))
 }
 
 async fn enforce_proof_egress(
@@ -10592,9 +10647,9 @@ struct ZkIvmProofAttachmentJsonDto {
     proof: ZkIvmProofBoxJsonDto,
     vk_ref: iroha_data_model::proof::VerifyingKeyId,
     #[norito(skip_serializing_if = "Option::is_none")]
-    vk_commitment: Option<[u8; 32]>,
+    vk_commitment: Option<Vec<u8>>,
     #[norito(skip_serializing_if = "Option::is_none")]
-    envelope_hash: Option<[u8; 32]>,
+    envelope_hash: Option<Vec<u8>>,
     #[norito(skip_serializing_if = "Option::is_none")]
     lane_privacy: Option<iroha_data_model::nexus::LanePrivacyProof>,
 }
@@ -10618,8 +10673,8 @@ impl TryFrom<iroha_data_model::proof::ProofAttachment> for ZkIvmProofAttachmentJ
                 bytes_b64: BASE64_STANDARD.encode(value.proof.bytes),
             },
             vk_ref: value.vk_ref,
-            vk_commitment: value.vk_commitment,
-            envelope_hash: value.envelope_hash,
+            vk_commitment: value.vk_commitment.map(|bytes| bytes.to_vec()),
+            envelope_hash: value.envelope_hash.map(|bytes| bytes.to_vec()),
             lane_privacy: value.lane_privacy,
         })
     }
@@ -11052,6 +11107,50 @@ fn zk_ivm_prove_bounded_error(mut error: String) -> String {
     error
 }
 
+fn zk_ivm_prove_public_error(error: String) -> String {
+    iroha_logger::warn!(internal_error = %error, "IVM prove job failed");
+    let filesystem_failure = [
+        "failed to inspect verifying key",
+        "failed to open verifying key",
+        "failed to read verifying key",
+        "verifying key path",
+        "opened verifying key",
+        "failed to inspect proving key",
+        "failed to open proving key",
+        "failed to read proving key",
+        "proving key path",
+        "opened proving key",
+    ]
+    .iter()
+    .any(|prefix| error.starts_with(prefix));
+    let safe = if error == "provided `proved` payload does not match node-derived execution payload"
+    {
+        error
+    } else if error.starts_with("failed to decode proving key archive") {
+        "failed to decode proving key archive".to_owned()
+    } else if filesystem_failure {
+        "proof key material is unavailable or invalid".to_owned()
+    } else if error.starts_with("invalid IVM header")
+        || error.starts_with("ivm prove requires bytecode")
+        || error.starts_with("verifying key ")
+        || error.starts_with("registry verifying key ")
+        || error.starts_with("generated IVM proof ")
+        || error.starts_with("generated proof exceeds ")
+        || error.starts_with("unsupported backend")
+        || error.starts_with("stark/fri prove requested")
+        || error.starts_with("IVM tooling output budget exceeded")
+        || error.starts_with("derived IvmProved JSON exceeds")
+    {
+        error
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect()
+    } else {
+        "IVM proof generation failed".to_owned()
+    };
+    zk_ivm_prove_bounded_error(safe)
+}
+
 fn zk_ivm_prove_job_response_body(
     job_id: String,
     status: ZkIvmProveJobStatus,
@@ -11071,7 +11170,7 @@ fn zk_ivm_prove_job_response_body(
         let proved = proved.ok_or_else(|| invalid("done job is missing proved payload"))?;
         let proved_json =
             encode_zk_ivm_proved_json_bounded(&proved).map_err(|message| invalid(&message))?;
-        let attachment = attachment
+        let attachment: ZkIvmProofAttachmentJsonDto = attachment
             .ok_or_else(|| invalid("done job is missing proof attachment"))?
             .try_into()
             .map_err(|message: String| invalid(&message))?;
@@ -11154,19 +11253,18 @@ fn zk_ivm_prove_terminal_body(
         Err(error) => zk_ivm_prove_job_response_body(
             job_id.clone(),
             ZkIvmProveJobStatus::Error,
-            Some(zk_ivm_prove_bounded_error(error)),
+            Some(zk_ivm_prove_public_error(error)),
             None,
             None,
         )
         .map(|body| (ZkIvmProveJobStatus::Error, body)),
     };
     encoded.unwrap_or_else(|error| {
+        iroha_logger::error!(%error, "failed to retain IVM prove result");
         let fallback = zk_ivm_prove_job_response_body(
             job_id,
             ZkIvmProveJobStatus::Error,
-            Some(zk_ivm_prove_bounded_error(format!(
-                "failed to retain prove result: {error}"
-            ))),
+            Some("proof result could not be retained".to_owned()),
             None,
             None,
         )
@@ -11440,16 +11538,15 @@ async fn handler_zk_ivm_derive(
         true,
     )
     .await?;
+    require_proof_json_content_type(&headers, "v1/zk/ivm/derive")?;
 
     let mut req: ZkIvmDeriveRequestDto =
-        norito::decode_from_bytes(body.as_ref()).or_else(|_| {
-            norito::json::from_slice(body.as_ref()).map_err(|err| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                        "invalid derive request body: {err}"
-                    )),
-                ))
-            })
+        norito::json::from_slice(body.as_ref()).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "invalid derive JSON request body: {err}"
+                )),
+            ))
         })?;
 
     let backend = req.vk_ref.backend.as_str();
@@ -11556,25 +11653,24 @@ async fn handler_zk_ivm_derive(
     let authority = req.authority;
     let metadata = req.metadata;
     let bytecode = req.bytecode;
-    let derive_task = tokio::task::spawn_blocking(
-        move || -> Result<Bytes, String> {
-            // The owned permit lives inside the physical blocking task, so
-            // request cancellation/timeout cannot detach unaccounted VM work.
-            let _tooling_permit = tooling_permit;
-            let synthetic_signer = zk_ivm_synthetic_signer()?;
-            let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-                chain_id,
-                authority.clone(),
-            )
-            .with_metadata(metadata)
-            .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode))
-            .try_sign(synthetic_signer.private_key())
-            .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
-            // Proof derivation needs a stable authority, but signature validity is not required here.
-            .with_authority(authority);
+    let derive_task = tokio::task::spawn_blocking(move || -> Result<Bytes, String> {
+        // The owned permit lives inside the physical blocking task, so
+        // request cancellation/timeout cannot detach unaccounted VM work.
+        let _tooling_permit = tooling_permit;
+        let synthetic_signer = zk_ivm_synthetic_signer()?;
+        let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+            chain_id,
+            authority.clone(),
+        )
+        .with_metadata(metadata)
+        .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode))
+        .try_sign(synthetic_signer.private_key())
+        .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
+        // Proof derivation needs a stable authority, but signature validity is not required here.
+        .with_authority(authority);
 
-            let view = state.query_view();
-            let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
+        let view = state.query_view();
+        let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                 &view,
                 &tx,
                 &vk_circuit_id,
@@ -11583,9 +11679,8 @@ async fn handler_zk_ivm_derive(
                 ZK_IVM_MAX_PROVED_JSON_BYTES,
             )
             .map_err(|err| err.to_string())?;
-            encode_zk_ivm_derive_response_bounded(&proved)
-        },
-    );
+        encode_zk_ivm_derive_response_bounded(&proved)
+    });
     let body = tokio::time::timeout(app.ivm_tooling_timeout, derive_task)
         .await
         .map_err(|_| {
@@ -11645,15 +11740,14 @@ async fn handler_zk_ivm_prove(
         true,
     )
     .await?;
+    require_proof_json_content_type(&headers, "v1/zk/ivm/prove")?;
 
-    let mut req: ZkIvmProveRequestDto = norito::decode_from_bytes(body.as_ref()).or_else(|_| {
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "invalid prove request body: {err}"
-                )),
-            ))
-        })
+    let mut req: ZkIvmProveRequestDto = norito::json::from_slice(body.as_ref()).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "invalid prove JSON request body: {err}"
+            )),
+        ))
     })?;
 
     let backend = req.vk_ref.backend.as_str();
@@ -11713,58 +11807,41 @@ async fn handler_zk_ivm_prove(
             ))
         })?;
         if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "verifying key is not Active".to_owned(),
-                    ),
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "verifying key is not Active".to_owned(),
                 ),
-            ));
+            )));
         }
         if !circuit_id_matches(
             backend,
             &vk_record.circuit_id,
             iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
         ) {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                        "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{backend}` (got `{}`)",
-                        vk_record.circuit_id,
-                    )),
-                ),
-            ));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{backend}` (got `{}`)",
+                    vk_record.circuit_id,
+                )),
+            )));
         }
         if vk_record.public_inputs_schema_hash
             != iroha_core::zk::ivm_execution_public_inputs_schema_hash()
         {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "verifying key schema hash is not compatible with `ivm-execution-v1`"
-                            .to_owned(),
-                    ),
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "verifying key schema hash is not compatible with `ivm-execution-v1`"
+                        .to_owned(),
                 ),
-            ));
+            )));
         }
         let registry_vk_len = usize::try_from(vk_record.vk_len).unwrap_or(usize::MAX);
         if registry_vk_len > ZK_IVM_MAX_VERIFYING_KEY_BYTES {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                        "registry verifying key length exceeds the {ZK_IVM_MAX_VERIFYING_KEY_BYTES}-byte tooling limit"
-                    )),
-                ),
-            ));
-        }
-        if vk_record.gas_schedule_id.is_none() {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "verifying key missing gas_schedule_id".to_owned(),
-                    ),
-                ),
-            ));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "registry verifying key length exceeds the {ZK_IVM_MAX_VERIFYING_KEY_BYTES}-byte tooling limit"
+                )),
+            )));
         }
     }
 
@@ -11896,9 +11973,7 @@ async fn handler_zk_ivm_prove(
                             )
                         })?
                 };
-                if vk_record.status
-                    != iroha_data_model::confidential::ConfidentialStatus::Active
-                {
+                if vk_record.status != iroha_data_model::confidential::ConfidentialStatus::Active {
                     return Err("verifying key is not Active".to_owned());
                 }
                 if !circuit_id_matches(
@@ -11943,8 +12018,7 @@ async fn handler_zk_ivm_prove(
                     } else {
                         ZK_IVM_MAX_VERIFYING_KEY_BYTES
                     };
-                    let bytes =
-                        read_zk_key_file_bounded(&path, "verifying key", admitted_len)?;
+                    let bytes = read_zk_key_file_bounded(&path, "verifying key", admitted_len)?;
                     iroha_data_model::proof::VerifyingKeyBox::new(
                         vk_ref.backend.as_str().to_owned(),
                         bytes,
@@ -11987,7 +12061,9 @@ async fn handler_zk_ivm_prove(
                     authority.clone(),
                 )
                 .with_metadata(metadata.clone())
-                .with_executable(iroha_data_model::transaction::Executable::Ivm(bytecode.clone()))
+                .with_executable(iroha_data_model::transaction::Executable::Ivm(
+                    bytecode.clone(),
+                ))
                 .try_sign(synthetic_signer.private_key())
                 .map_err(|err| format!("failed to sign synthetic IVM prove transaction: {err}"))?
                 // Proof derivation needs stable authority; signature validity is not required.
@@ -12063,8 +12139,11 @@ async fn handler_zk_ivm_prove(
                 if max_proof_bytes > 0 && proof_box.bytes.len() > max_proof_bytes as usize {
                     return Err("generated proof exceeds verifying key max_proof_bytes".to_owned());
                 }
-                let mut attachment =
-                    iroha_data_model::proof::ProofAttachment::new_ref(backend.clone(), proof_box, vk_ref);
+                let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+                    backend.clone(),
+                    proof_box,
+                    vk_ref,
+                );
                 attachment.vk_commitment = Some(vk_commitment);
                 Ok((derived_proved, attachment))
             })();
@@ -12099,6 +12178,21 @@ async fn handler_zk_ivm_prove(
     ))
 }
 
+fn validate_zk_ivm_prove_job_id(job_id: &str) -> Result<(), Error> {
+    if job_id.len() == 32
+        && job_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Ok(());
+    }
+    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(
+            "prove job_id must be exactly 32 lowercase hexadecimal characters".to_owned(),
+        ),
+    )))
+}
+
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_get(
     State(app): State<SharedAppState>,
@@ -12121,6 +12215,7 @@ async fn handler_zk_ivm_prove_get(
     .await?;
 
     let job_id = job_id.0;
+    validate_zk_ivm_prove_job_id(&job_id)?;
     let Some(entry) = app.zk_ivm_prove_jobs.get(&job_id) else {
         return Ok((
             StatusCode::NOT_FOUND,
@@ -12170,6 +12265,7 @@ async fn handler_zk_ivm_prove_delete(
     .await?;
 
     let job_id = job_id.0;
+    validate_zk_ivm_prove_job_id(&job_id)?;
     if let Some((_key, state)) = app.zk_ivm_prove_jobs.remove(&job_id) {
         let _ = state.cancel.send(true);
     }
@@ -42605,6 +42701,7 @@ impl Torii {
             config.proof_api.cache_max_age,
             config.proof_api.retry_after,
             config.proof_api.max_body_bytes.get(),
+            config.proof_api.body_read_timeout,
         );
         let content_snapshot = state.content_snapshot();
         let content_limits_snapshot = content_snapshot.limits;
@@ -45964,6 +46061,15 @@ pub(crate) mod tests_runtime_handlers {
             version: app.api_versions.default,
             inferred: true,
         })
+    }
+
+    fn proof_json_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers
     }
 
     fn query_conversion_message(err: &Error) -> Option<&str> {
@@ -64760,6 +64866,9 @@ pub(crate) mod tests_runtime_handlers {
                 std::time::Duration::from_secs(5),
                 std::time::Duration::from_secs(3),
                 iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES.get(),
+                std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
+                ),
             );
         }
 
@@ -66430,6 +66539,24 @@ mod tests {
 
     use super::*;
 
+    fn proof_json_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers
+    }
+
+    fn query_conversion_message(error: &Error) -> Option<&str> {
+        match error {
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => Some(message),
+            _ => None,
+        }
+    }
+
     struct FailingZkJobIdRng;
 
     #[derive(Debug)]
@@ -66473,6 +66600,57 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
+        let app = mk_app_state_for_tests();
+        let invalid = [
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "g123456789abcdef0123456789abcdef",
+        ];
+        for job_id in invalid {
+            let get_error = match handler_zk_ivm_prove_get(
+                State(app.clone()),
+                negotiated(&app),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+                axum::extract::Path(job_id.to_owned()),
+            )
+            .await
+            {
+                Ok(_) => panic!("GET accepted invalid job id"),
+                Err(error) => error,
+            };
+            let message = query_conversion_message(&get_error).expect("GET conversion error");
+            assert!(message.contains("exactly 32 lowercase hexadecimal"));
+            assert!(
+                !message.contains(job_id),
+                "invalid id must not be reflected"
+            );
+
+            let delete_error = match handler_zk_ivm_prove_delete(
+                State(app.clone()),
+                negotiated(&app),
+                HeaderMap::new(),
+                crate::loopback_connect_info(),
+                axum::extract::Path(job_id.to_owned()),
+            )
+            .await
+            {
+                Ok(_) => panic!("DELETE accepted and echoed invalid job id"),
+                Err(error) => error,
+            };
+            let message = query_conversion_message(&delete_error).expect("DELETE conversion error");
+            assert!(message.contains("exactly 32 lowercase hexadecimal"));
+            assert!(
+                !message.contains(job_id),
+                "invalid id must not be reflected"
+            );
+        }
+        validate_zk_ivm_prove_job_id("0123456789abcdef0123456789abcdef").expect("canonical id");
     }
 
     #[cfg(feature = "push")]
@@ -71940,7 +72118,7 @@ mod tests {
     async fn configured_proof_body_layer_accepts_above_axum_default_and_rejects_limit_plus_one() {
         let app = mk_app_state_for_tests();
         let router = proof_post_router_with_body_limits(
-            Router::new().route(
+            Router::<SharedAppState>::new().route(
                 "/probe",
                 post(|body: Bytes| async move {
                     assert!(body.len() > 2 * 1024 * 1024);
@@ -71948,7 +72126,8 @@ mod tests {
                 }),
             ),
             app.clone(),
-        );
+        )
+        .with_state::<()>(app.clone());
 
         let above_axum_default = axum::http::Request::builder()
             .method("POST")
@@ -71977,6 +72156,139 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn zk_ivm_json_endpoints_reject_wrong_mime_and_norito_under_json() {
+        let app = mk_app_state_for_tests();
+        let mut wrong_mime = HeaderMap::new();
+        wrong_mime.insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        );
+        let error = match handler_zk_ivm_derive(
+            State(app.clone()),
+            negotiated(&app),
+            wrong_mime,
+            crate::loopback_connect_info(),
+            Bytes::from_static(b"{}"),
+        )
+        .await
+        {
+            Ok(_) => panic!("wrong MIME must fail before decoding"),
+            Err(error) => error,
+        };
+        assert!(
+            query_conversion_message(&error)
+                .is_some_and(|message| message.contains("Content-Type: application/json"))
+        );
+
+        let norito = norito::to_bytes(&ZkIvmProveJobCreatedDto {
+            job_id: "binary-not-json".to_owned(),
+        })
+        .expect("encode Norito fixture");
+        let error = match handler_zk_ivm_derive(
+            State(app.clone()),
+            negotiated(&app),
+            proof_json_headers(),
+            crate::loopback_connect_info(),
+            Bytes::from(norito),
+        )
+        .await
+        {
+            Ok(_) => panic!("Norito bytes under application/json must not be accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            query_conversion_message(&error)
+                .is_some_and(|message| message.contains("invalid derive JSON request body"))
+        );
+    }
+
+    #[tokio::test]
+    async fn proof_body_middleware_deadline_rejects_stall_and_releases_admission() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+            state.proof_limits.body_read_timeout = Duration::from_millis(30);
+        }
+        let router = proof_post_router_with_body_limits(
+            Router::<SharedAppState>::new().route(
+                "/probe",
+                post(|_body: Bytes| async move { StatusCode::NO_CONTENT }),
+            ),
+            app.clone(),
+        )
+        .with_state::<()>(app.clone());
+        let stalled =
+            futures_util::stream::pending::<std::result::Result<Bytes, std::convert::Infallible>>();
+        let first_request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/probe")
+            .body(Body::from_stream(stalled))
+            .expect("stalled request");
+        let first_router = router.clone();
+        let first = tokio::spawn(async move {
+            first_router
+                .oneshot(first_request)
+                .await
+                .expect("first response")
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while app.proof_body_inflight.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stalled request must acquire admission");
+
+        let second = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/probe")
+                    .body(Body::from(Bytes::from_static(b"second")))
+                    .expect("second request"),
+            )
+            .await
+            .expect("second response");
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let first = first.await.expect("first task");
+        assert_eq!(first.status(), StatusCode::REQUEST_TIMEOUT);
+        let third = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/probe")
+                    .body(Body::from(Bytes::from_static(b"third")))
+                    .expect("third request"),
+            )
+            .await
+            .expect("third response");
+        assert_eq!(
+            third.status(),
+            StatusCode::NO_CONTENT,
+            "deadline completion must release middleware admission"
+        );
+    }
+
+    #[tokio::test]
+    async fn proof_body_absolute_deadline_rejects_continuous_trickle() {
+        let trickle = futures_util::stream::unfold((), |_| async {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            Some((
+                Ok::<_, std::convert::Infallible>(Bytes::from_static(b"x")),
+                (),
+            ))
+        });
+        let request = axum::http::Request::new(Body::from_stream(trickle));
+        let response = collect_proof_body_with_deadline(request, 1024, Duration::from_millis(25))
+            .await
+            .expect_err("trickle must not reset the absolute deadline");
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
     }
 
     #[tokio::test]
@@ -72044,7 +72356,7 @@ mod tests {
             state.proof_limits.retry_after = std::time::Duration::from_secs(5);
             state.proof_egress_limiter = limits::RateLimiter::new_u64(Some(1), Some(1));
         }
-        let job_id = "egress-limited-job".to_owned();
+        let job_id = "0123456789abcdef0123456789abcdef".to_owned();
         let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
         let response_body = zk_ivm_prove_job_response_body(
             job_id.clone(),
@@ -72094,7 +72406,7 @@ mod tests {
         );
         assert_eq!(
             app.zk_ivm_prove_jobs
-                .get("egress-limited-job")
+                .get("0123456789abcdef0123456789abcdef")
                 .expect("job remains cached")
                 .last_access_ms,
             created_ms,
@@ -72157,11 +72469,13 @@ mod tests {
             gas_policy_commitment: Hash::new(b"gas"),
         };
         let backend = "halo2/ipa".to_owned();
-        let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+        let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
             backend.clone(),
             iroha_data_model::proof::ProofBox::new(backend.clone(), vec![1, 2, 3]),
             VerifyingKeyId::new(backend, "compact"),
         );
+        attachment.vk_commitment = Some([7_u8; 32]);
+        attachment.envelope_hash = Some([9_u8; 32]);
         let done = zk_ivm_prove_job_response_body(
             job_id,
             ZkIvmProveJobStatus::Done,
@@ -72184,6 +72498,43 @@ mod tests {
             Some("AQID")
         );
         assert!(!proof.contains_key("bytes"));
+        let attachment = done
+            .get("attachment")
+            .and_then(norito::json::Value::as_object)
+            .expect("compact attachment");
+        for (field, expected) in [("vk_commitment", 7_u64), ("envelope_hash", 9_u64)] {
+            let bytes = attachment
+                .get(field)
+                .and_then(norito::json::Value::as_array)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{field} must serialize as a byte array, got {:?}",
+                        attachment.get(field)
+                    )
+                });
+            assert_eq!(bytes.len(), 32, "{field}");
+            assert!(
+                bytes.iter().all(|byte| byte.as_u64() == Some(expected)),
+                "{field} values"
+            );
+        }
+    }
+
+    #[test]
+    fn zk_ivm_terminal_errors_do_not_leak_key_paths_or_control_bytes() {
+        let secret = "TOP_SECRET_PROVING_KEY_SENTINEL";
+        let (status, body) = zk_ivm_prove_terminal_body(
+            "0123456789abcdef0123456789abcdef".to_owned(),
+            Err(format!(
+                "failed to read proving key bytes at /tmp/{secret}.pk: denied\nforbidden"
+            )),
+        );
+        assert_eq!(status, ZkIvmProveJobStatus::Error);
+        let rendered = std::str::from_utf8(&body).expect("error JSON is UTF-8");
+        assert!(!rendered.contains(secret));
+        assert!(!rendered.contains("/tmp/"));
+        assert!(!rendered.contains("forbidden"));
+        assert!(rendered.contains("proof key material is unavailable or invalid"));
     }
 
     #[test]
@@ -72253,7 +72604,7 @@ mod tests {
         let blocking = tokio::task::spawn_blocking(move || {
             started_tx.send(()).expect("started");
             release_rx.recv().expect("release");
-            Err("discard me".to_owned())
+            Err::<(), String>("discard me".to_owned())
         });
         let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
         let waiter = tokio::spawn(async move {
@@ -72356,7 +72707,7 @@ mod tests {
         let response = handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -72498,7 +72849,7 @@ mod tests {
         let response = handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -72641,7 +72992,7 @@ mod tests {
         let response = handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -72774,7 +73125,7 @@ mod tests {
         let response = handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -72914,7 +73265,7 @@ mod tests {
         let response = handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -73059,7 +73410,7 @@ mod tests {
         let response = handler_zk_ivm_derive(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -73089,7 +73440,7 @@ mod tests {
         let err = match handler_zk_ivm_derive(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(request_body),
         )
@@ -73209,7 +73560,7 @@ mod tests {
         let err = match handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -73310,7 +73661,7 @@ mod tests {
         let err = match handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
@@ -73404,7 +73755,7 @@ mod tests {
         let response = handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(req_body.clone()),
         )
@@ -73423,7 +73774,7 @@ mod tests {
         let err = match handler_zk_ivm_prove(
             State(app.clone()),
             negotiated(&app),
-            HeaderMap::new(),
+            proof_json_headers(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(req_body.clone()),
         )

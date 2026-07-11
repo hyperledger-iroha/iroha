@@ -405,6 +405,7 @@ impl std::io::Write for BoundedCountingWriter {
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
+    nested_contract_call_depth: usize,
     default: ivm::host::DefaultHost,
     codec_host: IvmCodecHost,
     access_log_enabled: bool,
@@ -505,6 +506,9 @@ pub type CoreHost = CoreHostImpl<NoQueryState>;
 /// Marker query slot for hosts that do not run queries.
 #[derive(Default, Copy, Clone)]
 pub struct NoQueryState;
+
+/// Deterministic maximum number of active `CALL_CONTRACT` child frames.
+const MAX_NESTED_CONTRACT_CALL_DEPTH: usize = 32;
 
 /// Slot storing a live queryable state reference for a host run.
 pub struct QueryStateSlot<QRef> {
@@ -1785,6 +1789,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             current_contract_runtime_context: None,
+            nested_contract_call_depth: 0,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -1876,6 +1881,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             current_contract_runtime_context: None,
+            nested_contract_call_depth: 0,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -1950,6 +1956,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self {
             authority,
             current_contract_runtime_context: None,
+            nested_contract_call_depth: 0,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -4990,6 +4997,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        if self.nested_contract_call_depth >= MAX_NESTED_CONTRACT_CALL_DEPTH {
+            return Err(ivm::VMError::metered(
+                ivm::gas::G_CALL_CONTRACT,
+                ivm::VMError::PermissionDenied,
+            ));
+        }
         let mut request_bytes = 0usize;
         let caller_context = self
             .current_contract_runtime_context
@@ -5120,7 +5133,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.args = Some(call_context.args().clone());
         self.fastpq_batch_entries = None;
 
+        self.nested_contract_call_depth += 1;
         let run_result = child_vm.run_with_host(self);
+        self.nested_contract_call_depth -= 1;
         match run_result {
             Ok(()) => {
                 let encoded_return = Self::encode_nested_contract_return(&child_vm, &return_schema)
@@ -9046,6 +9061,35 @@ mod pointer_abi_tests {
             }
             other => panic!("unsupported fixture account label: {other}"),
         }
+    }
+
+    #[test]
+    fn call_contract_rejects_at_deterministic_nesting_depth_before_frame_growth() {
+        let authority = ALICE_ID.clone();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            42,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let mut host = CoreHost::new(authority);
+        host.bind_contract_runtime_context(contract, None, "outer".to_owned());
+        host.nested_contract_call_depth = MAX_NESTED_CONTRACT_CALL_DEPTH;
+        let mut vm = IVM::new(1_000);
+
+        let result = host.handle_call_contract(&mut vm);
+        assert_eq!(
+            result,
+            Err(ivm::VMError::metered(
+                ivm::gas::G_CALL_CONTRACT,
+                ivm::VMError::PermissionDenied,
+            ))
+        );
+        assert_eq!(
+            host.nested_contract_call_depth, MAX_NESTED_CONTRACT_CALL_DEPTH,
+            "rejection must not mutate the active-frame counter"
+        );
     }
 
     fn fixture_account_literal(label: &str) -> String {

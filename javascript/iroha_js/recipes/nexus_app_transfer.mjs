@@ -3,8 +3,8 @@
  * Minimal Nexus App Facade transfer recipe.
  *
  * The fake Connect/Torii dependencies keep the recipe runnable without a live
- * wallet. Replace them with the browser Connect transport and ToriiClient in
- * an app.
+ * wallet. In an app, configure NexusAppClient with its built-in browser Connect
+ * path and Fetch-backed Torii client instead.
  */
 import { NexusAppClient } from "@iroha/iroha-js/nexus-app";
 import {

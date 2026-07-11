@@ -625,6 +625,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 burst: defaults::torii::PROOF_BURST.and_then(std::num::NonZeroU32::new),
                 max_body_bytes: defaults::torii::PROOF_MAX_BODY_BYTES,
                 body_max_inflight: defaults::torii::PROOF_BODY_MAX_INFLIGHT,
+                body_read_timeout: std::time::Duration::from_millis(
+                    defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
+                ),
                 egress_bytes_per_sec: defaults::torii::PROOF_EGRESS_BYTES_PER_SEC
                     .and_then(std::num::NonZeroU64::new),
                 egress_burst_bytes: defaults::torii::PROOF_EGRESS_BURST_BYTES

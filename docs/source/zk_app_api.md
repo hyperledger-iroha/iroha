@@ -246,6 +246,7 @@ proof_rate_per_minute = 120           # steady-state tokens/min (None to disable
 proof_burst = 60                      # burst tokens per endpoint key
 proof_max_body_bytes = 8_388_608      # maximum submission payload size (bytes)
 proof_body_max_inflight = 8           # aggregate pre-parse body admission
+proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted body
 proof_max_list_limit = 200            # maximum allowed `limit` for proofs list
 proof_request_timeout_ms = 1000       # wall-clock timeout for list/count
 proof_cache_max_age_secs = 30         # Cache-Control max-age for proof fetches

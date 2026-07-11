@@ -200,9 +200,7 @@ impl RateLimiter {
         let rate = rate_per_minute.and_then(|value| {
             (value > 0).then_some(f64::from(value) / Duration::from_secs(60).as_secs_f64())
         });
-        let burst = burst
-            .unwrap_or_else(|| rate_per_minute.unwrap_or(0))
-            .max(1) as f64;
+        let burst = burst.unwrap_or_else(|| rate_per_minute.unwrap_or(0)).max(1) as f64;
         Self {
             inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
         }

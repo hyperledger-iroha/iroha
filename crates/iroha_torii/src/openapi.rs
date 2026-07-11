@@ -2132,7 +2132,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Contracts",
             "Execute multiple read-only contract views.",
-            "Execute a batch of manifest-validated read-only contract view entrypoints and return one normalized item per request.",
+            "Execute 1 through 256 manifest-validated read-only contract view entrypoints under shared blocking-worker concurrency and timeout limits; the direct or routed JSON response is capped at 8 MiB.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2448,9 +2448,10 @@ fn zk_paths() -> Map {
                 "Fetch an IVM prove job.",
                 "Fetch one state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64.",
                 "#/components/schemas/ZkIvmProveJob",
-                vec![string_path_param(
+                vec![patterned_string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
+                    "^[0-9a-f]{32}$",
                 )],
             );
             let delete_op = json_delete_operation(
@@ -2458,9 +2459,10 @@ fn zk_paths() -> Map {
                 "Delete an IVM prove job.",
                 "Cancel and delete an IVM proof generation job entry. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
                 "#/components/schemas/ZkIvmProveJobCreated",
-                vec![string_path_param(
+                vec![patterned_string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
+                    "^[0-9a-f]{32}$",
                 )],
             );
             let mut methods = Map::new();
@@ -8925,6 +8927,17 @@ fn string_path_param(name: &str, description: &str) -> Value {
     schema.insert("type".into(), Value::String("string".to_owned()));
     param.insert("schema".into(), Value::Object(schema));
     Value::Object(param)
+}
+
+fn patterned_string_path_param(name: &str, description: &str, pattern: &str) -> Value {
+    let mut parameter = string_path_param(name, description);
+    parameter
+        .as_object_mut()
+        .and_then(|parameter| parameter.get_mut("schema"))
+        .and_then(Value::as_object_mut)
+        .expect("string path parameter has a schema")
+        .insert("pattern".into(), Value::String(pattern.to_owned()));
+    parameter
 }
 
 fn string_header_param(name: &str, description: &str, required: bool) -> Value {
@@ -16345,6 +16358,24 @@ mod tests {
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str);
         assert_eq!(request_ref, Some("#/components/schemas/ZkIvmProveRequest"));
+        let job_path = paths
+            .get("/v1/zk/ivm/prove/{job_id}")
+            .and_then(Value::as_object)
+            .expect("prove job path");
+        for method in ["get", "delete"] {
+            let pattern = job_path
+                .get(method)
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("parameters"))
+                .and_then(Value::as_array)
+                .and_then(|parameters| parameters.first())
+                .and_then(Value::as_object)
+                .and_then(|parameter| parameter.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str);
+            assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{method} path id");
+        }
 
         let schemas = doc
             .get("components")

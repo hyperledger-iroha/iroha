@@ -13,9 +13,15 @@ import {
   validateDistOutputs,
 } from "./build-dist.mjs";
 
-const SCRIPT_DIR = resolve(fileURLToPath(import.meta.url), "..");
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SCRIPT_DIR = resolve(SCRIPT_PATH, "..");
 const ROOT = resolve(SCRIPT_DIR, "..");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const ALLOWED_RECIPE_PATHS = new Set([
+  "recipes/iso_bridge_builder.mjs",
+  "recipes/nexus_app_transfer.mjs",
+  "recipes/README.md",
+]);
 
 function run(command, args, options = {}) {
   return new Promise((resolveRun, rejectRun) => {
@@ -59,7 +65,7 @@ function parsePackMetadata(stdout) {
   return metadata;
 }
 
-function validatePackPaths(metadata) {
+export function validatePackPaths(metadata) {
   const paths = new Set();
   for (const entry of metadata.files) {
     const path = entry?.path;
@@ -80,10 +86,19 @@ function validatePackPaths(metadata) {
     "src/index.js",
     "dist/index.js",
     "dist/ivmArtifact.js",
+    "dist/nexusApp.js",
+    "nexus-app.d.ts",
+    "recipes/iso_bridge_builder.mjs",
+    "recipes/nexus_app_transfer.mjs",
     "scripts/build-dist.mjs",
   ]) {
     if (!paths.has(required)) {
       throw new Error(`package smoke missing required tar entry: ${required}`);
+    }
+  }
+  for (const path of paths) {
+    if (path.startsWith("recipes/") && !ALLOWED_RECIPE_PATHS.has(path)) {
+      throw new Error(`package smoke found forbidden non-portable recipe: ${path}`);
     }
   }
 }
@@ -149,12 +164,14 @@ async function main() {
       'import * as canonical from "@iroha/iroha-js/canonical-request";',
       'import * as artifact from "@iroha/iroha-js/ivm-artifact";',
       'import * as codec from "@iroha/iroha-js/transaction-codec";',
+      'import * as nexus from "@iroha/iroha-js/nexus-app";',
       "const checks = [",
       '  ["AccountAddress", sdk.AccountAddress],',
       '  ["ToriiClient", sdk.ToriiClient],',
       '  ["computeIvmArtifactHashes", artifact.computeIvmArtifactHashes],',
       '  ["buildCanonicalRequestHeaders", canonical.buildCanonicalRequestHeaders],',
       '  ["buildBrowserTransferPayload", codec.buildBrowserTransferPayload],',
+      '  ["NexusAppClient", nexus.NexusAppClient],',
       "];",
       "for (const [name, value] of checks) {",
       '  if (typeof value !== "function") throw new Error(`missing packed export: ${name}`);',
@@ -166,6 +183,54 @@ async function main() {
     await run(process.execPath, ["--input-type=module", "--eval", smokeProgram], {
       cwd: consumerRoot,
     });
+
+    const installedRecipe = join(
+      consumerRoot,
+      "node_modules",
+      "@iroha",
+      "iroha-js",
+      "recipes",
+      "nexus_app_transfer.mjs",
+    );
+    const recipe = await run(process.execPath, [installedRecipe], {
+      cwd: consumerRoot,
+    });
+    for (const expected of [
+      "payload hash: 1c39c49925ffafee69598d90d5073cb48bbfa1795cc15b41afb67d2cc3b69669",
+      "signed transaction hash: 2d22bf944c58886de938e4094bf9887a43e66d598162bd2205f0812b64e180bb",
+      "final status: Committed",
+    ]) {
+      if (!recipe.stdout.includes(expected)) {
+        throw new Error(`packed Nexus recipe output is missing: ${expected}`);
+      }
+    }
+
+    const installedIsoBuilderRecipe = join(
+      consumerRoot,
+      "node_modules",
+      "@iroha",
+      "iroha-js",
+      "recipes",
+      "iso_bridge_builder.mjs",
+    );
+    const isoBuilder = await run(process.execPath, [installedIsoBuilderRecipe], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        ISO_MESSAGE_ID: "package-smoke-message",
+        ISO_CREATION_TIME: "2026-01-01T00:00:00.000Z",
+        ISO_INSTRUCTION_ID: "package-smoke-instruction",
+      },
+    });
+    for (const expected of [
+      "<MsgId>package-smoke-message</MsgId>",
+      "<InstrId>package-smoke-instruction</InstrId>",
+      '<IntrBkSttlmAmt Ccy="EUR">100.00</IntrBkSttlmAmt>',
+    ]) {
+      if (!isoBuilder.stdout.includes(expected)) {
+        throw new Error(`packed ISO builder recipe output is missing: ${expected}`);
+      }
+    }
 
     const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     if (packMetadata.name !== packageJson.name || packMetadata.version !== packageJson.version) {
@@ -179,7 +244,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
