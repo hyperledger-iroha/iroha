@@ -5508,7 +5508,7 @@ mod tests {
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         isi::Log,
-        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneLifecycleParameterV1},
         peer::PeerId,
         transaction::{TransactionBuilder, signed::TransactionResultInner},
         trigger::DataTriggerSequence,
