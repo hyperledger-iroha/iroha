@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "ဖန်ရှင် `{func}` တွင် ပါရာမီတာ `{name}` ကို အသုံးမပြုပါ",
     lint_unreachable_after_return: "{context} တွင် မရောက်နိုင်သော ကြေညာချက် ရှိသည်ဟုတွေ့တယ်៖ return ပို့ပြီးနောက်ရှိ ကုဒ်ကို မစမ်းကြည့်ပါ",
     lint_ok: "အောင်မြင်",
-    lint_usage: "အသုံးပြုပုံ: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "အသုံးပြုပုံ: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "ပေးထားသော ရင်းမြစ်များအပေါ် Kotodama lint စစ်ဆေးမှုများကို ပြေးဆင်ပါ။",
     ..english::MESSAGES
 };

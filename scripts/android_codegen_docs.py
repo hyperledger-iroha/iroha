@@ -251,7 +251,7 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
             {
                 "name": "code_hash",
                 "type": "Option<Hash>",
-                "description": "Blake2b-32 digest of the `.to` program body (bytes after the IVM header).",
+                "description": "Domain-separated canonical hash of the complete deployable `.to` artifact, including its execution header, `CNTR`, literals, and code.",
             },
             {
                 "name": "abi_hash",
@@ -266,7 +266,7 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
             {
                 "name": "features_bitmap",
                 "type": "Option<u64>",
-                "description": "Bitmask of build features (SIMD, CUDA, etc.).",
+                "description": "Compiler-derived, hash-covered V1 execution capabilities (ZK and VECTOR); never host SIMD, Metal, or CUDA availability.",
             },
             {
                 "name": "access_set_hints",
@@ -309,7 +309,7 @@ MANIFEST_TYPE_TABLES: dict[str, dict] = {
             {
                 "name": "kind",
                 "type": "EntryPointKind",
-                "description": "Role of the entrypoint (`Public`, `Hajimari`, or `Kaizen`).",
+                "description": "Role of the entrypoint (`Kotoage`, `View`, `Hajimari`, or `Kaizen`).",
             },
             {
                 "name": "permission",
@@ -467,7 +467,7 @@ SMART_CONTRACT_NOTES: dict[str, list[str]] = {
         f"Sample hash pair derived from `defaults/executor.to` lives in `{SMART_CONTRACT_FIXTURE}` for deterministic builder tests.",
     ],
     "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes": [
-        "`code_hash` must equal the Blake2b-32 digest of the program body (bytes after the IVM header); duplicate uploads re-use the stored bytes.",
+        "`code_hash` must equal the domain-separated canonical hash of the complete deployable `.to` artifact; duplicate uploads re-use the stored bytes.",
         f"Use the hashes in `{SMART_CONTRACT_FIXTURE}` to verify `.to` parsing logic in automation.",
     ],
     "iroha_data_model::isi::smart_contract_code::ActivateContractInstance": [

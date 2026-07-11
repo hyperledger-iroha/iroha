@@ -22,10 +22,10 @@ translation_last_reviewed: 2026-02-07
 
 - [Docker](https://docs.docker.com/engine/install/) с включенным Compose V2 (используется для запуска образца однорангового узла, определение в `defaults/docker-compose.single.yml`).
 - Набор инструментов Rust (1.76+) для сборки вспомогательных бинарников, если вы не скачаете опубликованные файлы.
-- Бинарники `koto_compile`, `ivm_run` и `iroha_cli`. Их можно собрать из рабочей области оформления заказа, как показано ниже, или скачать соответствующие артефакты выпуска:
+- Бинарники `koto build`, `ivm_run` и `iroha_cli`. Их можно собрать из рабочей области оформления заказа, как показано ниже, или скачать соответствующие артефакты выпуска:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 Скомпилируйте контракт в байткод IVM/Norito (`.to`) и запустите его локально, чтобы убедиться, что системные вызовы хоста передаются к обращению к сети:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-Бегун выводит лог `info("Hello from Kotodama")` и выполняет системный вызов `SET_ACCOUNT_DETAIL` против смоделированного хоста. Если доступен дополнительный бинарник `ivm_tool`, команда `ivm_tool inspect target/quickstart/hello.to` показывает заголовок ABI, функциональные биты и экспортированные точки входа.
+Бегун выводит лог `debug::info("Hello from Kotodama")` и выполняет системный вызов `SET_ACCOUNT_DETAIL` против смоделированного хоста. Если доступен дополнительный бинарник `ivm_tool`, команда `ivm_tool inspect target/quickstart/hello.to` показывает заголовок ABI, функциональные биты и экспортированные точки входа.
 
 ## 4. Отправьте байткод через Torii
 

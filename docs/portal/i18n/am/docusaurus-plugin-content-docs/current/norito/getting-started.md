@@ -18,7 +18,7 @@ translation_last_reviewed: 2026-02-07
 
 1. የ Rust Toolchain (1.76 ወይም አዲስ) ይጫኑ እና ይህን ማከማቻ ይመልከቱ።
 2. የሚደግፉ ሁለትዮሾችን ይገንቡ ወይም ያውርዱ፡
-   - `koto_compile` - Kotodama ባይትኮድ የሚያወጣው IVM/Norito
+   - `koto build` - Kotodama ባይትኮድ የሚያወጣው IVM/Norito
    - `ivm_run` እና `ivm_tool` - የአካባቢ ማስፈጸሚያ እና የፍተሻ መገልገያዎች
    - `iroha_cli` - በ Torii በኩል ውል ለማሰማራት ያገለግላል
 
@@ -27,7 +27,7 @@ translation_last_reviewed: 2026-02-07
    የመሳሪያ ሰንሰለት በአገር ውስጥ፣ የ Makefile ረዳቶችን በሁለትዮሽዎቹ ላይ ያመልክቱ፡
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. የማሰማራቱ ደረጃ ላይ ሲደርሱ የI18NT0000014X መስቀለኛ መንገድ እየሰራ መሆኑን ያረጋግጡ። የ
@@ -41,17 +41,16 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 ቁልፍ ባንዲራዎች፡-
 
-- `--abi 1` ውሉን ወደ ABI ስሪት 1 ይቆልፋል ( ብቸኛው የሚደገፍ ስሪት በ ላይ
+- `ABI V1` ውሉን ወደ ABI ስሪት 1 ይቆልፋል ( ብቸኛው የሚደገፍ ስሪት በ ላይ
   የጽሑፍ ጊዜ)።
-- `--max-cycles 0` ያልተገደበ አፈፃፀም ይጠይቃል; ለማሰር አዎንታዊ ቁጥር ያዘጋጁ
+- `--max-cycles 1000000` ያልተገደበ አፈፃፀም ይጠይቃል; ለማሰር አዎንታዊ ቁጥር ያዘጋጁ
   ለዜሮ-እውቀት ማረጋገጫዎች ዑደት ንጣፍ.
 
 ## 2. የNorito አርቲፊክስን መርምር (አማራጭ)
@@ -85,7 +84,7 @@ ivm_run target/examples/hello.to --args '{}'
 ቤዝ64 ጭነት፡-
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -96,8 +95,8 @@ iroha_cli app contracts deploy \
 በምላሹ ላይ የሚታየው hash መግለጫዎችን ለማውጣት ወይም ምሳሌዎችን ለመዘርዘር ሊያገለግል ይችላል፡-
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. ከ Torii ጋር ሩጡ
@@ -112,8 +111,8 @@ iroha_cli app contracts instances --namespace apps --table
 - የቀረቡትን ምሳሌዎች በአንድ ላይ ለማሰባሰብ እና ለማስፈጸም `make examples-run` ይጠቀሙ
   ተኩስ ሁለትዮሽዎቹ ከሌሉ `KOTO`/`IVM` የአካባቢ ተለዋዋጮችን ይሽሩ
   `PATH`.
-- `koto_compile` የኤቢአይ ሥሪቱን ውድቅ ካደረገ፣ አጠናቃሪው እና መስቀለኛ መንገዱን ያረጋግጡ።
-  ሁለቱም ኢላማ ABI v1 (ለመዘርዘር ያለ ክርክሮች `koto_compile --abi` ያሂዱ
+- `koto build` የኤቢአይ ሥሪቱን ውድቅ ካደረገ፣ አጠናቃሪው እና መስቀለኛ መንገዱን ያረጋግጡ።
+  ሁለቱም ኢላማ ABI v1 (ለመዘርዘር ያለ ክርክሮች `koto build --help` ያሂዱ
   ድጋፍ)።
 - CLI ሄክስ ወይም Base64 የመፈረሚያ ቁልፎችን ይቀበላል። ለሙከራ, መጠቀም ይችላሉ
   በ I18NI0000055X የወጡ ቁልፎች።

@@ -27,11 +27,11 @@ I18NT0000000006X һәм I18NT000000000000 тәүге тапҡыр: детерм�
   I18NI000000040X-та билдәләнгән өлгө тиңдәштәрен башлау өсөн).
 - Руст инструменттар слет (1.76+) ярҙамсы бинар төҙөү өсөн, әгәр һеҙ скачать түгел
   баҫылғандар.
-- `koto_compile`, `ivm_run`, һәм I18NI0000043X бинар. Һеҙ уларҙы төҙөргә мөмкин
+- `koto build`, `ivm_run`, һәм I18NI0000043X бинар. Һеҙ уларҙы төҙөргә мөмкин
   эш урыны кассаһы түбәндә күрһәтелгәнсә йәки скачать тап килгән релиз артефакттар:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -116,3 +116,23 @@ I18NF000000033X
 - Һеҙҙең үҙ контракттары тураһында итерацион, ҡулланыу I18NI000000059X X.
   эш урыны скачиваемый өҙөктәрҙе тергеҙеү өсөн шулай порталь docs һәм артефакттар ҡала
   синхронлаштырыуҙа I18NI000000060X буйынса сығанаҡтар менән синхронлаштырыла.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

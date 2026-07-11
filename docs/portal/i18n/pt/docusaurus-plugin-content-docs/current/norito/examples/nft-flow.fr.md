@@ -31,18 +31,25 @@ Parcourt o ciclo de vida de um NFT de luta em luta: frappe au propriétaire, tra
 
 [Baixe a fonte Kotodama](/norito-snippets/nft-flow.ko)
 
-```text
+```kotodama
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
-  kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<i105-account-id>");
-    let nft = nft_id!("n0$wonderland");
-    nft_mint_asset(nft, owner);
-
-    let to = account!("<i105-account-id>");
-    nft_transfer_asset(owner, nft, to);
-    nft_set_metadata(nft, name!("issued"), json!{ issued: "demo" });
-    nft_burn_asset(nft);
-  }
+    kotoage fn nft_issue_and_transfer() authorize("NftAuthority") {
+        let owner = AccountId::parse(
+            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        );
+        let nft = NftId::parse("n0$wonderland.universal");
+        ledger::nft::mint(nft, owner);
+        let to = AccountId::parse(
+            "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+        );
+        ledger::nft::transfer(source: owner, nft: nft, destination: to);
+        ledger::nft::set_metadata(
+            nft: nft,
+            key: Name::parse("issued"),
+            value: Json::parse("{\"issued\":\"demo\"}"),
+        );
+        ledger::nft::burn(nft);
+    }
 }
 ```

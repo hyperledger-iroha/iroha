@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "พารามิเตอร์ `{name}` ในฟังก์ชัน `{func}` ไม่เคยถูกใช้งาน",
     lint_unreachable_after_return: "ตรวจพบคำสั่งที่เข้าถึงไม่ได้ใน {context}: โค้ดหลัง return จะไม่ถูกรัน",
     lint_ok: "สำเร็จ",
-    lint_usage: "วิธีใช้: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "วิธีใช้: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "รันการตรวจ lint ของ Kotodama กับซอร์สที่ระบุ.",
     ..english::MESSAGES
 };

@@ -15517,7 +15517,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-unanchored-compact-token-symbol-removal",
     "--negative-control-mobile-halo2-vk-hash",
     "--negative-control-mobile-open-verify-public-input-hash-exactness",
-    "--negative-control-ton-sccp-public-input-validation-ordering",
     "--negative-control-rust-recursive-compact-unavailable-classifier",
     "--negative-control-rust-kagemusha-hop-public-instance-shape",
     "--negative-control-rust-kagemusha-fold-root-transition",
@@ -28576,22 +28575,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileSccpBranch,
-    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?proofRequestSkipsRelayContextBinding[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?tronRouteCanaryEvidenceHashDrifts[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?tonRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?solanaRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?sourceAdapterVerifierVkHashesDriftForUiTooling/u,
-    "mobile SCCP negative control must mutate EVM, TRON, TON, Solana, and source proof hash coverage",
+    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?proofRequestSkipsRelayContextBinding[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?tronRouteCanaryEvidenceHashDrifts[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?sourceAdapterVerifierVkHashesDriftForUiTooling/u,
+    "mobile SCCP negative control must mutate EVM, TRON, and source proof hash coverage",
   );
   assert.match(
     mobileSccpBranch,
-    /extraneousSourceProofError[\s\S]*?staleRequestError[\s\S]*?sourceProofBytes"\) == true[\s\S]*?requestHash"\) == true[\s\S]*?ex\.getMessage\(\)\.contains\("sourceProofBytes"\)[\s\S]*?ex\.getMessage\(\)\.contains\("requestHash"\)[\s\S]*?submission must reject extraneous wrapped proof-result source proof bytes[\s\S]*?submission must reject stale wrapped proof-result request context[\s\S]*?sourceProofBytes must be empty for SORA source bundle[\s\S]*?TON request hash must bind bundle finality proof bytes[\s\S]*?TON request hash must bind bundle\/source-proof byte boundaries/u,
+    /extraneousSourceProofError[\s\S]*?staleRequestError[\s\S]*?sourceProofBytes"\) == true[\s\S]*?requestHash"\) == true[\s\S]*?ex\.getMessage\(\)\.contains\("sourceProofBytes"\)[\s\S]*?ex\.getMessage\(\)\.contains\("requestHash"\)[\s\S]*?submission must reject extraneous wrapped proof-result source proof bytes[\s\S]*?submission must reject stale wrapped proof-result request context[\s\S]*?sourceProofBytes must be empty for SORA source bundle[\s\S]*?requestHash/u,
     "mobile SCCP negative control must mutate sourceProofBytes fail-fast coverage",
   );
   assert.match(
     mobileSccpBranch,
-    /Kotlin SCCP EVM prover tests[\s\S]*?Android SCCP EVM prover tests[\s\S]*?Kotlin SCCP TRON prover tests[\s\S]*?Android SCCP TRON prover tests[\s\S]*?Kotlin SCCP TON prover tests[\s\S]*?Android SCCP TON prover tests[\s\S]*?Kotlin SCCP Solana prover tests[\s\S]*?Android SCCP Solana prover tests[\s\S]*?Kotlin SCCP source proof hash tests[\s\S]*?Android SCCP source proof hash tests/u,
+    /Kotlin SCCP EVM prover tests[\s\S]*?Android SCCP EVM prover tests[\s\S]*?Kotlin SCCP TRON prover tests[\s\S]*?Android SCCP TRON prover tests[\s\S]*?Kotlin SCCP source proof hash tests[\s\S]*?Android SCCP source proof hash tests/u,
     "mobile SCCP negative control must require all SCCP labels",
   );
   assert.match(
     mobileSccpBranch,
-    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?derivesTonRouteCanaryEvidenceHash[\s\S]*?derivesSolanaRouteCanaryEvidenceHash[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?expected = f"\{label\} missing \{expected_marker\}"[\s\S]*?if expected not in message:[\s\S]*?mobile SCCP runner coverage drift was rejected for the wrong reason/u,
+    /proofRequestBindsPublicSignalsAndRelayContext[\s\S]*?derivesTronRouteCanaryEvidenceHash[\s\S]*?derivesSourceAdapterVerifierVkHashesForUiTooling[\s\S]*?expected = f"\{label\} missing \{expected_marker\}"[\s\S]*?if expected not in message:[\s\S]*?mobile SCCP runner coverage drift was rejected for the wrong reason/u,
     "mobile SCCP negative control must require exact missing-test diagnostics",
   );
   assert.match(

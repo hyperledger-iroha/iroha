@@ -24,6 +24,13 @@ public final class OkHttpTransportExecutor
             Objects.requireNonNull(client, "client"));
   }
 
+  /** Creates a wrapper with a custom buffered-response limit. */
+  public OkHttpTransportExecutor(final OkHttpClient client, final long maximumResponseBytes) {
+    this.delegate =
+        new org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor(
+            Objects.requireNonNull(client, "client"), maximumResponseBytes);
+  }
+
   @Override
   public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
     return delegate.execute(request);

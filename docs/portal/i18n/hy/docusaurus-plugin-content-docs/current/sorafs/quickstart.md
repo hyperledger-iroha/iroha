@@ -127,3 +127,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - **CI ավտոմատացում** – ավելացրեք վերը նշված հրամանները՝ խողովակաշարերը թողարկելու համար, որպեսզի փաստաթղթերը,
   հարմարանքները և արտեֆակտները ստորագրված կողքին հրապարակում են դետերմինիստական մանիֆեստներ
   մետատվյալներ.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

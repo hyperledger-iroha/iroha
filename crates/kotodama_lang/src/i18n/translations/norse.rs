@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "Parameteren `{name}` i funksjonen `{func}` blir aldri brukt",
     lint_unreachable_after_return: "Fant en utilgjengelig setning i {context}: kode etter en return blir ikke kjørt",
     lint_ok: "bra",
-    lint_usage: "Bruk: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Bruk: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Kjør Kotodama-lintene på de oppgitte kildene.",
     ..english::MESSAGES
 };

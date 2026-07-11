@@ -1565,13 +1565,17 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
                     key_artifacts_path.display()
                 );
                 write_kagemusha_norito_artifact_file(key_artifacts_path, &key_artifacts)
-                    .wrap_err_with(|| format!("failed to write {}", key_artifacts_path.display()))?;
+                    .wrap_err_with(|| {
+                        format!("failed to write {}", key_artifacts_path.display())
+                    })?;
                 eprintln!(
                     "Writing ABI-7 recursive compact verifier-key package to {}",
                     verifier_keys_path.display()
                 );
                 write_kagemusha_norito_artifact_file(verifier_keys_path, &verifier_keys)
-                    .wrap_err_with(|| format!("failed to write {}", verifier_keys_path.display()))?;
+                    .wrap_err_with(|| {
+                        format!("failed to write {}", verifier_keys_path.display())
+                    })?;
                 let key_artifacts_summary =
                     compact_key_output_summary_from_file(key_artifacts_path).wrap_err_with(
                         || format!("failed to summarize {}", key_artifacts_path.display()),
@@ -1686,13 +1690,17 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
                     key_artifacts_path.display()
                 );
                 write_kagemusha_norito_artifact_file(key_artifacts_path, &key_artifacts)
-                    .wrap_err_with(|| format!("failed to write {}", key_artifacts_path.display()))?;
+                    .wrap_err_with(|| {
+                        format!("failed to write {}", key_artifacts_path.display())
+                    })?;
                 eprintln!(
                     "Writing ABI-7 recursive compact verifier-key package to {}",
                     verifier_keys_path.display()
                 );
                 write_kagemusha_norito_artifact_file(verifier_keys_path, &verifier_keys)
-                    .wrap_err_with(|| format!("failed to write {}", verifier_keys_path.display()))?;
+                    .wrap_err_with(|| {
+                        format!("failed to write {}", verifier_keys_path.display())
+                    })?;
                 let key_artifacts_summary =
                     compact_key_output_summary_from_file(key_artifacts_path).wrap_err_with(
                         || format!("failed to summarize {}", key_artifacts_path.display()),
@@ -1985,10 +1993,7 @@ fn write_kagemusha_lineage_key_artifact_file(path: &std::path::Path, bytes: &[u8
     })
 }
 
-fn write_kagemusha_norito_artifact_file<T>(
-    path: &std::path::Path,
-    value: &T,
-) -> Result<()>
+fn write_kagemusha_norito_artifact_file<T>(path: &std::path::Path, value: &T) -> Result<()>
 where
     T: norito::core::NoritoSerialize,
 {
@@ -2716,10 +2721,7 @@ fn build_proof_attachment_from_json(
         .get("envelope_hash_hex")
         .and_then(|x| x.as_str())
         .ok_or_else(|| eyre::eyre!("envelope_hash_hex must be provided"))?;
-    att.envelope_hash = Some(parse_exact_lower_hex32(
-        envelope_hash,
-        "envelope_hash_hex",
-    )?);
+    att.envelope_hash = Some(parse_exact_lower_hex32(envelope_hash, "envelope_hash_hex")?);
     if let Some((field, message)) = att.structural_error() {
         return Err(eyre::eyre!("{field} {message}"));
     }
@@ -3549,9 +3551,8 @@ mod tests {
             let err = build_proof_attachment_from_json(&v)
                 .expect_err("noncanonical envelope_hash_hex rejected");
             assert!(
-                format!("{err}").contains(
-                    "envelope_hash_hex must be exactly 32 lowercase hex bytes"
-                ),
+                format!("{err}")
+                    .contains("envelope_hash_hex must be exactly 32 lowercase hex bytes"),
                 "unexpected noncanonical hash error: {err}"
             );
         }

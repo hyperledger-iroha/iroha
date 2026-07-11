@@ -383,9 +383,7 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SccpMessageProofBundles.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SolanaSccpProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/SourceSccpProofs.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TronSccpProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionRequest.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionActionResponse.java"
@@ -479,8 +477,6 @@ on:
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tools/PendingQueueInspectorTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SourceSccpProofsTests.java"
-      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/SolanaSccpProverTests.java"
-      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java"
       - "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json"
       - "java/iroha_android/src/test/resources/transaction_payloads.json"
@@ -632,9 +628,7 @@ on:
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SccpMessageProofBundles.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SolanaSccpProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashes.kt"
-      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TronSccpProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionRequest.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/subscriptions/SubscriptionActionResponse.kt"
@@ -690,9 +684,7 @@ on:
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoColumnarTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/norito/NoritoHeaderTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt"
-      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SolanaSccpProverTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/SourceSccpProofHashesTest.kt"
-      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt"
@@ -1214,7 +1206,6 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-asset-selector-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-verdict-id-hex-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-open-verify-public-input-hash-exactness
-          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-ton-sccp-public-input-validation-ordering
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-multisig-resolved-account-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-fail-closed
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-device-lab-family-overmatch

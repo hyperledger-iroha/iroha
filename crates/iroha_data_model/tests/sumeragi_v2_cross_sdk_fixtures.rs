@@ -42,6 +42,7 @@ fn context() -> HeightContext {
         height: 1,
         epoch: 2,
         epoch_end_height: 100,
+        next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
         parent_commit_qc: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),

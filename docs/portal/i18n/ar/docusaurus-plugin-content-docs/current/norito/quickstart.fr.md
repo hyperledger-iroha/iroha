@@ -22,10 +22,10 @@ translation_last_reviewed: 2026-02-07
 
 - [Docker](https://docs.docker.com/engine/install/) مع Compose V2 نشط (استخدم من أجل تحديد الزوج المحدد في `defaults/docker-compose.single.yml`).
 - Toolchain Rust (1.76+) لإنشاء الثنائيات المساعدة إذا لم تقم بتنزيلها دون أي منشورات.
-- الثنائيات `koto_compile`، `ivm_run` و`iroha_cli`. يمكنك إنشاء مستندات بعد الخروج من مساحة العمل مثل هذه أو تنزيل عناصر الإصدار المقابلة:
+- الثنائيات `koto build`، `ivm_run` و`iroha_cli`. يمكنك إنشاء مستندات بعد الخروج من مساحة العمل مثل هذه أو تنزيل عناصر الإصدار المقابلة:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -47,22 +47,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -74,15 +74,14 @@ KO
 قم بتجميع العقد بالرمز الثانوي IVM/Norito (`.to`) وقم بتنفيذ الموقع لتأكيد إعادة تشغيل مكالمات المضيف قبل لمس إعادة التشغيل:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-يقوم المشغل بطباعة السجل `info("Hello from Kotodama")` وتشغيل استدعاء النظام `SET_ACCOUNT_DETAIL` ضد محاكاة المضيف. إذا كان الخيار الثنائي `ivm_tool` متاحًا، فإن `ivm_tool inspect target/quickstart/hello.to` يعرض واجهة ABI وأجزاء الميزات ونقاط الإدخال المصدرة.
+يقوم المشغل بطباعة السجل `debug::info("Hello from Kotodama")` وتشغيل استدعاء النظام `SET_ACCOUNT_DETAIL` ضد محاكاة المضيف. إذا كان الخيار الثنائي `ivm_tool` متاحًا، فإن `ivm_tool inspect target/quickstart/hello.to` يعرض واجهة ABI وأجزاء الميزات ونقاط الإدخال المصدرة.
 
 ## 4. احصل على الرمز الثانوي عبر Toriiأثناء المضي قدمًا في عملية التنفيذ، قم بإرسال الكود الثانوي إلى Torii مع CLI. معرف التطوير الافتراضي مشتق من المفتاح العام في `defaults/client.toml`، دونك معرف الحساب هو
 ```

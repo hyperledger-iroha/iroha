@@ -33,7 +33,7 @@ Esta página reflete `docs/source/soranexus_bootstrap_plan.md`. Mantenha ambas a
 ## Entornos de vermelho
 - Operar dois ambientes Nexus com diferentes configurações de vermelho:
 - **Sora Nexus (mainnet)** - prefijo de red de produção `nexus`, hospedando a governança canônica e serviços piggyback de SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefijo de red de staging `testus`, que especifica a configuração de mainnet para testes de integração e validação de pré-lançamento (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - prefijo de red de staging `testus`, que especifica a configuração de mainnet para testes de integração e validação de pré-lançamento (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Manter arquivos de gênese separados, folhas de governo e casas de infraestrutura para cada ambiente. Teste atual como o banco de testes de todos os lançamentos SoraFS/SoraNet antes de promover um Nexus.
 - As tubulações de CI/CD devem ser executadas primeiro em Testus, executando testes de fumaça automatizados e exigindo o manual de promoção Nexus uma vez que passam pelas verificações.
 - Os pacotes de configuração de referência vivem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada um com `config.toml`, `genesis.json` e diretórios de admissão Torii de exemplo.

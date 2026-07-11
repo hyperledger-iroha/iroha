@@ -26,13 +26,13 @@ Canonical syscall table (subset)
 | Hex  | Name                       | Arguments (in `r10+`)                                                   | Returns     | Gas (base + variable)        | Notes |
 |------|----------------------------|-------------------------------------------------------------------------|-------------|------------------------------|-------|
 | 0x1A | SET_ACCOUNT_DETAIL         | `&AccountId`, `&Name`, `&Json`                                          | `u64=0`     | `G_set_detail + bytes(val)`  | Writes a detail for the account |
-| 0x22 | MINT_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_mint`                     | Mints `amount` of asset to account |
-| 0x23 | BURN_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`             | `u64=0`     | `G_burn`                     | Burns `amount` from account |
-| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
+| 0x22 | MINT_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&QuantityValueV1`                  | `u64=0`     | `G_mint`                     | Mints `amount` of asset to account |
+| 0x23 | BURN_ASSET                 | `&AccountId`, `&AssetDefinitionId`, `&QuantityValueV1`                  | `u64=0`     | `G_burn`                     | Burns `amount` from account |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN    | –                                                                       | `u64=0`     | `G_transfer`                 | Begin FASTPQ transfer batch scope |
 | 0x2A | TRANSFER_V1_BATCH_END      | –                                                                       | `u64=0`     | `G_transfer`                 | Flush accumulated FASTPQ transfer batch |
 | 0x2B | TRANSFER_V1_BATCH_APPLY    | `r10=&NoritoBytes(TransferAssetBatch)`                                  | `u64=0`     | `G_transfer`                 | Apply a Norito-encoded batch in a single syscall |
-| 0x2C | TRANSFER_ASSET_SCOPED      | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
+| 0x2C | TRANSFER_ASSET_SCOPED      | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | NFT_MINT_ASSET             | `&NftId`, `&AccountId(owner)`                                           | `u64=0`     | `G_nft_mint_asset`           | Registers a new NFT |
 | 0x26 | NFT_TRANSFER_ASSET         | `&AccountId(from)`, `&NftId`, `&AccountId(to)`                          | `u64=0`     | `G_nft_transfer_asset`       | Transfers ownership of NFT |
 | 0x27 | NFT_SET_METADATA           | `&NftId`, `&Name`, `&Json`                                              | `u64=0`     | `G_nft_set_metadata`         | Updates NFT metadata |
@@ -50,11 +50,43 @@ Gas enforcement
 - CoreHost charges extra gas for ISI syscalls using the native ISI schedule; FASTPQ batch transfers are charged per entry.
 - ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
 - SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost and unsorted offsets add a per-item penalty.
+- Numeric syscalls use quote-free staged metering: each bounded validation,
+  logical-limb arithmetic, normalization, and output phase is debited before it
+  begins. Small compact values therefore cost less than wide values without
+  making consensus depend on host bigint performance.
 
 Notes
 - All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
 - All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
 - Kotodama `block_height()` lowers to the existing extended `SYSVAR_BLOCK_HEIGHT` syscall (`0x010021`) and returns the host-provided block height as an integer.
+- `QuantityValueV1`, `IntValueV1`, and `DecimalValueV1` use pointer types
+  `0x0010`, `0x0011`, and `0x0012`; `0x0013` is unassigned and rejected.
+  Their unconditional syscall blocks are `0x010100..=0x010113`,
+  `0x010120..=0x01012F`, and `0x010140..=0x01014F`. Exact division distinguishes
+  repeating results from terminating results needing scale above 28; rounded
+  operations require an explicit scale and one of seven stable rounding modes.
+  Arithmetic and gas depend only on canonical bytes and deterministic 64-bit
+  logical-limb work.
+- `JSON_BUILD` (`0x01004E`) consumes one compiler-emitted construction schema
+  and flattened word table, recursively reads bounded `Option`/`List` handles,
+  sorts object keys canonically, and encodes one `Json` payload. Decimal and
+  quantity values remain exact decimal strings, bytes use lowercase `0x`
+  hex, and no floating-point conversion is used.
+- Every `JSON_GET_*` syscall returns a compiler-owned `Option<T>` sum handle;
+  missing/wrongly typed fields are `none`. Numeric getters distinguish
+  `JSON_GET_INT`, `JSON_GET_DECIMAL`, and `JSON_GET_QUANTITY`; retired numeric
+  getter names are not part of V1.
+- `CORE_QUERY_GET` (`0x010001`) accepts stable entity tag `1..=5` for account,
+  asset, asset definition, domain, or NFT plus that family's exact typed ID,
+  and returns a compiler-owned `Option<View>` handle. `CORE_QUERY_PAGE`
+  (`0x010002`) accepts the same tag with `offset >= 0` and `limit` in `1..=64`,
+  and returns `List<View, 64>` plus `Option<int>` continuation handles. The
+  host orders canonical IDs, performs one ledger query, encodes only the exact
+  projection once with Norito, and the guest decodes it once. The precise view
+  and `QueryPage<T>` field layouts are normative in
+  `docs/source/kotodama_grammar.md`; those layouts and stable entity tags are
+  bound into the ABI hash. Query families outside these five remain explicit
+  `NoritoBytes` specialist APIs.
 - Exact gas constants (`G_*`) are defined by the active gas schedule; see `ivm.md`.
 
 Errors

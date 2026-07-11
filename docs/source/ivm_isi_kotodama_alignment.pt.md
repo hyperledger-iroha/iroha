@@ -49,8 +49,8 @@ Terminologia
 ### Kotodama → IVM
 - Existem peças de frontend (lexer/parser/minimal semântica/IR/regalloc).
 - Codegen (`kotodama::compiler`) emite um subconjunto de operações IVM e usa `SCALL` para operações de ativos:
-  - `MintAsset` → definir x10=conta, x11=ativo, x12=&NoritoBytes(Numeric); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` semelhante (quantidade passada como ponteiro NoritoBytes(Numeric)).
+  - `MintAsset` → definir x10=conta, x11=ativo, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` semelhante (quantidade passada como ponteiro Amount).
 - Demonstrações `koto_*_demo.rs` mostram o uso de `WsvHost` com índices inteiros mapeados para IDs para testes rápidos.
 
 ---
@@ -130,9 +130,9 @@ Terminologia
 Subconjunto representativo — finalize e expanda durante a implementação do host.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → Registro ISI
 - SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → Registro ISI
 - SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8) → Registro ISI
-- SYSCALL_MINT_ASSET(conta: ptr AccountId, ativo: ptr AssetDefinitionId, valor: ptr NoritoBytes(Numeric)) → ISI Mint
-- SYSCALL_BURN_ASSET(conta: ptr AccountId, ativo: ptr AssetDefinitionId, quantidade: ptr NoritoBytes(Numeric)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(de: ptr AccountId, para: ptr AccountId, ativo: ptr AssetDefinitionId, valor: ptr NoritoBytes(Numeric)) → Transferência ISI
+- SYSCALL_MINT_ASSET(conta: ptr AccountId, ativo: ptr AssetDefinitionId, valor: ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET(conta: ptr AccountId, ativo: ptr AssetDefinitionId, quantidade: ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(de: ptr AccountId, para: ptr AccountId, ativo: ptr AssetDefinitionId, valor: ptr Amount) → Transferência ISI
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (abrir/fechar o escopo; entradas individuais são baixadas via `transfer_asset`)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Enviar um lote pré-codificado quando os contratos já serializaram as entradas fora da cadeia
 - SYSCALL_NFT_MINT_ASSET(id: ptr NftId, proprietário: ptr AccountId) → Registro ISI

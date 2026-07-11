@@ -174,7 +174,7 @@ impl PredicateJson {
     ///
     /// # Errors
     /// Returns an error when serialisation of the canonical JSON representation fails.
-    pub fn into_compound<T>(&self) -> Result<CompoundPredicate<T>, json::Error> {
+    pub fn into_compound<T: 'static>(&self) -> Result<CompoundPredicate<T>, json::Error> {
         if self.is_empty() {
             Ok(CompoundPredicate::PASS)
         } else {

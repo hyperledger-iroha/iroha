@@ -36,8 +36,8 @@ pub struct ZkTask {
     pub tx_hash: Option<Hash>,
     /// Code hash of the executed bytecode.
     pub code_hash: [u8; 32],
-    /// Full program bytes executed to produce this trace.
-    pub program: Arc<Vec<u8>>,
+    /// Shared immutable program bytes executed to produce this trace.
+    pub program: Arc<[u8]>,
     /// Optional block header associated with this trace (for warnings/events).
     /// If not provided, the ZK lane will emit a warning with a minimal header
     /// carrying height=1.
@@ -69,7 +69,7 @@ impl ZkTask {
         h.update((self.program.len() as u64).to_le_bytes());
         if !self.program.is_empty() {
             let sample = if self.program.len() <= 64 {
-                &self.program
+                self.program.as_ref()
             } else {
                 &self.program[..64]
             };
@@ -939,7 +939,7 @@ mod tests {
             let mut task = ZkTask {
                 tx_hash: None,
                 code_hash: [0xAB; 32],
-                program: Arc::new(vec![0, 1, 2, 3]),
+                program: Arc::from(vec![0, 1, 2, 3]),
                 header: None,
                 trace: Vec::new(),
                 constraints: Vec::new(),
@@ -1003,7 +1003,7 @@ mod tests {
         let task = ZkTask {
             tx_hash: Some(Hash::prehashed([0x11; 32])),
             code_hash: [0x22; 32],
-            program: Arc::new(vec![0x01, 0x02]),
+            program: Arc::from(vec![0x01, 0x02]),
             header: None,
             trace: Vec::new(),
             constraints: Vec::new(),
@@ -1030,7 +1030,7 @@ mod tests {
             let task = ZkTask {
                 tx_hash: Some(Hash::prehashed([idx as u8; 32])),
                 code_hash: [0xAA; 32],
-                program: Arc::new(vec![idx as u8]),
+                program: Arc::from(vec![idx as u8]),
                 header: None,
                 trace: Vec::new(),
                 constraints: Vec::new(),
@@ -1046,7 +1046,7 @@ mod tests {
         let mut pending = vec![ZkTask {
             tx_hash: None,
             code_hash: [0xFF; 32],
-            program: Arc::new(vec![0xFF]),
+            program: Arc::from(vec![0xFF]),
             header: None,
             trace: Vec::new(),
             constraints: Vec::new(),
@@ -1132,7 +1132,7 @@ mod tests {
             0,
             0,
         );
-        let program = Arc::new(vec![0x13, 0x37, 0xC0, 0xDE]);
+        let program: Arc<[u8]> = Arc::from(vec![0x13, 0x37, 0xC0, 0xDE]);
         let trace = vec![
             RegisterState {
                 pc: 0,

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
@@ -32,7 +32,7 @@ Bu səhifə `docs/source/soranexus_bootstrap_plan.md`-i əks etdirir. Lokallaşd
 ## Şəbəkə Mühitləri
 - Fərqli şəbəkə prefiksləri ilə iki Nexus mühitini idarə edin:
 - **Sora Nexus (əsas şəbəkə)** – istehsal şəbəkəsi prefiksi `nexus`, kanonik idarəetmə və SoraFS/SoraNet geri xidmətlər (zəncir ID `0x02F1` / UUU028X / UUU02) yerləşdirilir.
-- **Sora Taira (testnet)** – inteqrasiya testi və buraxılışdan əvvəl doğrulama (zəncir UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`) üçün əsas şəbəkə konfiqurasiyasını əks etdirən `taira` şəbəkə prefiksi.
+- **Sora Taira (testnet)** – inteqrasiya testi və buraxılışdan əvvəl doğrulama (zəncir UUID `fc56984b-2be7-431d-840e-21514d1883f0`) üçün əsas şəbəkə konfiqurasiyasını əks etdirən `taira` şəbəkə prefiksi.
 - Hər bir mühit üçün ayrı-ayrı genezis faylları, idarəetmə açarları və infrastruktur izlərini qoruyun. Taira, Nexus-ə yüksəlməzdən əvvəl bütün SoraFS/SoraNet buraxılışları üçün sınaq bazası kimi çıxış edir.
 - CI/CD boru kəmərləri əvvəlcə Taira-a yerləşdirilməli, avtomatlaşdırılmış tüstü sınaqları yerinə yetirməli və yoxlamalar keçdikdən sonra Nexus-ə əl ilə irəliləmə tələb olunur.
 - İstinad konfiqurasiya paketləri `configs/soranexus/nexus/` (mainnet) və `configs/soranexus/taira/` (testnet) altında yaşayır, hər biri nümunə `config.toml`, `genesis.json` və Torii qəbul kataloqlarını ehtiva edir.

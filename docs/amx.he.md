@@ -301,7 +301,7 @@ Selectors קומפילטיים חייבים להתאים להתנהגות החו
 ליישם manifests של UAID. המודול החדש `ivm::analysis` (`crates/ivm/src/analysis.rs`)
 מספק `analyze_program(&[u8])` שמפענח ארטיפקט `.to`, סופר קריאות/כתיבות של רגיסטרים,
 פעולות זיכרון ושימוש ב-syscalls, ומייצר דוח ידידותי ל-JSON שה-SDK manifests יכולים
-להטמיע. הריצו אותו לצד `koto_lint` כאשר מפרסמים UAIDs כך שסיכום ה-R/W ייכנס
+להטמיע. הריצו אותו לצד `koto check` כאשר מפרסמים UAIDs כך שסיכום ה-R/W ייכנס
 לחבילת הראיות המופנית בביקורות NX-17.
 
 ## אכיפת מדיניות Space Directory

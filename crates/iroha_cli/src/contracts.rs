@@ -2,9 +2,8 @@
 
 use std::{
     collections::BTreeMap,
-    env, fs,
+    fs,
     path::{Path, PathBuf},
-    process::Command as ProcessCommand,
     str::FromStr,
     sync::Arc,
 };
@@ -26,11 +25,20 @@ use iroha_core::{
     pipeline::overlay::build_overlay_for_transaction_with_accounts,
     smartcontracts::ivm::{cache::ProgramSummary, host::CoreHost},
 };
-use iroha_crypto::{Hash, KeyPair, PrivateKey};
-use ivm::{PointerType, host::IVMHost, kotodama::compiler::CompilerOptions};
+use iroha_crypto::{KeyPair, PrivateKey};
+use ivm::host::IVMHost;
+use ivm::kotodama::driver::{
+    BuildDriver as KotodamaBuildDriver, BuildStatus as KotodamaBuildStatus,
+    PublishLayout as KotodamaPublishLayout, PublishMode as KotodamaPublishMode,
+    SourceBuildRequest as KotodamaSourceBuildRequest, read_source_file as read_kotodama_source,
+};
 use reqwest::StatusCode;
 
 use crate::{Run, RunContext, TransactionWaitArgs, wait_for_transaction_status};
+
+// Canonical argument preparation reserves the bounded 1 MiB HEAP before
+// decoding; keep the default above that floor with room for a small call.
+const DEFAULT_CONTRACT_GAS_LIMIT: u64 = 1_500_000;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -80,6 +88,42 @@ impl Run for Command {
             Command::DebugCall(args) => args.run(context),
             Command::Manifest(cmd) => cmd.run(context),
             Command::Simulate(args) => args.run(context),
+        }
+    }
+}
+
+impl Command {
+    /// Return whether this contract command is entirely local and may use the
+    /// deterministic offline fallback configuration.
+    pub(crate) fn allows_fallback_config(&self) -> bool {
+        match self {
+            Self::App(AppCommand::Build(_))
+            | Self::Dev(
+                DevCommand::Check(_)
+                | DevCommand::Build(_)
+                | DevCommand::Test(_)
+                | DevCommand::Schema(_),
+            )
+            | Self::DeriveAddress(_)
+            | Self::DebugView(_)
+            | Self::DebugCall(_)
+            | Self::Manifest(ManifestCommand::Build(_))
+            | Self::Simulate(_) => true,
+            Self::App(AppCommand::Plan(_) | AppCommand::Deploy(_) | AppCommand::Resume(_))
+            | Self::Dev(
+                DevCommand::Doctor(_)
+                | DevCommand::Deploy(_)
+                | DevCommand::Resume(_)
+                | DevCommand::Call(_)
+                | DevCommand::View(_)
+                | DevCommand::Smoke(_),
+            )
+            | Self::Code(_)
+            | Self::Alias(_)
+            | Self::Deploy(_)
+            | Self::Call(_)
+            | Self::View(_)
+            | Self::Manifest(ManifestCommand::Get(_)) => false,
         }
     }
 }
@@ -180,9 +224,15 @@ pub struct DevCheckArgs {
 pub struct DevTestArgs {
     #[command(flatten)]
     pub manifest: DevManifestArgs,
-    /// Only run tests whose path or name contains this text.
+    /// Only run test source paths containing this text.
+    #[arg(long)]
+    pub path_filter: Option<String>,
+    /// Only run test function names containing this text.
     #[arg(long)]
     pub filter: Option<String>,
+    /// Match the complete test function name supplied by `--filter`.
+    #[arg(long, requires = "filter")]
+    pub exact: bool,
     /// Emit text or JSON from the native test runner when supported.
     #[arg(long, default_value = "text")]
     pub format: String,
@@ -237,9 +287,9 @@ pub struct DevCallArgs {
     /// Request an unsigned transaction scaffold instead of direct submission.
     #[arg(long)]
     pub scaffold_only: bool,
-    /// Optional contract entrypoint selector (defaults to `main`).
+    /// Contract entrypoint selector.
     #[arg(long)]
-    pub entrypoint: Option<String>,
+    pub entrypoint: String,
     /// Optional gas asset id forwarded to transaction metadata.
     #[arg(long)]
     pub gas_asset_id: Option<String>,
@@ -265,9 +315,9 @@ pub struct DevViewArgs {
     /// Authority account identifier used as the read context. Defaults to the configured client authority.
     #[arg(long)]
     pub authority: Option<String>,
-    /// Optional contract entrypoint selector (defaults to `main`).
+    /// Contract view entrypoint selector.
     #[arg(long)]
-    pub entrypoint: Option<String>,
+    pub entrypoint: String,
     /// Gas limit applied to the view execution. Defaults to the manifest profile value.
     #[arg(long)]
     pub gas_limit: Option<u64>,
@@ -350,7 +400,7 @@ struct ContractAppManifest {
     bundle_name: String,
     default_dataspace: Option<String>,
     contracts: Vec<ContractAppManifestContract>,
-    init: Vec<ContractAppManifestInitCall>,
+    hajimari: Vec<ContractAppManifestHajimariCall>,
     assertions: Vec<ContractAppManifestAssertion>,
     profiles: BTreeMap<String, ContractDevManifestProfile>,
     tests: Vec<ContractDevManifestTest>,
@@ -368,10 +418,10 @@ struct ContractAppManifestContract {
 }
 
 #[derive(Debug)]
-struct ContractAppManifestInitCall {
+struct ContractAppManifestHajimariCall {
     id: String,
     contract: String,
-    entrypoint: Option<String>,
+    entrypoint: String,
     payload: Option<toml::Value>,
     gas_limit: u64,
     gas_asset_id: Option<String>,
@@ -382,7 +432,7 @@ struct ContractAppManifestInitCall {
 struct ContractAppManifestAssertion {
     id: String,
     contract: String,
-    entrypoint: Option<String>,
+    entrypoint: String,
     payload: Option<toml::Value>,
     gas_limit: u64,
     expected_result: Option<toml::Value>,
@@ -405,7 +455,7 @@ struct ContractDevManifestSmoke {
     id: String,
     contract: String,
     mode: Option<String>,
-    entrypoint: Option<String>,
+    entrypoint: String,
     payload: Option<toml::Value>,
     expected_result: Option<toml::Value>,
     gas_limit: Option<u64>,
@@ -437,7 +487,7 @@ pub struct AppPlanArgs {
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Optional transaction time-to-live in milliseconds for bundle deploy and init transactions.
+    /// Optional transaction time-to-live in milliseconds for bundle deploy and hajimari transactions.
     #[arg(long)]
     pub transaction_ttl_ms: Option<u64>,
 }
@@ -452,7 +502,7 @@ pub struct AppDeployArgs {
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Optional transaction time-to-live in milliseconds for bundle deploy and init transactions.
+    /// Optional transaction time-to-live in milliseconds for bundle deploy and hajimari transactions.
     #[arg(long)]
     pub transaction_ttl_ms: Option<u64>,
 }
@@ -467,18 +517,18 @@ pub struct AppResumeArgs {
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Optional transaction time-to-live in milliseconds for bundle deploy and init transactions.
+    /// Optional transaction time-to-live in milliseconds for bundle deploy and hajimari transactions.
     #[arg(long)]
     pub transaction_ttl_ms: Option<u64>,
 }
 
-fn default_contract_artifact_path(manifest_path: &Path, contract_name: &str) -> Result<PathBuf> {
+fn default_contract_artifact_path(manifest_path: &Path, seiyaku_name: &str) -> Result<PathBuf> {
     let base = manifest_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("artifacts");
     fs::create_dir_all(&base)?;
-    Ok(base.join(format!("{contract_name}.to")))
+    Ok(base.join(format!("{seiyaku_name}.to")))
 }
 
 fn resolve_manifest_path(base: &Path, path: &Path) -> PathBuf {
@@ -627,15 +677,15 @@ fn parse_contract_manifest_contract(
     })
 }
 
-fn parse_contract_manifest_init_call(
+fn parse_contract_manifest_hajimari_call(
     table: &toml::Table,
     index: usize,
-) -> Result<ContractAppManifestInitCall> {
-    let context = format!("init[{index}]");
-    Ok(ContractAppManifestInitCall {
+) -> Result<ContractAppManifestHajimariCall> {
+    let context = format!("hajimari[{index}]");
+    Ok(ContractAppManifestHajimariCall {
         id: toml_required_string(table, "id", &context)?,
         contract: toml_required_string(table, "contract", &context)?,
-        entrypoint: toml_optional_string(table, "entrypoint", &context)?,
+        entrypoint: toml_required_string(table, "entrypoint", &context)?,
         payload: table.get("payload").cloned(),
         gas_limit: toml_required_u64(table, "gas_limit", &context)?,
         gas_asset_id: toml_optional_string(table, "gas_asset_id", &context)?,
@@ -651,7 +701,7 @@ fn parse_contract_manifest_assertion(
     Ok(ContractAppManifestAssertion {
         id: toml_required_string(table, "id", &context)?,
         contract: toml_required_string(table, "contract", &context)?,
-        entrypoint: toml_optional_string(table, "entrypoint", &context)?,
+        entrypoint: toml_required_string(table, "entrypoint", &context)?,
         payload: table.get("payload").cloned(),
         gas_limit: toml_required_u64(table, "gas_limit", &context)?,
         expected_result: table.get("expected_result").cloned(),
@@ -689,7 +739,7 @@ fn parse_contract_manifest_smoke(
         id: toml_required_string(table, "id", &context)?,
         contract: toml_required_string(table, "contract", &context)?,
         mode: toml_optional_string(table, "mode", &context)?,
-        entrypoint: toml_optional_string(table, "entrypoint", &context)?,
+        entrypoint: toml_required_string(table, "entrypoint", &context)?,
         payload: table.get("payload").cloned(),
         expected_result: table.get("expected_result").cloned(),
         gas_limit: toml_optional_u64(table, "gas_limit", &context)?,
@@ -700,6 +750,25 @@ fn parse_contract_app_manifest(value: toml::Value) -> Result<ContractAppManifest
     let table = value
         .as_table()
         .ok_or_else(|| eyre!("contract app manifest root must be a TOML table"))?;
+    const ALLOWED_TOP_LEVEL_KEYS: &[&str] = &[
+        "bundle_name",
+        "default_dataspace",
+        "contracts",
+        "hajimari",
+        "assertions",
+        "profiles",
+        "tests",
+        "smoke",
+    ];
+    if let Some(key) = table
+        .keys()
+        .find(|key| !ALLOWED_TOP_LEVEL_KEYS.contains(&key.as_str()))
+    {
+        return Err(eyre!(
+            "unknown contract manifest field `{key}`; expected one of {}",
+            ALLOWED_TOP_LEVEL_KEYS.join(", ")
+        ));
+    }
     let contracts = toml_table_array(table, "contracts", "manifest")?
         .into_iter()
         .enumerate()
@@ -710,10 +779,10 @@ fn parse_contract_app_manifest(value: toml::Value) -> Result<ContractAppManifest
             "`manifest.contracts` must contain at least one table"
         ));
     }
-    let init = toml_table_array(table, "init", "manifest")?
+    let hajimari = toml_table_array(table, "hajimari", "manifest")?
         .into_iter()
         .enumerate()
-        .map(|(index, table)| parse_contract_manifest_init_call(table, index))
+        .map(|(index, table)| parse_contract_manifest_hajimari_call(table, index))
         .collect::<Result<Vec<_>>>()?;
     let assertions = toml_table_array(table, "assertions", "manifest")?
         .into_iter()
@@ -752,7 +821,7 @@ fn parse_contract_app_manifest(value: toml::Value) -> Result<ContractAppManifest
         bundle_name: toml_required_string(table, "bundle_name", "manifest")?,
         default_dataspace: toml_optional_string(table, "default_dataspace", "manifest")?,
         contracts,
-        init,
+        hajimari,
         assertions,
         profiles,
         tests,
@@ -768,15 +837,16 @@ fn compile_or_load_contract_code(
     match (&contract.source, &contract.artifact) {
         (Some(source), artifact) => {
             let source_path = resolve_manifest_path(manifest_dir, source);
-            let source_text = fs::read_to_string(&source_path)
-                .wrap_err_with(|| format!("failed to read `{}`", source_path.display()))?;
-            let compiler = ivm::KotodamaCompiler::new_with_options(CompilerOptions {
-                debug_source_name: Some(source_path.display().to_string()),
-                ..CompilerOptions::default()
-            });
-            let (program, _manifest) = compiler
-                .compile_source_with_manifest(&source_text)
+            let source_text = read_kotodama_source(&source_path).map_err(|error| eyre!(error))?;
+            let source_name = source_path.display().to_string();
+            let compiler = ivm::kotodama::session::CompilerSession::default();
+            let output = compiler
+                .build(ivm::kotodama::session::CompileRequest {
+                    source: &source_text,
+                    source_name: Some(&source_name),
+                })
                 .map_err(|err| eyre!("failed to compile `{}`: {err}", source_path.display()))?;
+            let program = output.artifact;
             let artifact_path = artifact
                 .as_ref()
                 .map(|path| resolve_manifest_path(manifest_dir, path))
@@ -821,11 +891,19 @@ fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value
     let default_dataspace = manifest.default_dataspace.as_deref();
     let mut contracts = Vec::with_capacity(manifest.contracts.len());
     let mut alias_by_name = BTreeMap::new();
+    let mut interface_by_name = BTreeMap::new();
 
     for contract in &manifest.contracts {
         let contract_alias = resolve_contract_manifest_alias(&contract.alias, default_dataspace)?;
         alias_by_name.insert(contract.name.clone(), contract_alias.clone());
         let code = compile_or_load_contract_code(manifest_path, contract)?;
+        let verified = ivm::verify_contract_artifact(&code).map_err(|error| {
+            eyre!(
+                "contract `{}` is not a valid deployable artifact: {error}",
+                contract.name
+            )
+        })?;
+        interface_by_name.insert(contract.name.clone(), verified.manifest);
         contracts.push(norito::json!({
             "name": (contract.name.clone()),
             "contract_alias": (contract_alias),
@@ -843,10 +921,34 @@ fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value
             resolve_contract_manifest_alias(value, default_dataspace)
         };
 
-    let init_calls = manifest
-        .init
+    let hajimari_calls = manifest
+        .hajimari
         .into_iter()
         .map(|call| {
+            if let Some(interface) = interface_by_name.get(&call.contract) {
+                let descriptor = interface
+                    .entrypoints
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .find(|entrypoint| entrypoint.name == call.entrypoint)
+                    .ok_or_else(|| {
+                        eyre!(
+                            "hajimari call `{}` targets unknown entrypoint `{}` on contract `{}`",
+                            call.id,
+                            call.entrypoint,
+                            call.contract
+                        )
+                    })?;
+                if descriptor.kind
+                    != iroha::data_model::smart_contract::manifest::EntryPointKind::Hajimari
+                {
+                    return Err(eyre!(
+                        "hajimari call `{}` must target a hajimari/始まり entrypoint",
+                        call.id
+                    ));
+                }
+            }
             Ok(norito::json!({
                 "id": (call.id),
                 "contract_alias": (resolve_alias_ref(&call.contract)?),
@@ -878,7 +980,7 @@ fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value
         "bundle_name": (manifest.bundle_name),
         "default_dataspace": (manifest.default_dataspace),
         "contracts": (contracts),
-        "init_calls": (init_calls),
+        "hajimari_calls": (hajimari_calls),
         "assertions": (assertions),
     }))
 }
@@ -988,16 +1090,40 @@ impl Run for AppResumeArgs {
 
 impl DevBuildArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let report = dev_build_manifest(&self.manifest.manifest, self.locked)?;
+        let report =
+            dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, self.locked)?;
         context.print_data(&report)
     }
 }
 
 impl DevCheckArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let build = dev_build_manifest(&self.manifest.manifest, self.locked)?;
-        let test = dev_run_tests(&self.manifest.manifest, None, false, false)?;
         let lint = dev_run_lints(&self.manifest.manifest)?;
+        let lint_ok = lint
+            .get("ok")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        if !lint_ok {
+            context.print_data(&norito::json!({
+                "ok": false,
+                "profile": (self.manifest.profile),
+                "lint": (lint),
+            }))?;
+            return Err(eyre!(
+                "contract lint failed; detailed diagnostics were emitted in the lint report"
+            ));
+        }
+        let build =
+            dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, self.locked)?;
+        let test = dev_run_tests(
+            &self.manifest.manifest,
+            None,
+            None,
+            false,
+            false,
+            false,
+            "text",
+        )?;
         context.print_data(&norito::json!({
             "ok": true,
             "profile": (self.manifest.profile),
@@ -1010,12 +1136,14 @@ impl DevCheckArgs {
 
 impl DevTestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let _ = self.format.as_str();
         let report = dev_run_tests(
             &self.manifest.manifest,
+            self.path_filter.as_deref(),
             self.filter.as_deref(),
+            self.exact,
             self.coverage,
             self.profile_mode,
+            &self.format,
         )?;
         context.print_data(&report)
     }
@@ -1098,7 +1226,7 @@ impl DevDoctorArgs {
 
 impl DevSchemaArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let report = dev_build_manifest(&self.manifest.manifest, false)?;
+        let report = dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, false)?;
         let markdown = render_dev_schema_markdown(&self.manifest.manifest, &report)?;
         if let Some(path) = self.out {
             if let Some(parent) = path.parent() {
@@ -1121,7 +1249,7 @@ impl DevDeployArgs {
         context: &mut C,
         action: DevDeployAction,
     ) -> Result<()> {
-        let _ = dev_build_manifest(&self.manifest.manifest, true)?;
+        let _ = dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, true)?;
         match action {
             DevDeployAction::Deploy => AppDeployArgs {
                 manifest: ContractAppManifestArgs {
@@ -1155,9 +1283,10 @@ impl DevCallArgs {
             .parent()
             .unwrap_or_else(|| Path::new("."));
         validate_dev_payload_for_contract(
-            manifest_dir,
+            &self.manifest.manifest,
+            &self.manifest.profile,
             contract,
-            self.entrypoint.as_deref(),
+            &self.entrypoint,
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
         )?;
@@ -1198,7 +1327,7 @@ impl DevCallArgs {
             private_key.as_ref(),
             None,
             Some(&contract_alias),
-            self.entrypoint.as_deref(),
+            &self.entrypoint,
             payload.as_ref(),
             None,
             self.gas_asset_id.as_deref(),
@@ -1240,9 +1369,10 @@ impl DevViewArgs {
             .parent()
             .unwrap_or_else(|| Path::new("."));
         validate_dev_payload_for_contract(
-            manifest_dir,
+            &self.manifest.manifest,
+            &self.manifest.profile,
             contract,
-            self.entrypoint.as_deref(),
+            &self.entrypoint,
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
         )?;
@@ -1269,7 +1399,7 @@ impl DevViewArgs {
             &authority,
             None,
             Some(&contract_alias),
-            self.entrypoint.as_deref(),
+            &self.entrypoint,
             payload.as_ref(),
             gas_limit,
         )?;
@@ -1279,7 +1409,7 @@ impl DevViewArgs {
 
 impl DevSmokeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let _ = dev_build_manifest(&self.manifest.manifest, true)?;
+        let _ = dev_build_manifest(&self.manifest.manifest, &self.manifest.profile, true)?;
         let manifest = load_contract_app_manifest(&self.manifest.manifest)?;
         let manifest_dir = self
             .manifest
@@ -1311,7 +1441,7 @@ impl DevSmokeArgs {
                     &authority,
                     None,
                     Some(&case.contract_alias),
-                    case.entrypoint.as_deref(),
+                    &case.entrypoint,
                     case.payload.as_ref(),
                     case.gas_limit,
                 )?,
@@ -1327,7 +1457,7 @@ impl DevSmokeArgs {
                         Some(private_key),
                         None,
                         Some(&case.contract_alias),
-                        case.entrypoint.as_deref(),
+                        &case.entrypoint,
                         case.payload.as_ref(),
                         None,
                         None,
@@ -1399,20 +1529,15 @@ fn dev_contract_by_name<'a>(
 }
 
 fn validate_dev_payload_for_contract(
-    manifest_dir: &Path,
+    manifest_path: &Path,
+    profile: &str,
     contract: &ContractAppManifestContract,
-    entrypoint: Option<&str>,
+    entrypoint: &str,
     payload_json: Option<&str>,
     payload_file: Option<&Path>,
 ) -> Result<()> {
-    let artifact_path = contract
-        .artifact
-        .as_ref()
-        .map(|path| resolve_manifest_path(manifest_dir, path))
-        .unwrap_or(default_contract_artifact_path(
-            &manifest_dir.join("iroha.contracts.toml"),
-            &contract.name,
-        )?);
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let artifact_path = dev_contract_publish_layout(manifest_path, profile, contract)?.artifact;
     let payload = load_contract_payload_value(payload_json, payload_file)?;
     validate_dev_payload_value_for_contract(
         manifest_dir,
@@ -1423,11 +1548,33 @@ fn validate_dev_payload_for_contract(
     )
 }
 
+fn dev_contract_publish_layout(
+    manifest_path: &Path,
+    profile: &str,
+    contract: &ContractAppManifestContract,
+) -> Result<KotodamaPublishLayout> {
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    if let Some(artifact) = &contract.artifact {
+        let artifact = resolve_manifest_path(manifest_dir, artifact);
+        let manifest = dev_sidecar_path(&artifact, ".manifest.json");
+        let interface = dev_sidecar_path(&artifact, ".interface.json");
+        return KotodamaPublishLayout::for_artifact(artifact, Some(manifest), Some(interface))
+            .map_err(|error| eyre!(error));
+    }
+    KotodamaPublishLayout::standard(
+        manifest_dir.join("target/kotodama"),
+        profile,
+        &contract.name,
+        true,
+    )
+    .map_err(|error| eyre!(error))
+}
+
 fn validate_dev_payload_value_for_contract(
     manifest_dir: &Path,
     contract: &ContractAppManifestContract,
     artifact_path: &Path,
-    entrypoint: Option<&str>,
+    entrypoint: &str,
     payload: Option<&norito::json::Value>,
 ) -> Result<()> {
     let _ = manifest_dir;
@@ -1435,7 +1582,7 @@ fn validate_dev_payload_value_for_contract(
         return Ok(());
     }
     let artifact = verify_contract_from_bytes(&fs::read(&artifact_path)?)?;
-    let entrypoint_name = entrypoint.unwrap_or("main");
+    let entrypoint_name = entrypoint;
     let descriptor = artifact
         .contract_interface
         .entrypoints
@@ -1454,7 +1601,7 @@ fn validate_dev_payload_value_for_contract(
 fn dev_profile_default_gas_limit(profile: Option<&ContractDevManifestProfile>) -> u64 {
     profile
         .and_then(|profile| profile.default_gas_limit)
-        .unwrap_or(100_000)
+        .unwrap_or(DEFAULT_CONTRACT_GAS_LIMIT)
 }
 
 fn load_dev_profile_config(
@@ -1553,7 +1700,7 @@ struct PreparedDevSmoke {
     contract: String,
     contract_alias: iroha::data_model::smart_contract::ContractAlias,
     mode: DevSmokeMode,
-    entrypoint: Option<String>,
+    entrypoint: String,
     payload: Option<norito::json::Value>,
     expected_result: Option<norito::json::Value>,
     gas_limit: u64,
@@ -1570,20 +1717,14 @@ fn prepare_dev_smoke_cases(
     let mut cases = Vec::with_capacity(manifest.smoke.len());
     for smoke in &manifest.smoke {
         let contract = dev_contract_by_name(&manifest, &smoke.contract)?;
-        let artifact_path = contract
-            .artifact
-            .as_ref()
-            .map(|path| resolve_manifest_path(manifest_dir, path))
-            .unwrap_or(default_contract_artifact_path(
-                manifest_path,
-                &contract.name,
-            )?);
+        let artifact_path =
+            dev_contract_publish_layout(manifest_path, profile_name, contract)?.artifact;
         let payload = smoke.payload.clone().map(toml_to_json_value).transpose()?;
         validate_dev_payload_value_for_contract(
             manifest_dir,
             contract,
             &artifact_path,
-            smoke.entrypoint.as_deref(),
+            &smoke.entrypoint,
             payload.as_ref(),
         )
         .wrap_err_with(|| format!("invalid payload for smoke `{}`", smoke.id))?;
@@ -1608,62 +1749,61 @@ fn prepare_dev_smoke_cases(
     Ok(cases)
 }
 
-fn dev_build_manifest(manifest_path: &Path, locked: bool) -> Result<norito::json::Value> {
+fn dev_build_manifest(
+    manifest_path: &Path,
+    profile: &str,
+    locked: bool,
+) -> Result<norito::json::Value> {
     let manifest = load_contract_app_manifest(manifest_path)?;
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut contracts = Vec::with_capacity(manifest.contracts.len());
-
+    let mut requests = Vec::new();
+    let mut sources = Vec::new();
     for contract in &manifest.contracts {
         let Some(source) = &contract.source else {
             continue;
         };
         let source_path = resolve_manifest_path(manifest_dir, source);
-        let source_text = fs::read_to_string(&source_path)
-            .wrap_err_with(|| format!("failed to read `{}`", source_path.display()))?;
-        let artifact_path = contract
-            .artifact
-            .as_ref()
-            .map(|path| resolve_manifest_path(manifest_dir, path))
-            .unwrap_or(default_contract_artifact_path(
-                manifest_path,
-                &contract.name,
-            )?);
-        let manifest_out = dev_sidecar_path(&artifact_path, ".manifest.json");
-        let interface_out = dev_sidecar_path(&artifact_path, ".interface.json");
-        let source_map_out = dev_sidecar_path(&artifact_path, ".source-map.json");
-        let budget_out = dev_sidecar_path(&artifact_path, ".budget.json");
-
-        let compiler = ivm::KotodamaCompiler::new_with_options(CompilerOptions {
-            debug_source_name: Some(source_path.display().to_string()),
-            emit_debug: true,
-            ..CompilerOptions::default()
+        let source_text = read_kotodama_source(&source_path).map_err(|error| eyre!(error))?;
+        let source_name = source_path.display().to_string();
+        let layout = dev_contract_publish_layout(manifest_path, profile, contract)?;
+        requests.push(KotodamaSourceBuildRequest {
+            source: source_text,
+            source_name,
+            profile: profile.to_owned(),
+            layout,
+            mode: if locked {
+                KotodamaPublishMode::Verify
+            } else {
+                KotodamaPublishMode::Write
+            },
         });
-        let (program, contract_manifest, report) = compiler
-            .compile_source_with_manifest_and_report(&source_text)
-            .map_err(|err| eyre!("failed to compile `{}`: {err}", source_path.display()))?;
-
-        write_or_check(&artifact_path, &program, locked)?;
-        write_or_check_text(
-            &manifest_out,
-            &norito::json::to_json_pretty(&contract_manifest)?,
-            locked,
-        )?;
-        write_or_check_text(
-            &interface_out,
-            &dev_interface_json(&contract_manifest)?,
-            locked,
-        )?;
-        write_or_check_text(&source_map_out, &dev_source_map_json(&report)?, locked)?;
-        write_or_check_text(&budget_out, &dev_budget_json(&report)?, locked)?;
-
+        sources.push((contract, source_path));
+    }
+    let driver = KotodamaBuildDriver::for_current_executable(
+        ivm::kotodama::session::CompilerSession::default(),
+    )
+    .map_err(|error| eyre!(error))?;
+    let outcomes = driver
+        .build_source_batch(requests)
+        .map_err(|error| eyre!(error))?;
+    let mut contracts = Vec::with_capacity(outcomes.len());
+    for ((contract, source_path), outcome) in sources.into_iter().zip(outcomes) {
+        let contract_manifest = outcome.manifest;
+        let interface_out = outcome
+            .paths
+            .interface
+            .as_ref()
+            .expect("developer builds always request an interface");
         contracts.push(norito::json!({
             "name": (contract.name.clone()),
             "source": (source_path.display().to_string()),
-            "artifact": (artifact_path.display().to_string()),
-            "manifest": (manifest_out.display().to_string()),
+            "artifact": (outcome.paths.artifact.display().to_string()),
+            "manifest": (outcome.paths.manifest.display().to_string()),
             "interface": (interface_out.display().to_string()),
-            "source_map": (source_map_out.display().to_string()),
-            "budget": (budget_out.display().to_string()),
+            "source_map": (outcome.paths.source_map.display().to_string()),
+            "budget": (outcome.paths.budget.display().to_string()),
+            "record": (outcome.paths.record.display().to_string()),
+            "status": (match outcome.status { KotodamaBuildStatus::Fresh => "fresh", KotodamaBuildStatus::Built => "built" }),
             "entrypoint_count": (contract_manifest.entrypoints.as_ref().map_or(0_u64, |entries| entries.len() as u64)),
             "state_count": (contract_manifest.states.as_ref().map_or(0_u64, |states| states.len() as u64)),
         }));
@@ -1672,6 +1812,7 @@ fn dev_build_manifest(manifest_path: &Path, locked: bool) -> Result<norito::json
     Ok(norito::json!({
         "ok": true,
         "manifest": (manifest_path.display().to_string()),
+        "profile": (profile),
         "contract_count": (contracts.len() as u64),
         "contracts": (contracts),
     }))
@@ -1680,58 +1821,90 @@ fn dev_build_manifest(manifest_path: &Path, locked: bool) -> Result<norito::json
 fn dev_run_lints(manifest_path: &Path) -> Result<norito::json::Value> {
     let manifest = load_contract_app_manifest(manifest_path)?;
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let session = ivm::kotodama::session::CompilerSession::default();
     let mut checked = 0_u64;
+    let mut diagnostic_count = 0_u64;
     let mut diagnostics = Vec::new();
     for contract in &manifest.contracts {
         if let Some(source) = &contract.source {
             let source_path = resolve_manifest_path(manifest_dir, source);
-            let exe = resolve_dev_tool("koto_lint");
-            let output = ProcessCommand::new(&exe)
-                .arg(source_path.as_os_str())
-                .output()
-                .wrap_err_with(|| format!("failed to run `{}`", exe.display()))?;
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            if !stdout.is_empty() {
-                contextless_print(&stdout);
-            }
-            if !stderr.is_empty() {
-                contextless_print(&stderr);
-            }
-            if !output.status.success() {
+            let source_text = read_kotodama_source(&source_path).map_err(|error| eyre!(error))?;
+            let warnings = match session.check_with_lints(ivm::kotodama::session::CompileRequest {
+                source: &source_text,
+                source_name: source_path.to_str(),
+            }) {
+                Ok(warnings) => warnings,
+                Err(bundle) => {
+                    diagnostic_count = diagnostic_count.saturating_add(
+                        u64::try_from(bundle.diagnostics.len()).unwrap_or(u64::MAX),
+                    );
+                    diagnostics.push(norito::json!({
+                        "source": (source_path.display().to_string()),
+                        "kind": "compile",
+                        "diagnostics": (norito::json::Value::Array(bundle.diagnostics.iter().map(ivm::kotodama::diagnostic::Diagnostic::to_json_value).collect())),
+                    }));
+                    checked += 1;
+                    continue;
+                }
+            };
+            if !warnings.is_empty() {
+                diagnostic_count = diagnostic_count
+                    .saturating_add(u64::try_from(warnings.len()).unwrap_or(u64::MAX));
+                let language = ivm::kotodama::i18n::detect_language();
+                let warnings = warnings
+                    .into_iter()
+                    .map(|warning| {
+                        let (line, column) = warning
+                            .source
+                            .as_ref()
+                            .map_or((1, 1), |span| (span.line.max(1), span.column.max(1)));
+                        let position = ivm::kotodama::diagnostic::SourcePosition { line, column };
+                        let mut diagnostic = ivm::kotodama::diagnostic::Diagnostic::warning(
+                            warning.diagnostic_code(),
+                            ivm::kotodama::diagnostic::DiagnosticPhase::Semantic,
+                            warning.localized_message(language),
+                            Some(ivm::kotodama::diagnostic::SourceSpan {
+                                source: Some(source_path.display().to_string()),
+                                start: position,
+                                end: position,
+                                byte_range: None,
+                            }),
+                        );
+                        diagnostic.notes.push(format!(
+                            "lint `{}` in category `{}`",
+                            warning.code,
+                            warning.category.as_str()
+                        ));
+                        diagnostic.to_json_value()
+                    })
+                    .collect::<Vec<_>>();
                 diagnostics.push(norito::json!({
                     "source": (source_path.display().to_string()),
-                    "status": (output.status.code().unwrap_or(1) as i64),
-                    "stdout": (stdout),
-                    "stderr": (stderr),
+                    "kind": "lint",
+                    "diagnostics": (warnings),
                 }));
             }
             checked += 1;
         }
     }
-    if !diagnostics.is_empty() {
-        return Err(eyre!(
-            "contract lint failed for {} source(s)",
-            diagnostics.len()
-        ));
-    }
+    let ok = diagnostics.is_empty();
     Ok(norito::json!({
-        "ok": true,
+        "ok": (ok),
         "checked": (checked),
-        "diagnostic_count": (diagnostics.len() as u64),
+        "failed_source_count": (diagnostics.len() as u64),
+        "diagnostic_count": (diagnostic_count),
         "diagnostics": (diagnostics),
     }))
 }
 
-fn contextless_print(message: &str) {
-    println!("{message}");
-}
-
 fn dev_run_tests(
     manifest_path: &Path,
-    filter: Option<&str>,
+    path_filter: Option<&str>,
+    name_filter: Option<&str>,
+    exact: bool,
     coverage: bool,
     profile: bool,
+    format: &str,
 ) -> Result<norito::json::Value> {
     let manifest = load_contract_app_manifest(manifest_path)?;
     let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
@@ -1760,13 +1933,22 @@ fn dev_run_tests(
         }
     }
     test_paths.sort();
+    let invocations = prepare_dev_test_invocations(
+        test_paths,
+        path_filter,
+        name_filter,
+        exact,
+        mode,
+        format,
+        |path| {
+            ivm::koto_test_driver::discover_test_names(path)
+                .map_err(|error| eyre!("failed to discover tests in `{}`: {error}", path.display()))
+        },
+    )?;
     let mut executed = Vec::new();
-    for path in test_paths {
-        let rendered = path.display().to_string();
-        if filter.is_some_and(|needle| !rendered.contains(needle)) {
-            continue;
-        }
-        run_dev_tool("koto_test", &[mode.into(), path.as_os_str().to_owned()])?;
+    for (rendered, args) in invocations {
+        ivm::koto_test_driver::run_cli(args)
+            .map_err(|error| eyre!("Kotodama tests in `{rendered}` failed: {error}"))?;
         executed.push(rendered);
     }
     Ok(norito::json!({
@@ -1777,29 +1959,92 @@ fn dev_run_tests(
     }))
 }
 
-fn run_dev_tool(tool: &str, args: &[std::ffi::OsString]) -> Result<()> {
-    let exe = resolve_dev_tool(tool);
-    let status = ProcessCommand::new(&exe)
-        .args(args)
-        .status()
-        .wrap_err_with(|| format!("failed to run `{}`", exe.display()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(eyre!("`{}` exited with status {status}", exe.display()))
+fn prepare_dev_test_invocations<F>(
+    mut test_paths: Vec<PathBuf>,
+    path_filter: Option<&str>,
+    name_filter: Option<&str>,
+    exact: bool,
+    mode: &str,
+    format: &str,
+    mut discover_names: F,
+) -> Result<Vec<(String, Vec<String>)>>
+where
+    F: FnMut(&Path) -> Result<Vec<String>>,
+{
+    if path_filter.is_some_and(str::is_empty) {
+        return Err(eyre!("--path-filter must not be empty"));
     }
-}
+    if name_filter.is_some_and(str::is_empty) {
+        return Err(eyre!("--filter must not be empty"));
+    }
+    if exact && name_filter.is_none() {
+        return Err(eyre!("--exact requires --filter"));
+    }
+    match format {
+        "text" | "human" => {}
+        "json" | "junit" if mode == "run" => {}
+        "json" | "junit" => {
+            return Err(eyre!(
+                "{format} test output is available only in normal run mode"
+            ));
+        }
+        other => return Err(eyre!("unsupported contract test format `{other}`")),
+    }
 
-fn resolve_dev_tool(tool: &str) -> PathBuf {
-    if let Ok(current) = env::current_exe()
-        && let Some(dir) = current.parent()
-    {
-        let candidate = dir.join(tool);
-        if candidate.is_file() {
-            return candidate;
+    test_paths.sort();
+    if let Some(needle) = path_filter {
+        test_paths.retain(|path| path.to_string_lossy().contains(needle));
+        if test_paths.is_empty() {
+            return Err(eyre!(
+                "no Kotodama test source path matched --path-filter `{needle}`"
+            ));
         }
     }
-    PathBuf::from(tool)
+
+    if let Some(needle) = name_filter {
+        let mut matched_paths = Vec::new();
+        for path in test_paths {
+            let names = discover_names(&path)?;
+            let matches = names.iter().any(|name| {
+                if exact {
+                    name == needle
+                } else {
+                    name.contains(needle)
+                }
+            });
+            if matches {
+                matched_paths.push(path);
+            }
+        }
+        test_paths = matched_paths;
+        if test_paths.is_empty() {
+            return Err(eyre!(
+                "no Kotodama test function matched --filter `{needle}`{}",
+                if exact { " with --exact" } else { "" }
+            ));
+        }
+    }
+
+    Ok(test_paths
+        .into_iter()
+        .map(|path| {
+            let rendered = path.display().to_string();
+            let mut args = vec![mode.to_owned()];
+            if let Some(needle) = name_filter {
+                args.push("--filter".to_owned());
+                args.push(needle.to_owned());
+            }
+            if exact {
+                args.push("--exact".to_owned());
+            }
+            if matches!(format, "json" | "junit") {
+                args.push("--format".to_owned());
+                args.push(format.to_owned());
+            }
+            args.push(rendered.clone());
+            (rendered, args)
+        })
+        .collect())
 }
 
 fn dev_sidecar_path(artifact: &Path, suffix: &str) -> PathBuf {
@@ -1811,91 +2056,6 @@ fn dev_sidecar_path(artifact: &Path, suffix: &str) -> PathBuf {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(format!("{stem}{suffix}"))
-}
-
-fn write_or_check(path: &Path, bytes: &[u8], locked: bool) -> Result<()> {
-    if locked && !path.is_file() {
-        return Err(eyre!("generated artifact is missing: {}", path.display()));
-    }
-    if locked {
-        let existing = fs::read(path)?;
-        if existing != bytes {
-            return Err(eyre!("generated artifact is stale: {}", path.display()));
-        }
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("failed to create {}", parent.display()))?;
-    }
-    fs::write(path, bytes).wrap_err_with(|| format!("failed to write {}", path.display()))
-}
-
-fn write_or_check_text(path: &Path, text: &str, locked: bool) -> Result<()> {
-    write_or_check(path, text.as_bytes(), locked)
-}
-
-fn dev_interface_json(
-    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
-) -> Result<String> {
-    let manifest_value = norito::json::to_value(manifest)?;
-    let entrypoints = manifest
-        .entrypoints
-        .as_ref()
-        .map(norito::json::to_value)
-        .transpose()?
-        .unwrap_or(norito::json::Value::Array(Vec::new()));
-    let states = manifest
-        .states
-        .as_ref()
-        .map(norito::json::to_value)
-        .transpose()?
-        .unwrap_or(norito::json::Value::Array(Vec::new()));
-    norito::json::to_json_pretty(&norito::json!({
-        "interface_version": 1_u64,
-        "manifest": (manifest_value),
-        "entrypoints": (entrypoints),
-        "states": (states),
-    }))
-    .map_err(Into::into)
-}
-
-fn dev_source_map_json(report: &ivm::kotodama::compiler::CompileReport) -> Result<String> {
-    let items = report
-        .source_map
-        .iter()
-        .map(|entry| {
-            norito::json!({
-                "function_name": (entry.function_name.clone()),
-                "pc_start": (entry.pc_start),
-                "pc_end": (entry.pc_end),
-                "source_path": (entry.source.source_path.clone()),
-                "line": (entry.source.line as u64),
-                "column": (entry.source.column as u64),
-            })
-        })
-        .collect::<Vec<_>>();
-    norito::json::to_json_pretty(&items).map_err(Into::into)
-}
-
-fn dev_budget_json(report: &ivm::kotodama::compiler::CompileReport) -> Result<String> {
-    let items = report
-        .budget_report
-        .iter()
-        .map(|entry| {
-            norito::json!({
-                "function_name": (entry.function_name.clone()),
-                "pc_start": (entry.pc_start),
-                "pc_end": (entry.pc_end),
-                "bytecode_bytes": (entry.bytecode_bytes as u64),
-                "bytecode_words": (entry.bytecode_words as u64),
-                "frame_bytes": (entry.frame_bytes as u64),
-                "jump_span_words": (entry.jump_span_words as u64),
-                "jump_range_risk": (entry.jump_range_risk),
-            })
-        })
-        .collect::<Vec<_>>();
-    norito::json::to_json_pretty(&items).map_err(Into::into)
 }
 
 fn render_dev_schema_markdown(
@@ -1956,11 +2116,18 @@ fn render_dev_schema_markdown(
             else {
                 continue;
             };
-            let kind = entrypoint
+            let raw_kind = entrypoint
                 .get("kind")
                 .and_then(|kind| kind.get("kind"))
                 .and_then(norito::json::Value::as_str)
                 .unwrap_or("Unknown");
+            let kind = match raw_kind {
+                "Kotoage" => "kotoage",
+                "View" => "view",
+                "Hajimari" => "hajimari",
+                "Kaizen" => "kaizen",
+                other => other,
+            };
             let return_type = entrypoint
                 .get("return_type")
                 .and_then(norito::json::Value::as_str)
@@ -2000,14 +2167,16 @@ fn dev_sample_payload_json(entrypoint: &norito::json::Value) -> Result<String> {
 
 fn dev_sample_value_for_type(type_name: &str) -> norito::json::Value {
     match type_name {
-        "int" | "Amount" | "Balance" | "FixedU128" => norito::json!(0_i64),
+        "i64" => norito::json!(0_i64),
+        "u128" | "Amount" => norito::json!("0"),
         "bool" => norito::json!(false),
-        "bytes" | "Blob" => norito::json!("0x"),
+        "string" => norito::json!(""),
+        "bytes" => norito::json!("0x"),
         "Json" => norito::json!({}),
         "AccountId" => norito::json!("ed0120..."),
         "AssetDefinitionId" => norito::json!("xor#universal"),
         "AssetId" => norito::json!("xor#universal:ed0120..."),
-        "DataSpaceId" => norito::json!("universal"),
+        "DataSpaceId" => norito::json!(0_u64),
         "DomainId" => norito::json!("soraswap.universal"),
         "Name" => norito::json!("sample"),
         "NftId" => norito::json!("nft#soraswap.universal"),
@@ -2429,9 +2598,9 @@ pub struct CallArgs {
     /// Run Torii simulation first and include the server-side execution trace in the submit response.
     #[arg(long, conflicts_with = "simulate")]
     pub trace: bool,
-    /// Optional contract entrypoint selector (defaults to `main`).
+    /// Contract entrypoint selector.
     #[arg(long)]
-    pub entrypoint: Option<String>,
+    pub entrypoint: String,
     /// Optional gas asset id forwarded to transaction metadata.
     #[arg(long)]
     pub gas_asset_id: Option<String>,
@@ -2439,7 +2608,7 @@ pub struct CallArgs {
     #[arg(long)]
     pub fee_sponsor: Option<String>,
     /// Gas limit metadata forwarded to the contract call.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     #[command(flatten)]
     pub target: ContractTargetArgs,
@@ -2479,7 +2648,7 @@ impl Run for CallArgs {
                 &authority,
                 target.contract_address.as_ref(),
                 target.contract_alias.as_ref(),
-                self.entrypoint.as_deref(),
+                &self.entrypoint,
                 payload.as_ref(),
                 self.gas_asset_id.as_deref(),
                 fee_sponsor.as_ref(),
@@ -2493,7 +2662,7 @@ impl Run for CallArgs {
                 &authority,
                 target.contract_address.as_ref(),
                 target.contract_alias.as_ref(),
-                self.entrypoint.as_deref(),
+                &self.entrypoint,
                 payload.as_ref(),
                 self.gas_asset_id.as_deref(),
                 fee_sponsor.as_ref(),
@@ -2507,7 +2676,7 @@ impl Run for CallArgs {
             private_key.as_ref(),
             target.contract_address.as_ref(),
             target.contract_alias.as_ref(),
-            self.entrypoint.as_deref(),
+            &self.entrypoint,
             payload.as_ref(),
             None,
             self.gas_asset_id.as_deref(),
@@ -2545,11 +2714,11 @@ pub struct ViewArgs {
     /// Authority account identifier used as the read context. Defaults to the configured client authority.
     #[arg(long)]
     pub authority: Option<String>,
-    /// Optional contract entrypoint selector (defaults to `main`).
+    /// Contract view entrypoint selector.
     #[arg(long)]
-    pub entrypoint: Option<String>,
+    pub entrypoint: String,
     /// Gas limit applied to the local view execution.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     #[command(flatten)]
     pub target: ContractTargetArgs,
@@ -2570,7 +2739,7 @@ impl Run for ViewArgs {
             &authority,
             target.contract_address.as_ref(),
             target.contract_alias.as_ref(),
-            self.entrypoint.as_deref(),
+            &self.entrypoint,
             payload.as_ref(),
             self.gas_limit,
         )?;
@@ -2590,11 +2759,11 @@ pub struct DebugViewArgs {
     /// Base64-encoded code (mutually exclusive with --code-file)
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
-    /// Optional contract entrypoint selector (defaults to `main`).
+    /// Contract view entrypoint selector.
     #[arg(long)]
-    pub entrypoint: Option<String>,
+    pub entrypoint: String,
     /// Gas limit applied to the local view execution.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     /// Optional source file used to render snippet context for trapped debug locations.
     #[arg(long, value_name = "PATH")]
@@ -2635,11 +2804,11 @@ pub struct DebugCallArgs {
     /// Base64-encoded code (mutually exclusive with --code-file)
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
-    /// Optional contract entrypoint selector (defaults to `main`).
+    /// Contract entrypoint selector.
     #[arg(long)]
-    pub entrypoint: Option<String>,
+    pub entrypoint: String,
     /// Gas limit applied to the local call execution.
-    #[arg(long, default_value_t = 100_000)]
+    #[arg(long, default_value_t = DEFAULT_CONTRACT_GAS_LIMIT)]
     pub gas_limit: u64,
     /// Optional source file used to render snippet context for trapped debug locations.
     #[arg(long, value_name = "PATH")]
@@ -2903,28 +3072,17 @@ fn verify_contract_from_bytes(bytes: &[u8]) -> Result<ivm::VerifiedContractArtif
 }
 
 fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {
-    let parsed = ivm::ProgramMetadata::parse(bytes)
-        .map_err(|err| eyre!("failed to parse IVM metadata: {err}"))?;
-    let code_hash = Hash::new(&bytes[parsed.header_len..]);
-    let metadata = parsed.metadata;
-    let policy = match metadata.abi_version {
-        1 => ivm::SyscallPolicy::AbiV1,
+    let summary = ProgramSummary::from_artifact(bytes)
+        .map_err(|err| eyre!("failed to prepare IVM program summary: {err}"))?;
+    match summary.metadata.abi_version {
+        1 => {}
         v => {
             return Err(eyre!(
                 "unsupported abi_version {v}; expected 1 for the first release"
             ));
         }
-    };
-    let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(policy));
-    let meta_hash = Hash::new(metadata.encode());
-    Ok(ProgramSummary {
-        metadata,
-        code_hash,
-        abi_hash,
-        meta_hash,
-        header_len: parsed.header_len,
-        code_offset: parsed.code_offset,
-    })
+    }
+    Ok(summary)
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
@@ -3052,11 +3210,15 @@ impl<H> IVMHost for TracingHost<H>
 where
     H: IVMHost + 'static,
 {
+    fn prepare_syscall(&self, number: u32, vm: &ivm::IVM) -> Result<u64, ivm::VMError> {
+        self.inner.prepare_syscall(number, vm)
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut ivm::IVM) -> Result<u64, ivm::VMError> {
         let record = LocalContractSyscallTrace {
             pc: vm.pc(),
             syscall: number,
-            gas_remaining_at_call: vm.gas_remaining,
+            gas_remaining_at_call: vm.remaining_gas(),
             additional_gas: None,
             error: None,
         };
@@ -3135,6 +3297,41 @@ enum LocalContractSchemaType {
     Tuple(Vec<LocalContractSchemaType>),
 }
 
+fn prepare_local_contract_arguments(
+    descriptor: &ivm::EmbeddedEntrypointDescriptor,
+    payload: Option<&Json>,
+    gas_limit: u64,
+) -> Result<Option<ivm::PreparedArgumentRecord>> {
+    match (descriptor.argument_schema.as_ref(), payload) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(eyre!(
+            "zero-parameter entrypoint `{}` must not receive a payload",
+            descriptor.name
+        )),
+        (Some(_), None) => Err(eyre!(
+            "parameterized entrypoint `{}` requires a payload",
+            descriptor.name
+        )),
+        (Some(schema), Some(payload)) => {
+            let canonical =
+                ivm::encode_argument_record_from_json(schema, payload).map_err(|err| {
+                    eyre!(
+                        "payload for entrypoint `{}` does not match its argument schema: {err}",
+                        descriptor.name
+                    )
+                })?;
+            ivm::prepare_argument_record_with_gas_limit(schema, Arc::from(canonical), gas_limit)
+                .map(Some)
+                .map_err(|err| {
+                    eyre!(
+                        "failed to prepare arguments for entrypoint `{}`: {err}",
+                        descriptor.name
+                    )
+                })
+        }
+    }
+}
+
 fn execute_local_contract_debug_view<C: RunContext>(
     context: &C,
     args: DebugViewArgs,
@@ -3143,7 +3340,7 @@ fn execute_local_contract_debug_view<C: RunContext>(
     let code = load_code_bytes(args.code_file.clone(), args.code_b64.clone())?;
     let verified = verify_contract_from_bytes(&code)?;
     let summary = program_summary_from_bytes(&code)?;
-    let selector = args.entrypoint.unwrap_or_else(|| "main".to_owned());
+    let selector = args.entrypoint;
     let descriptor = resolve_local_view_entrypoint(&verified, &selector)?;
     let entrypoint_pc = resolve_local_contract_entrypoint_pc(&code, descriptor)?;
     let payload = load_contract_payload_value(
@@ -3151,6 +3348,8 @@ fn execute_local_contract_debug_view<C: RunContext>(
         args.payload.payload_file.as_deref(),
     )?;
     let payload = normalize_local_contract_payload(descriptor, payload.as_ref())?;
+    let arguments = prepare_local_contract_arguments(descriptor, payload.as_ref(), args.gas_limit)?;
+    let prepared_arguments = arguments.clone();
     let accounts = load_debug_accounts_fixture(
         &authority,
         args.accounts_json.as_deref(),
@@ -3161,8 +3360,12 @@ fn execute_local_contract_debug_view<C: RunContext>(
         args.durable_state_file.as_deref(),
     )?;
 
-    let mut host = if let Some(payload) = payload {
-        CoreHost::with_accounts_and_args(authority, Arc::clone(&accounts), payload)
+    let mut host = if let Some(arguments) = arguments {
+        CoreHost::with_accounts_and_argument_record(
+            authority,
+            Arc::clone(&accounts),
+            Some(arguments),
+        )
     } else {
         CoreHost::with_accounts(authority, Arc::clone(&accounts))
     };
@@ -3174,6 +3377,11 @@ fn execute_local_contract_debug_view<C: RunContext>(
     vm.load_program(&code)
         .map_err(|err| eyre!("failed to load contract debug view bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);
+    if let Some(arguments) = prepared_arguments.as_ref() {
+        arguments
+            .precharge_vm(&mut vm)
+            .map_err(|err| eyre!("failed to precharge contract debug arguments: {err}"))?;
+    }
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entrypoint_pc)
         .map_err(|err| eyre!("failed to seek to contract debug entrypoint: {err}"))?;
@@ -3239,14 +3447,13 @@ fn execute_local_contract_debug_view<C: RunContext>(
         });
     }
 
-    let schema = descriptor
-        .return_type
-        .as_deref()
-        .map(parse_local_contract_schema_type)
-        .transpose()?
-        .unwrap_or(LocalContractSchemaType::Unit);
-    let (result, _) = decode_local_contract_view_result_value(&vm, 10, &schema)
-        .map_err(|err| eyre!("failed to decode contract debug view return value: {err}"))?;
+    let result = descriptor.return_schema.as_ref().map_or_else(
+        || Ok(norito::json::Value::Null),
+        |schema| {
+            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
+                .map_err(|err| eyre!("failed to decode contract debug view return value: {err}"))
+        },
+    )?;
 
     Ok(LocalContractDebugViewResponse {
         ok: true,
@@ -3272,7 +3479,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
     let code = load_code_bytes(args.code_file.clone(), args.code_b64.clone())?;
     let verified = verify_contract_from_bytes(&code)?;
     let summary = program_summary_from_bytes(&code)?;
-    let selector = args.entrypoint.unwrap_or_else(|| "main".to_owned());
+    let selector = args.entrypoint;
     let descriptor = resolve_local_public_entrypoint(&verified, &selector)?;
     let entrypoint_pc = resolve_local_contract_entrypoint_pc(&code, descriptor)?;
     let payload = load_contract_payload_value(
@@ -3280,6 +3487,8 @@ fn execute_local_contract_debug_call<C: RunContext>(
         args.payload.payload_file.as_deref(),
     )?;
     let payload = normalize_local_contract_payload(descriptor, payload.as_ref())?;
+    let arguments = prepare_local_contract_arguments(descriptor, payload.as_ref(), args.gas_limit)?;
+    let prepared_arguments = arguments.clone();
     let accounts = load_debug_accounts_fixture(
         &authority,
         args.accounts_json.as_deref(),
@@ -3290,8 +3499,12 @@ fn execute_local_contract_debug_call<C: RunContext>(
         args.durable_state_file.as_deref(),
     )?;
 
-    let mut host = if let Some(payload) = payload {
-        CoreHost::with_accounts_and_args(authority, Arc::clone(&accounts), payload)
+    let mut host = if let Some(arguments) = arguments {
+        CoreHost::with_accounts_and_argument_record(
+            authority,
+            Arc::clone(&accounts),
+            Some(arguments),
+        )
     } else {
         CoreHost::with_accounts(authority, Arc::clone(&accounts))
     };
@@ -3303,6 +3516,11 @@ fn execute_local_contract_debug_call<C: RunContext>(
     vm.load_program(&code)
         .map_err(|err| eyre!("failed to load contract debug call bytecode: {err}"))?;
     vm.set_gas_limit(args.gas_limit);
+    if let Some(arguments) = prepared_arguments.as_ref() {
+        arguments
+            .precharge_vm(&mut vm)
+            .map_err(|err| eyre!("failed to precharge contract debug arguments: {err}"))?;
+    }
     vm.set_register(1, vm.memory.code_len());
     vm.set_program_counter(entrypoint_pc)
         .map_err(|err| eyre!("failed to seek to contract debug entrypoint: {err}"))?;
@@ -3340,19 +3558,14 @@ fn execute_local_contract_debug_call<C: RunContext>(
         });
     }
 
-    let schema = descriptor
-        .return_type
-        .as_deref()
-        .map(parse_local_contract_schema_type)
-        .transpose()?
-        .unwrap_or(LocalContractSchemaType::Unit);
-    let result = if schema == LocalContractSchemaType::Unit {
-        None
-    } else {
-        let (value, _) = decode_local_contract_view_result_value(&vm, 10, &schema)
-            .map_err(|err| eyre!("failed to decode contract debug call return value: {err}"))?;
-        Some(value)
-    };
+    let result = descriptor
+        .return_schema
+        .as_ref()
+        .map(|schema| {
+            iroha_core::smartcontracts::ivm::return_value::decode_entrypoint_return(&vm, schema)
+                .map_err(|err| eyre!("failed to decode contract debug call return value: {err}"))
+        })
+        .transpose()?;
 
     Ok(LocalContractDebugCallResponse {
         ok: true,
@@ -3634,8 +3847,8 @@ fn resolve_local_public_entrypoint<'a>(
     resolve_local_entrypoint(
         artifact,
         selector,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
-        "public",
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+        "kotoage",
     )
 }
 
@@ -3820,192 +4033,25 @@ fn normalize_local_contract_payload(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
     payload: Option<&norito::json::Value>,
 ) -> Result<Option<iroha_primitives::json::Json>> {
-    if descriptor.params.is_empty() {
-        if let Some(payload) = payload {
-            match payload {
-                norito::json::Value::Object(map) if map.is_empty() => {}
-                _ => {
-                    return Err(eyre!(
-                        "contract payload must be an empty JSON object for zero-parameter entrypoints"
-                    ));
-                }
-            }
-        }
-        return Ok(None);
-    }
-
-    let payload = payload
-        .ok_or_else(|| eyre!("contract payload is required for parameterized entrypoints"))?;
-    let object = payload
-        .as_object()
-        .ok_or_else(|| eyre!("contract payload must be a JSON object keyed by parameter name"))?;
-
-    let mut normalized = norito::json::Map::new();
-    for param in &descriptor.params {
-        let value = object.get(&param.name).ok_or_else(|| {
-            eyre!(
-                "missing contract payload field `{}` for entrypoint `{}`",
-                param.name,
-                descriptor.name
-            )
-        })?;
-        let schema = parse_local_contract_schema_type(&param.type_name)?;
-        validate_local_contract_value(&schema, value, &param.name)?;
-        normalized.insert(param.name.clone(), value.clone());
-    }
-
-    for key in object.keys() {
-        if !descriptor.params.iter().any(|param| param.name == *key) {
-            return Err(eyre!(
-                "unexpected contract payload field `{key}` for entrypoint `{}`",
-                descriptor.name
-            ));
-        }
-    }
-
-    Ok(Some(iroha_primitives::json::Json::from(
-        norito::json::Value::Object(normalized),
-    )))
-}
-
-fn decode_local_contract_view_result_value(
-    vm: &ivm::IVM,
-    start_register: usize,
-    schema: &LocalContractSchemaType,
-) -> Result<(norito::json::Value, usize)> {
-    let pointer_string = |ptr: u64| -> Result<String> {
-        if ptr == 0 {
-            return Err(eyre!(
-                "contract view returned a null pointer for a non-nullable type"
-            ));
-        }
-        Ok(ptr.to_string())
-    };
-
-    match schema {
-        LocalContractSchemaType::Unit => Ok((norito::json::Value::Null, 0)),
-        LocalContractSchemaType::Int => {
-            let raw = vm.register(start_register);
-            let value = decode_contract_view_signed_i64(raw);
-            Ok((norito::json::Value::from(value), 1))
-        }
-        LocalContractSchemaType::Bool => Ok((
-            norito::json::Value::Bool(vm.register(start_register) != 0),
-            1,
+    match (descriptor.argument_schema.as_ref(), payload) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(eyre!(
+            "contract payload must be omitted for zero-parameter entrypoints"
         )),
-        LocalContractSchemaType::Numeric => {
-            let ptr = vm.register(start_register);
-            let value: iroha_primitives::numeric::Numeric =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)
-                    .map_err(|err| eyre!("failed to decode numeric return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::String => {
-            Err(eyre!("string contract view returns are not supported yet"))
-        }
-        LocalContractSchemaType::Json => {
-            let ptr = vm.register(start_register);
-            let value = CoreHost::decode_tlv_json(vm, ptr)
-                .map_err(|err| eyre!("failed to decode JSON return: {err}"))?;
-            let parsed = norito::json::parse_value(value.get())
-                .map_err(|err| eyre!("invalid JSON return payload: {err}"))?;
-            Ok((parsed, 1))
-        }
-        LocalContractSchemaType::Name => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::name::Name =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::Name)
-                    .map_err(|err| eyre!("failed to decode Name return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::AccountId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::account::AccountId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AccountId)
-                    .map_err(|err| eyre!("failed to decode AccountId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::AssetDefinitionId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::asset::AssetDefinitionId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)
-                    .map_err(|err| eyre!("failed to decode AssetDefinitionId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::AssetId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::asset::AssetId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetId)
-                    .map_err(|err| eyre!("failed to decode AssetId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::DomainId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::domain::DomainId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DomainId)
-                    .map_err(|err| eyre!("failed to decode DomainId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::NftId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nft::NftId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NftId)
-                    .map_err(|err| eyre!("failed to decode NftId return: {err}"))?;
-            Ok((norito::json::Value::from(value.to_string()), 1))
-        }
-        LocalContractSchemaType::Blob | LocalContractSchemaType::Bytes => {
-            let ptr = vm.register(start_register);
-            let value = CoreHost::decode_tlv_blob(vm, ptr)
-                .map_err(|err| eyre!("failed to decode blob return: {err}"))?;
-            Ok((
-                norito::json::Value::from(format!("0x{}", hex::encode(value))),
-                1,
-            ))
-        }
-        LocalContractSchemaType::DataSpaceId => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::DataSpaceId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DataSpaceId)
-                    .map_err(|err| eyre!("failed to decode DataSpaceId return: {err}"))?;
-            Ok((norito::json::Value::from(value.as_u64()), 1))
-        }
-        LocalContractSchemaType::AxtDescriptor => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::AxtDescriptor =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AxtDescriptor)
-                    .map_err(|err| eyre!("failed to decode AxtDescriptor return: {err}"))?;
-            Ok((norito::json::to_value(&value)?, 1))
-        }
-        LocalContractSchemaType::AssetHandle => {
-            let ptr = vm.register(start_register);
-            let value: iroha_data_model::nexus::AssetHandle =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetHandle)
-                    .map_err(|err| eyre!("failed to decode AssetHandle return: {err}"))?;
-            Ok((norito::json::to_value(&value)?, 1))
-        }
-        LocalContractSchemaType::ProofBlob => {
-            let ptr = vm.register(start_register);
-            let value = pointer_string(ptr)?;
-            Ok((norito::json::Value::from(value), 1))
-        }
-        LocalContractSchemaType::Tuple(items) => {
-            let mut values = Vec::with_capacity(items.len());
-            let mut consumed = 0_usize;
-            for item in items {
-                let (value, used) =
-                    decode_local_contract_view_result_value(vm, start_register + consumed, item)?;
-                values.push(value);
-                consumed += used;
-            }
-            Ok((norito::json::Value::Array(values), consumed))
+        (Some(_), None) => Err(eyre!(
+            "contract payload is required for parameterized entrypoints"
+        )),
+        (Some(schema), Some(payload)) => {
+            let payload = iroha_primitives::json::Json::from(payload.clone());
+            ivm::encode_argument_record_from_json(schema, &payload).map_err(|error| {
+                eyre!(
+                    "contract payload for entrypoint `{}` does not match its exact argument schema: {error}",
+                    descriptor.name
+                )
+            })?;
+            Ok(Some(payload))
         }
     }
-}
-
-fn decode_contract_view_signed_i64(raw: u64) -> i64 {
-    // IVM exposes signed integer returns in the register file as raw
-    // two's-complement bits inside a u64 register value.
-    raw as i64
 }
 
 #[cfg(test)]
@@ -4015,9 +4061,15 @@ mod tests {
 
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
     use iroha_i18n::{Bundle, Language, Localizer};
-    use ivm::kotodama::compiler::CompilerOptions;
+    use ivm::kotodama::session::{CompileRequest, CompilerSession};
     use tempfile::tempdir;
     use url::Url;
+
+    #[test]
+    fn default_contract_gas_limit_covers_strict_argument_admission_floor() {
+        assert_eq!(dev_profile_default_gas_limit(None), DEFAULT_CONTRACT_GAS_LIMIT);
+        assert!(DEFAULT_CONTRACT_GAS_LIMIT > 1_048_752);
+    }
 
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -4041,7 +4093,7 @@ mod tests {
     fn minimal_view_contract_program() -> Vec<u8> {
         let source = r#"
             seiyaku Demo {
-                view fn inspect() -> int {
+                view fn inspect() -> i64 {
                     return 7;
                 }
             }
@@ -4073,21 +4125,13 @@ mod tests {
     }
 
     fn compile_contract_program_with_source_path(source: &str, source_path: &str) -> Vec<u8> {
-        let compiler = ivm::KotodamaCompiler::new_with_options(CompilerOptions {
-            debug_source_name: Some(source_path.to_owned()),
-            ..CompilerOptions::default()
-        });
-        let (program, _manifest) = compiler
-            .compile_source_with_manifest(source)
+        let output = CompilerSession::default()
+            .build(CompileRequest {
+                source,
+                source_name: Some(source_path),
+            })
             .expect("compile contract with source path");
-        program
-    }
-
-    #[test]
-    fn local_contract_view_signed_int_decodes_twos_complement_register_bits() {
-        assert_eq!(decode_contract_view_signed_i64(u64::MAX), -1);
-        assert_eq!(decode_contract_view_signed_i64(i64::MAX as u64), i64::MAX);
-        assert_eq!(decode_contract_view_signed_i64(i64::MIN as u64), i64::MIN);
+        output.artifact
     }
 
     #[test]
@@ -4095,6 +4139,35 @@ mod tests {
         let alias = resolve_contract_manifest_alias("router", Some("universal"))
             .expect("resolve contract alias");
         assert_eq!(alias.to_string(), "router::universal");
+    }
+
+    #[test]
+    fn contract_manifest_rejects_retired_init_table() {
+        let value = toml::from_str::<toml::Value>(
+            r#"
+            bundle_name = "demo"
+
+            [[contracts]]
+            name = "demo.greeter"
+            alias = "greeter::universal"
+            source = "greeter.ko"
+
+            [[init]]
+            id = "seed"
+            contract = "demo.greeter"
+            entrypoint = "hajimari"
+            gas_limit = 1000
+            "#,
+        )
+        .expect("parse retired manifest spelling");
+        let error = parse_contract_app_manifest(value)
+            .expect_err("the English lifecycle table must not be accepted");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown contract manifest field `init`"),
+            "unexpected error: {error}",
+        );
     }
 
     #[test]
@@ -4349,8 +4422,8 @@ mod tests {
             &contract_path,
             r#"
                 seiyaku Greeter {
-                    kotoage fn init(value: int) {}
-                    view fn status() -> int { return 7; }
+                    hajimari(value: i64) {}
+                    view fn status() -> i64 { return 7; }
                 }
             "#,
         )
@@ -4369,10 +4442,10 @@ mod tests {
                 source = "contracts/greeter.ko"
                 artifact = "artifacts/greeter.to"
 
-                [[init]]
+                [[hajimari]]
                 id = "seed"
                 contract = "demo.greeter"
-                entrypoint = "init"
+                entrypoint = "hajimari"
                 gas_limit = 1000
                 payload = { value = 7 }
             "#,
@@ -4397,7 +4470,7 @@ mod tests {
         );
         assert_eq!(
             bundle
-                .get("init_calls")
+                .get("hajimari_calls")
                 .and_then(norito::json::Value::as_array)
                 .and_then(|calls| calls.first())
                 .and_then(|call| call.get("contract_alias"))
@@ -4405,6 +4478,50 @@ mod tests {
             Some("greeter::universal")
         );
         assert!(dir.path().join("artifacts/greeter.to").exists());
+    }
+
+    #[test]
+    fn build_contract_app_bundle_rejects_non_hajimari_lifecycle_calls() {
+        let dir = tempdir().expect("tempdir");
+        let contracts_dir = dir.path().join("contracts");
+        fs::create_dir_all(&contracts_dir).expect("create contracts dir");
+        fs::write(
+            contracts_dir.join("greeter.ko"),
+            r#"
+                seiyaku Greeter {
+                    kotoage fn run() authorize("Run") {}
+                }
+            "#,
+        )
+        .expect("write contract");
+        let manifest_path = dir.path().join("iroha.app.toml");
+        fs::write(
+            &manifest_path,
+            r#"
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter::universal"
+                source = "contracts/greeter.ko"
+
+                [[hajimari]]
+                id = "seed"
+                contract = "demo.greeter"
+                entrypoint = "run"
+                gas_limit = 1000
+            "#,
+        )
+        .expect("write manifest");
+
+        let error = build_contract_app_bundle(&manifest_path)
+            .expect_err("hajimari tables must not dispatch ordinary kotoage entrypoints");
+        assert!(
+            error
+                .to_string()
+                .contains("must target a hajimari/始まり entrypoint"),
+            "unexpected error: {error}",
+        );
     }
 
     #[test]
@@ -4419,9 +4536,9 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    state int Counter;
-                    kotoage fn init(value: int) { Counter = value; }
-                    view fn status() -> int { return Counter; }
+                    state Counter: i64;
+                    hajimari(value: i64) { Counter = value; }
+                    view fn status() -> i64 { return Counter; }
                 }
             "#,
         )
@@ -4447,7 +4564,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        let report = dev_build_manifest(&manifest_path, false).expect("dev build");
+        let report = dev_build_manifest(&manifest_path, "local", false).expect("dev build");
         assert_eq!(
             report
                 .get("contract_count")
@@ -4457,13 +4574,350 @@ mod tests {
         assert!(artifacts_dir.join("greeter.to").exists());
         assert!(artifacts_dir.join("greeter.manifest.json").exists());
         assert!(artifacts_dir.join("greeter.interface.json").exists());
-        assert!(artifacts_dir.join("greeter.source-map.json").exists());
-        assert!(artifacts_dir.join("greeter.budget.json").exists());
+        let contract = report
+            .get("contracts")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|contracts| contracts.first())
+            .expect("one contract report");
+        let source_map = contract
+            .get("source_map")
+            .and_then(norito::json::Value::as_str)
+            .expect("source-map report path");
+        let budget = contract
+            .get("budget")
+            .and_then(norito::json::Value::as_str)
+            .expect("budget report path");
+        assert!(Path::new(source_map).is_file());
+        assert!(Path::new(budget).is_file());
+        assert!(source_map.contains("/.sidecars/"));
+        assert!(budget.contains("/.sidecars/"));
+        let generated_paths = [
+            "artifact",
+            "manifest",
+            "interface",
+            "source_map",
+            "budget",
+            "record",
+        ]
+        .map(|field| {
+            PathBuf::from(
+                contract
+                    .get(field)
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or_else(|| panic!("build report is missing `{field}`")),
+            )
+        });
+        assert!(generated_paths.iter().all(|path| path.is_file()));
+        assert!(generated_paths[3].to_string_lossy().contains("/.sidecars/"));
+        assert!(generated_paths[4].to_string_lossy().contains("/.sidecars/"));
+        assert!(
+            generated_paths[5]
+                .to_string_lossy()
+                .contains("/.fingerprints/")
+        );
+        let modified = generated_paths.map(|path| {
+            let modified = fs::metadata(&path)
+                .unwrap_or_else(|error| panic!("metadata for {}: {error}", path.display()))
+                .modified()
+                .ok();
+            (path, modified)
+        });
+        let fresh = dev_build_manifest(&manifest_path, "local", false).expect("no-op dev build");
+        assert_eq!(
+            fresh
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("status"))
+                .and_then(norito::json::Value::as_str),
+            Some("fresh")
+        );
+        for (path, expected_modified) in modified {
+            assert_eq!(
+                fs::metadata(&path)
+                    .unwrap_or_else(|error| {
+                        panic!("fresh metadata for {}: {error}", path.display())
+                    })
+                    .modified()
+                    .ok(),
+                expected_modified,
+                "no-op dev build must not rewrite {}",
+                path.display()
+            );
+        }
 
         let schema = render_dev_schema_markdown(&manifest_path, &report).expect("schema markdown");
         assert!(schema.contains("demo.greeter"));
-        assert!(schema.contains("### init"));
+        assert!(schema.contains("### hajimari"));
+        assert!(schema.contains("- Kind: `hajimari`"));
         assert!(schema.contains("\"value\": 0"));
+    }
+
+    #[test]
+    fn dev_lint_report_preserves_canonical_diagnostic_records() {
+        let dir = tempdir().expect("tempdir");
+        let contracts_dir = dir.path().join("contracts");
+        fs::create_dir_all(&contracts_dir).expect("create contracts dir");
+        fs::write(
+            contracts_dir.join("greeter.ko"),
+            r#"
+                seiyaku Greeter {
+                    view fn status(unused: i64) -> i64 { return 7; }
+                }
+            "#,
+        )
+        .expect("write contract");
+
+        let manifest_path = dir.path().join("iroha.contracts.toml");
+        fs::write(
+            &manifest_path,
+            r#"
+                bundle_name = "demo"
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter::universal"
+                source = "contracts/greeter.ko"
+            "#,
+        )
+        .expect("write manifest");
+
+        let report = dev_run_lints(&manifest_path).expect("lint report");
+        assert_eq!(
+            report.get("ok").and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            report
+                .get("diagnostic_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            report
+                .get("failed_source_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        let diagnostic = report
+            .get("diagnostics")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|sources| sources.first())
+            .and_then(|source| source.get("diagnostics"))
+            .and_then(norito::json::Value::as_array)
+            .and_then(|diagnostics| diagnostics.first())
+            .expect("canonical lint diagnostic");
+        assert_eq!(
+            diagnostic.get("code").and_then(norito::json::Value::as_str),
+            Some("K5003")
+        );
+        assert_eq!(
+            diagnostic
+                .get("severity")
+                .and_then(norito::json::Value::as_str),
+            Some("warning")
+        );
+        assert_eq!(
+            diagnostic
+                .get("phase")
+                .and_then(norito::json::Value::as_str),
+            Some("semantic")
+        );
+        assert!(diagnostic.get("primary_span").is_some());
+        assert!(diagnostic.get("notes").is_some());
+        assert!(diagnostic.get("help").is_some());
+        assert!(diagnostic.get("fix").is_some());
+
+        let mut context = TestContext::new(fixture_account(0x44));
+        let error = DevCheckArgs {
+            manifest: DevManifestArgs {
+                manifest: manifest_path,
+                profile: "local".to_owned(),
+            },
+            locked: false,
+        }
+        .run(&mut context)
+        .expect_err("lint findings must keep a failing exit status");
+        assert!(
+            error
+                .to_string()
+                .contains("detailed diagnostics were emitted")
+        );
+        let output = context.take_output().expect("printed dev-check report");
+        assert_eq!(
+            output.get("ok").and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            output
+                .pointer("/lint/diagnostics/0/diagnostics/0/code")
+                .and_then(norito::json::Value::as_str),
+            Some("K5003")
+        );
+    }
+
+    #[test]
+    fn dev_test_path_filter_selects_files_without_becoming_a_name_filter() {
+        let invocations = prepare_dev_test_invocations(
+            vec![
+                PathBuf::from("tests/kotodama/payments.test.ko"),
+                PathBuf::from("tests/kotodama/assets.test.ko"),
+            ],
+            Some("payments"),
+            None,
+            false,
+            "run",
+            "text",
+            |_| -> Result<Vec<String>> { panic!("path-only selection must not parse test names") },
+        )
+        .expect("select one test source by path");
+
+        assert_eq!(
+            invocations,
+            vec![(
+                "tests/kotodama/payments.test.ko".to_owned(),
+                vec![
+                    "run".to_owned(),
+                    "tests/kotodama/payments.test.ko".to_owned()
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn dev_test_name_filter_selects_matching_files_and_is_always_forwarded() {
+        let invocations = prepare_dev_test_invocations(
+            vec![
+                PathBuf::from("tests/kotodama/assets.test.ko"),
+                PathBuf::from("tests/kotodama/payments.test.ko"),
+            ],
+            None,
+            Some("reject"),
+            false,
+            "run",
+            "text",
+            |path| {
+                Ok(if path.ends_with("payments.test.ko") {
+                    vec!["rejects_invalid_payment".to_owned()]
+                } else {
+                    vec!["mints_asset".to_owned()]
+                })
+            },
+        )
+        .expect("select one test source by function name");
+
+        assert_eq!(
+            invocations,
+            vec![(
+                "tests/kotodama/payments.test.ko".to_owned(),
+                vec![
+                    "run".to_owned(),
+                    "--filter".to_owned(),
+                    "reject".to_owned(),
+                    "tests/kotodama/payments.test.ko".to_owned(),
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn dev_test_filters_fail_closed_when_paths_or_names_do_not_match() {
+        let paths = vec![PathBuf::from("tests/kotodama/payments.test.ko")];
+        let path_error = prepare_dev_test_invocations(
+            paths.clone(),
+            Some("missing"),
+            None,
+            false,
+            "run",
+            "text",
+            |_| -> Result<Vec<String>> { Ok(Vec::new()) },
+        )
+        .expect_err("an unmatched path filter must fail");
+        assert!(
+            path_error
+                .to_string()
+                .contains("no Kotodama test source path matched")
+        );
+
+        let name_error = prepare_dev_test_invocations(
+            paths,
+            None,
+            Some("missing"),
+            false,
+            "run",
+            "text",
+            |_| Ok(vec!["smoke".to_owned()]),
+        )
+        .expect_err("an unmatched name filter must fail");
+        assert!(
+            name_error
+                .to_string()
+                .contains("no Kotodama test function matched")
+        );
+    }
+
+    #[test]
+    fn dev_test_exact_requires_and_forwards_a_complete_name_filter() {
+        let path = PathBuf::from("tests/kotodama/payments.test.ko");
+        let invocations = prepare_dev_test_invocations(
+            vec![path.clone()],
+            None,
+            Some("smoke"),
+            true,
+            "run",
+            "json",
+            |_| Ok(vec!["smoke".to_owned(), "smoke_extended".to_owned()]),
+        )
+        .expect("select one exact test");
+        assert_eq!(
+            invocations,
+            vec![(
+                path.display().to_string(),
+                vec![
+                    "run".to_owned(),
+                    "--filter".to_owned(),
+                    "smoke".to_owned(),
+                    "--exact".to_owned(),
+                    "--format".to_owned(),
+                    "json".to_owned(),
+                    path.display().to_string(),
+                ]
+            )]
+        );
+
+        let error = prepare_dev_test_invocations(
+            vec![path],
+            None,
+            None,
+            true,
+            "run",
+            "text",
+            |_| -> Result<Vec<String>> { Ok(Vec::new()) },
+        )
+        .expect_err("--exact without --filter must fail");
+        assert!(error.to_string().contains("--exact requires --filter"));
+    }
+
+    #[test]
+    fn dev_schema_samples_use_only_v1_canonical_scalar_types() {
+        assert_eq!(dev_sample_value_for_type("i64"), norito::json!(0_i64));
+        assert_eq!(dev_sample_value_for_type("u128"), norito::json!("0"));
+        assert_eq!(dev_sample_value_for_type("Amount"), norito::json!("0"));
+        assert_eq!(dev_sample_value_for_type("bool"), norito::json!(false));
+        assert_eq!(dev_sample_value_for_type("string"), norito::json!(""));
+        assert_eq!(dev_sample_value_for_type("bytes"), norito::json!("0x"));
+        assert_eq!(
+            dev_sample_value_for_type("DataSpaceId"),
+            norito::json!(0_u64)
+        );
+
+        for retired in ["int", "Balance", "FixedU128", "Blob"] {
+            assert_eq!(
+                dev_sample_value_for_type(retired),
+                norito::json!("sample"),
+                "retired type `{retired}` must not receive canonical schema handling"
+            );
+        }
     }
 
     #[test]
@@ -4478,7 +4932,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: int) -> int { return value; }
+                    view fn status(value: i64) -> i64 { return value; }
                 }
             "#,
         )
@@ -4510,7 +4964,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
         let cases = prepare_dev_smoke_cases(&manifest_path, "local").expect("prepare smoke");
 
         assert_eq!(cases.len(), 1);
@@ -4541,15 +4995,15 @@ mod tests {
         let program = compile_contract_program(
             r#"
             seiyaku Demo {
-                kotoage fn submit(amount: int, recipient: AccountId) -> int {
+                kotoage fn submit(amount: i64, recipient: AccountId) -> i64 authorize("Submit") {
                     return amount;
                 }
 
-                kotoage fn upload(owner: AccountId, tag: Name, payload: bytes) -> int {
-                    return tlv_len(payload);
+                kotoage fn upload(owner: AccountId, tag: Name, payload: bytes) -> i64 authorize("Upload") {
+                    return codec::tlv_len(payload);
                 }
 
-                view fn ping() -> int {
+                view fn ping() -> i64 {
                     return 1;
                 }
             }
@@ -4605,15 +5059,13 @@ mod tests {
         let err = normalize_local_contract_payload(&ping, Some(&norito::json!({ "extra": 1 })))
             .expect_err("zero-parameter entrypoint rejects non-empty payload");
         assert!(
-            err.to_string()
-                .contains("contract payload must be an empty JSON object"),
+            err.to_string().contains("contract payload must be omitted"),
             "unexpected error: {err}"
         );
         let err = normalize_local_contract_payload(&ping, Some(&norito::json!(null)))
             .expect_err("zero-parameter entrypoint rejects null payload");
         assert!(
-            err.to_string()
-                .contains("contract payload must be an empty JSON object"),
+            err.to_string().contains("contract payload must be omitted"),
             "unexpected error: {err}"
         );
 
@@ -4654,7 +5106,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: int) -> int { return value; }
+                    view fn status(value: i64) -> i64 { return value; }
                 }
             "#,
         )
@@ -4685,7 +5137,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
             .expect_err("manifest smoke payload drift must fail");
         let rendered = format!("{err:?}");
@@ -4711,7 +5163,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: int) -> int { return value; }
+                    view fn status(value: i64) -> i64 { return value; }
                 }
             "#,
         )
@@ -4739,7 +5191,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
             .expect_err("array smoke payload must fail");
         let rendered = format!("{err:?}");
@@ -4763,7 +5215,7 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    view fn status(value: int) -> int { return value; }
+                    view fn status(value: i64) -> i64 { return value; }
                 }
             "#,
         )
@@ -4794,7 +5246,7 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, false).expect("dev build");
+        dev_build_manifest(&manifest_path, "local", false).expect("dev build");
         let err = prepare_dev_smoke_cases(&manifest_path, "local")
             .expect_err("unknown smoke entrypoint must fail");
         let rendered = format!("{err:?}");
@@ -4886,9 +5338,9 @@ mod tests {
             contracts_dir.join("greeter.ko"),
             r#"
                 seiyaku Greeter {
-                    state int Counter;
-                    kotoage fn init(value: int) { Counter = value; }
-                    view fn status() -> int { return Counter; }
+                    state Counter: i64;
+                    hajimari(value: i64) { Counter = value; }
+                    view fn status() -> i64 { return Counter; }
                 }
             "#,
         )
@@ -4910,10 +5362,10 @@ mod tests {
         )
         .expect("write manifest");
 
-        dev_build_manifest(&manifest_path, false).expect("initial dev build");
+        dev_build_manifest(&manifest_path, "local", false).expect("initial dev build");
         let interface_path = artifacts_dir.join("greeter.interface.json");
         fs::remove_file(&interface_path).expect("remove generated interface");
-        let err = dev_build_manifest(&manifest_path, true)
+        let err = dev_build_manifest(&manifest_path, "local", true)
             .expect_err("locked build must reject missing interface");
         assert!(
             err.to_string().contains("generated artifact is missing")
@@ -4921,9 +5373,9 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        dev_build_manifest(&manifest_path, false).expect("regenerate outputs");
+        dev_build_manifest(&manifest_path, "local", false).expect("regenerate outputs");
         fs::write(&interface_path, "{}\n").expect("poison generated interface");
-        let err = dev_build_manifest(&manifest_path, true)
+        let err = dev_build_manifest(&manifest_path, "local", true)
             .expect_err("locked build must reject stale interface");
         assert!(
             err.to_string().contains("generated artifact is stale")
@@ -5067,13 +5519,14 @@ mod tests {
     #[test]
     fn program_summary_reports_hashes() {
         let program = minimal_program();
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse");
-        let expected_code_hash = Hash::new(&program[parsed.header_len..]);
+        let expected_code_hash = ivm::contract_code_hash(&program);
         let summary = program_summary_from_bytes(&program).expect("summary");
         assert_eq!(summary.code_hash, expected_code_hash);
         assert_eq!(
             summary.abi_hash,
-            Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+            iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(
+                ivm::SyscallPolicy::AbiV1,
+            ))
         );
     }
 
@@ -5131,8 +5584,8 @@ mod tests {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
-            entrypoint: Some("inspect".to_owned()),
-            gas_limit: 50_000,
+            entrypoint: "inspect".to_owned(),
+            gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
             source_file: None,
             accounts_json: None,
             accounts_file: None,
@@ -5171,7 +5624,7 @@ mod tests {
         let source_path = dir.path().join("debug_view_with_path.ko");
         let source = r#"
             seiyaku Demo {
-                view fn inspect() -> int {
+                view fn inspect() -> i64 {
                     return 7;
                 }
             }
@@ -5184,7 +5637,7 @@ mod tests {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
-            entrypoint: Some("inspect".to_owned()),
+            entrypoint: "inspect".to_owned(),
             gas_limit: 0,
             source_file: None,
             accounts_json: None,
@@ -5229,7 +5682,7 @@ mod tests {
         let override_path = dir.path().join("override.ko");
         let source = r#"
             seiyaku Demo {
-                view fn inspect() -> int {
+                view fn inspect() -> i64 {
                     return 7;
                 }
             }
@@ -5239,7 +5692,7 @@ mod tests {
             &override_path,
             r#"
                 seiyaku Demo {
-                    view fn inspect() -> int {
+                    view fn inspect() -> i64 {
                         return 99;
                     }
                 }
@@ -5253,7 +5706,7 @@ mod tests {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
-            entrypoint: Some("inspect".to_owned()),
+            entrypoint: "inspect".to_owned(),
             gas_limit: 0,
             source_file: Some(override_path.clone()),
             accounts_json: None,
@@ -5291,11 +5744,12 @@ mod tests {
         let mut ctx = TestContext::new(authority);
         let source = r#"
             seiyaku Demo {
-                state int counter;
+                state counter: i64;
+                hajimari() { counter = 0; }
 
-                kotoage fn bump() -> int permission(Admin) {
+                kotoage fn bump() -> i64 authorize("Admin") {
                     counter = counter + 1;
-                    register_domain(domain("debugcall.universal"));
+                    ledger::domain::register(DomainId::parse("debugcall.universal"));
                     return counter;
                 }
             }
@@ -5310,7 +5764,7 @@ mod tests {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
-            entrypoint: Some("bump".to_owned()),
+            entrypoint: "bump".to_owned(),
             gas_limit: 50_000,
             source_file: None,
             accounts_json: None,
@@ -5371,7 +5825,7 @@ mod tests {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
-            entrypoint: Some("inspect".to_owned()),
+            entrypoint: "inspect".to_owned(),
             gas_limit: 50_000,
             source_file: None,
             accounts_json: None,
@@ -5387,7 +5841,7 @@ mod tests {
             .run(&mut ctx)
             .expect_err("view entrypoints must be rejected");
         assert!(
-            err.to_string().contains("is not a public entrypoint"),
+            err.to_string().contains("is not a kotoage entrypoint"),
             "unexpected error: {err}"
         );
     }
@@ -5398,10 +5852,11 @@ mod tests {
         let mut ctx = TestContext::new(authority.clone());
         let source = r#"
             seiyaku Demo {
-                state int counter;
+                state counter: i64;
+                hajimari() { counter = 0; }
 
-                kotoage fn bump(amount: int) -> int permission(Admin) {
-                    register_domain(domain("debugparity.universal"));
+                kotoage fn bump(amount: i64) -> i64 authorize("Admin") {
+                    ledger::domain::register(DomainId::parse("debugparity.universal"));
                     counter = amount;
                     return counter;
                 }
@@ -5414,7 +5869,7 @@ mod tests {
             authority: None,
             code_file: None,
             code_b64: Some(code_b64),
-            entrypoint: Some("bump".to_owned()),
+            entrypoint: "bump".to_owned(),
             gas_limit: 50_000,
             source_file: None,
             accounts_json: None,
@@ -5436,7 +5891,7 @@ mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("gas_limit").expect("static gas_limit key"),
-            iroha_primitives::json::Json::from(50_000u64),
+            iroha_primitives::json::Json::from(DEFAULT_CONTRACT_GAS_LIMIT),
         );
         metadata.insert(
             Name::from_str("contract_entrypoint").expect("static contract_entrypoint key"),

@@ -161,6 +161,9 @@ mod tests {
     use crate::compiler::Compiler as KotodamaCompiler;
     use norito::json as norito_json_mod;
 
+    const DEPLOYABLE_FUZZ_FIXTURE: &str =
+        "seiyaku BytecodeAnalysis { view fn fuzz_seed() -> int { return 0; } }";
+
     fn build_metadata_payload(
         meta: &ProgramMetadata,
         iteration: usize,
@@ -198,7 +201,9 @@ mod tests {
     #[test]
     fn analyze_detects_arithmetic_instruction() {
         let code = KotodamaCompiler::new()
-            .compile_source("fn main() { let x = 1 * 2; }")
+            .compile_source(
+                "seiyaku BytecodeAnalysis { view fn multiply(int left, int right) -> int { return left * right; } }",
+            )
             .expect("compile");
         let analysis = analyze_bytecode(&code).expect("analyze");
         assert!(
@@ -213,7 +218,7 @@ mod tests {
     #[test]
     fn fuzz_reports_disabled_runtime() {
         let code = KotodamaCompiler::new()
-            .compile_source("fn main() { return; }")
+            .compile_source(DEPLOYABLE_FUZZ_FIXTURE)
             .expect("compile");
         let report = run_bytecode_fuzz(&code, 2).expect("fuzz");
         assert_eq!(report.failures, 0);
@@ -224,6 +229,20 @@ mod tests {
                 .iter()
                 .any(|f| f.code == "bytecode-fuzz-disabled"),
             "expected disabled runtime finding"
+        );
+    }
+
+    #[test]
+    fn fuzz_fixture_is_a_deployable_v1_view_contract() {
+        let (_code, manifest) = KotodamaCompiler::new()
+            .compile_source_with_manifest(DEPLOYABLE_FUZZ_FIXTURE)
+            .expect("compile deployable fuzz fixture");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].name, "fuzz_seed");
+        assert_eq!(
+            entrypoints[0].kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::View
         );
     }
 

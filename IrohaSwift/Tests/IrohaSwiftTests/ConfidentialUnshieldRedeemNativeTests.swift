@@ -24,7 +24,7 @@ final class ConfidentialUnshieldRedeemNativeTests: XCTestCase {
             return
         }
 
-        let chainId = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+        let chainId = "fc56984b-2be7-431d-840e-21514d1883f0"
         let assetDefinitionId = "xor#universal"
         let spendKey = Data(repeating: 0xA1, count: 32)
         let inputRho = Data(repeating: 0xA2, count: 32)

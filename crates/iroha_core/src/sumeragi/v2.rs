@@ -127,6 +127,9 @@ impl VerifiedHeightContext {
     ) -> Result<Self, AdapterError> {
         context.validate()?;
         parent_artifact.validate()?;
+        if parent_artifact.validator_set_pops != parent_proofs_of_possession {
+            return Err(AdapterError::ParentContextMismatch);
+        }
         verify_roster_proofs(&parent_artifact.height_context, parent_proofs_of_possession)?;
         verify_quorum_certificate(
             &parent_artifact.height_context,
@@ -154,7 +157,7 @@ impl VerifiedHeightContext {
         {
             return Err(AdapterError::ParentContextMismatch);
         }
-        if let Some(snapshot) = &parent_artifact.next_epoch_snapshot {
+        if let Some(snapshot) = &parent_artifact.height_context.next_epoch_snapshot {
             if context.epoch != snapshot.epoch
                 || context.mode != snapshot.mode
                 || context.roster != snapshot.roster
@@ -1205,7 +1208,9 @@ impl SumeragiV2Adapter {
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<FinalizedV2Height, AdapterError> {
         self.ensure_ingress()?;
-        artifact.validate()?;
+        artifact
+            .verify()
+            .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
         let core_decision = self
             .reducer
             .durable_state()
@@ -1218,6 +1223,7 @@ impl SumeragiV2Adapter {
         let wire_subject = self.registry.subject(core_decision.subject())?;
 
         if artifact.height_context != self.wire_context
+            || artifact.validator_set_pops != self.proofs_of_possession
             || artifact.subject != wire_subject
             || artifact.commit_qc != wire_decision
             || kura_receipt.height() != self.wire_context.height
@@ -2698,26 +2704,15 @@ fn verify_roster_proofs(
     context: &wire::HeightContext,
     proofs_of_possession: &[Vec<u8>],
 ) -> Result<(), AdapterError> {
-    validate_bls_roster(context)?;
-    if proofs_of_possession.len() != context.roster.len() {
-        return Err(AdapterError::ProofOfPossessionCount {
-            expected: context.roster.len(),
-            actual: proofs_of_possession.len(),
-        });
-    }
-    #[cfg(feature = "bls")]
-    for (entry, proof) in context.roster.iter().zip(proofs_of_possession) {
-        iroha_crypto::bls_normal_pop_verify(entry.validator.public_key(), proof)
-            .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
-    }
-    #[cfg(not(feature = "bls"))]
-    {
-        let _ = proofs_of_possession;
-        return Err(AdapterError::Cryptography(
-            "the iroha_core `bls` feature is required by Sumeragi v2".to_owned(),
-        ));
-    }
-    Ok(())
+    wire::finality::verify_validator_roster_pops(context, proofs_of_possession).map_err(|error| {
+        match error {
+            wire::finality::V2QuorumCertificateVerificationError::ProofOfPossessionCount {
+                expected,
+                actual,
+            } => AdapterError::ProofOfPossessionCount { expected, actual },
+            other => AdapterError::Cryptography(other.to_string()),
+        }
+    })
 }
 
 fn verify_individual_signature(
@@ -2742,20 +2737,21 @@ fn verify_quorum_certificate(
     certificate: &wire::QuorumCertificate,
     proofs_of_possession: &[Vec<u8>],
 ) -> Result<(), AdapterError> {
-    certificate.validate(context)?;
-    let signer = certificate
-        .signers
-        .first()
-        .copied()
-        .ok_or(wire::ValidationError::InsufficientSignerCount)?;
-    let preimage = certificate.signer_preimage(context, signer)?;
-    verify_aggregate_signature(
+    wire::finality::verify_quorum_certificate_with_validator_pops(
         context,
-        &certificate.signers,
-        &certificate.aggregate_signature,
-        &preimage,
+        certificate,
         proofs_of_possession,
     )
+    .map_err(|error| match error {
+        wire::finality::V2QuorumCertificateVerificationError::InvalidCertificate(error) => {
+            AdapterError::WireValidation(error)
+        }
+        wire::finality::V2QuorumCertificateVerificationError::ProofOfPossessionCount {
+            expected,
+            actual,
+        } => AdapterError::ProofOfPossessionCount { expected, actual },
+        other => AdapterError::Cryptography(other.to_string()),
+    })
 }
 
 /// Verify one certificate against an immutable context record reopened for
@@ -2920,6 +2916,7 @@ mod tests {
             height: 1,
             epoch: 1,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -3009,6 +3006,7 @@ mod tests {
             height: 1,
             epoch: 3,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -3088,7 +3086,7 @@ mod tests {
             parent_context.clone(),
             parent_subject,
             parent_qc.clone(),
-            None,
+            proofs.clone(),
         );
         artifact.validate().expect("valid parent artifact");
         let receipt = KuraV2CommitReceipt::for_test(&artifact);

@@ -2701,11 +2701,11 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn block_message_blocking_ingress_policy_matches_expected_variants() {
+    fn block_message_blocking_ingress_policy_admits_only_authoritative_v2() {
         let signed = signed_block_for_test();
         let created =
             BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
-        assert!(created.requires_blocking_ingress());
+        assert!(!created.requires_blocking_ingress());
 
         assert!(
             BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
@@ -2745,7 +2745,7 @@ mod network_relay_tests {
                 .expect("signed block has signature")
                 .clone(),
         });
-        assert!(init.requires_blocking_ingress());
+        assert!(!init.requires_blocking_ingress());
 
         let chunk = iroha_core::sumeragi::consensus::RbcChunk {
             block_hash: signed.hash(),
@@ -2755,8 +2755,8 @@ mod network_relay_tests {
             idx: 0,
             bytes: vec![0x55],
         };
-        assert!(BlockMessage::RbcChunk(chunk.clone()).requires_blocking_ingress());
-        assert!(BlockMessage::from_rbc_chunk(chunk).requires_blocking_ingress());
+        assert!(!BlockMessage::RbcChunk(chunk.clone()).requires_blocking_ingress());
+        assert!(!BlockMessage::from_rbc_chunk(chunk).requires_blocking_ingress());
 
         let requester = PeerId::new(KeyPair::random().public_key().clone());
         let fetch = FetchPendingBlock {
@@ -2768,7 +2768,7 @@ mod network_relay_tests {
             requester_roster_proof_known: None,
             commit_qc_only: Some(true),
         };
-        assert!(BlockMessage::FetchPendingBlock(fetch).requires_blocking_ingress());
+        assert!(!BlockMessage::FetchPendingBlock(fetch).requires_blocking_ingress());
 
         let background_fetch = FetchPendingBlock {
             requester: PeerId::new(KeyPair::random().public_key().clone()),

@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "halbeegga `{name}` ee shaqada `{func}` lama adeegsado marnaba",
     lint_unreachable_after_return: "waxaa laga helay hadal aan la gaadhi karin gudaha {context}: koodhka ka dambeeya return marnaba ma fulayo",
     lint_ok: "wacan",
-    lint_usage: "Isticmaal: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Isticmaal: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Ka shaqee jeegagga lint ee Kotodama ee isha la siiyay.",
     ..english::MESSAGES
 };

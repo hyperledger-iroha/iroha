@@ -279,6 +279,32 @@ impl ByteMerkleTree {
         *self.cached.lock() = cached_copy;
     }
 
+    /// Restore selected leaves from an immutable template without cloning the
+    /// complete leaf vector or canonical tree.
+    pub(crate) fn reset_leaves_from(&mut self, other: &ByteMerkleTree, indices: &[usize]) {
+        if self.chunk != other.chunk || self.leaf_count() != other.leaf_count() {
+            self.reset_from(other);
+            return;
+        }
+        if indices.is_empty() {
+            return;
+        }
+        let template = other.leaves.lock();
+        let mut leaves = self.leaves.lock();
+        for index in indices {
+            if let (Some(destination), Some(source)) =
+                (leaves.get_mut(*index), template.get(*index))
+            {
+                *destination = *source;
+            }
+        }
+        drop(leaves);
+        drop(template);
+        // Rebuild lazily only if a proof is requested. Memory keeps the
+        // template's already-known root for ordinary execution.
+        *self.cached.lock() = None;
+    }
+
     #[cfg(test)]
     pub(crate) fn has_cached_tree(&self) -> bool {
         self.cached.lock().is_some()
@@ -813,6 +839,19 @@ mod tests {
 
         target.reset_from(&source);
         assert_eq!(target.root(), source.root());
+    }
+
+    #[test]
+    fn selected_leaf_reset_restores_template_without_tree_clone() {
+        let template = ByteMerkleTree::from_bytes(&[0u8; 128], 32);
+        let mut worker = template.clone();
+        worker.update_leaf(1, &[0xAA; 32]);
+        worker.update_leaf(3, &[0x55; 32]);
+        assert_ne!(worker.root(), template.root());
+
+        worker.reset_leaves_from(&template, &[1, 3]);
+
+        assert_eq!(worker.root(), template.root());
     }
 
     #[test]

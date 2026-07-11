@@ -330,7 +330,7 @@ fn canonical_code_hash(code_bytes: &[u8]) -> Result<Hash, Error> {
             "contract artifact header length exceeds code length",
         ));
     }
-    Ok(Hash::new(&code_bytes[parsed.header_len..]))
+    Ok(ivm::contract_code_hash(code_bytes))
 }
 
 fn manifest_from_verified_artifact(
@@ -493,7 +493,7 @@ fn persist_job_response(
 
 fn entrypoint_kind_label(kind: EntryPointKind) -> &'static str {
     match kind {
-        EntryPointKind::Public => "public",
+        EntryPointKind::Kotoage => "kotoage",
         EntryPointKind::View => "view",
         EntryPointKind::Hajimari => "hajimari",
         EntryPointKind::Kaizen => "kaizen",
@@ -512,13 +512,21 @@ fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> String {
         .as_ref()
         .map(|value| format!(" -> {value}"))
         .unwrap_or_default();
-    format!(
-        "{} fn {}({}){}",
-        entrypoint_kind_label(entrypoint.kind),
-        entrypoint.name,
-        params,
-        return_type
-    )
+    match entrypoint.kind {
+        EntryPointKind::Kotoage | EntryPointKind::View => format!(
+            "{} fn {}({}){}",
+            entrypoint_kind_label(entrypoint.kind),
+            entrypoint.name,
+            params,
+            return_type
+        ),
+        EntryPointKind::Hajimari | EntryPointKind::Kaizen => format!(
+            "{}({}){}",
+            entrypoint_kind_label(entrypoint.kind),
+            params,
+            return_type
+        ),
+    }
 }
 
 fn render_program_syscalls(analysis: &ProgramAnalysis) -> String {
@@ -551,12 +559,12 @@ fn render_pseudo_source(
     manifest: Option<&ContractManifest>,
     analysis: Option<&ProgramAnalysis>,
 ) -> String {
-    let contract_name = format!(
+    let seiyaku_name = format!(
         "Contract_{}",
         &code_hash.chars().take(8).collect::<String>()
     );
     let mut lines = Vec::new();
-    lines.push(format!("contract {contract_name} {{"));
+    lines.push(format!("seiyaku {seiyaku_name} {{"));
     lines.push(
         "  // Decompiled pseudo-source derived from contract bytes and manifest hints.".to_owned(),
     );
@@ -646,7 +654,7 @@ fn render_manifest_stub(
 ) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
-        "contract ManifestStub_{} {{",
+        "seiyaku ManifestStub_{} {{",
         &code_hash[..code_hash.len().min(8)]
     ));
     lines.push(
@@ -1097,6 +1105,7 @@ pub async fn handle_post_verified_source_job(
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
 
+    let source_name = request.source_name;
     let source_text = request.source_text;
     if source_text.trim().is_empty() {
         let response = ContractVerifiedSourceJobResponseDto {
@@ -1113,11 +1122,16 @@ pub async fn handle_post_verified_source_job(
         return Ok((StatusCode::BAD_REQUEST, JsonBody(persisted)));
     }
 
-    let compile_result =
-        ivm::KotodamaCompiler::new().compile_source_with_manifest_and_report(&source_text);
+    let compile_result = ivm::kotodama::session::CompilerSession::default().build(
+        ivm::kotodama::session::CompileRequest {
+            source: &source_text,
+            source_name: source_name.as_deref(),
+        },
+    );
 
     let response = match compile_result {
-        Ok((code_bytes, _manifest, _report)) => {
+        Ok(output) => {
+            let code_bytes = output.artifact;
             let actual_hash = canonical_code_hash(&code_bytes)?;
             let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
                 conversion_error(format!(
@@ -1171,7 +1185,7 @@ pub async fn handle_post_verified_source_job(
                 let bundle = VerifiedSourceBundle {
                     version: VERIFIED_SOURCE_VERSION,
                     language: language.clone(),
-                    source_name: request.source_name.clone(),
+                    source_name: source_name.clone(),
                     source_text: source_text.clone(),
                     code_hash: code_hash_hex.clone(),
                     abi_hash: Some(hash_hex(&verified.abi_hash)),
@@ -1185,7 +1199,7 @@ pub async fn handle_post_verified_source_job(
                     abi_hash: Some(hash_hex(&verified.abi_hash)),
                     compiler_fingerprint: verified.manifest.compiler_fingerprint.clone(),
                     language,
-                    source_name: request.source_name.clone(),
+                    source_name: source_name.clone(),
                     source_text,
                     submitted_at: submitted_at.clone(),
                     manifest_id_hex: verified_source_ref
@@ -1281,6 +1295,41 @@ mod tests {
 
             assert_eq!(actual, algorithm);
         }
+    }
+
+    #[test]
+    fn pseudo_source_uses_branded_entrypoint_syntax() {
+        let descriptor = |name: &str, kind| EntrypointDescriptor {
+            name: name.to_owned(),
+            kind,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        };
+
+        assert_eq!(
+            entrypoint_signature(&descriptor("run", EntryPointKind::Kotoage)),
+            "kotoage fn run()",
+        );
+        assert_eq!(
+            entrypoint_signature(&descriptor("read", EntryPointKind::View)),
+            "view fn read()",
+        );
+        assert_eq!(
+            entrypoint_signature(&descriptor("hajimari", EntryPointKind::Hajimari)),
+            "hajimari()",
+        );
+        assert_eq!(
+            entrypoint_signature(&descriptor("kaizen", EntryPointKind::Kaizen)),
+            "kaizen()",
+        );
     }
 
     fn build_state_with_single_transaction(
@@ -1417,7 +1466,7 @@ mod tests {
             compiler_fingerprint: Some("torii-tests".to_owned()),
             language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
             source_name: Some("demo.ko".to_owned()),
-            source_text: "kotoage fn main() {}".to_owned(),
+            source_text: "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }".to_owned(),
             submitted_at: now_rfc3339(),
             manifest_id_hex: Some("aa".repeat(16)),
             payload_digest_hex: Some("bb".repeat(32)),
@@ -1435,7 +1484,10 @@ mod tests {
         let payload: ContractCodeViewDto =
             norito::json::from_slice(&body).expect("decode contract view");
         assert_eq!(payload.rendered_source_kind, RENDERED_SOURCE_VERIFIED);
-        assert_eq!(payload.rendered_source_text, "kotoage fn main() {}");
+        assert_eq!(
+            payload.rendered_source_text,
+            "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }"
+        );
         assert!(payload.verified_source_ref.is_some());
     }
 
@@ -1443,7 +1495,7 @@ mod tests {
     async fn verified_source_job_accepts_exact_match_and_persists_record() {
         let _guard = TestDataDirGuard::new();
         let source = r#"
-kotoage fn main() {}
+seiyaku Demo { kotoage fn main() authorize("Run") {} }
 "#;
 
         let (compiled, _, _) = ivm::KotodamaCompiler::new()
@@ -1483,7 +1535,7 @@ kotoage fn main() {}
     #[tokio::test]
     async fn verified_source_job_persists_verifiable_sorafs_manifest() {
         let _guard = TestDataDirGuard::new();
-        let source = "kotoage fn main() {}";
+        let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
 
         let (compiled, _, _) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest_and_report(source)
@@ -1537,7 +1589,7 @@ kotoage fn main() {}
     #[tokio::test]
     async fn verified_source_job_reports_hash_mismatch() {
         let _guard = TestDataDirGuard::new();
-        let source = "kotoage fn main() {}";
+        let source = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }";
         let wrong_hash = "11".repeat(32);
         let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
 

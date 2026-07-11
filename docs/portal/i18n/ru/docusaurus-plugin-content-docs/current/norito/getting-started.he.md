@@ -25,14 +25,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 1. Установите Rust toolchain (1.76 или новее) и клонируйте этот репозиторий.
 2. Соберите или скачайте вспомогательные бинарники:
-   - `koto_compile` - компилятор Kotodama, который генерирует байткод IVM/Norito
+   - `koto build` - компилятор Kotodama, который генерирует байткод IVM/Norito
    - `ivm_run` и `ivm_tool` - утилиты локального запуска и инспекции
    - `iroha_cli` - используется для деплоя контрактов через Torii
 
    Makefile репозитория ожидает эти бинарники в `PATH`. Вы можете скачать готовые артефакты или собрать их из исходников. Если вы компилируете toolchain локально, укажите Makefile хелперам путь к бинарникам:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Убедитесь, что узел Iroha запущен к моменту шага деплоя. Примеры ниже предполагают, что Torii доступен по URL из профиля `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -43,16 +43,15 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Ключевые флаги:
 
-- `--abi 1` фиксирует контракт на ABI версии 1 (единственная поддерживаемая версия на момент написания).
-- `--max-cycles 0` запрашивает неограниченное выполнение; установите положительное число, чтобы ограничить padding циклов для zero-knowledge доказательств.
+- `ABI V1` фиксирует контракт на ABI версии 1 (единственная поддерживаемая версия на момент написания).
+- `--max-cycles 1000000` запрашивает неограниченное выполнение; установите положительное число, чтобы ограничить padding циклов для zero-knowledge доказательств.
 
 ## 2. Проверить артефакт Norito (опционально)
 
@@ -79,7 +78,7 @@ ivm_run target/examples/hello.to --args '{}'
 Когда контракт вас устраивает, задеплойте его на узел через CLI. Укажите аккаунт-авторитет, его ключ подписи и либо файл `.to`, либо Base64 payload:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -88,8 +87,8 @@ iroha_cli app contracts deploy \
 Команда отправляет bundle манифеста Norito + байткода через Torii и печатает статус транзакции. После коммита показанный в ответе хэш кода можно использовать для получения манифестов или списка инстансов:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Запуск через Torii
@@ -99,7 +98,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## Советы и устранение проблем
 
 - Используйте `make examples-run`, чтобы собрать и выполнить примеры одним запуском. Переопределите переменные окружения `KOTO`/`IVM`, если бинарники не находятся в `PATH`.
-- Если `koto_compile` отклоняет ABI версию, проверьте, что компилятор и узел нацелены на ABI v1 (запустите `koto_compile --abi` без аргументов, чтобы увидеть поддержку).
+- Если `koto build` отклоняет ABI версию, проверьте, что компилятор и узел нацелены на ABI v1 (запустите `koto build --help` без аргументов, чтобы увидеть поддержку).
 - CLI принимает ключи подписи в hex или Base64. Для тестов можно использовать ключи, выданные `iroha_cli tools crypto keypair`.
 - При отладке Norito payloads полезна команда `ivm_tool disassemble`, которая помогает сопоставлять инструкции с исходниками Kotodama.
 

@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. Установите набор инструментов Rust (1.76 или исходный код) и клонируйте этот репозиторий.
 2. Создайте или выгрузите поддерживаемые двоичные файлы:
-   - `koto_compile` - компилятор Kotodama, который выдает байт-код IVM/Norito
+   - `koto build` - компилятор Kotodama, который выдает байт-код IVM/Norito
    - `ivm_run` y `ivm_tool` - использование локального выброса и проверки
    - `iroha_cli` - используйте США для получения контрактов через Torii
 
    Makefile репозитория содержит эти двоичные файлы в формате `PATH`. Можно удалить предварительно скомпилированные или скомпилированные артефакты из исходного кода. Если вы скомпилировали локальную цепочку инструментов, используйте помощники Makefile в двоичных файлах:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Убедитесь, что узел Iroha находится в процессе выброса, когда он находится в пути. Примеры данных, которые Torii доступны в URL-адресе, настроенном в вашем профиле `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,16 +34,15 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Варианты клавы:
 
-- `--abi 1` показывает контрато в версии ABI 1 (уникальная поддержка момента написания).
-- `--max-cycles 0` ограничение греха изгнания; установите номер позитива, чтобы использовать прокладку циклов для получения знаний о себе.
+- `ABI V1` показывает контрато в версии ABI 1 (уникальная поддержка момента написания).
+- `--max-cycles 1000000` ограничение греха изгнания; установите номер позитива, чтобы использовать прокладку циклов для получения знаний о себе.
 
 ## 2. Проверка артефакта Norito (дополнительно)
 
@@ -70,7 +69,7 @@ ivm_run target/examples/hello.to --args '{}'
 Когда это удовлетворительно с контрактом, выберите место, где используется CLI. Пропорция авторизованного доступа, клавы фирмы и архива `.to` или полезной нагрузки Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 Команда отправляет пакет манифестов Norito + байт-код для Torii и возвращает состояние результата транзакции. После каждого подтверждения хеш-код кода, отправленный в ответ, можно использовать для восстановления манифеста или списка экземпляров:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Выброс против ToriiПосле регистрации байт-кода можно вызвать инструкцию, которая будет ссылаться на альмасенадо код (стр., например, `iroha_cli ledger transaction submit` или ваш клиент приложения). Обеспечьте разрешение доступа к требуемым системным вызовам (`set_account_detail`, `transfer_asset` и т. д.).
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## Советы по решению проблем
 
 - США `make examples-run` для компиляции и выброса файлов в одиночку. Запишите переменные `KOTO`/`IVM`, если двоичные файлы не установлены в `PATH`.
-- Если `koto_compile` повторит версию ABI, проверьте, что компилятор и узел подключен к ABI v1 (выберите `koto_compile --abi` без аргументов для списка поддерживаемых версий).
+- Если `koto build` повторит версию ABI, проверьте, что компилятор и узел подключен к ABI v1 (выберите `koto build --help` без аргументов для списка поддерживаемых версий).
 - CLI принимает ключи фирмы в шестнадцатеричном формате или Base64. Для работы можно использовать клавиши, излучаемые по `iroha_cli tools crypto keypair`.
 - При очистке полезных данных Norito подкоманду `ivm_tool disassemble` можно получить соответствующие инструкции с кодом действующего Kotodama.
 

@@ -103,11 +103,9 @@ If the bridge is protected by API tokens, export `X-API-Token` alongside
 
 ## iso_alias.mjs
 
-- Calls `ToriiClient.evaluateAliasVoprf` to hash blinded alias inputs and
-  demonstrates both literal (IBAN-style) and indexed lookups via
+- Demonstrates both literal (IBAN-style) and indexed lookups via
   `resolveAlias` / `resolveAliasByIndex`.
-- Prints backend/digest metadata for VOPRF requests, surfaces 404 vs runtime
-  disabled responses, and highlights the account bindings returned by the alias
+- Surfaces 404 vs runtime-disabled responses and highlights the account bindings returned by the alias
   APIs so ISO bridge drills can run without bespoke tooling.
 
 Run with:
@@ -115,7 +113,6 @@ Run with:
 ```bash
 npm install
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeef \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node ./recipes/iso_alias.mjs
@@ -123,10 +120,8 @@ node ./recipes/iso_alias.mjs
 
 Environment variables:
 
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
 - `ISO_ALIAS_LABEL` — resolve a literal alias; omit to skip the lookup.
 - `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index for deterministic lookups.
-- `ISO_SKIP_VOPRF=1` — suppress the VOPRF call (useful when only testing lookups).
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
 
 ## iso_bridge_builder.mjs
@@ -175,7 +170,7 @@ field.
   script also honours `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` and accepts private
   keys via `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`.
 - Prints the Torii response including `contract_alias`, `contract_address`,
-  `previous_contract_address`, `upgraded`, `dataspace`, `tx_hash_hex`,
+  `previous_contract_address`, `kaizen`, `dataspace`, `tx_hash_hex`,
   `code_hash_hex`, and `abi_hash_hex` so CI jobs can archive evidence bundles
   alongside release artifacts.
 

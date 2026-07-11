@@ -10,6 +10,10 @@ PUBLIC_MCP_URL="${PUBLIC_MCP_URL:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
+WRITE_CONFIG_EXPLICIT=0
+if [[ -n "$WRITE_CONFIG" ]]; then
+  WRITE_CONFIG_EXPLICIT=1
+fi
 WRITE_TARGET="${WRITE_TARGET:-}"
 WRITE_MESSAGE_PREFIX="${WRITE_MESSAGE_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
@@ -38,6 +42,7 @@ CHECKED_ROOTS=()
 VALIDATOR_ROOT_SPECS=()
 VALIDATOR_LABELS=()
 VALIDATOR_ROOTS=()
+VALIDATOR_ROOT_COUNT=0
 CURL_RESOLVE_RULES=()
 CURL_URL_RESOLVE_ARGS=()
 
@@ -92,6 +97,9 @@ For final public rollout, use a runtime-only canary signer config. When
 `--write-config` is omitted, the script bootstraps a runtime-only canary config
 automatically, preferring `/run/secrets/taira-canary-client.toml` when that
 directory is writable and otherwise falling back to `${TMPDIR:-/tmp}`. It
+reuses an existing config at the automatic path. An explicit `--write-config`
+must already exist and is read without modification; the script never
+overwrites operator-supplied signing material. Automatic bootstrap
 onboards a fresh ordinary account on Taira and, when a gas asset is configured,
 passes that asset to onboarding and skips faucet funding by default. The write
 canary attaches Taira's accepted XOR gas asset metadata by default and still
@@ -209,6 +217,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       WRITE_CONFIG="$2"
+      WRITE_CONFIG_EXPLICIT=1
       shift 2
       ;;
     --write-target)
@@ -407,7 +416,7 @@ normalize_root_url() {
 parse_validator_roots() {
   local spec label root existing
 
-  for spec in "${VALIDATOR_ROOT_SPECS[@]}"; do
+  for spec in "${VALIDATOR_ROOT_SPECS[@]+"${VALIDATOR_ROOT_SPECS[@]}"}"; do
     if [[ "$spec" != *=* ]]; then
       echo "--validator-root must use LABEL=URL syntax: ${spec}" >&2
       exit 1
@@ -427,13 +436,13 @@ parse_validator_roots() {
       echo "validator root must be an http(s) URL: ${root}" >&2
       exit 1
     fi
-    for existing in "${VALIDATOR_LABELS[@]}"; do
+    for existing in "${VALIDATOR_LABELS[@]+"${VALIDATOR_LABELS[@]}"}"; do
       if [[ "$existing" == "$label" ]]; then
         echo "duplicate validator label: ${label}" >&2
         exit 1
       fi
     done
-    for existing in "${VALIDATOR_ROOTS[@]}"; do
+    for existing in "${VALIDATOR_ROOTS[@]+"${VALIDATOR_ROOTS[@]}"}"; do
       if [[ "$existing" == "$root" ]]; then
         echo "duplicate validator root: ${root}" >&2
         exit 1
@@ -441,14 +450,15 @@ parse_validator_roots() {
     done
     VALIDATOR_LABELS+=("$label")
     VALIDATOR_ROOTS+=("$root")
+    VALIDATOR_ROOT_COUNT=$((VALIDATOR_ROOT_COUNT + 1))
   done
 
-  if [[ $REQUIRE_ALL_VALIDATORS -eq 1 && ${#VALIDATOR_ROOTS[@]} -eq 0 ]]; then
+  if [[ $REQUIRE_ALL_VALIDATORS -eq 1 && $VALIDATOR_ROOT_COUNT -eq 0 ]]; then
     echo "--require-all-validators requires repeated --validator-root LABEL=URL arguments" >&2
     exit 1
   fi
-  if [[ ${#VALIDATOR_ROOTS[@]} -gt 0 && ${#VALIDATOR_ROOTS[@]} -lt $MIN_VALIDATOR_SET_LEN ]]; then
-    echo "validator fleet check requires at least ${MIN_VALIDATOR_SET_LEN} distinct labeled roots; received ${#VALIDATOR_ROOTS[@]}" >&2
+  if [[ $VALIDATOR_ROOT_COUNT -gt 0 && $VALIDATOR_ROOT_COUNT -lt $MIN_VALIDATOR_SET_LEN ]]; then
+    echo "validator fleet check requires at least ${MIN_VALIDATOR_SET_LEN} distinct labeled roots; received ${VALIDATOR_ROOT_COUNT}" >&2
     exit 1
   fi
 }
@@ -661,25 +671,22 @@ print_sumeragi_route_diagnostics() {
 import json
 import sys
 
-def dig(obj, *path):
-    cur = obj
-    for key in path:
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(key)
-    return cur
-
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
-summary = {
-    "commit_qc_height": payload.get("commit_qc_height", dig(payload, "commit_qc", "height")),
-    "highest_qc_height": payload.get("highest_qc_height", dig(payload, "highest_qc", "height")),
-    "tx_queue_depth": payload.get("tx_queue_depth"),
-    "tx_queue_saturated": payload.get("tx_queue_saturated"),
-    "view_change_last_cause": dig(payload, "view_change_causes", "last_cause"),
-    "worker_loop_stage": dig(payload, "worker_loop", "stage"),
-}
+status = payload.get("v2") if isinstance(payload.get("v2"), dict) else payload
+summary = {name: status.get(name) for name in (
+    "protocol_version",
+    "height_context_id",
+    "height",
+    "view",
+    "phase",
+    "leader",
+    "last_committed_height",
+    "last_committed_subject",
+    "body_state",
+    "pending_persistence_id",
+)}
 print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 PY
 }
@@ -1186,8 +1193,8 @@ check_route_parity() {
   root_url="$(normalize_root_url "$root_url")"
   check_route_status "$label" GET "${root_url}/v1/sccp/capabilities" "200" \
     "SCCP capability discovery route"
-  check_route_status "$label" GET "${root_url}/v1/sccp/manifests" "200" \
-    "SCCP manifest discovery route"
+  check_route_status "$label" GET "${root_url}/v1/sccp/registry" "200" \
+    "SCCP typed registry discovery route"
   check_route_status "$label" GET "${root_url}/v1/zk/proofs/count" "200" \
     "ZK proof count route"
   check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "200" \
@@ -1343,6 +1350,7 @@ source_path, target_torii_url, output_path, time_to_live_ms, status_timeout_ms =
 with open(source_path, "rb") as handle:
     source = tomllib.load(handle)
 
+PUBLIC_TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 chain = source.get("chain")
 account = source.get("account") or {}
 public_key = account.get("public_key")
@@ -1357,12 +1365,19 @@ status_timeout_ms = int(status_timeout_ms)
 
 if not isinstance(chain, str) or not chain:
     raise SystemExit("write canary config is missing a top-level `chain` value")
+if chain != PUBLIC_TAIRA_CHAIN_ID:
+    raise SystemExit(
+        "write canary config must target the public Sumeragi-v2 Taira chain "
+        f"`{PUBLIC_TAIRA_CHAIN_ID}`"
+    )
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
 if not isinstance(private_key, str) or not private_key:
     raise SystemExit("write canary config is missing `account.private_key`")
 if chain_discriminant is not None and not isinstance(chain_discriminant, int):
     raise SystemExit("write canary config `account.chain_discriminant` must be an integer")
+if chain_discriminant is not None and chain_discriminant != 369:
+    raise SystemExit("write canary config must use Taira chain discriminant 369")
 if not isinstance(domain, str) or not domain:
     domain = "wonderland.universal"
 elif "." not in domain:
@@ -1464,6 +1479,15 @@ ensure_iroha_bin() {
 
 ensure_write_canary_config() {
   local target_url="$1"
+
+  if [[ -f "$WRITE_CONFIG" ]]; then
+    return 0
+  fi
+  if [[ $WRITE_CONFIG_EXPLICIT -eq 1 ]]; then
+    echo "write canary config not found: ${WRITE_CONFIG}" >&2
+    exit 1
+  fi
+
   local bootstrap_cmd=(
     python3
     "${REPO_ROOT}/scripts/taira_bootstrap_canary.py"
@@ -1503,13 +1527,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-KNOWN_PREFIXES = {
-    "iroha3-taira": 369,
-    "809574f5-fee7-5e69-bfcf-52451e42d50f": 369,
-    "fc56984b-2be7-431d-840e-21514d1883f0": 369,
-    "iroha3-nexus": 753,
-    "00000000-0000-0000-0000-000000000753": 753,
-}
+PUBLIC_TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 
 with open(sys.argv[1], "rb") as handle:
     source = tomllib.load(handle)
@@ -1521,12 +1539,17 @@ chain_discriminant = account.get("chain_discriminant")
 
 if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
-if chain_discriminant is None:
-    chain_discriminant = KNOWN_PREFIXES.get(chain)
-if not isinstance(chain_discriminant, int):
+if chain != PUBLIC_TAIRA_CHAIN_ID:
     raise SystemExit(
-        "write canary config must set `account.chain_discriminant` when `chain` is not a known Taira/Nexus chain id"
+        "write canary config must target the public Sumeragi-v2 Taira chain "
+        f"`{PUBLIC_TAIRA_CHAIN_ID}`"
     )
+if chain_discriminant is None:
+    chain_discriminant = 369
+if not isinstance(chain_discriminant, int):
+    raise SystemExit("write canary config `account.chain_discriminant` must be an integer")
+if chain_discriminant != 369:
+    raise SystemExit("write canary config must use Taira chain discriminant 369")
 
 print(public_key)
 print(chain_discriminant)

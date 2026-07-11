@@ -26,6 +26,11 @@ fn tlv_blob<T: NoritoSerialize>(val: &T, ty: PointerType) -> Vec<u8> {
     blob
 }
 
+fn quantity_tlv(value: Numeric) -> Vec<u8> {
+    let quantity = Quantity::try_from_numeric(value).expect("canonical quantity");
+    ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity pointer envelope")
+}
+
 fn load_input_blob(vm: &mut IVM, cursor: &mut u64, blob: &[u8]) -> u64 {
     vm.memory
         .input_write_aligned(cursor, blob, 8)
@@ -47,7 +52,7 @@ fn scall_program(syscall: u32) -> Vec<u8> {
         version_minor: 0,
         mode: 0,
         vector_length: 0,
-        max_cycles: 0,
+        max_cycles: 1_000_000,
         abi_version: 1,
     }
     .encode();
@@ -158,7 +163,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         let key_tlv = tlv_blob(&key, PointerType::Name);
         let value_tlv = tlv_blob(&value, PointerType::Json);
         let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId);
-        let amount_tlv = tlv_blob(&amount, PointerType::NoritoBytes);
+        let amount_tlv = quantity_tlv(amount.clone());
         let mut cursor = 0;
         let ptr_account = load_input_blob(&mut vm, &mut cursor, &account_tlv);
         let ptr_key = load_input_blob(&mut vm, &mut cursor, &key_tlv);

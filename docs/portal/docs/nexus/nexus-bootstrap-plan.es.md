@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-11-10T17:34:36.494808+00:00"
 translation_last_reviewed: 2025-12-30
 ---
@@ -34,7 +34,7 @@ Esta pagina refleja `docs/source/soranexus_bootstrap_plan.md`. Manten ambas copi
 ## Entornos de red
 - Operar dos entornos Nexus con prefijos de red distintos:
 - **Sora Nexus (mainnet)** - prefijo de red de produccion `nexus`, hospedando la gobernanza canonica y servicios piggyback de SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Taira (testnet)** - prefijo de red de staging `taira`, que espeja la configuracion de mainnet para pruebas de integracion y validacion pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Taira (testnet)** - prefijo de red de staging `taira`, que espeja la configuracion de mainnet para pruebas de integracion y validacion pre-release (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Mantener archivos genesis separados, llaves de gobernanza y huellas de infraestructura para cada entorno. Taira actua como el banco de pruebas de todos los rollouts SoraFS/SoraNet antes de promover a Nexus.
 - Las pipelines de CI/CD deben desplegar primero en Taira, ejecutar smoke tests automatizados, y requerir promocion manual a Nexus una vez que pasen los checks.
 - Los bundles de configuracion de referencia viven en `configs/soranexus/nexus/` (mainnet) y `configs/soranexus/taira/` (testnet), cada uno con `config.toml`, `genesis.json` y directorios de admision Torii de ejemplo.

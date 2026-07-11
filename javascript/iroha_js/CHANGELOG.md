@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Replaced lossy Kotodama compiler exceptions with a discriminated asynchronous
+  result. Node and browser-service compilation now preserve the canonical Rust
+  diagnostic fields and UTF-8 byte spans, validate artifact/manifest/sidecar
+  integrity on success, and bound compiler-service success and error bodies
+  while reading them.
 - Made the registry artifact independently consumable: NodeNext declaration
   targets and public subpath type exports are verified from a clean packed
   layout, registry recipes are restricted to clean-install portable examples,

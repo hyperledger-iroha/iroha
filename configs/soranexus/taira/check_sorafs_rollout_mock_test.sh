@@ -62,7 +62,7 @@ if state_dir:
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
-        'chain = "iroha3-taira"\n'
+        'chain = "fc56984b-2be7-431d-840e-21514d1883f0"\n'
         '\n'
         '[account]\n'
         'domain = "universal"\n'
@@ -404,7 +404,7 @@ write_canary_config() {
   local private_key="$3"
 
   cat >"$path" <<EOF
-chain = "iroha3-taira"
+chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 
 [account]
 domain = "universal"
@@ -417,6 +417,57 @@ nonce = true
 time_to_live_ms = 120000
 status_timeout_ms = 120000
 EOF
+}
+
+run_invalid_canary_identity_case() {
+  local mutation="$1"
+  local expected_pattern="$2"
+  local root output_file config_path
+
+  root="$(make_case_root)"
+  output_file="${root}/invalid-${mutation}.log"
+  config_path="${root}/explicit-canary.toml"
+  write_canary_config \
+    "$config_path" \
+    "ED0120INVALIDPUBLICKEY0123456789ABCDEF0123456789ABCDEF01234567" \
+    "802620INVALIDPRIVATEKEY0123456789ABCDEF0123456789ABCDEF01234567"
+  python3 - "$config_path" "$mutation" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+mutation = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+if mutation == "archived-chain":
+    text = text.replace(
+        "fc56984b-2be7-431d-840e-21514d1883f0",
+        "809574f5-fee7-5e69-bfcf-52451e42d50f",
+        1,
+    )
+elif mutation == "wrong-discriminant":
+    text = text.replace("chain_discriminant = 369", "chain_discriminant = 753", 1)
+else:
+    raise SystemExit(f"unknown mutation: {mutation}")
+path.write_text(text, encoding="utf-8")
+PY
+
+  if run_rollout \
+    "$root" \
+    success \
+    --write-config "$config_path" \
+    --iroha-bin "${root}/mockbin/iroha" \
+    --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+    --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
+    >"$output_file" 2>&1; then
+    echo "invalid canary identity case ${mutation} unexpectedly succeeded" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
+  if ! grep -q "$expected_pattern" "$output_file"; then
+    echo "invalid canary identity case ${mutation} did not emit expected pattern: ${expected_pattern}" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
 }
 
 run_rollout() {
@@ -717,6 +768,12 @@ run_implicit_bootstrap_success_case
 run_custom_http_timeouts_are_passed_to_curl_case
 run_explicit_config_is_preserved_case
 run_explicit_missing_config_fails_without_bootstrap_case
+run_invalid_canary_identity_case \
+  archived-chain \
+  'write canary config must target the public Sumeragi-v2 Taira chain'
+run_invalid_canary_identity_case \
+  wrong-discriminant \
+  'write canary config must use Taira chain discriminant 369'
 run_asset_retry_success_case
 run_expected_failure_case \
   capacity_state_503 \

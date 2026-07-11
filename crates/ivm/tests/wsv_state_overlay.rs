@@ -8,7 +8,7 @@ use std::{
 
 use ivm::{
     IVM, Memory, MockWorldStateView, PointerType, WsvHost, encoding, host::IVMHost, instruction,
-    syscalls, validate_tlv_bytes,
+    syscalls,
 };
 
 mod common;
@@ -103,15 +103,14 @@ fn overlay_stages_and_flushes_on_finish() {
             .wsv
             .sc_get("counter")
             .expect("state flushed after finish_tx");
-        let tlv = validate_tlv_bytes(&stored).expect("stored TLV");
-        assert_eq!(tlv.payload, b"5");
+        assert_eq!(stored, b"5");
     }
 }
 
 #[test]
 fn overlay_restores_snapshot_on_rollback() {
     let p_path = make_tlv(PointerType::Name, b"counter");
-    let initial = make_tlv(PointerType::NoritoBytes, b"1");
+    let initial = b"1".to_vec();
     let updated = make_tlv(PointerType::NoritoBytes, b"9");
     let program = set_and_get_program();
 
@@ -158,8 +157,7 @@ fn overlay_restores_snapshot_on_rollback() {
             .wsv
             .sc_get("counter")
             .expect("state after rollback should exist");
-        let tlv = validate_tlv_bytes(&stored).expect("stored TLV");
-        assert_eq!(tlv.payload, b"1");
+        assert_eq!(stored, b"1");
     }
 }
 
@@ -175,8 +173,8 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
     fs::create_dir_all(&tmp_dir).expect("tmp dir");
     let persist_path = tmp_dir.join("state.json");
 
-    let initial = make_tlv(PointerType::NoritoBytes, b"1");
-    let updated = make_tlv(PointerType::NoritoBytes, b"9");
+    let initial = b"1".to_vec();
+    let updated = b"9".to_vec();
     let mut wsv =
         MockWorldStateView::with_state_store(persist_path.clone()).expect("persisted WSV");
     wsv.sc_set("counter", initial).expect("seed durable state");
@@ -189,21 +187,18 @@ fn checkpoint_restore_flushes_persisted_wsv_state() {
     let reloaded =
         MockWorldStateView::with_state_store(persist_path.clone()).expect("reload updated state");
     let stored = reloaded.sc_get("counter").expect("updated persisted state");
-    let tlv = validate_tlv_bytes(&stored).expect("updated TLV");
-    assert_eq!(tlv.payload, b"9");
+    assert_eq!(stored, b"9");
 
     assert!(host.restore(snapshot.as_ref()));
     let stored = host.wsv.sc_get("counter").expect("restored host state");
-    let tlv = validate_tlv_bytes(&stored).expect("restored host TLV");
-    assert_eq!(tlv.payload, b"1");
+    assert_eq!(stored, b"1");
 
     let reloaded =
         MockWorldStateView::with_state_store(persist_path.clone()).expect("reload restored state");
     let stored = reloaded
         .sc_get("counter")
         .expect("restored persisted state");
-    let tlv = validate_tlv_bytes(&stored).expect("restored persisted TLV");
-    assert_eq!(tlv.payload, b"1");
+    assert_eq!(stored, b"1");
 
     let _ = fs::remove_dir_all(&tmp_dir);
 }

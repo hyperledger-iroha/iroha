@@ -123,3 +123,23 @@ Rápidamente cuando la carga útil se reconstruyó divergir del manifiesto.
 - **Automatización de CI** – adición de comandos acima aos pipelines de release para que a
   documentación, accesorios y artefatos publiquem manifiestos determinísticos junto com
   metadados asesinados.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

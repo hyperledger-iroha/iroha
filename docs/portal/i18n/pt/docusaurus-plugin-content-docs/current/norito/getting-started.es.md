@@ -16,14 +16,14 @@ Este guia rápido mostra o fluxo mínimo para compilar um contrato Kotodama, ins
 
 1. Instale o conjunto de ferramentas Rust (1.76 ou mais recente) e clone este repositório.
 2. Construa ou baixe os binários de suporte:
-   - `koto_compile` - compilador Kotodama que emite bytecode IVM/Norito
+   - `koto build` - compilador Kotodama que emite bytecode IVM/Norito
    - `ivm_run` e `ivm_tool` - russálias de execução local e inspeção
    - `iroha_cli` - é usado para a solução de contratos via Torii
 
    O Makefile do repositório espera esses binários em `PATH`. Você pode baixar artefatos pré-compilados ou compilados a partir do código fonte. Se você compilar o conjunto de ferramentas localmente, use os auxiliares do Makefile para os binários:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Certifique-se de que um nó de Iroha esteja em execução quando você sair do passo de despliegue. Os exemplos abaixo presumem que Torii está acessível no URL definido em seu perfil de `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,16 +34,15 @@ O repositório inclui um contrato mínimo "hello world" em `examples/hello/hello
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Opções chave:
 
-- `--abi 1` fixa o contrato na versão ABI 1 (a única suportada no momento da escrita).
-- `--max-cycles 0` solicitação de ejecução sem limites; estabeleça um número positivo para acotar o preenchimento de ciclos para testes de conhecimento zero.
+- `ABI V1` fixa o contrato na versão ABI 1 (a única suportada no momento da escrita).
+- `--max-cycles 1000000` solicitação de ejecução sem limites; estabeleça um número positivo para acotar o preenchimento de ciclos para testes de conhecimento zero.
 
 ## 2. Inspecione o artefato Norito (opcional)
 
@@ -70,7 +69,7 @@ O exemplo `hello` registra uma saudação e emite um syscall `SET_ACCOUNT_DETAIL
 Quando você estiver satisfeito com o contrato, desdobre um nó usando a CLI. Proporciona uma conta de autoridade, sua chave de firma e um arquivo `.to` ou payload Base64:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 O comando envia um pacote de manifesto Norito + bytecode por Torii e mostra o estado da transação resultante. Uma vez confirmado, o hash do código exibido na resposta pode ser usado para recuperar manifestos ou listar instâncias:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Execução contra ToriiCom o bytecode registrado, você pode invocar o envio de uma instrução que deve ser referenciada ao código armazenado (p. ej., por meio de `iroha_cli ledger transaction submit` ou seu cliente de aplicação). Certifique-se de que as permissões da conta permitem os syscalls desejados (`set_account_detail`, `transfer_asset`, etc.).
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## Conselhos e solução de problemas
 
 - Use `make examples-run` para compilar e executar os exemplos em uma única etapa. Descreva as variáveis ​​de ambiente `KOTO`/`IVM` se os binários não estiverem em `PATH`.
-- Se `koto_compile` rechaza a versão ABI, verifique se o compilador e o nodo apontam para ABI v1 (executa `koto_compile --abi` sem argumentos para listar suporte).
+- Se `koto build` rechaza a versão ABI, verifique se o compilador e o nodo apontam para ABI v1 (executa `koto build --help` sem argumentos para listar suporte).
 - O CLI aceita chaves de firma em hexadecimal ou Base64. Para fins de verificação, você pode usar as chaves emitidas por `iroha_cli tools crypto keypair`.
 - Ao limpar cargas úteis Norito, o subcomando `ivm_tool disassemble` ajuda a instruções correlacionadas com o código fonte Kotodama.
 

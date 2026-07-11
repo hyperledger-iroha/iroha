@@ -8,6 +8,7 @@ This index links the main design and reference documents for IVM, Kotodama, and 
 - IVM bytecode header: `ivm_header.md`
 - Kotodama grammar and semantics: `kotodama_grammar.md`
 - Kotodama examples and syscall mappings: `kotodama_examples.md`
+- Machine-readable Kotodama V1 documentation policy: `kotodama_v1_docs.json`
 - Transaction pipeline (IVM‑first): `../../new_pipeline.md`
 - Torii Contracts API (manifests): `torii_contracts_api.md`
 - Universal account/UAID operations guide: `universal_accounts_guide.md`
@@ -33,8 +34,9 @@ This index links the main design and reference documents for IVM, Kotodama, and 
 - Docker builder image usage: `docker_build.md`
 
 Usage tips
-- Build and run examples in `examples/` using external tools (`koto_compile`, `ivm_run`):
-  - `make examples-run` (and `make examples-inspect` if `ivm_tool` is available)
+- Check and build sources in `examples/` with the unified `koto` driver.
+- Exercise a named entrypoint with `iroha contract debug-call`, or a view
+  with `iroha contract debug-view`.
 - Optional integration tests (ignored by default) for examples and header checks live in `integration_tests/tests/`.
 
 Pipeline configuration
@@ -62,5 +64,9 @@ Docs sync checks
   - Update sections: `cargo run -p ivm --bin gen_header_doc -- --write` and `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
 
 CI
-- GitHub Actions workflow `.github/workflows/check-docs.yml` runs these checks on every push/PR and will fail if generated docs drift from the implementation.
+- Pull-request CI discovers every tracked Kotodama source fence and documented
+  `*.ko` heredoc below the roots in `kotodama_v1_docs.json`, then checks the
+  unique sources with the canonical Rust driver. Run the same guard locally
+  with `python3 scripts/check_kotodama_docs.py --koto target/debug/koto`.
+- Generated syscall documentation drift is checked with the commands above.
 - [Governance Playbook](governance_playbook.md)

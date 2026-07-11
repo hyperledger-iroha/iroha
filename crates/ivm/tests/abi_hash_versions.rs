@@ -14,6 +14,6 @@ fn abi_hash_matches_v1_golden() {
     let hash = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     assert_eq!(
         hex::encode(hash),
-        "cfedd3f16e55a2db43076d7ac0daabc92c19684143af89594b841234ca17037d"
+        "b23c852dd485262beb79efd35cc9dfd69bd548a84239c77053b98a565839b7d3"
     );
 }

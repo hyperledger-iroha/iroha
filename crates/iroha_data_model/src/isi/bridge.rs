@@ -1,140 +1,235 @@
 //! Bridge proof ingestion instructions.
 
 use super::*;
-use iroha_primitives::json::Json;
 
-/// Route-bound browser prover manifest reference used by SCCP route-manifest ISIs.
+/// Activation update for one exact governed SCCP route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct SccpRouteBrowserProverManifestRef {
-    /// Browser-safe prover module URL.
-    pub module_url: String,
-    /// Optional package/module specifier for reproducible builds.
-    pub module_specifier: Option<String>,
-    /// Hex-encoded SHA-256 digest of the browser module bytes.
-    pub module_hash: String,
-    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
-    pub manifest_hash: String,
-    /// Expected exported symbols in the browser module.
-    pub expected_exports: Vec<String>,
-    /// Hex-encoded route/deployment hash this prover manifest is bound to.
-    pub bound_route_hash: String,
-    /// Hex-encoded proof/material hash this prover manifest is bound to.
-    pub bound_proof_hash: String,
+#[norito(deny_unknown_fields)]
+pub struct SccpSetRouteActivationV1 {
+    /// Exact route to update.
+    pub key: crate::bridge::SccpRouteKeyV1,
+    /// Activation state that must still be current when governance executes.
+    pub expected_current: crate::bridge::SccpRouteActivationV1,
+    /// Legal replacement activation state.
+    pub next: crate::bridge::SccpRouteActivationV1,
+    /// Required authenticated delayed-claim cutoff when `next` is terminal;
+    /// absent for every nonterminal transition.
+    pub inbound_finality_cutoff: Option<crate::bridge::SccpInboundFinalityCutoffV1>,
 }
 
-/// SCCP route manifest payload managed by on-chain route-manifest ISIs.
+/// Append-only native trust-anchor update for one exact governed SCCP lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SccpAdvanceLaneTrustAnchorV1 {
+    /// Exact lane whose current checkpoint advances.
+    pub lane_id: crate::bridge::SccpLaneIdV1,
+    /// Checkpoint that must still be current when governance executes.
+    pub expected_current: crate::bridge::SccpNativeTrustAnchorV1,
+    /// New family-tagged native checkpoint appended to retained history.
+    pub next: crate::bridge::SccpNativeTrustAnchorV1,
+}
+
+/// First native trust-anchor installation for one exact governed SCCP lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SccpInitializeLaneTrustAnchorV1 {
+    /// Exact lane whose absent checkpoint is initialized.
+    pub lane_id: crate::bridge::SccpLaneIdV1,
+    /// Checkpoint state that must still be absent when governance executes.
+    pub expected_current: Option<crate::bridge::SccpNativeTrustAnchorV1>,
+    /// First valid family-tagged native checkpoint.
+    pub initial: crate::bridge::SccpNativeTrustAnchorV1,
+}
+
+/// Atomic registration input for one exact staged route.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct SccpRouteManifest {
-    /// Material format version.
-    pub version: u8,
-    /// Stable route identifier.
-    pub route_id: String,
-    /// Stable asset key within the route.
-    pub asset_key: String,
-    /// Route network key, for example `mainnet`, `testnet`, or `bsc-testnet`.
-    pub network: String,
-    /// Canonical counterparty chain key.
-    pub chain: String,
-    /// Counterparty chain id hex.
-    pub chain_id_hex: String,
-    /// Canonical counterparty explorer base URL.
-    pub explorer_url: Option<String>,
-    /// Canonical counterparty explorer host.
-    pub explorer_host: Option<String>,
-    /// SCCP counterparty account codec id.
-    pub counterparty_account_codec: Option<u8>,
-    /// Stable logical key for the counterparty account codec.
-    pub counterparty_account_codec_key: Option<String>,
-    /// SCCP counterparty domain identifier.
-    pub counterparty_domain: u32,
-    /// Destination verifier target name.
-    pub verifier_target: String,
-    /// Whether this route is production-ready.
-    pub production_ready: bool,
-    /// Disabled reason surfaced when the route is not production-ready.
-    pub disabled_reason: Option<String>,
-    /// Hex-encoded destination network id used in binding evidence.
-    pub network_id_hex: String,
-    /// Counterparty `TairaXOR` token contract address.
-    pub taira_xor_token_address: String,
-    /// Counterparty `TairaXOR` bridge contract address.
-    pub taira_xor_bridge_address: String,
-    /// SCCP source bridge contract address.
-    pub source_bridge_address: String,
-    /// Destination verifier contract address.
-    pub destination_verifier_address: String,
-    /// TON verifier internal message value in nanoTON.
-    pub ton_finalize_message_value_nano: Option<String>,
-    /// Hex-encoded verifier code digest.
-    pub verifier_code_hash: String,
-    /// Hex-encoded verifier key digest.
-    pub verifier_key_hash: String,
-    /// Optional hex-encoded browser/local prover artifact digest.
-    pub proof_artifact_hash: Option<String>,
-    /// Optional hex-encoded proving key digest.
-    pub proving_key_hash: Option<String>,
-    /// Optional hex-encoded native EVM prover bundle digest.
-    pub native_evm_prover_bundle_hash: Option<String>,
-    /// Optional canonical native EVM prover bundle JSON.
-    pub native_evm_prover_bundle: Option<Json>,
-    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
-    pub source_verifier_material: Option<Json>,
-    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
-    pub source_adapter_engine_deployment: Option<Json>,
-    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
-    pub source_adapter_engine: Option<Json>,
-    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
-    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
-    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
-    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
-    /// Optional hash of the normalized deployment evidence used to build this route.
-    pub deployment_evidence_sha256: Option<String>,
-    /// Canonical destination binding key.
-    pub destination_binding_key: String,
-    /// Hex-encoded canonical destination binding hash.
-    pub destination_binding_hash: String,
-    /// Canonical TAIRA settlement asset definition id.
-    pub taira_burn_record_settlement_asset_definition_id: String,
-    /// Base64-encoded TAIRA burn-record contract artifact.
-    pub taira_burn_record_contract_artifact_b64: String,
-    /// Hex-encoded SHA-256 digest of the TAIRA burn-record artifact.
-    pub taira_burn_record_artifact_sha256: String,
-    /// Hex-encoded TAIRA burn-record contract code hash.
-    pub taira_burn_record_code_hash: String,
-    /// TAIRA burn-record verifier backend.
-    pub taira_burn_record_vk_backend: String,
-    /// TAIRA burn-record verifier key name.
-    pub taira_burn_record_vk_name: String,
-    /// TAIRA burn-record settlement gas limit.
-    pub taira_burn_record_gas_limit: u64,
-    /// Optional settlement contract address.
-    pub settlement_contract_address: Option<String>,
-    /// Optional settlement contract alias.
-    pub settlement_contract_alias: Option<String>,
-    /// Whether post-deploy route evidence is complete.
-    pub post_deploy_full_toml_ready: Option<bool>,
-    /// Hex-encoded source bridge config hash.
-    pub post_deploy_source_bridge_config_hash: Option<String>,
-    /// Hex-encoded source event transaction id.
-    pub post_deploy_source_event_transaction_id: Option<String>,
-    /// Canonical explorer URL for the source event transaction.
-    pub post_deploy_source_event_explorer_url: Option<String>,
-    /// Hex-encoded route canary evidence hash.
-    pub post_deploy_route_canary_evidence_hash: Option<String>,
-    /// Hex-encoded route canary transaction id.
-    pub post_deploy_route_canary_transaction_id: Option<String>,
-    /// Canonical explorer URL for the route canary transaction.
-    pub post_deploy_route_canary_explorer_url: Option<String>,
-    /// Hex-encoded offline full TOML SHA-256 digest.
-    pub post_deploy_offline_full_toml_sha256: Option<String>,
+#[norito(deny_unknown_fields)]
+pub struct SccpRegisterRouteV1 {
+    /// Complete immutable route, necessarily staged at registration.
+    pub route: crate::bridge::SccpGovernedRouteV1,
+    /// Optional initial lane anchor, or the exact current value when joining a lane.
+    pub native_trust_anchor: Option<crate::bridge::SccpNativeTrustAnchorV1>,
+}
+
+/// Atomic cutover from one immutable route revision to its staged successor.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SccpSwitchRouteRevisionV1 {
+    /// Currently selected immutable revision.
+    pub previous_key: crate::bridge::SccpRouteKeyV1,
+    /// Activation state that the previous revision must still have.
+    pub expected_previous: crate::bridge::SccpRouteActivationV1,
+    /// Inbound-draining or emergency-paused state assigned to the previous revision.
+    pub previous_next: crate::bridge::SccpRouteActivationV1,
+    /// Required authenticated delayed-claim cutoff when the previous revision
+    /// becomes terminal in this atomic cutover; otherwise absent.
+    pub previous_inbound_finality_cutoff: Option<crate::bridge::SccpInboundFinalityCutoffV1>,
+    /// Already-registered staged monotonic successor.
+    pub successor_key: crate::bridge::SccpRouteKeyV1,
+    /// Bidirectional state assigned to the successor.
+    pub successor_next: crate::bridge::SccpRouteActivationV1,
+}
+
+/// Closed atomic SCCP route-governance action.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+#[norito(tag = "action", content = "route")]
+pub enum SccpRouteGovernanceActionV1 {
+    /// Register one complete immutable route in staged state.
+    #[codec(index = 0)]
+    Register(SccpRegisterRouteV1),
+    /// Change only the route's directional activation state.
+    #[codec(index = 1)]
+    SetActivation(SccpSetRouteActivationV1),
+    /// Atomically stop one revision and enable its staged successor.
+    #[codec(index = 2)]
+    SwitchRevision(SccpSwitchRouteRevisionV1),
+    /// Install the first native source trust anchor using a `None` compare-and-swap.
+    #[codec(index = 3)]
+    InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1),
+    /// Append and select the next native source trust anchor without deleting history.
+    #[codec(index = 4)]
+    AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1),
+    /// Remove a never-used staged route.
+    #[codec(index = 5)]
+    Remove(crate::bridge::SccpRouteKeyV1),
+}
+
+impl SccpRouteGovernanceActionV1 {
+    /// Validate invariants that do not require current world state.
+    pub fn validate_static(&self) -> Result<(), crate::bridge::SccpRouteValidationError> {
+        use crate::bridge::SccpRouteValidationError;
+
+        match self {
+            Self::Register(registration) => {
+                registration.route.validate_registration()?;
+                registration
+                    .route
+                    .validate_with_anchor(registration.native_trust_anchor)
+            }
+            Self::SetActivation(update) => {
+                update.key.validate()?;
+                let cutoff_valid = if update.next.is_terminal() {
+                    update
+                        .inbound_finality_cutoff
+                        .is_some_and(crate::bridge::SccpInboundFinalityCutoffV1::is_well_formed)
+                } else {
+                    update.inbound_finality_cutoff.is_none()
+                };
+                if !update.expected_current.can_transition_to(update.next) || !cutoff_valid {
+                    return Err(SccpRouteValidationError::InvalidActivationTransition);
+                }
+                Ok(())
+            }
+            Self::SwitchRevision(update) => {
+                update.previous_key.validate()?;
+                update.successor_key.validate()?;
+                let same_lineage = update.previous_key.lane_id == update.successor_key.lane_id
+                    && update.previous_key.route_id == update.successor_key.route_id
+                    && update.previous_key.asset_key == update.successor_key.asset_key;
+                let terminal_cutover = update.previous_next.is_terminal();
+                let previous_transition_valid = if terminal_cutover {
+                    matches!(
+                        update.expected_previous,
+                        crate::bridge::SccpRouteActivationV1::Bidirectional
+                            | crate::bridge::SccpRouteActivationV1::InboundOnly
+                            | crate::bridge::SccpRouteActivationV1::Paused
+                    )
+                } else {
+                    update
+                        .expected_previous
+                        .can_transition_to(update.previous_next)
+                };
+                let cutoff_valid = if terminal_cutover {
+                    update
+                        .previous_inbound_finality_cutoff
+                        .is_some_and(crate::bridge::SccpInboundFinalityCutoffV1::is_well_formed)
+                } else {
+                    update.previous_inbound_finality_cutoff.is_none()
+                };
+                if !same_lineage
+                    || update.successor_key.revision
+                        != update
+                            .previous_key
+                            .revision
+                            .checked_add(1)
+                            .ok_or(SccpRouteValidationError::InvalidRouteRevision)?
+                    || !previous_transition_valid
+                    || !cutoff_valid
+                    || !matches!(
+                        update.previous_next,
+                        crate::bridge::SccpRouteActivationV1::InboundOnly
+                            | crate::bridge::SccpRouteActivationV1::Paused
+                            | crate::bridge::SccpRouteActivationV1::Retired
+                    )
+                    || !crate::bridge::SccpRouteActivationV1::Staged
+                        .can_transition_to(update.successor_next)
+                    || update.successor_next != crate::bridge::SccpRouteActivationV1::Bidirectional
+                {
+                    return Err(SccpRouteValidationError::InvalidActivationTransition);
+                }
+                Ok(())
+            }
+            Self::InitializeTrustAnchor(update) => {
+                if !update.lane_id.is_well_formed()
+                    || !update.lane_id.source.is_external()
+                    || !update.lane_id.target.is_sora()
+                    || update.expected_current.is_some()
+                    || !update.initial.is_well_formed()
+                    || !update
+                        .initial
+                        .backend
+                        .supports_source_network(update.lane_id.source)
+                {
+                    return Err(SccpRouteValidationError::InvalidTrustAnchorInitialize);
+                }
+                Ok(())
+            }
+            Self::AdvanceTrustAnchor(update) => {
+                if !update.lane_id.is_well_formed()
+                    || !update.lane_id.source.is_external()
+                    || !update.lane_id.target.is_sora()
+                    || !update.expected_current.is_well_formed()
+                    || !update.next.is_well_formed()
+                    || update.expected_current.backend != update.next.backend
+                    || !update
+                        .next
+                        .backend
+                        .supports_source_network(update.lane_id.source)
+                    || update.expected_current.anchor_hash == update.next.anchor_hash
+                    || update.next.checkpoint_height <= update.expected_current.checkpoint_height
+                {
+                    return Err(SccpRouteValidationError::InvalidTrustAnchorAdvance);
+                }
+                Ok(())
+            }
+            Self::Remove(key) => key.validate(),
+        }
+    }
 }
 
 isi! {
@@ -143,8 +238,9 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct SubmitBridgeProof {
-        /// Bridge proof payload (ICS or transparent ZK).
+        /// Typed bridge proof payload and its payload-owned verifier binding.
         pub proof: crate::bridge::BridgeProof,
     }
 }
@@ -180,60 +276,24 @@ impl RecordBridgeReceipt {
 }
 
 isi! {
-    /// Upsert an on-chain SCCP route manifest.
+    /// Apply one exact atomic SCCP route-governance action.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct UpsertSccpRouteManifest {
-        /// Route manifest to insert or replace.
-        pub manifest: SccpRouteManifest,
+    #[norito(deny_unknown_fields)]
+    pub struct ApplySccpRouteGovernance {
+        /// Complete closed governance action.
+        pub action: SccpRouteGovernanceActionV1,
     }
 }
 
-impl crate::seal::Instruction for UpsertSccpRouteManifest {}
+impl crate::seal::Instruction for ApplySccpRouteGovernance {}
 
-impl UpsertSccpRouteManifest {
-    /// Construct a new SCCP route manifest upsert.
-    pub fn new(manifest: SccpRouteManifest) -> Self {
-        Self { manifest }
-    }
-}
-
-isi! {
-    /// Remove an on-chain SCCP route manifest by canonical route key.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    pub struct RemoveSccpRouteManifest {
-        /// Stable route identifier.
-        pub route_id: String,
-        /// Stable asset key within the route.
-        pub asset_key: String,
-        /// SCCP counterparty domain identifier.
-        pub counterparty_domain: u32,
-        /// Counterparty chain id hex.
-        pub chain_id_hex: String,
-    }
-}
-
-impl crate::seal::Instruction for RemoveSccpRouteManifest {}
-
-impl RemoveSccpRouteManifest {
-    /// Construct a new SCCP route manifest removal.
-    pub fn new(
-        route_id: String,
-        asset_key: String,
-        counterparty_domain: u32,
-        chain_id_hex: String,
-    ) -> Self {
-        Self {
-            route_id,
-            asset_key,
-            counterparty_domain,
-            chain_id_hex,
-        }
+impl ApplySccpRouteGovernance {
+    /// Construct one atomic SCCP route-governance instruction.
+    pub fn new(action: SccpRouteGovernanceActionV1) -> Self {
+        Self { action }
     }
 }
 
@@ -281,7 +341,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordBridgeReceipt {
     }
 }
 
-impl<'a> norito::core::DecodeFromSlice<'a> for UpsertSccpRouteManifest {
+impl<'a> norito::core::DecodeFromSlice<'a> for ApplySccpRouteGovernance {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = bridge_decode_flags();
         if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
@@ -289,7 +349,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UpsertSccpRouteManifest {
         }
 
         let mut offset = 0usize;
-        let manifest = super::decode_aos_canonical_field::<SccpRouteManifest>(
+        let action = super::decode_aos_canonical_field::<SccpRouteGovernanceActionV1>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -297,47 +357,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for UpsertSccpRouteManifest {
             return Err(norito::core::Error::LengthMismatch);
         }
         norito::core::note_payload_access(bytes, offset);
-        Ok((Self { manifest }, offset))
-    }
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for RemoveSccpRouteManifest {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = bridge_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
-
-        let mut offset = 0usize;
-        let route_id = super::decode_aos_canonical_field::<String>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let asset_key = super::decode_aos_canonical_field::<String>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let counterparty_domain = super::decode_aos_canonical_field::<u32>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let chain_id_hex = super::decode_aos_canonical_field::<String>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((
-            Self {
-                route_id,
-                asset_key,
-                counterparty_domain,
-                chain_id_hex,
-            },
-            offset,
-        ))
+        Ok((Self { action }, offset))
     }
 }
 
@@ -347,7 +367,10 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct RecordSccpMessage {
+        /// Exact governed lane and destination binding for this outbound message.
+        pub context: crate::bridge::SccpOutboundMessageContextV1,
         /// Canonical SCCP payload bytes.
         pub payload_bytes: Vec<u8>,
     }
@@ -356,9 +379,224 @@ isi! {
 impl crate::seal::Instruction for RecordSccpMessage {}
 
 impl RecordSccpMessage {
-    /// Construct a new SCCP message record instruction for the provided payload bytes.
-    pub fn new(payload_bytes: Vec<u8>) -> Self {
-        Self { payload_bytes }
+    /// Construct an SCCP message record instruction for the exact governed context.
+    pub fn new(
+        context: crate::bridge::SccpOutboundMessageContextV1,
+        payload_bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            context,
+            payload_bytes,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sccp_governance_tests {
+    use super::*;
+    use crate::bridge::{
+        BridgeNativeProofBackendV1, SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1,
+        SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError,
+    };
+
+    fn lane() -> SccpLaneIdV1 {
+        SccpLaneIdV1 {
+            source: SccpNetworkV1::EthereumMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        }
+    }
+
+    fn anchor(hash: u8, height: u64) -> SccpNativeTrustAnchorV1 {
+        SccpNativeTrustAnchorV1 {
+            backend: BridgeNativeProofBackendV1::EthereumBeacon,
+            anchor_hash: [hash; 32],
+            checkpoint_height: height,
+        }
+    }
+
+    fn key(revision: u32) -> SccpRouteKeyV1 {
+        SccpRouteKeyV1 {
+            lane_id: lane(),
+            route_id: "taira_eth_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            revision,
+        }
+    }
+
+    #[test]
+    fn trust_anchor_initialize_is_strict_none_to_some_cas() {
+        let valid =
+            SccpRouteGovernanceActionV1::InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1 {
+                lane_id: lane(),
+                expected_current: None,
+                initial: anchor(1, 100),
+            });
+        assert!(valid.validate_static().is_ok());
+
+        let stale =
+            SccpRouteGovernanceActionV1::InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1 {
+                lane_id: lane(),
+                expected_current: Some(anchor(1, 100)),
+                initial: anchor(2, 101),
+            });
+        assert_eq!(
+            stale.validate_static(),
+            Err(SccpRouteValidationError::InvalidTrustAnchorInitialize)
+        );
+
+        let zero =
+            SccpRouteGovernanceActionV1::InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1 {
+                lane_id: lane(),
+                expected_current: None,
+                initial: SccpNativeTrustAnchorV1 {
+                    anchor_hash: [0; 32],
+                    ..anchor(1, 100)
+                },
+            });
+        assert_eq!(
+            zero.validate_static(),
+            Err(SccpRouteValidationError::InvalidTrustAnchorInitialize)
+        );
+    }
+
+    #[test]
+    fn trust_anchor_advance_rejects_same_rollback_and_cross_family() {
+        let valid = SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
+            lane_id: lane(),
+            expected_current: anchor(1, 100),
+            next: anchor(2, 101),
+        });
+        assert!(valid.validate_static().is_ok());
+
+        for next in [anchor(1, 101), anchor(2, 100), anchor(2, 99)] {
+            let action =
+                SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
+                    lane_id: lane(),
+                    expected_current: anchor(1, 100),
+                    next,
+                });
+            assert_eq!(
+                action.validate_static(),
+                Err(SccpRouteValidationError::InvalidTrustAnchorAdvance)
+            );
+        }
+
+        let cross_family =
+            SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
+                lane_id: lane(),
+                expected_current: anchor(1, 100),
+                next: SccpNativeTrustAnchorV1 {
+                    backend: BridgeNativeProofBackendV1::TronDpos,
+                    anchor_hash: [2; 32],
+                    checkpoint_height: 101,
+                },
+            });
+        assert_eq!(
+            cross_family.validate_static(),
+            Err(SccpRouteValidationError::InvalidTrustAnchorAdvance)
+        );
+    }
+
+    #[test]
+    fn revision_switch_requires_checked_successor_and_draining_previous() {
+        let valid = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
+            previous_key: key(1),
+            expected_previous: SccpRouteActivationV1::Bidirectional,
+            previous_next: SccpRouteActivationV1::InboundOnly,
+            previous_inbound_finality_cutoff: None,
+            successor_key: key(2),
+            successor_next: SccpRouteActivationV1::Bidirectional,
+        });
+        assert!(valid.validate_static().is_ok());
+
+        let overflow = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
+            previous_key: key(u32::MAX),
+            expected_previous: SccpRouteActivationV1::Bidirectional,
+            previous_next: SccpRouteActivationV1::InboundOnly,
+            previous_inbound_finality_cutoff: None,
+            successor_key: key(u32::MAX),
+            successor_next: SccpRouteActivationV1::Bidirectional,
+        });
+        assert_eq!(
+            overflow.validate_static(),
+            Err(SccpRouteValidationError::InvalidRouteRevision)
+        );
+
+        let unsafe_retire =
+            SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
+                previous_key: key(1),
+                expected_previous: SccpRouteActivationV1::Bidirectional,
+                previous_next: SccpRouteActivationV1::Retired,
+                previous_inbound_finality_cutoff: None,
+                successor_key: key(2),
+                successor_next: SccpRouteActivationV1::Bidirectional,
+            });
+        assert_eq!(
+            unsafe_retire.validate_static(),
+            Err(SccpRouteValidationError::InvalidActivationTransition)
+        );
+
+        let safe_retire = SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
+            previous_key: key(1),
+            expected_previous: SccpRouteActivationV1::Bidirectional,
+            previous_next: SccpRouteActivationV1::Retired,
+            previous_inbound_finality_cutoff: Some(crate::bridge::SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: [0x91; 32],
+                max_anchor_interval_height: 101,
+            }),
+            successor_key: key(2),
+            successor_next: SccpRouteActivationV1::Bidirectional,
+        });
+        assert!(safe_retire.validate_static().is_ok());
+    }
+
+    #[test]
+    fn terminal_activation_requires_one_well_formed_inbound_finality_cutoff() {
+        let cutoff = crate::bridge::SccpInboundFinalityCutoffV1 {
+            trust_anchor_hash: anchor(1, 100).anchor_hash,
+            max_anchor_interval_height: 150,
+        };
+        let valid = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
+            key: key(1),
+            expected_current: SccpRouteActivationV1::InboundOnly,
+            next: SccpRouteActivationV1::Retired,
+            inbound_finality_cutoff: Some(cutoff),
+        });
+        assert!(valid.validate_static().is_ok());
+
+        for inbound_finality_cutoff in [
+            None,
+            Some(crate::bridge::SccpInboundFinalityCutoffV1 {
+                trust_anchor_hash: [0; 32],
+                ..cutoff
+            }),
+            Some(crate::bridge::SccpInboundFinalityCutoffV1 {
+                max_anchor_interval_height: 0,
+                ..cutoff
+            }),
+        ] {
+            let invalid = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
+                key: key(1),
+                expected_current: SccpRouteActivationV1::InboundOnly,
+                next: SccpRouteActivationV1::Retired,
+                inbound_finality_cutoff,
+            });
+            assert_eq!(
+                invalid.validate_static(),
+                Err(SccpRouteValidationError::InvalidActivationTransition)
+            );
+        }
+
+        let cutoff_on_live = SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
+            key: key(1),
+            expected_current: SccpRouteActivationV1::Paused,
+            next: SccpRouteActivationV1::InboundOnly,
+            inbound_finality_cutoff: Some(cutoff),
+        });
+        assert_eq!(
+            cutoff_on_live.validate_static(),
+            Err(SccpRouteValidationError::InvalidActivationTransition)
+        );
     }
 }
 
@@ -371,6 +609,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
         }
 
         let mut offset = 0usize;
+        let context = super::decode_aos_slice_field::<crate::bridge::SccpOutboundMessageContextV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let payload_bytes = super::decode_aos_slice_field::<Vec<u8>>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -379,7 +621,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RecordSccpMessage {
             return Err(norito::core::Error::LengthMismatch);
         }
         norito::core::note_payload_access(bytes, offset);
-        Ok((Self { payload_bytes }, offset))
+        Ok((
+            Self {
+                context,
+                payload_bytes,
+            },
+            offset,
+        ))
     }
 }
 
@@ -391,7 +639,7 @@ mod tests {
     use crate::{
         bridge::{
             BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeReceipt,
-            BridgeTransparentProof,
+            BridgeTransparentProof, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
         },
         nexus::LaneId,
         proof::ProofBox,
@@ -403,12 +651,11 @@ mod tests {
                 start_height: 7,
                 end_height: 9,
             },
-            manifest_hash: [0xAB; 32],
             payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                verifier_manifest_hash: [0xAB; 32],
                 proof: ProofBox::new("halo2/mock".into(), vec![0xDE, 0xAD, 0xBE, 0xEF]),
                 recursion_depth: Some(2),
             }),
-            pinned: true,
         }
     }
 
@@ -425,101 +672,28 @@ mod tests {
         }
     }
 
-    fn browser_prover_ref(seed: u8) -> SccpRouteBrowserProverManifestRef {
-        let hex = |byte| format!("0x{}", hex::encode([byte; 32]));
-        SccpRouteBrowserProverManifestRef {
-            module_url: "@sora/sccp-bsc-prover/taira-bsc-xor-prover.js".to_owned(),
-            module_specifier: Some("@sora/sccp-bsc-prover".to_owned()),
-            module_hash: hex(seed),
-            manifest_hash: hex(seed.saturating_add(1)),
-            expected_exports: vec!["bscSccpProve".to_owned(), "bscSccpSelfTest".to_owned()],
-            bound_route_hash: hex(seed.saturating_add(2)),
-            bound_proof_hash: hex(seed.saturating_add(3)),
-        }
+    fn outbound_context() -> SccpOutboundMessageContextV1 {
+        SccpOutboundMessageContextV1::new(
+            SccpLaneIdV1 {
+                source: SccpNetworkV1::SoraTaira,
+                target: SccpNetworkV1::BscTestnet,
+            },
+            [0x44; 32],
+            [0x45; 32],
+        )
+        .expect("valid outbound context")
     }
 
-    fn route_manifest() -> SccpRouteManifest {
-        let hex = |byte| format!("0x{}", hex::encode([byte; 32]));
-        SccpRouteManifest {
-            version: 1,
+    fn route_governance_action() -> SccpRouteGovernanceActionV1 {
+        SccpRouteGovernanceActionV1::Remove(crate::bridge::SccpRouteKeyV1 {
+            lane_id: SccpLaneIdV1 {
+                source: SccpNetworkV1::BscTestnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
             route_id: "taira_bsc_xor".to_owned(),
             asset_key: "xor".to_owned(),
-            network: "bsc-testnet".to_owned(),
-            chain: "bsc-testnet".to_owned(),
-            chain_id_hex: "0x61".to_owned(),
-            explorer_url: Some("https://testnet.bscscan.com".to_owned()),
-            explorer_host: Some("testnet.bscscan.com".to_owned()),
-            counterparty_account_codec: Some(2),
-            counterparty_account_codec_key: Some("evm_hex".to_owned()),
-            counterparty_domain: 2,
-            verifier_target: "EvmContract".to_owned(),
-            production_ready: true,
-            disabled_reason: None,
-            network_id_hex: hex(0x61),
-            taira_xor_token_address: "0x1111111111111111111111111111111111111111".to_owned(),
-            taira_xor_bridge_address: "0x2222222222222222222222222222222222222222".to_owned(),
-            source_bridge_address: "0x3333333333333333333333333333333333333333".to_owned(),
-            destination_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
-            ton_finalize_message_value_nano: None,
-            verifier_code_hash: hex(0x45),
-            verifier_key_hash: hex(0x46),
-            proof_artifact_hash: Some(hex(0x47)),
-            proving_key_hash: Some(hex(0x48)),
-            native_evm_prover_bundle_hash: Some(hex(0x49)),
-            native_evm_prover_bundle: Some(Json::new(norito::json!({
-                "schema": "sccp-bsc-native-evm-prover-bundle/v1",
-                "routeId": "taira_bsc_xor",
-                "assetKey": "xor"
-            }))),
-            source_verifier_material: Some(Json::new(norito::json!({
-                "version": 1,
-                "source_domain": 2,
-                "target_domain": 0,
-                "source_chain": "bsc"
-            }))),
-            source_adapter_engine_deployment: Some(Json::new(norito::json!({
-                "version": 1,
-                "source_domain": 2,
-                "target_domain": 0,
-                "source_chain": "bsc",
-                "deployment_receipt_hash": "0x5454545454545454545454545454545454545454545454545454545454545454"
-            }))),
-            source_adapter_engine: Some(Json::new(norito::json!({
-                "version": 1,
-                "source_domain": 2,
-                "target_domain": 0,
-                "source_chain": "bsc"
-            }))),
-            destination_browser_prover: Some(browser_prover_ref(0x50)),
-            source_browser_prover: Some(browser_prover_ref(0x60)),
-            deployment_evidence_sha256: Some(hex(0x4a)),
-            destination_binding_key: "evm:0:2:test-binding".to_owned(),
-            destination_binding_hash: hex(0x4b),
-            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
-                .to_owned(),
-            taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
-            taira_burn_record_artifact_sha256: hex(0x4c),
-            taira_burn_record_code_hash: hex(0x4d),
-            taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
-            taira_burn_record_vk_name: "taira_bsc_xor_burn_record_v1".to_owned(),
-            taira_burn_record_gas_limit: 2_000_000,
-            settlement_contract_address: None,
-            settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
-            post_deploy_full_toml_ready: Some(true),
-            post_deploy_source_bridge_config_hash: Some(hex(0x4e)),
-            post_deploy_source_event_transaction_id: Some(hex(0x4f)),
-            post_deploy_source_event_explorer_url: Some(format!(
-                "https://testnet.bscscan.com/tx/{}",
-                hex(0x4f)
-            )),
-            post_deploy_route_canary_evidence_hash: Some(hex(0x51)),
-            post_deploy_route_canary_transaction_id: Some(hex(0x52)),
-            post_deploy_route_canary_explorer_url: Some(format!(
-                "https://testnet.bscscan.com/tx/{}",
-                hex(0x52)
-            )),
-            post_deploy_offline_full_toml_sha256: Some(hex(0x53)),
-        }
+            revision: 1,
+        })
     }
 
     fn assert_slice_roundtrip<T>(value: T)
@@ -555,14 +729,8 @@ mod tests {
     fn bridge_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(SubmitBridgeProof::new(proof()));
         assert_slice_roundtrip(RecordBridgeReceipt::new(receipt()));
-        assert_slice_roundtrip(UpsertSccpRouteManifest::new(route_manifest()));
-        assert_slice_roundtrip(RemoveSccpRouteManifest::new(
-            "taira_bsc_xor".to_owned(),
-            "xor".to_owned(),
-            2,
-            "0x61".to_owned(),
-        ));
-        assert_slice_roundtrip(RecordSccpMessage::new(vec![0xCA, 0xFE]));
+        assert_slice_roundtrip(ApplySccpRouteGovernance::new(route_governance_action()));
+        assert_slice_roundtrip(RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]));
     }
 
     #[test]
@@ -570,22 +738,18 @@ mod tests {
         let registry = crate::isi::InstructionRegistry::new()
             .register_slice::<SubmitBridgeProof>()
             .register_slice::<RecordBridgeReceipt>()
-            .register_slice::<UpsertSccpRouteManifest>()
-            .register_slice::<RemoveSccpRouteManifest>()
+            .register_slice::<ApplySccpRouteGovernance>()
             .register_slice::<RecordSccpMessage>();
 
         assert_registry_decodes(&registry, SubmitBridgeProof::new(proof()));
         assert_registry_decodes(&registry, RecordBridgeReceipt::new(receipt()));
-        assert_registry_decodes(&registry, UpsertSccpRouteManifest::new(route_manifest()));
         assert_registry_decodes(
             &registry,
-            RemoveSccpRouteManifest::new(
-                "taira_bsc_xor".to_owned(),
-                "xor".to_owned(),
-                2,
-                "0x61".to_owned(),
-            ),
+            ApplySccpRouteGovernance::new(route_governance_action()),
         );
-        assert_registry_decodes(&registry, RecordSccpMessage::new(vec![0xCA, 0xFE]));
+        assert_registry_decodes(
+            &registry,
+            RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]),
+        );
     }
 }

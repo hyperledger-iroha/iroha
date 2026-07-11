@@ -197,7 +197,7 @@ qulflarni oldindan yuklash yoki UAID manifestlarini qo'llash. Yangi `ivm::analys
 (`crates/ivm/src/analysis.rs`) kodni dekodlaydigan `analyze_program(&[u8])` ni ochib beradi.
 `.to` artefakt, o'qish/yozish, xotira operatsiyalari va tizim qo'ng'iroqlarini ro'yxatga olish,
 va SDK manifestlari joylashtirishi mumkin bo'lgan JSON-do'st hisobotni ishlab chiqaradi. Uni ishga tushiring
-UAIDlarni nashr qilishda `koto_lint` bilan birga ishlab chiqarilgan R/W xulosasi
+UAIDlarni nashr qilishda `koto check` bilan birga ishlab chiqarilgan R/W xulosasi
 NX-17 tayyorligini tekshirish paytida havola qilingan dalillar to'plamida olingan.
 
 ## Space Directory siyosatini amalga oshirish

@@ -28,6 +28,8 @@ mod nullifier;
 mod nullifier_computation;
 #[path = "../numeric_syscalls.rs"]
 mod numeric_syscalls;
+#[path = "../numeric_v1_sdk_fixture.rs"]
+mod numeric_v1_sdk_fixture;
 #[path = "../op_semantics.rs"]
 mod op_semantics;
 #[path = "../op_semantics_alignment_more.rs"]

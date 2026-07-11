@@ -44,7 +44,7 @@ translator: machine-google-reviewed
 - Docker ግንበኛ ምስል አጠቃቀም፡ `docker_build.md`
 
 የአጠቃቀም ምክሮች
-- ውጫዊ መሳሪያዎችን (`koto_compile`፣ `ivm_run`) በመጠቀም ምሳሌዎችን በ`examples/` ይገንቡ እና ያሂዱ።
+- ውጫዊ መሳሪያዎችን (`koto build`፣ `ivm_run`) በመጠቀም ምሳሌዎችን በ`examples/` ይገንቡ እና ያሂዱ።
   - `make examples-run` (እና `make examples-inspect` ካለ)
 - የአማራጭ ውህደት ሙከራዎች (በነባሪነት ችላ የተባሉ) ምሳሌዎች እና የርዕስ ፍተሻዎች በቀጥታ በ`integration_tests/tests/`።የቧንቧ መስመር ውቅር
 - ሁሉም የሩጫ ጊዜ ባህሪ በ`iroha_config` ፋይሎች ነው የተዋቀረው። የአካባቢ ተለዋዋጮች ለኦፕሬተሮች ጥቅም ላይ አይውሉም.

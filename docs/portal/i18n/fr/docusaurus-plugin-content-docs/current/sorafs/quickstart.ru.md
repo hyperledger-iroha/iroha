@@ -127,3 +127,23 @@ Provenances :
 - **Автоматизация CI** – добавьте команды выше в release-пайплайны, чтобы документация,
   matériels et objets d'art publiés dans les manifestations publiques
   métadonnées.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

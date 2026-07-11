@@ -20,7 +20,7 @@ Iroha node တစ်ခုသို့။
 
 1. Rust toolchain (1.76 သို့မဟုတ် ထို့ထက် ပို) ကို ထည့်သွင်းပြီး ဤသိမ်းဆည်းမှုကို စစ်ဆေးပါ။
 2. ပံ့ပိုးပေးထားသော binaries ကို တည်ဆောက်ပါ သို့မဟုတ် ဒေါင်းလုဒ်လုပ်ပါ-
-   - `koto_compile` – Kotodama IVM/Norito bytecode ကိုထုတ်လွှတ်သော compiler
+   - `koto build` – Kotodama IVM/Norito bytecode ကိုထုတ်လွှတ်သော compiler
    - `ivm_run` နှင့် `ivm_tool` - ဒေသဆိုင်ရာ ကွပ်မျက်ရေးနှင့် စစ်ဆေးရေး အသုံးဝင်မှုများ
    - `iroha` - Torii မှတစ်ဆင့် စာချုပ်ဖြန့်ကျက်ရာတွင် အသုံးပြုသည်
 
@@ -29,7 +29,7 @@ Iroha node တစ်ခုသို့။
    စက်တွင်းရှိ toolchain တွင် Makefile အကူအညီပေးသူများကို binaries တွင်ညွှန်ပြပါ-
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. သင်အသုံးပြုမှုအဆင့်သို့ရောက်ရှိသောအခါ Iroha node တစ်ခုလည်ပတ်ကြောင်းသေချာပါစေ။ ဟိ
@@ -43,17 +43,16 @@ Iroha node တစ်ခုသို့။
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 အဓိက အလံများ-
 
-- `--abi 1` သည် ABI ဗားရှင်း 1 သို့ စာချုပ်ကို လော့ခ်ချသည် (တစ်ခုတည်းသော ပံ့ပိုးထားသော ဗားရှင်းမှာ
+- `ABI V1` သည် ABI ဗားရှင်း 1 သို့ စာချုပ်ကို လော့ခ်ချသည် (တစ်ခုတည်းသော ပံ့ပိုးထားသော ဗားရှင်းမှာ
   စာရေးချိန်)။
-- `--max-cycles 0` သည် အကန့်အသတ်မဲ့ ကွပ်မျက်မှုကို တောင်းဆိုသည်။ အပြုသဘောဆောင်သော နံပါတ်ကို ချည်နှောင်ရန် သတ်မှတ်ပါ။
+- `--max-cycles 1000000` သည် အကန့်အသတ်မဲ့ ကွပ်မျက်မှုကို တောင်းဆိုသည်။ အပြုသဘောဆောင်သော နံပါတ်ကို ချည်နှောင်ရန် သတ်မှတ်ပါ။
   သုည-အသိပညာအထောက်အထားများအတွက် သံသရာ padding။
 
 ## 2. Norito ကို စစ်ဆေးပါ (ချန်လှပ်ထားနိုင်သည်)
@@ -87,7 +86,7 @@ ivm_run target/examples/hello.to --args '{}'
 Base64 ပေးဆောင်မှု-
 
 ```sh
-iroha app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,13 +97,13 @@ iroha app contracts deploy \
 တုံ့ပြန်မှုတွင်ပြသထားသော hash ကို မန်နီးဖက်စ်များ သို့မဟုတ် ဖြစ်ရပ်များကို စာရင်းပြုစုရန် အသုံးပြုနိုင်သည်။
 
 ```sh
-iroha app contracts manifest get --code-hash 0x<hash>
+iroha contract manifest get --code-hash 0x<hash>
 ```
 
 ## 5. Torii ကို run ပါ။
 
 bytecode မှတ်ပုံတင်ထားပြီး၊ ညွှန်ကြားချက်တစ်ခုတင်ပြခြင်းဖြင့် ၎င်းကိုသင်တောင်းဆိုနိုင်ပါသည်။
-သိမ်းဆည်းထားသောကုဒ်ကို ရည်ညွှန်းသည် (ဥပမာ၊ `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait` မှတဆင့်
+သိမ်းဆည်းထားသောကုဒ်ကို ရည်ညွှန်းသည် (ဥပမာ၊ `iroha contract call --contract-address <contract-address> --entrypoint main --wait` မှတဆင့်
 သို့မဟုတ် သင့်လျှောက်လွှာဖောက်သည်)။ အကောင့်ခွင့်ပြုချက်များ လိုချင်သောကိုခွင့်ပြုကြောင်းသေချာပါစေ။
 syscalls (`set_account_detail`၊ `transfer_asset` စသည်ဖြင့်)။
 
@@ -113,8 +112,8 @@ syscalls (`set_account_detail`၊ `transfer_asset` စသည်ဖြင့်)�
 - ပေးထားသော ဥပမာများကို တစ်ခုတည်းတွင် စုစည်းပြီး လုပ်ဆောင်ရန် `make examples-run` ကို အသုံးပြုပါ။
   ရိုက်ချက်။ binaries ကိုဖွင့်မထားပါက `KOTO`/`IVM` ကို အစားထိုးပါ
   `PATH`။
-- `koto_compile` သည် ABI ဗားရှင်းကို ငြင်းပယ်ပါက compiler နှင့် node ကို စစ်ဆေးပါ။
-  ပစ်မှတ် နှစ်ခုစလုံးသည် ABI v1 (`koto_compile --abi` ကို စာရင်းသွင်းရန် အကြောင်းပြချက်များမပါဘဲ လုပ်ဆောင်သည်
+- `koto build` သည် ABI ဗားရှင်းကို ငြင်းပယ်ပါက compiler နှင့် node ကို စစ်ဆေးပါ။
+  ပစ်မှတ် နှစ်ခုစလုံးသည် ABI v1 (`koto build --help` ကို စာရင်းသွင်းရန် အကြောင်းပြချက်များမပါဘဲ လုပ်ဆောင်သည်
   ပံ့ပိုးမှု)။
 - CLI သည် hex သို့မဟုတ် Base64 လက်မှတ်ထိုးသော့များကို လက်ခံသည်။ စမ်းသပ်ရန်အတွက်၊ သင်သုံးနိုင်သည်။
   `kagami keys --json` မှ ထုတ်လွှတ်သော သော့များ။

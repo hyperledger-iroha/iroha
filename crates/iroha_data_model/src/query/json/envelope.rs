@@ -231,6 +231,11 @@ pub enum SingularQueryJson {
         /// Asset definition address identifying the asset type.
         asset: String,
     },
+    /// Looks up a non-fungible asset by identifier.
+    FindNftById {
+        /// Canonical NFT identifier.
+        nft_id: String,
+    },
     /// Looks up a native asset escrow by identifier.
     FindAssetEscrowById {
         /// Hex-encoded escrow hash identifier.
@@ -342,6 +347,12 @@ impl SingularQueryJson {
         })
     }
 
+    fn parse_nft_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindNftById {
+            nft_id: payload_required_string(payload, "nft_id")?.to_owned(),
+        })
+    }
+
     fn parse_asset_escrow(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindAssetEscrowById {
             escrow_id: payload_required_string(payload, "escrow_id")?.to_owned(),
@@ -414,6 +425,12 @@ impl SingularQueryJson {
             .map_err(|_| QueryJsonError::InvalidField("payload", "domain_id"))
     }
 
+    fn decode_nft_id(nft_id: &str) -> Result<crate::nft::NftId, QueryJsonError> {
+        nft_id
+            .parse()
+            .map_err(|_| QueryJsonError::InvalidField("payload", "nft_id"))
+    }
+
     fn decode_contract_hash(code_hash: &str) -> Result<iroha_crypto::Hash, QueryJsonError> {
         let bytes = hex::decode(code_hash.trim_start_matches("0x"))
             .map_err(|_| QueryJsonError::InvalidHex("code_hash".to_owned()))?;
@@ -477,6 +494,11 @@ impl SingularQueryJson {
             Self::FindAssetDefinitionById { asset } => {
                 let mut payload = Map::new();
                 payload.insert("asset".to_owned(), Value::String(asset.clone()));
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
+            Self::FindNftById { nft_id } => {
+                let mut payload = Map::new();
+                payload.insert("nft_id".to_owned(), Value::String(nft_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
             Self::FindAssetEscrowById { escrow_id }
@@ -549,6 +571,7 @@ impl SingularQueryJson {
             }
             "FindAssetById" => Self::parse_asset_by_id(singular_payload(map)?),
             "FindAssetDefinitionById" => Self::parse_asset_definition(singular_payload(map)?),
+            "FindNftById" => Self::parse_nft_by_id(singular_payload(map)?),
             "FindAssetEscrowById" => Self::parse_asset_escrow(singular_payload(map)?),
             "FindAnonymousAssetEscrowById" => {
                 Self::parse_anonymous_asset_escrow(singular_payload(map)?)
@@ -579,6 +602,7 @@ impl SingularQueryJson {
             }
             SingularQueryJson::FindAssetById { .. } => "FindAssetById",
             SingularQueryJson::FindAssetDefinitionById { .. } => "FindAssetDefinitionById",
+            SingularQueryJson::FindNftById { .. } => "FindNftById",
             SingularQueryJson::FindAssetEscrowById { .. } => "FindAssetEscrowById",
             SingularQueryJson::FindAnonymousAssetEscrowById { .. } => {
                 "FindAnonymousAssetEscrowById"
@@ -658,6 +682,12 @@ impl SingularQueryJson {
                 let id = Self::decode_asset_definition_id(&asset)?;
                 Ok(SingularQueryBox::FindAssetDefinitionById(
                     crate::query::asset::prelude::FindAssetDefinitionById::new(id),
+                ))
+            }
+            SingularQueryJson::FindNftById { nft_id } => {
+                let id = Self::decode_nft_id(&nft_id)?;
+                Ok(SingularQueryBox::FindNftById(
+                    crate::query::nft::prelude::FindNftById::new(id),
                 ))
             }
             SingularQueryJson::FindAssetEscrowById { escrow_id } => {
@@ -786,7 +816,7 @@ impl IterableQueryJson {
         })
     }
 
-    fn predicate_or_pass<T>(&self) -> Result<CompoundPredicate<T>, QueryJsonError> {
+    fn predicate_or_pass<T: 'static>(&self) -> Result<CompoundPredicate<T>, QueryJsonError> {
         self.predicate.as_ref().map_or_else(
             || Ok(CompoundPredicate::PASS),
             |pred| {
@@ -1346,6 +1376,35 @@ mod tests {
             SingularQueryBox::FindTwitterBindingByHash(query)
                 if query.binding_hash == binding_hash
         ));
+    }
+
+    #[test]
+    fn nft_by_id_query_roundtrip() {
+        let nft_id: crate::nft::NftId =
+            "ticket$wonderland.universal".parse().expect("valid NFT id");
+        let singular = SingularQueryJson::FindNftById {
+            nft_id: nft_id.to_string(),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+        let request = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        assert!(matches!(
+            request,
+            SingularQueryBox::FindNftById(query) if query.nft_id() == &nft_id
+        ));
+
+        let invalid = SingularQueryJson::FindNftById {
+            nft_id: "missing-domain-separator".to_owned(),
+        };
+        let error = invalid
+            .into_box()
+            .expect_err("non-canonical NFT identifiers must be rejected");
+        assert_eq!(error, QueryJsonError::InvalidField("payload", "nft_id"));
     }
 
     #[test]

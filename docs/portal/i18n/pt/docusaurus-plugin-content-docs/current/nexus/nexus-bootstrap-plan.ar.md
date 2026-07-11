@@ -33,7 +33,7 @@ Verifique o valor `docs/source/soranexus_bootstrap_plan.md`. Verifique se o prod
 ## بيئات الشبكة
 - Verifique o valor do Nexus para obter mais informações:
 - **Sora Nexus (mainnet)** - بادئة شبكة انتاج `nexus` تستضيف الحوكمة القانونية وخدمات Código SoraFS/SoraNet (ID de cadeia `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - بادئة شبكة staging `testus` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (cadeia UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - بادئة شبكة staging `testus` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (cadeia UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - الحفاظ على ملفات genesis ومفاتيح حوكمة وبصمات بنية تحتية منفصلة لكل بيئة. Teste o Testus para obter o SoraFS/SoraNet para o Nexus.
 - يجب ان تنشر خطوط CI/CD الى Testus اولا وتنفذ testes de fumaça تلقائية وتطلب ترقية يدوية الى Nexus بعد نجاح الفحوصات.
 - Você pode usar `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet) e `config.toml` O `genesis.json` é o mesmo do Torii.

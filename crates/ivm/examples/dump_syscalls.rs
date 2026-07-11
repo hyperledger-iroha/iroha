@@ -31,13 +31,13 @@ fn dump(src: &str) {
 }
 
 fn main() {
-    // Case 1: create_nfts_for_all_users + set_execution_depth + set_account_detail
-    let src1 = "seiyaku Sample1 { kotoage fn run() { create_nfts_for_all_users(); set_execution_depth(111); set_account_detail(authority(), name!(\"cursor\"), json!{ query: \"sc_dummy\", cursor: 1 }); } }";
+    // Case 1: create_nfts_for_all_users + set_account_detail
+    let src1 = "seiyaku Sample1 { kotoage fn run() authorize(\"Admin\") { ledger::nft::create_for_all_users(); ledger::account::set_detail(account: context::authority(), key: Name::parse(\"cursor\"), value: Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")); } }";
     println!("-- case 1 --");
     dump(src1);
 
     // Case 2: typed NFT syscalls
-    let src2 = "seiyaku Sample2 { kotoage fn run() { nft_mint_asset(nft_id!(\"n0$wonderland\"), account!(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); nft_transfer_asset(account!(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), nft_id!(\"n0$wonderland\"), account!(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
+    let src2 = "seiyaku Sample2 { kotoage fn run() authorize(\"Admin\") { ledger::nft::mint(NftId::parse(\"n0$wonderland\"), AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), nft: NftId::parse(\"n0$wonderland\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
     println!("-- case 2 --");
     dump(src2);
 }

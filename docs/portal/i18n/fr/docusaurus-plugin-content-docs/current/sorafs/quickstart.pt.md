@@ -125,3 +125,23 @@ rapidement lorsque la charge utile a été reconstruite divergente du manifeste.
 - **Automation de CI** – ajouter les commandes ainsi que les pipelines de publication pour que
   documentation, agencements et artefatos publicsm manifestos determinísticos junto com
   métadados assassinés.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

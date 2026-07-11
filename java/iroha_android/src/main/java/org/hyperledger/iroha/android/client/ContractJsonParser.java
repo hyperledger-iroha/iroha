@@ -2,6 +2,8 @@ package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -12,13 +14,18 @@ public final class ContractJsonParser {
 
   private ContractJsonParser() {}
 
+  /** Parses the complete `/v1/contracts/code/{code_hash}` manifest response. */
+  public static ContractManifestRecord parseManifestRecord(final byte[] payload) {
+    return ContractManifestJsonParser.parseRecord(payload);
+  }
+
   public static ContractDeployResponse parseDeployResponse(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "contract deploy response"), "contract deploy response");
     final List<Object> contracts =
         requiredList(root.get("contracts"), "contract deploy response.contracts");
-    final List<Object> initCalls =
-        requiredList(root.get("init_calls"), "contract deploy response.init_calls");
+    final List<Object> hajimariCalls =
+        requiredList(root.get("hajimari_calls"), "contract deploy response.hajimari_calls");
     final List<Object> assertions =
         requiredList(root.get("assertions"), "contract deploy response.assertions");
     return new ContractDeployResponse(
@@ -39,7 +46,7 @@ public final class ContractJsonParser {
                       optionalString(contract.get("contract_alias")),
                       optionalString(contract.get("contract_address")),
                       optionalString(contract.get("previous_contract_address")),
-                      Boolean.TRUE.equals(contract.get("upgraded")),
+                      Boolean.TRUE.equals(contract.get("kaizen")),
                       optionalString(contract.get("dataspace")),
                       contract.containsKey("deploy_nonce")
                           ? asOptionalLong(
@@ -53,6 +60,9 @@ public final class ContractJsonParser {
                                   "contract deploy response.contracts[].tx_hash_hex"),
                               "txHashHex")
                           : null,
+                      optionalObject(
+                          contract.get("pipeline_status"),
+                          "contract deploy response.contracts[].pipeline_status"),
                       HttpClientTransport.normalizeHex32(
                           requiredString(
                               contract.get("code_hash_hex"),
@@ -68,25 +78,28 @@ public final class ContractJsonParser {
                           "contract deploy response.contracts[].status"));
                 })
             .collect(Collectors.toList()),
-        initCalls.stream()
+        hajimariCalls.stream()
             .map(
                 item -> {
                   final Map<String, Object> call =
-                      expectObject(item, "contract deploy response.init_calls[]");
-                  return new ContractDeployResponse.InitCallReceipt(
-                      requiredString(call.get("id"), "contract deploy response.init_calls[].id"),
+                      expectObject(item, "contract deploy response.hajimari_calls[]");
+                  return new ContractDeployResponse.HajimariCallReceipt(
+                      requiredString(call.get("id"), "contract deploy response.hajimari_calls[].id"),
                       optionalString(call.get("contract_alias")),
                       optionalString(call.get("entrypoint")),
                       call.containsKey("tx_hash_hex") && call.get("tx_hash_hex") != null
                           ? HttpClientTransport.normalizeHex32(
                               requiredString(
                                   call.get("tx_hash_hex"),
-                                  "contract deploy response.init_calls[].tx_hash_hex"),
+                                  "contract deploy response.hajimari_calls[].tx_hash_hex"),
                               "txHashHex")
                           : null,
+                      optionalObject(
+                          call.get("pipeline_status"),
+                          "contract deploy response.hajimari_calls[].pipeline_status"),
                       requiredString(
                           call.get("status"),
-                          "contract deploy response.init_calls[].status"));
+                          "contract deploy response.hajimari_calls[].status"));
                 })
             .collect(Collectors.toList()),
         assertions.stream()
@@ -128,10 +141,44 @@ public final class ContractJsonParser {
                 requiredString(root.get("tx_hash_hex"), "contract call response.tx_hash_hex"),
                 "txHashHex")
             : null,
+        optionalObject(root.get("pipeline_status"), "contract call response.pipeline_status"),
         optionalString(root.get("entrypoint")),
+        asOptionalNonNegativeLong(
+            root.get("transaction_ttl_ms"), "contract call response.transaction_ttl_ms"),
+        optionalHash(root.get("entrypoint_hash_hex"), "contract call response.entrypoint_hash_hex"),
         optionalBase64(root.get("transaction_scaffold_b64"), "contract call response.transaction_scaffold_b64"),
         optionalBase64(root.get("signed_transaction_b64"), "contract call response.signed_transaction_b64"),
-        optionalBase64(root.get("signing_message_b64"), "contract call response.signing_message_b64"));
+        optionalBase64(root.get("signing_message_b64"), "contract call response.signing_message_b64"),
+        parseOperationReceipt(
+            expectObject(root.get("operation_receipt"), "contract call response.operation_receipt"),
+            "contract call response.operation_receipt"));
+  }
+
+  private static ContractOperationReceipt parseOperationReceipt(
+      final Map<String, Object> receipt, final String path) {
+    final Long gasLimit = asOptionalNonNegativeLong(receipt.get("gas_limit"), path + ".gas_limit");
+    if (gasLimit != null && gasLimit.longValue() == 0L) {
+      throw new IllegalStateException(path + ".gas_limit must be positive");
+    }
+    return new ContractOperationReceipt(
+        requiredString(receipt.get("operation_kind"), path + ".operation_kind"),
+        requiredString(receipt.get("status"), path + ".status"),
+        requiredString(receipt.get("transport"), path + ".transport"),
+        requiredString(receipt.get("dataspace"), path + ".dataspace"),
+        optionalString(receipt.get("contract_alias")),
+        optionalString(receipt.get("contract_address")),
+        optionalHash(receipt.get("code_hash_hex"), path + ".code_hash_hex"),
+        optionalHash(receipt.get("abi_hash_hex"), path + ".abi_hash_hex"),
+        optionalHash(receipt.get("tx_hash_hex"), path + ".tx_hash_hex"),
+        optionalString(receipt.get("entrypoint")),
+        optionalHash(receipt.get("entrypoint_hash_hex"), path + ".entrypoint_hash_hex"),
+        gasLimit,
+        asOptionalNonNegativeLong(receipt.get("gas_used"), path + ".gas_used"),
+        optionalString(receipt.get("gas_asset_id")),
+        optionalString(receipt.get("fee_sponsor")),
+        HttpClientTransport.normalizeHex32(
+            requiredString(receipt.get("payload_digest_hex"), path + ".payload_digest_hex"),
+            "payloadDigestHex"));
   }
 
   public static MultisigResponse parseMultisigResponse(final byte[] payload) {
@@ -235,6 +282,20 @@ public final class ContractJsonParser {
     final String string = value instanceof String ? (String) value : String.valueOf(value);
     final String trimmed = string.trim();
     return trimmed.isEmpty() ? null : trimmed;
+  }
+
+  private static String optionalHash(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    return HttpClientTransport.normalizeHex32(requiredString(value, path), path);
+  }
+
+  private static Map<String, Object> optionalObject(final Object value, final String path) {
+    if (value == null) {
+      return null;
+    }
+    return Collections.unmodifiableMap(new LinkedHashMap<>(expectObject(value, path)));
   }
 
   private static Boolean optionalBoolean(final Object value, final String path) {

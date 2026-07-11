@@ -1,31 +1,30 @@
 // NFT example: mints and transfers an NFT
-
 seiyaku NftDemo {
-  fn owner_id() -> AccountId {
-    let owner = account!("sorauﾛ1QG1ｼﾀ3vN7ﾋzﾄﾍcﾐLKDCAｲ5ｸｴjﾔﾘ2uﾄﾕmｷﾕﾙeJBJW7X2N7");
-    return owner;
-  }
+    fn owner_id() -> AccountId {
+        let owner = AccountId::parse("sorauﾛ1QG1ｼﾀ3vN7ﾋzﾄﾍcﾐLKDCAｲ5ｸｴjﾔﾘ2uﾄﾕmｷﾕﾙeJBJW7X2N7", );
+        return owner;
+    }
 
-  fn recipient_id() -> AccountId {
-    let recipient = account!("sorauﾛ1NksﾂJZﾐLﾂｽjﾖrUphCSﾎ8Wﾉｽﾏﾁﾓr3ﾑLｾﾇﾋYqwﾌﾉFTMDQE");
-    return recipient;
-  }
+    fn recipient_id() -> AccountId {
+        let recipient = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
+        return recipient;
+    }
 
-  fn dragon_nft() -> NftId {
-    let nft = nft_id!("dragon$wonderland");
-    return nft;
-  }
+    fn dragon_nft() -> NftId {
+        let nft = NftId::parse("dragon$wonderland");
+        return nft;
+    }
 
-  kotoage fn create() permission(NftAuthority) {
-    let owner = owner_id();
-    let nft = dragon_nft();
-    nft_mint_asset(nft, owner);
-  }
+    kotoage fn create() authorize("NftAuthority") {
+        let owner = owner_id();
+        let nft = dragon_nft();
+        ledger::nft::mint(nft, owner);
+    }
 
-  kotoage fn transfer() permission(NftAuthority) {
-    let owner = owner_id();
-    let recipient = recipient_id();
-    let nft = dragon_nft();
-    nft_transfer_asset(owner, nft, recipient);
-  }
+    kotoage fn transfer() authorize("NftAuthority") {
+        let owner = owner_id();
+        let recipient = recipient_id();
+        let nft = dragon_nft();
+        ledger::nft::transfer(source: owner, nft: nft, destination: recipient);
+    }
 }

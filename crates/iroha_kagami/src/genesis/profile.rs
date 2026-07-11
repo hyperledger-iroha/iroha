@@ -16,7 +16,8 @@ pub const TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 pub const PUBLIC_XOR_ALIAS: &str = "xor#universal";
 /// Public XOR domain registered in public-profile genesis manifests.
 pub const PUBLIC_XOR_DOMAIN: &str = "universal.universal";
-const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+const ARCHIVED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
 const PK2_NEXUS_CHAIN_ID: &str = "cbdc16";
 
@@ -201,7 +202,12 @@ pub fn resolve_public_xor_asset_definition_id(
 #[must_use]
 pub fn known_chain_discriminant_for_chain_id(chain_id: &str) -> Option<u16> {
     match chain_id {
-        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
+        // Keep the archived UUID readable with its historical I105 prefix. It is
+        // deliberately excluded from `public_xor_profile_for_chain_id`, so new
+        // public-profile genesis bundles cannot select the retired network.
+        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID | ARCHIVED_TAIRA_CHAIN_ID => {
+            Some(TAIRA_CHAIN_DISCRIMINANT)
+        }
         "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID | PK2_NEXUS_CHAIN_ID => {
             Some(NEXUS_CHAIN_DISCRIMINANT)
         }
@@ -365,7 +371,11 @@ mod tests {
     #[test]
     fn known_chain_discriminant_maps_taira_and_nexus() {
         assert_eq!(
-            known_chain_discriminant_for_chain_id("809574f5-fee7-5e69-bfcf-52451e42d50f"),
+            known_chain_discriminant_for_chain_id("fc56984b-2be7-431d-840e-21514d1883f0"),
+            Some(TAIRA_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            known_chain_discriminant_for_chain_id(ARCHIVED_TAIRA_CHAIN_ID),
             Some(TAIRA_CHAIN_DISCRIMINANT)
         );
         assert_eq!(

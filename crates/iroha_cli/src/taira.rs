@@ -31,7 +31,7 @@ use url::Url;
 use crate::{CliOutputFormat, Run, RunContext};
 
 const DEFAULT_PUBLIC_ROOT: &str = "https://taira.sora.org";
-const DEFAULT_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
 const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_ALIAS_PREFIX: &str = "taira-rollout-canary";

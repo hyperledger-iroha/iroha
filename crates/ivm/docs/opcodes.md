@@ -14,7 +14,15 @@ Conventions and notes
 - Mode gating: vector/SIMD instructions execute only when the program header `VECTOR` bit is set; otherwise they deterministically trap with a mode-disabled error. ZK-specific instructions execute only when the `ZK` bit is set. Reserved HTM instructions are disabled unless an explicit feature/mode enables them.
 - Pointer-ABI: instructions that dereference Norito TLV pointers (e.g., signature verify opcodes) follow the pointer-ABI documented in `syscalls.md`/`tlv_examples.md`. Hosts/VM validate TLVs on first dereference and trap on invalid envelopes.
 - Memory: all loads/stores require natural alignment; region permissions (INPUT/OUTPUT/CODE/HEAP/STACK) are enforced uniformly. Misaligned accesses deterministically trap with `MisalignedAccess`.
-- Control flow: `JALR` masks the low two bits of the computed target so control transfers are 4-byte aligned.
+- Control flow: `JALR` masks the low two bits of the computed target so control transfers are 4-byte aligned. `JAL` carries `rd` plus a signed 16-bit word offset. `JMP` and `JALS` use the whole low 24 bits as a signed word offset; `JALS` writes its return address to `r1`. Deployable artifacts carrying a `CNTR` interface additionally enforce protected returns: direct calls linking `r1` push the expected return PC onto a host-protected stack, and only canonical `JALR r0, r1, 0` returns may pop it. A mismatch, noncanonical indirect transfer, or depth above 1,024 traps before the target executes. At invocation start the VM captures the aligned initial `r1`; an empty protected stack must return to that exact captured address, which must also be a `HALT` instruction or the host's end-of-code sentinel. Raw code loaded with `IVM::load_code` retains the general opcode semantics for low-level tests and tooling.
+- Indexed literals: `LDLIT` and `LDI64` carry `rd` plus an unsigned 16-bit `LTLB` index. The authenticated table descriptor names either an exact ABI-v1 pointer TLV or an exact eight-byte signed scalar. Program loading rejects unknown kinds, noncanonical lengths, gaps, aliases, out-of-range indices, and instruction/entry kind mismatches before execution. Scalar entries never grant pointer provenance.
+- First-release availability: `LDLIT`, `LDI64`, `JAL`, `JMP`, and `JALS` are unconditional ABI-v1 instructions. They do not consult a feature bit or execution-mode flag and are present in every IVM build.
+- Kotodama's relaxing assembler uses one-word `JAL` transfers when the signed
+  16-bit word range is sufficient and one-word `JMP`/`JALS` transfers
+  otherwise. Transfers beyond the signed 24-bit range route through sparse
+  two-word trampoline islands. Each island has a direct skip on the normal
+  fallthrough path and a direct `JMP` on the far path, preserving statically
+  verifiable control flow and linking protected calls exactly once.
 - See also: `instruction.rs` API docs for authoritative field extractors and masks used by encoders/decoders.
 ## Encoding Format
 
@@ -27,7 +35,7 @@ IVM v1.1 standardises on a single 32‑bit word layout with an 8‑bit primary o
 +----------+-----------+-----------+-----------+
 ```
 
-The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, syscall numbers, etc.). Branch immediates are expressed in instruction words (i8) rather than raw byte offsets.
+The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, syscall numbers, etc.). Branch and direct-transfer immediates are expressed in instruction words rather than raw byte offsets.
 
 ## Operand Conventions
 
@@ -45,6 +53,8 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x31 | `STORE64` | Store 64-bit word to memory |
 | 0x32 | `LOAD128` | Load 128-bit vector (requires `VECTOR` mode; traps otherwise) |
 | 0x33 | `STORE128` | Store 128-bit vector (requires `VECTOR` mode; traps otherwise) |
+| 0x34 | `LDLIT` | Load a prevalidated typed-TLV pointer from `LTLB[index:u16]` into `rd` |
+| 0x35 | `LDI64` | Load a prevalidated exact little-endian signed `i64` from `LTLB[index:u16]` into `rd` |
 
 ## Arithmetic
 
@@ -69,15 +79,18 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x11 | `MULH` | Multiply high (signed) |
 | 0x12 | `MULHU` | Multiply high (unsigned) |
 | 0x13 | `MULHSU` | Multiply high (signed×unsigned) |
-| 0x14 | `DIV` | Divide (signed) |
+| 0x14 | `DIV` | Divide (signed); traps on zero divisor or `i64::MIN / -1` overflow |
 | 0x15 | `DIVU` | Divide (unsigned) |
-| 0x16 | `REM` | Remainder (signed) |
+| 0x16 | `REM` | Remainder (signed); traps on zero divisor or `i64::MIN % -1` overflow |
 | 0x17 | `REMU` | Remainder (unsigned) |
 | 0x18 | `ROTL` | Rotate left |
 | 0x19 | `ROTR` | Rotate right |
 | 0x1A | `POPCNT` | Population count |
 | 0x1B | `CLZ` | Count leading zeros |
 | 0x1C | `CTZ` | Count trailing zeros |
+| 0x1D | `ISQRT` | Integer square root |
+| 0x1E | `MIN` | Minimum (signed) |
+| 0x1F | `MAX` | Maximum (signed) |
 | 0x20 | `ADDI` | Add immediate |
 | 0x21 | `ANDI` | Bitwise AND immediate |
 | 0x22 | `ORI` | Bitwise OR immediate |
@@ -85,6 +98,10 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x24 | `CMOVI` | Conditional move immediate |
 | 0x25 | `ROTL_IMM` | Rotate left immediate |
 | 0x26 | `ROTR_IMM` | Rotate right immediate |
+| 0x27 | `ABS` | Absolute value (signed); traps on `i64::MIN` overflow |
+| 0x28 | `DIV_CEIL` | Ceiling division (signed); traps on zero divisor or `i64::MIN / -1` overflow |
+| 0x29 | `GCD` | Greatest common divisor (unsigned magnitude) |
+| 0x2A | `MEAN` | Overflow-free arithmetic mean (signed) |
 
 ## Control Flow
 
@@ -96,12 +113,12 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x43 | `BGE` | Branch if greater or equal |
 | 0x44 | `BLTU` | Branch if less than unsigned |
 | 0x45 | `BGEU` | Branch if greater or equal unsigned |
-| 0x46 | `JAL` | Jump and link |
+| 0x46 | `JAL` | Jump by signed 16-bit word offset and write the return address to `rd` |
 | 0x47 | `JR` | Jump to register |
-| 0x48 | `JALR` | Jump and link register |
+| 0x48 | `JALR` | Jump and link register; deployable contracts permit only the canonical protected return `JALR r0, r1, 0` |
 | 0x49 | `HALT` | Stop execution |
-| 0x4A | `JMP` | Absolute jump |
-| 0x4B | `JALS` | Jump and link (short form) |
+| 0x4A | `JMP` | Jump by signed 24-bit word offset |
+| 0x4B | `JALS` | Jump by signed 24-bit word offset and write the return address to `r1` |
 
 ## Syscalls and System
 
@@ -126,8 +143,8 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x78 | `PAREND` | End parallel region hint *(reserved)* |
 | 0x80 | `SHA256BLOCK` | SHA-256 compression round |
 | 0x81 | `SHA3BLOCK` | SHA-3 compression round (rs1=&state[25]*8, rs2=&block[136], rd=&out_state[25]*8) |
-| 0x82 | `POSEIDON2` | Poseidon permutation (2-ary) |
-| 0x83 | `POSEIDON6` | Poseidon permutation (6-ary) |
+| 0x82 | `POSEIDON2` | `rd = poseidon2(rs1, rs2)` over two scalar registers |
+| 0x83 | `POSEIDON6` | `rd = poseidon6(rs1..rs1+5)`; the `rs2` slot is reserved as zero and the input window must not exceed `r255` |
 | 0x84 | `PUBKGEN` | BLS12-381 public key generation |
 | 0x85 | `VALCOM` | Validate commitment |
 | 0x86 | `ECADD` | Elliptic curve addition |
@@ -141,11 +158,20 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x8E | `PAIRING` | BLS12-381 pairing check |
 | 0x8F | `ED25519BATCHVERIFY` | Deterministic Ed25519 batch verification using a Norito-encoded request (rs1=&NoritoBytes(Ed25519BatchRequest), rd=result 1/0, rs2=failure index; max 512 entries; gas = base + per-entry charge) |
 
+In ZK mode the inputs to either Poseidon form must have uniform visibility:
+all public or all private. A mixed public/private tuple traps with
+`PrivacyViolation`; the resulting digest is always tagged public because the
+hash operation is the explicit commitment/declassification boundary.
+
 Notes
 - Vector ops (`VADD*`/`VAND`/`VXOR`/`VOR`/`VROT32`, `LOAD128`/`STORE128`) are available only when the header `VECTOR` bit is set; otherwise a deterministic mode-disabled trap occurs. `SETVL` sets the logical vector length used for gas scaling and ILP vector helpers; it does not change the physical SIMD width.
-- Signature verify opcodes and hash/compression ops consume or produce data via TLV pointers when specified; see `syscalls.md` for pointer-ABI TLV layout and examples.
+- Signature verify opcodes and hash/compression ops consume or produce data via TLV pointers when specified; see `syscalls.md` for pointer-ABI TLV layout and examples. Signature verification checks the privacy classification of the complete TLV envelope (header, payload, and checksum) before parsing. A private overlap traps with `PrivacyViolation` rather than being converted into a public false result.
 
-## ISO 20022 Messaging
+## Reserved ISO 20022 Messaging Slots
+
+The `0x90..=0x9F` values below are reservations, not executable ABI-v1
+instructions. The decoder rejects them as invalid opcodes; they are listed only
+to prevent accidental reuse of their assigned values.
 
 | Hex | Mnemonic | Description |
 |----:|----------|-------------|
@@ -170,15 +196,21 @@ Notes
 
 | Hex | Mnemonic | Description |
 |----:|----------|-------------|
-| 0xA0 | `ASSERT` | Assert zero |
-| 0xA1 | `ASSERT_EQ` | Assert registers equal |
+| 0xA0 | `ASSERT` | Assert zero; private operands are rejected |
+| 0xA1 | `ASSERT_EQ` | Assert registers equal; private operands are rejected |
 | 0xA2 | `FADD` | Field addition |
 | 0xA3 | `FSUB` | Field subtraction |
 | 0xA4 | `FMUL` | Field multiplication |
-| 0xA5 | `FINV` | Field inverse |
-| 0xA6 | `ASSERT_RANGE` | Assert numeric range |
+| 0xA5 | `FINV` | Field inverse; private operands are rejected because zero is exceptional |
+| 0xA6 | `ASSERT_RANGE` | Assert numeric range; private operands are rejected |
 
 For detailed semantics see the `instruction` module in the API reference.
+
+The public-only restriction on value-dependent traps is deliberate. Whether a
+private assertion, division, absolute value, or inverse succeeds cannot be
+allowed to change the observable VM result. Total arithmetic operations may
+still propagate private tags; declassification remains limited to explicit
+commitment/proof boundaries.
 
 Note: Public parallel markers (`PARBEGIN`/`PAREND`) are no‑ops by design. `SETVL` sets only the logical vector length used for gas scaling and helpers; it does not change the physical SIMD width. Any accelerated backend must preserve bit‑exact results relative to the scalar path.
 
@@ -200,6 +232,8 @@ helpers are available:
 | 0xF6 | `SYSCALL_VERIFY_PROOF` | Verify registry-bound proof envelopes in `CoreHost`; `DefaultHost` returns `NotImplemented` |
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |
 | 0x010000 | `SYSCALL_QUERY_EXECUTE_NORITO` | Execute a Norito-encoded read-only query request |
+| 0x010001 | `SYSCALL_CORE_QUERY_GET` | Return `Option<View>` for one stable-tagged core entity |
+| 0x010002 | `SYSCALL_CORE_QUERY_PAGE` | Return `List<View,64>` plus `Option<i64>` handles in canonical ID order |
 | 0x010020..0x010025 | `SYSCALL_SYSVAR_*` | Read deterministic chain/block/authority/contract context |
 
 ### NFT syscall naming alignment

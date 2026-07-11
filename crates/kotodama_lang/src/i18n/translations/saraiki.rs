@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "فنکشن `{func}` وچ `{name}` پیرامیٹر کدے استعمال نئیں تھیندا",
     lint_unreachable_after_return: "{context} وچ نا رسائی والا جملہ ملیا؛ return توں بعد والا کوڈ کدی وی نئیں چلدا",
     lint_ok: "ٹھیک",
-    lint_usage: "استعمال: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "استعمال: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "دتی ڳئی سورساں تے Kotodama lint چلاو.",
     ..english::MESSAGES
 };

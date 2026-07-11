@@ -644,6 +644,7 @@ impl V2CandidateAssembler {
         let confidential = compute_confidential_feature_digest(
             state_view.world(),
             state_view.zk(),
+            state_view.sccp_registry(),
             context.height,
         );
         drop(state_view);

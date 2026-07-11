@@ -30,7 +30,7 @@ Bu sahifa `docs/source/soranexus_bootstrap_plan.md`ni aks ettiradi. Mahalliylash
 ## Tarmoq muhitlari
 - Ikkita Nexus muhitini alohida tarmoq prefikslari bilan boshqaring:
 - **Sora Nexus (mainnet)** – kanonik boshqaruv va SoraFS/SoraNet piggyback xizmatlarini o'z ichiga olgan `nexus` ishlab chiqarish tarmog'i prefiksi (zanjir ID `0x02F1` / UUU028X / UUU02).
-- **Sora Testus (testnet)** – bosqichli tarmoq prefiksi `testus`, integratsiya sinovi va relizdan oldin tekshirish uchun asosiy tarmoq konfiguratsiyasini aks ettiradi (zanjir UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** – bosqichli tarmoq prefiksi `testus`, integratsiya sinovi va relizdan oldin tekshirish uchun asosiy tarmoq konfiguratsiyasini aks ettiradi (zanjir UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Har bir muhit uchun alohida genezis fayllari, boshqaruv kalitlari va infratuzilma izlarini saqlang. Testus Nexus ga ko'tarilishdan oldin barcha SoraFS/SoraNet prokatlari uchun sinov asosi bo'lib xizmat qiladi.
 - CI/CD quvurlari avval Testus-ga joylashtirilishi, avtomatlashtirilgan tutun sinovlarini o'tkazishi va tekshiruvdan o'tgandan keyin Nexus ga qo'lda ko'tarilishi kerak.
 - Yo'naltiruvchi konfiguratsiya to'plamlari `configs/soranexus/nexus/` (asosiy tarmoq) va `configs/soranexus/testus/` (testnet) ostida ishlaydi, ularning har birida `config.toml`, `genesis.json` va Torii namunalari mavjud.

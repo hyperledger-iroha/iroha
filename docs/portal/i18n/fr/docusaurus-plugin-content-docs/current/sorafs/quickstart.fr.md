@@ -129,3 +129,23 @@ rapidement lorsque la charge utile reconstruit s'écarte du manifeste.
 - **Automatisation CI** – ajouter les commandes ci-dessus aux pipelines de release pour que
   la documentation, les luminaires et les artefacts publient des manifestes déterministes
   avec des métadonnées signées.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

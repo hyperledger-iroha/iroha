@@ -30,7 +30,7 @@ fn nested_branches_executed_set_gas() {
     let a1 = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 1);
     let a2 = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 2, 0, 1);
     let beq = encoding::wide::encode_branch(instruction::wide::control::BEQ, 1, 2, 2);
-    let jmp = encoding::wide::encode_jump(instruction::wide::control::JMP, 0, 2);
+    let jmp = encoding::wide::encode_offset24(instruction::wide::control::JMP, 2);
     let then = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 0, 7);
     let halt = HALT_WORD;
     let bytes = assemble_words(&[a1, a2, beq, jmp, then, halt]);

@@ -45,9 +45,12 @@ distribution content differ, so explicit concurrent builds are deterministic.
 Native bindings load only after verifying the platform-specific SHA-256 recorded
 in `native/iroha_js_host.checksums.json`. When a binding is present but its
 checksum is missing or mismatched, native access fails closed; it never falls
-back around a present-but-unverified binary. Run `npm run build:native`
-explicitly from a source checkout after installing the Rust toolchain. Set
-`IROHA_JS_NATIVE_DIR` only to a separately verified native artifact directory.
+back around a present-but-unverified binary. The loader authenticates the
+complete manifest, then loads a private, read-only, content-addressed snapshot
+of the exact bytes it hashed so replacing the original path cannot race module
+loading. Run `npm run build:native` explicitly from a source checkout after
+installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only to a separately
+verified native artifact directory.
 
 ## Native SoraFS Reference Validation
 
@@ -409,25 +412,71 @@ const transportKinds = offlineCashAvailableTransportKinds({
 });
 ```
 
-For browser-safe Kotodama contract compilation, use the dedicated compiler
-subpath. It emits the same `.to` artifact bytes and manifest metadata used by
-Torii contract deployment without importing the Node-first SDK surface:
+Kotodama V1 uses the Rust compiler as its only implementation. Node loads it
+through `iroha_js_host` and performs compilation off the event-loop thread:
 
 ```js
 import { compileKotodamaProgram } from "@iroha/iroha-js/kotodama-compiler";
 
-const compiled = compileKotodamaProgram(source, { sourceName: "contract.ko" });
-if (compiled.diagnostics.length > 0) {
-  throw new Error(compiled.diagnostics.map((item) => item.message).join("\n"));
-}
-
-console.log(compiled.codeHashHex);
-console.log(compiled.manifest);
+const result = await compileKotodamaProgram(source);
 ```
 
-The compiler defaults to production mode, which strips `#[test]` functions like
-Rust `CompilerMode::Production`. Pass `{ mode: "test" }` to retain supported
-Kotodama test helpers in local test artifacts.
+Pass a bounded logical path to preserve useful file names in diagnostics and
+sidecars. ZK contracts must explicitly select the canonical ZK policy; this is
+the only compiler feature policy exposed by the adapter:
+
+```js
+const result = await compileKotodamaProgram(source, {
+  sourceName: "contracts/private_transfer.ko",
+  zk: true,
+});
+```
+
+The browser export has no compiler implementation. It requires an explicit
+canonical Rust compiler-service endpoint:
+
+```js
+import { compileKotodamaProgram } from "@iroha/iroha-js/kotodama-compiler";
+
+const result = await compileKotodamaProgram(source, {
+  compilerUrl: "https://compiler.example",
+  sourceName: "contracts/payment.ko",
+  zk: false,
+});
+
+if (!result.ok) {
+  for (const diagnostic of result.diagnostics) {
+    console.error(diagnostic.code, diagnostic.primary_span, diagnostic.message);
+  }
+} else {
+  console.log(result.output.codeHashHex);
+  console.log(result.output.manifest);
+}
+```
+
+Offline browser compilation is intentionally unsupported so browser and Node
+artifacts cannot drift from the canonical Rust compiler. Remote compiler
+services must use HTTPS; loopback HTTP is accepted for local development. The
+service receives the complete source, so use only an endpoint you trust. Node
+and browser adapters reject source larger than the canonical 1 MiB UTF-8 limit
+before invoking the native binding or making a network request.
+The native binding and service receive the same canonical JSON-shaped request,
+`{ source, sourceName?, zk }`. `sourceName` is limited to 4096 UTF-8 bytes and
+must not contain control characters. Unknown options—including ABI, vector,
+debug-embedding, and test-mode selectors—fail closed.
+Compilation failures resolve to `{ ok: false, diagnostics }` with the exact
+structured Rust diagnostics; network, service, and malformed-response failures
+reject the promise. A compiler service returns both successful and failed
+compiler result envelopes with HTTP 200; non-success HTTP statuses are reserved
+for service and transport failures.
+
+This one-source API emits one deployable contract. Typed module graphs use the
+project driver behind `koto build` or `iroha contract dev`; the JavaScript
+adapter does not rewrite or flatten modules.
+Kotodama V1 source keeps its branded declaration spellings: deployable units
+use `seiyaku`/`誓約`, public calls use `kotoage`/`言挙げ`, and lifecycle hooks use
+`hajimari`/`始まり` and `kaizen`/`改善`. The English source spellings `contract`,
+`entry`, `init`, and `upgrade` are rejected by the canonical Rust parser.
 
 For browser-only Connect bootstrap without importing the Node-first `ToriiClient`
 surface, use the dedicated browser subpath:
@@ -441,7 +490,7 @@ import {
 } from "@iroha/iroha-js/connect-browser";
 
 const preview = createConnectSessionPreview({
-  chainId: "809574f5-fee7-5e69-bfcf-52451e42d50f",
+  chainId: "fc56984b-2be7-431d-840e-21514d1883f0",
   node: "https://taira.sora.org",
 });
 
@@ -1432,10 +1481,6 @@ const torii = new ToriiClient("http://localhost:8080", {
   config: { torii: { apiTokens: ["bridge-token"] } },
 });
 
-const voprf = await torii.evaluateAliasVoprf("deadbeef");
-console.log(voprf.backend); // "blake2b512-mock"
-console.log(voprf.evaluated_element_hex); // hex digest
-
 const resolved = await torii.resolveAlias("GB82 WEST 1234 5698 7654 32");
 if (resolved) {
   console.log(`${resolved.alias} → ${resolved.account_id}`);
@@ -1478,10 +1523,9 @@ The `canonical-request` subpath ships standalone DOM declarations, so browser
 TypeScript consumers do not need ambient Node types.
 
 > **Recipe:** run `node javascript/iroha_js/recipes/iso_alias.mjs` to exercise
-> the VOPRF and lookup endpoints from the CLI. The script accepts
-> `ISO_VOPRF_INPUT`, `ISO_ALIAS_LABEL`, and `ISO_ALIAS_INDEX` so ISO bridge gate
-> jobs can hash blinded elements and confirm deterministic account bindings
-> without writing bespoke tooling.
+> the lookup endpoints from the CLI. The script accepts `ISO_ALIAS_LABEL` and
+> `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
+> bindings without writing bespoke tooling.
 
 Sumeragi consensus status now exposes deterministic membership hashes. Inspecting
 the `membership` block is a quick way to verify roster alignment across peers:
@@ -2491,7 +2535,7 @@ round-trips the full current manifest metadata surface including
 hash length and accept `Buffer`, typed arrays, or base64 strings. Public
 deployment is now alias-first through `ToriiClient.deployContract`, which
 requires `contractAlias`, returns a fresh immutable `contract_address`, and
-reports whether the deploy upgraded an existing alias binding.
+reports `kaizen` when the deploy replaces an existing alias binding.
 `buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
 reclamation ISI into CI/governance tooling and rejects empty reason strings
 before submission so operators get fast feedback during rehearsals.
@@ -2505,9 +2549,10 @@ can stage a leased alias binding for rehearsal environments.
 
 `ToriiClient.callContract` wraps `/v1/contracts/call`, preparing the JSON
 payload that Torii expects (authority credentials, `contract_address` or `contract_alias`,
-optional entrypoint/payload plus gas settings with a required `gasLimit`) and normalising all hash fields. The
-helper returns the queued transaction hash along with the code/ABI hashes Torii
-resolved for the call.
+a required explicit entrypoint, an optional payload, and a positive `gasLimit`) and
+normalising all hash fields. The helper returns the queued transaction hash,
+transaction TTL and entrypoint hash when present, plus the mandatory normalized
+`operation_receipt` evidence and the code/ABI hashes Torii resolved for the call.
 
 ```js
 import { ToriiClient } from "@iroha/iroha-js";
@@ -2523,11 +2568,12 @@ const response = await torii.callContract({
   entrypoint: "increment",
   payload: { amount: 1 },
   gasAssetId: "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
-  gasLimit: 50_000,
+  gasLimit: 1_500_000,
 });
 
 console.log("queued tx:", response.tx_hash_hex);
 console.log("code hash:", response.code_hash_hex);
+console.log("payload digest:", response.operation_receipt.payload_digest_hex);
 ```
 
 Any JSON-serializable payload is cloned before submission so callers can reuse the
@@ -2663,8 +2709,8 @@ but it must equal the policy-derived transfer and cannot redirect or change the
 fee. It never appends an instruction: the deployed contract (including any
 nested pool call) must emit the transfer inside the proved overlay.
 
-The deployed artifact must be compiled in ZK mode (for `koto_compile`, use
-`--force-zk`), its manifest and bytecode must already be registered, and the
+The deployed artifact must be compiled in ZK mode with `koto build --zk`; its
+manifest and bytecode must already be registered, and the
 node must have an active `ivm-execution-v1` verifying-key record plus the
 matching proving key. A conventional non-ZK deployed artifact cannot be
 retrofitted by this client helper; it must be rebuilt and deployed by its owner.
@@ -3336,7 +3382,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
-- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":50000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
+- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":1500000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
@@ -3347,7 +3393,6 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_ISO_PACS009` — optional JSON object merged into the default pacs.009 builder fields (same structure as the pacs.008 overrides; handy for replaying RTGS transfers with custom identifiers).
 - `IROHA_TORII_INTEGRATION_ISO_ALIAS` — optional ISO alias (for example, `GB82 WEST 1234 5698 7654 32`) used by the alias-resolution integration test. Set alongside `IROHA_TORII_INTEGRATION_ISO_ENABLED=1` when the ISO runtime is active.
 - `IROHA_TORII_INTEGRATION_ISO_ALIAS_INDEX` — optional deterministic index (integer) for exercising `resolveAliasByIndex`. Provide this when the target node exposes indexed alias metadata so the integration suite can cover both alias endpoints.
-- `IROHA_TORII_INTEGRATION_ISO_VOPRF` — optional hex string forwarded to the alias VOPRF helper coverage (defaults to `deadbeef`); useful when replaying captured transcripts that require specific blinded elements.
 - `IROHA_TORII_INTEGRATION_SORAFS_ENABLED` — set to `1` to run the optional SoraFS registry/storage smoke test (lists manifests/aliases/replication orders and fetches the storage state). Leave unset/`0` when SoraFS endpoints are disabled on the target node.
 - `IROHA_TORII_INTEGRATION_SORAFS_POR_WEEK` — optional ISO week label such as `2026-W05`. When set alongside `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`, the suite fetches the PoR weekly report for that week to exercise the Norito export path.
 - `IROHA_TORII_INTEGRATION_UAID` — optional UAID literal (`uaid:<hex>` or raw 64-hex digest, LSB=1). When provided, the integration suite exercises the UAID portfolio/bindings/manifests endpoints so cross-dataspace APIs stay covered.

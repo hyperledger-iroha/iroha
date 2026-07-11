@@ -1567,6 +1567,7 @@ fn minimal_config_snapshot() {
                     kura_retry_interval: 1s,
                     kura_retry_max_attempts: 5,
                     commit_inflight_timeout: 5s,
+                    post_finality_cleanup_timeout: 5s,
                     commit_work_queue_cap: 1,
                     commit_result_queue_cap: 1,
                 },
@@ -2389,12 +2390,6 @@ fn minimal_config_snapshot() {
                 bridge_proof_max_range_len: 4096,
                 bridge_proof_max_past_age_blocks: 0,
                 bridge_proof_max_future_drift_blocks: 0,
-                sccp_launch_mode: EthereumMainnetLane,
-                sccp_source_verifier_materials: [],
-                sccp_source_adapter_engine_deployments: [],
-                sccp_destination_rollouts: [],
-                sccp_route_allowlists: [],
-                sccp_route_manifests: [],
                 poseidon_params_id: None,
                 pedersen_params_id: None,
                 kaigi_roster_join_vk: None,
@@ -4533,8 +4528,15 @@ fn taira_config_enables_untrusted_cid_hosting() {
         block
             .get("max_ivm_transactions")
             .and_then(TomlValue::as_integer),
-        Some(32),
-        "Taira profile should cap IVM-heavy proposal size"
+        None,
+        "Sumeragi v2 profiles must not use the retired IVM transaction-count cap"
+    );
+    assert_eq!(
+        block
+            .get("max_payload_bytes")
+            .and_then(TomlValue::as_integer),
+        Some(16 * 1024 * 1024),
+        "Taira profile should cap proposal payload bytes"
     );
     assert_eq!(
         block

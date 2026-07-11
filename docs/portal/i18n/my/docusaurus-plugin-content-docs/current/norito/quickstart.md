@@ -25,11 +25,11 @@ translation_last_reviewed: 2026-02-07
   `defaults/docker-compose.single.yml` တွင် သတ်မှတ်ထားသော နမူနာမျိုးတူကို စတင်ရန်။
 - သင်ဒေါင်းလုဒ်မလုပ်ပါက helper binaries ကိုတည်ဆောက်ရန်အတွက် Rust toolchain (1.76+)
   ထုတ်ဝေသူများ။
-- `koto_compile`၊ `ivm_run` နှင့် `iroha_cli` binaries ၎င်းတို့ကို သင်တည်ဆောက်နိုင်သည်။
+- `koto build`၊ `ivm_run` နှင့် `iroha_cli` binaries ၎င်းတို့ကို သင်တည်ဆောက်နိုင်သည်။
   အောက်တွင်ပြထားသည့်အတိုင်း workspace checkout သို့မဟုတ် ကိုက်ညီသောထွက်ရှိထားသော artifact ကို ဒေါင်းလုဒ်လုပ်ပါ-
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -56,22 +56,22 @@ docker compose -f defaults/docker-compose.single.yml up --build
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -86,15 +86,14 @@ KO
 ကွန်ရက်ကိုမထိမီ လက်ခံဆောင်ရွက်ပေးသည့် syscalls အောင်မြင်ကြောင်း အတည်ပြုပါ-
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-အပြေးသမားသည် `info("Hello from Kotodama")` မှတ်တမ်းကို ရိုက်နှိပ်ပြီး လုပ်ဆောင်သည်။
+အပြေးသမားသည် `debug::info("Hello from Kotodama")` မှတ်တမ်းကို ရိုက်နှိပ်ပြီး လုပ်ဆောင်သည်။
 `SET_ACCOUNT_DETAIL` သည် လှောင်ပြောင်ထားသော host ကိုဆန့်ကျင်သည့် syscall ဖြစ်သည်။ ရွေးချယ်နိုင်လျှင် `ivm_tool`
 binary ကို ရနိုင်သည်၊ `ivm_tool inspect target/quickstart/hello.to` မှ ဖော်ပြသည်။
 ABI ခေါင်းစီး၊ အင်္ဂါရပ်ဘစ်များနှင့် ထုတ်ယူထားသော ဝင်ခွင့်အမှတ်များ။

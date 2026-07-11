@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "المعامل `{name}` في الدالة `{func}` غير مستخدم إطلاقًا",
     lint_unreachable_after_return: "تم اكتشاف تعليمة غير قابلة للوصول في {context}: الشفرة بعد return لا تُنفَّذ أبدًا",
     lint_ok: "تم",
-    lint_usage: "كيفية الاستخدام: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "كيفية الاستخدام: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "يشغّل فحوصات Kotodama على المصادر المقدَّمة.",
     ..english::MESSAGES
 };

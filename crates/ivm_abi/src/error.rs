@@ -4,6 +4,8 @@
 //! and hardware transactional memory aborts.
 use std::{error::Error as StdError, fmt};
 
+use crate::numeric::{NumericFaultV1, PointerAbiFaultV1};
+
 /// Memory region permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Perm(u8);
@@ -38,6 +40,11 @@ pub enum VmTrapKind {
     InvalidOpcode,
     UnknownSyscall,
     NotImplemented,
+    SyscallGasQuoteExceeded,
+    SyscallMeteringModeMismatch,
+    GasCostOverflow,
+    NumericFault,
+    PointerAbiFault,
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
@@ -132,6 +139,35 @@ pub enum VMError {
     NotImplemented {
         syscall: u32,
     },
+    /// A host returned an actual gas cost above its side-effect-free preparation quote.
+    SyscallGasQuoteExceeded {
+        /// Upper bound supplied before the VM entered the host.
+        quoted: u64,
+        /// Cost reported after the host returned.
+        actual: u64,
+    },
+    /// A syscall used reserve/refund reporting while registered for staged
+    /// metering, or attempted a staged charge without an active staged call.
+    SyscallMeteringModeMismatch {
+        /// Syscall whose registered metering mode was violated.
+        syscall: u32,
+    },
+    /// A deterministic gas formula exceeded the `u64` gas domain.
+    GasCostOverflow,
+    /// The next staged syscall phase could not be afforded.
+    ///
+    /// No gas is debited for the named phase; gas charged by earlier phases is
+    /// retained.
+    SyscallOutOfGas {
+        /// Syscall executing the staged phase.
+        syscall: u32,
+        /// Stable staged-metering phase tag.
+        phase: u8,
+    },
+    /// A checked numeric operation failed in trap mode.
+    NumericFault(NumericFaultV1),
+    /// A numeric pointer envelope failed stable ABI validation.
+    PointerAbiFault(PointerAbiFaultV1),
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
@@ -255,6 +291,25 @@ impl fmt::Display for VMError {
             VMError::HostUnavailable => write!(f, "host unavailable"),
             VMError::NotImplemented { syscall } => {
                 write!(f, "syscall 0x{syscall:02x} not implemented by host")
+            }
+            VMError::SyscallGasQuoteExceeded { quoted, actual } => write!(
+                f,
+                "syscall gas quote exceeded (quoted={quoted}, actual={actual})"
+            ),
+            VMError::SyscallMeteringModeMismatch { syscall } => write!(
+                f,
+                "syscall 0x{syscall:02x} violated its registered metering mode"
+            ),
+            VMError::GasCostOverflow => write!(f, "gas cost exceeded the canonical u64 domain"),
+            VMError::SyscallOutOfGas { syscall, phase } => write!(
+                f,
+                "syscall 0x{syscall:02x} ran out of gas before metering phase {phase}"
+            ),
+            VMError::NumericFault(fault) => {
+                write!(f, "numeric operation failed with ABI fault {}", fault.tag())
+            }
+            VMError::PointerAbiFault(fault) => {
+                write!(f, "numeric pointer validation failed with ABI fault {}", fault.tag())
             }
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),

@@ -371,7 +371,7 @@ call = client.call_contract_and_wait(
     contract_alias="boi-lock::is",
     entrypoint="create_lock",
     payload={"amount": "10"},
-    gas_limit=100_000,
+    gas_limit=1_500_000,
 )
 
 policy = client.get_sns_policy(2)

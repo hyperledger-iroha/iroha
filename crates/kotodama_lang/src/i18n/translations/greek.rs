@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "Η παράμετρος `{name}` στη συνάρτηση `{func}` δεν χρησιμοποιείται ποτέ",
     lint_unreachable_after_return: "Εντοπίστηκε μη προσπελάσιμη εντολή στο {context}: ο κώδικας μετά το return δεν εκτελείται ποτέ",
     lint_ok: "εντάξει",
-    lint_usage: "Χρήση: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "Χρήση: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "Εκτελεί τους ελέγχους lint του Kotodama στα δοσμένα αρχεία πηγής.",
     ..english::MESSAGES
 };

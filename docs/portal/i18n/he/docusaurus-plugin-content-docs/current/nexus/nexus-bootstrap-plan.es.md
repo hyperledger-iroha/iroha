@@ -33,7 +33,7 @@ Esta pagina refleja `docs/source/soranexus_bootstrap_plan.md`. Manten ambas copi
 ## Entornos de red
 - Operar dos entornos Nexus עם מאפיינים אדומים:
 - **Sora Nexus (mainnet)** - prefijo de red de produccion `nexus`, hospedando la gobernanza canonica y servicios piggyback de SoraFS/SoraNet (מזהה שרשרת I108UID30X /U18UID30X `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - Prefijo de red de staging `testus`, que espeja la configuracion de mainnet para pruebas de integracion yvalidacion pre-release (שרשרת UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - Prefijo de red de staging `testus`, que espeja la configuracion de mainnet para pruebas de integracion yvalidacion pre-release (שרשרת UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Mantener archivos genesis separados, llaves de gobernanza y huellas de infraestructura para cada entorno. Testus actua como el banco de pruebas de todos los rollouts SoraFS/SoraNet לפני קידום המכירות של Nexus.
 - צינורות ה-CI/CD של CI/CD deben desplegar primero in Testus, ejecutar tests tests automatizados, and requesterir promocion manual a Nexus une vez que pasen los checks.
 - Los bundles de configuracion de referencia viven en `configs/soranexus/nexus/` (mainnet) y `configs/soranexus/testus/` (testnet), cada uno con `config.toml`, `genesis.json` y directorios de ejplo de admision I0800000X.

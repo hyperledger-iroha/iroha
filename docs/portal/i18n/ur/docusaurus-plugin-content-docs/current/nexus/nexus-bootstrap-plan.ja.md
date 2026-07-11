@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d42801bb14a4b47f97d22981063fdf4777faa9418cb0cc4bd352380be791cfb6
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -39,7 +39,7 @@ description: Nexus کے بنیادی validator cluster کو آن لائن لان
 ## نیٹ ورک ماحول
 - دو Nexus environments کو الگ نیٹ ورک prefixes کے ساتھ چلائیں:
 - **Sora Nexus (mainnet)** - پروڈکشن نیٹ ورک prefix `nexus` جو canonical governance اور SoraFS/SoraNet piggyback services میزبان بناتا ہے (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - staging نیٹ ورک prefix `testus` جو mainnet configuration کو integration testing اور pre-release validation کے لئے mirror کرتا ہے (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - staging نیٹ ورک prefix `testus` جو mainnet configuration کو integration testing اور pre-release validation کے لئے mirror کرتا ہے (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - ہر environment کے لئے الگ genesis files، governance keys، اور infrastructure footprints رکھیں۔ Testus تمام SoraFS/SoraNet rollouts کے لئے proving ground ہے، Nexus میں promote کرنے سے پہلے۔
 - CI/CD pipelines پہلے Testus پر deploy کریں، automated smoke tests چلائیں، اور checks پاس ہونے پر Nexus میں manual promotion درکار ہو۔
 - Reference configuration bundles `configs/soranexus/nexus/` (mainnet) اور `configs/soranexus/testus/` (testnet) کے تحت ہیں، ہر ایک میں نمونہ `config.toml`, `genesis.json` اور Torii admission directories شامل ہیں۔

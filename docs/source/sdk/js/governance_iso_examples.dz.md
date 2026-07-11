@@ -141,39 +141,34 @@ await torii.submitIsoMessage(
 );
 ```
 
-### ISO alias helper
+### ISO མིང་གཞན་རོགས་སྐྱོར།
 
-`recipes/iso_alias.mjs` exercises the alias endpoints that back the ISO bridge.
-It evaluates a blinded alias element via `ToriiClient.evaluateAliasVoprf` and
-resolves aliases either by literal label (IBAN-style strings) or by deterministic
-index (`resolveAlias` / `resolveAliasByIndex`). Configure it with:
+`recipes/iso_alias.mjs` གིས་ སྒེར་གྱི་ལག་ཆས་མ་དགོས་པར་ ISO མིང་གཞན་འཚོལ་ཞིབ་ཚུ་བརྟགཔ་ཨིན།
+འདི་གིས་ `resolveAlias` དང་ `resolveAliasByIndex` ལུ་འབོད་བརྡ་འབད་ཞིནམ་ལས་ Torii གིས་ལོག་བཏང་མི་རྩིས་ཐོའི་མཐུད་སྦྲེལ་ འབྱུང་ཁུངས་ དང་གཏན་འབེབས་ཟུར་ཐོ་དཔར་བསྐྲུན་འབདཝ་ཨིན།
 
-- `TORII_URL` — Torii endpoint exposing the ISO alias APIs.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element forwarded to the VOPRF helper
-  (defaults to `deadbeef`). Set `ISO_SKIP_VOPRF=1` to skip this call.
-- `ISO_ALIAS_LABEL` — literal alias to resolve; omit when only testing VOPRF or indexed lookups.
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index used with `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for locked-down deployments.
+ཁོར་ཡུག་འགྱུར་ལྡོག་ཅན།
+
+- I18NI000000059X — Torii མཐའ་མའི་གྲོགས་རམ་པ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+- I18NI000000063X — ཐག་གཅོད་འབད་ནི་ལུ་ ངོ་མ་མིང་གཞན་ (དཔེར་ན་ IBAN-style ཡིག་རྒྱུན་ཚུ་)།
+- I18NI000000064X — ཚག་ཡང་ན་ `0x`-སྔོན་སྒྲིག་ཟུར་ཐོ་ I18NI000000066X ལུ་སྤྲོད་ཡོདཔ་ཨིན།
+- I18NI0000000067X / `TORII_API_TOKEN` — བདེ་སྲུང་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་མགོ་ཡིག་ I18NT0000008X བཀྲམ་སྤེལ་ཚུ།
 
 ```bash
-# Evaluate a blinded element and resolve both a label and deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
-# Skip VOPRF and only resolve a stored alias.
+# Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The script prints the backend/digest metadata for the VOPRF helper and displays
-the account, source, and deterministic index returned by the alias resolution
-endpoints. When the ISO bridge runtime is disabled, the helper reports the same
-error message surfaced by Torii so CI runs can treat it as a soft skip.
+གྲོགས་རམ་པ་འདི་གིས་ Torii’s གི་སྤྱོད་ལམ་འདི་ མེ་ལོང་: འདི་གིས་ མིང་གཞན་མེད་པའི་སྐབས་ 404s ཕྱིར་ཐོན་འབདཝ་ཨིན།
+དང་ རན་ཊའིམ་ལྕོགས་མེད་ཀྱི་འཛོལ་བ་ཚུ་ མཉེན་པའི་གོམ་པ་སྦེ་ བརྩི་འཇོག་འབདཝ་ལས་ སི་ཨའི་ རྒྱུན་འབབ་ཀྱིས་ ཟམ་བཟོད་བསྲན་འབད་ཚུགས།
+བདག་འཛིན་སྒོ་སྒྲིག་ཚུ།
 
 The ISO message builders apply the same identifier validation rules captured in
 [`docs/source/finance/settlement_iso_mapping.md`](../../finance/settlement_iso_mapping.md);

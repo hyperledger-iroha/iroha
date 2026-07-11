@@ -5056,613 +5056,6 @@ final class ToriiClientTests: XCTestCase {
         return values
     }
 
-    private func sccpSampleProofHex(messageId: String = String(repeating: "11", count: 32),
-                                    sourceDomain: UInt32 = 0,
-                                    commitmentRoot: String = String(repeating: "33", count: 32)) -> String {
-        var out = Data()
-        out.append(sccpAbiWord(1))
-        out.append(Data(hexString: messageId)!)
-        out.append(sccpAbiWord(sourceDomain))
-        out.append(Data(hexString: commitmentRoot)!)
-        out.append(sccpAbiWord(1))
-        out.append(sccpAbiWord(2))
-        for word in [
-            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed",
-            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2",
-            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa",
-            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b"
-        ] {
-            out.append(Data(hexString: word)!)
-        }
-        out.append(sccpAbiWord(1))
-        out.append(sccpAbiWord(2))
-        return hexString(out)
-    }
-
-    private func sccpMessageBundleJson() -> String {
-        let messageId = String(repeating: "11", count: 32)
-        let payloadHash = String(repeating: "22", count: 32)
-        let commitmentRoot = String(repeating: "33", count: 32)
-        return """
-        {"version":1,"commitment_root":"\(commitmentRoot)","commitment":{"version":1,"kind":"Transfer","target_domain":5,"message_id":"\(messageId)","payload_hash":"\(payloadHash)"}}
-        """
-    }
-
-    private func sccpBridgeMessageBody(proofHex: String) -> Data {
-        Data("""
-        {"authority":"alice","message_bundle":\(sccpMessageBundleJson()),"proof_bytes_hex":"0x\(proofHex)"}
-        """.utf8)
-    }
-
-    private let sccpTestTronNetworkId = String(repeating: "71", count: 32)
-    private let sccpTestTronVerifierAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
-    private let sccpTestTronVerifierCodeHash = String(repeating: "72", count: 32)
-    private let sccpTestTronVerifierKeyHash = String(repeating: "73", count: 32)
-    private let sccpTestEvmNetworkId = String(repeating: "aa", count: 32)
-    private let sccpTestEvmVerifierAddress = String(repeating: "bb", count: 20)
-    private let sccpTestEvmBridgeAddress = String(repeating: "cc", count: 20)
-    private let sccpTestEvmVerifierCodeHash = String(repeating: "dd", count: 32)
-    private let sccpTestEvmVerifierKeyHash = String(repeating: "ee", count: 32)
-
-    private func sccpTestTronDestinationBindingHash() throws -> String {
-        let hash = try sccpTronDestinationBindingHash(
-            networkId: "0x\(sccpTestTronNetworkId)",
-            verifierAddress: sccpTestTronVerifierAddress,
-            verifierCodeHash: "0x\(sccpTestTronVerifierCodeHash)",
-            verifierKeyHash: "0x\(sccpTestTronVerifierKeyHash)"
-        )
-        if hash.hasPrefix("0x") {
-            return String(hash.dropFirst(2))
-        }
-        return hash
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBridgeSubmitJsonHelpersPostRawProofAndMessagePayloads() async throws {
-        var seenPaths: [String] = []
-        let proofHex = sccpSampleProofHex()
-        let bindingHash = try sccpTestTronDestinationBindingHash()
-        let proofBody = Data("""
-        {"authority":"alice","message_bundle":\(sccpMessageBundleJson()),"network_id_hex":"0x\(sccpTestTronNetworkId)","verifier_code_hash_hex":"0x\(sccpTestTronVerifierCodeHash)","verifier_key_hash_hex":"0x\(sccpTestTronVerifierKeyHash)","expected_destination_binding_hash_hex":"0x\(bindingHash)","tron_verifier_address":"\(sccpTestTronVerifierAddress)","proof_bytes_hex":"0x\(proofHex)"}
-        """.utf8)
-        StubURLProtocol.handler = { request in
-            seenPaths.append(request.url?.path ?? "")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            switch request.url?.path {
-            case "/v1/bridge/proofs/submit":
-                XCTAssertEqual(self.bodyData(from: request), proofBody)
-            case "/v1/bridge/messages":
-                XCTAssertEqual(self.bodyData(from: request), Data(#"{"authority":"alice","message_bundle":{}}"#.utf8))
-            default:
-                XCTFail("unexpected request: \(request.url?.path ?? "")")
-            }
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, Data(#"{"ok":true}"#.utf8))
-        }
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
-
-        let proofResponse = try await client.postBridgeProofSubmitJson(
-            proofBody
-        )
-        XCTAssertEqual(proofResponse, Data(#"{"ok":true}"#.utf8))
-        let messageResponse = try await client.postBridgeMessageSubmitJson(
-            Data(#"{"authority":"alice","message_bundle":{}}"#.utf8)
-        )
-        XCTAssertEqual(messageResponse, Data(#"{"ok":true}"#.utf8))
-        XCTAssertEqual(seenPaths, ["/v1/bridge/proofs/submit", "/v1/bridge/messages"])
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBridgeProofSubmitRequestPostsEncodedPayload() async throws {
-        let proofHex = sccpSampleProofHex()
-        let bindingHash = try sccpTestTronDestinationBindingHash()
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/bridge/proofs/submit")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            let requestBody = try XCTUnwrap(self.bodyData(from: request))
-            let fields = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: requestBody) as? [String: Any]
-            )
-            XCTAssertEqual(fields["authority"] as? String, "alice")
-            XCTAssertNotNil(fields["message_bundle"] as? [String: Any])
-            XCTAssertEqual(fields["network_id_hex"] as? String, "0x\(self.sccpTestTronNetworkId)")
-            XCTAssertEqual(fields["verifier_code_hash_hex"] as? String, "0x\(self.sccpTestTronVerifierCodeHash)")
-            XCTAssertEqual(fields["verifier_key_hash_hex"] as? String, "0x\(self.sccpTestTronVerifierKeyHash)")
-            XCTAssertEqual(
-                fields["expected_destination_binding_hash_hex"] as? String,
-                "0x\(bindingHash)"
-            )
-            XCTAssertEqual(fields["tron_verifier_address"] as? String, self.sccpTestTronVerifierAddress)
-            XCTAssertEqual(fields["proof_bytes_hex"] as? String, "0x\(proofHex)")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, Data(#"{"ok":true}"#.utf8))
-        }
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
-        let messageId = String(repeating: "11", count: 32)
-        let commitmentRoot = String(repeating: "33", count: 32)
-        let messageBundle = ToriiJSONValue.object([
-            "commitment_root": .string(commitmentRoot),
-            "commitment": .object(["message_id": .string(messageId)])
-        ])
-
-        let response = try await client.submitBridgeProof(
-            ToriiBridgeProofSubmitRequest(
-                authority: "alice",
-                messageBundle: messageBundle,
-                networkIdHex: "0x\(sccpTestTronNetworkId)",
-                verifierCodeHashHex: "0x\(sccpTestTronVerifierCodeHash)",
-                verifierKeyHashHex: "0x\(sccpTestTronVerifierKeyHash)",
-                expectedDestinationBindingHashHex: "0x\(bindingHash)",
-                tronVerifierAddress: sccpTestTronVerifierAddress,
-                proofBytesHex: "0x\(proofHex)"
-            )
-        )
-        XCTAssertEqual(response, Data(#"{"ok":true}"#.utf8))
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions() async throws {
-        let messageId = String(repeating: "11", count: 32)
-        let commitmentRoot = String(repeating: "33", count: 32)
-        let proofHex = sccpSampleProofHex(messageId: messageId, commitmentRoot: commitmentRoot)
-        let proofBytes = try XCTUnwrap(Data(hexString: proofHex))
-        let messageBundle = ToriiJSONValue.object([
-            "commitment_root": .string(commitmentRoot),
-            "commitment": .object(["message_id": .string(messageId)])
-        ])
-        var bodies: [[String: Any]] = []
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/bridge/proofs/submit")
-            XCTAssertEqual(request.httpMethod, "POST")
-            let requestBody = try XCTUnwrap(self.bodyData(from: request))
-            let fields = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: requestBody) as? [String: Any]
-            )
-            bodies.append(fields)
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, Data(#"{"ok":true}"#.utf8))
-        }
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
-        let evmBinding = try sccpEvmDestinationBinding(
-            targetDomain: sccpDomainEthereum,
-            networkId: "0x\(String(repeating: "71", count: 32))",
-            verifierAddress: "0x\(String(repeating: "44", count: 20))",
-            bridgeAddress: "0x\(String(repeating: "45", count: 20))",
-            verifierCodeHash: "0x\(String(repeating: "72", count: 32))",
-            verifierKeyHash: "0x\(String(repeating: "73", count: 32))"
-        )
-        let evmSubmission = try buildEvmSccpSubmission(
-            EvmSccpSubmissionInput(
-                publicInputs: EvmSccpPublicInputsInput(
-                    messageId: messageId,
-                    payloadHash: String(repeating: "22", count: 32),
-                    targetDomain: sccpDomainEthereum,
-                    commitmentRoot: commitmentRoot,
-                    finalityHeight: 7,
-                    finalityBlockHash: String(repeating: "44", count: 32)
-                ),
-                proofBytes: proofBytes,
-                statementHash: "0x\(String(repeating: "55", count: 32))",
-                destinationBinding: evmBinding
-            )
-        )
-
-        _ = try await client.submitBridgeProof(
-            try ToriiBridgeProofSubmitRequest(
-                authority: "alice",
-                messageBundle: messageBundle,
-                evmSccpSubmission: evmSubmission,
-                destinationBinding: evmBinding
-            )
-        )
-        let evmBody = try XCTUnwrap(bodies.last)
-        XCTAssertEqual(evmBody["network_id_hex"] as? String, evmBinding.networkId)
-        XCTAssertEqual(evmBody["verifier_address_hex"] as? String, evmBinding.verifierAddress)
-        XCTAssertEqual(evmBody["bridge_address_hex"] as? String, evmBinding.bridgeAddress)
-        XCTAssertEqual(evmBody["verifier_code_hash_hex"] as? String, evmBinding.verifierCodeHash)
-        XCTAssertEqual(evmBody["verifier_key_hash_hex"] as? String, evmBinding.verifierKeyHash)
-        XCTAssertEqual(evmBody["expected_destination_binding_hash_hex"] as? String, evmBinding.hash)
-        XCTAssertEqual(evmBody["proof_bytes_hex"] as? String, "0x\(proofHex)")
-        do {
-            _ = try ToriiBridgeProofSubmitRequest(
-                authority: "alice",
-                messageBundle: .object([:]),
-                evmSccpSubmission: evmSubmission,
-                destinationBinding: evmBinding
-            )
-            XCTFail("EVM SCCP submit helper must reject missing message bundle proof context")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("message_bundle.commitment.message_id"))
-        }
-        var invalidProofBytes = proofBytes
-        invalidProofBytes.replaceSubrange((4 * 32)..<(6 * 32), with: Data(repeating: 0, count: 64))
-        let invalidEvmSubmission = EvmSccpSubmission(
-            version: evmSubmission.version,
-            proofFamily: evmSubmission.proofFamily,
-            verifierBackend: evmSubmission.verifierBackend,
-            platformPayload: evmSubmission.platformPayload,
-            envelopeEncoding: evmSubmission.envelopeEncoding,
-            submissionKind: evmSubmission.submissionKind,
-            verifierEntrypoint: evmSubmission.verifierEntrypoint,
-            contractMethod: evmSubmission.contractMethod,
-            functionSelector: evmSubmission.functionSelector,
-            sourceDomain: evmSubmission.sourceDomain,
-            targetDomain: evmSubmission.targetDomain,
-            publicInputs: evmSubmission.publicInputs,
-            publicInputWords: evmSubmission.publicInputWords,
-            publicSignalWords: evmSubmission.publicSignalWords,
-            statementHash: evmSubmission.statementHash,
-            destinationBindingHash: evmSubmission.destinationBindingHash,
-            arguments: evmSubmission.arguments,
-            proofBytes: invalidProofBytes,
-            callData: evmSubmission.callData,
-            callDataHex: evmSubmission.callDataHex,
-            envelopeBytes: evmSubmission.envelopeBytes,
-            envelopeHex: evmSubmission.envelopeHex
-        )
-        do {
-            _ = try ToriiBridgeProofSubmitRequest(
-                authority: "alice",
-                messageBundle: messageBundle,
-                evmSccpSubmission: invalidEvmSubmission,
-                destinationBinding: evmBinding
-            )
-            XCTFail("EVM SCCP submit helper must reject invalid Groth16 proof tuple")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proofBytes.a"))
-        }
-
-        let tronBinding = try sccpTronDestinationBinding(
-            targetDomain: sccpDomainTron,
-            networkId: "0x\(String(repeating: "81", count: 32))",
-            verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
-            verifierCodeHash: "0x\(String(repeating: "82", count: 32))",
-            verifierKeyHash: "0x\(String(repeating: "83", count: 32))"
-        )
-        let tronSubmission = try buildTronSccpSubmission(
-            TronSccpSubmissionInput(
-                publicInputs: TronSccpPublicInputsInput(
-                    messageId: messageId,
-                    payloadHash: String(repeating: "22", count: 32),
-                    targetDomain: sccpDomainTron,
-                    commitmentRoot: commitmentRoot,
-                    finalityHeight: 7,
-                    finalityBlockHash: String(repeating: "44", count: 32)
-                ),
-                proofBytes: proofBytes,
-                statementHash: "0x\(String(repeating: "66", count: 32))",
-                destinationBinding: tronBinding
-            )
-        )
-
-        _ = try await client.submitBridgeProof(
-            try ToriiBridgeProofSubmitRequest(
-                authority: "alice",
-                messageBundle: messageBundle,
-                tronSccpSubmission: tronSubmission,
-                destinationBinding: tronBinding
-            )
-        )
-        let tronBody = try XCTUnwrap(bodies.last)
-        XCTAssertEqual(tronBody["network_id_hex"] as? String, tronBinding.networkId)
-        XCTAssertEqual(tronBody["tron_verifier_address"] as? String, tronBinding.verifierAddress)
-        XCTAssertEqual(tronBody["verifier_code_hash_hex"] as? String, tronBinding.verifierCodeHash)
-        XCTAssertEqual(tronBody["verifier_key_hash_hex"] as? String, tronBinding.verifierKeyHash)
-        XCTAssertEqual(tronBody["expected_destination_binding_hash_hex"] as? String, tronBinding.hash)
-        XCTAssertNil(tronBody["verifier_address_hex"])
-        XCTAssertNil(tronBody["bridge_address_hex"])
-        XCTAssertEqual(tronBody["proof_bytes_hex"] as? String, "0x\(proofHex)")
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBridgeSubmitJsonHelpersRejectPlaceholderProofBytesBeforeRequest() async throws {
-        StubURLProtocol.handler = { request in
-            XCTFail("invalid bridge submit payload must not be sent: \(request.url?.path ?? "")")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 500,
-                                           httpVersion: nil,
-                                           headerFields: nil)!
-            return (response, Data())
-        }
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
-        let body = Data(#"{"proof_bytes_hex":"0x0000"}"#.utf8)
-        let bindingHash = try sccpTestTronDestinationBindingHash()
-
-        do {
-            _ = try await client.postBridgeProofSubmitJson(body)
-            XCTFail("bridge proof submit must reject all-zero proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex"))
-            XCTAssertTrue(message.contains("all zero"))
-        }
-
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(body)
-            XCTFail("bridge message submit must reject all-zero proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex"))
-            XCTAssertTrue(message.contains("all zero"))
-        }
-
-        let shortBody = Data(#"{"proof_bytes_hex":"0x0102ab"}"#.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(shortBody)
-            XCTFail("bridge proof submit must reject short proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex"))
-            XCTAssertTrue(message.contains("384-byte"))
-        }
-
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(shortBody)
-            XCTFail("bridge message submit must reject short proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex"))
-            XCTAssertTrue(message.contains("384-byte"))
-        }
-
-        var offCurveC = Data(hexString: sccpSampleProofHex())!
-        offCurveC[11 * 32 + 31] = 3
-        let offCurveCBody = Data("""
-        {"network_id_hex":"0x\(String(repeating: "71", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","proof_bytes_hex":"0x\(hexString(offCurveC))"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(offCurveCBody)
-            XCTFail("bridge proof submit must reject off-curve G1 proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex.c"))
-        }
-
-        var offCurveB = Data(hexString: sccpSampleProofHex())!
-        offCurveB[6 * 32 + 31] ^= 0x01
-        let offCurveBBody = Data("""
-        {"verifier_address_hex":"0x\(String(repeating: "22", count: 20))","proof_bytes_hex":"0x\(hexString(offCurveB))"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(offCurveBBody)
-            XCTFail("bridge message submit must reject off-curve G2 proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex.b"))
-        }
-
-        do {
-            _ = try await client.postBridgeProofSubmitJson(
-                sccpBridgeMessageBody(proofHex: sccpSampleProofHex(messageId: String(repeating: "44", count: 32)))
-            )
-            XCTFail("bridge proof submit must reject message-id drift")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex.message_id"))
-        }
-
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(
-                sccpBridgeMessageBody(proofHex: sccpSampleProofHex(sourceDomain: 5))
-            )
-            XCTFail("bridge message submit must reject source-domain drift")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex.source_domain"))
-        }
-
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(
-                sccpBridgeMessageBody(proofHex: sccpSampleProofHex(commitmentRoot: String(repeating: "55", count: 32)))
-            )
-            XCTFail("bridge message submit must reject commitment-root drift")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex.commitment_root"))
-        }
-
-        let missingBundleContextBody = Data("""
-        {"authority":"alice","message_bundle":{},"network_id_hex":"0x\(String(repeating: "71", count: 32))","verifier_code_hash_hex":"0x\(String(repeating: "72", count: 32))","verifier_key_hash_hex":"0x\(String(repeating: "73", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(missingBundleContextBody)
-            XCTFail("bridge proof submit must reject proof bytes without message bundle proof context")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("message_bundle.commitment.message_id"))
-        }
-
-        let proofOnlyBody = Data(#"{"proof_bytes_hex":"0x\#(sccpSampleProofHex())"}"#.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(proofOnlyBody)
-            XCTFail("bridge proof submit must reject proof bytes without destination material")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("deployment destination fields"))
-        }
-
-        let partialDestinationBody = Data("""
-        {"network_id_hex":"0x\(String(repeating: "71", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(partialDestinationBody)
-            XCTFail("bridge proof submit must reject partial destination tuple")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("complete EVM or TRON"))
-        }
-
-        let mixedDestinationBody = Data("""
-        {"network_id_hex":"0x\(String(repeating: "71", count: 32))","verifier_address_hex":"0x\(String(repeating: "22", count: 20))","bridge_address_hex":"0x\(String(repeating: "33", count: 20))","verifier_code_hash_hex":"0x\(String(repeating: "72", count: 32))","verifier_key_hash_hex":"0x\(String(repeating: "73", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(mixedDestinationBody)
-            XCTFail("bridge message submit must reject mixed EVM/TRON destination tuple")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("cannot be mixed"))
-        }
-
-        let mismatchedDestinationBindingBody = Data("""
-        {"authority":"alice","message_bundle":\(sccpMessageBundleJson()),"network_id_hex":"0x\(sccpTestTronNetworkId)","verifier_code_hash_hex":"0x\(sccpTestTronVerifierCodeHash)","verifier_key_hash_hex":"0x\(sccpTestTronVerifierKeyHash)","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","tron_verifier_address":"\(sccpTestTronVerifierAddress)","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(mismatchedDestinationBindingBody)
-            XCTFail("bridge message submit must reject mismatched TRON destination binding")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("canonical TRON destination binding"))
-        }
-
-        let mismatchedEvmDestinationBindingBody = Data("""
-        {"authority":"alice","message_bundle":\(sccpMessageBundleJson()),"network_id_hex":"0x\(sccpTestEvmNetworkId)","verifier_address_hex":"0x\(sccpTestEvmVerifierAddress)","bridge_address_hex":"0x\(sccpTestEvmBridgeAddress)","verifier_code_hash_hex":"0x\(sccpTestEvmVerifierCodeHash)","verifier_key_hash_hex":"0x\(sccpTestEvmVerifierKeyHash)","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(mismatchedEvmDestinationBindingBody)
-            XCTFail("bridge message submit must reject mismatched EVM destination binding")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("canonical EVM destination binding"))
-        }
-
-        let fullDestinationNoBundleBody = Data("""
-        {"authority":"alice","network_id_hex":"0x\(sccpTestTronNetworkId)","verifier_code_hash_hex":"0x\(sccpTestTronVerifierCodeHash)","verifier_key_hash_hex":"0x\(sccpTestTronVerifierKeyHash)","expected_destination_binding_hash_hex":"0x\(bindingHash)","tron_verifier_address":"\(sccpTestTronVerifierAddress)","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(fullDestinationNoBundleBody)
-            XCTFail("bridge proof submit must reject missing bundle selection")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("exactly one of burn_bundle or message_bundle"))
-        }
-
-        let burnDestinationBody = Data("""
-        {"authority":"alice","burn_bundle":{},"network_id_hex":"0x\(sccpTestTronNetworkId)","verifier_code_hash_hex":"0x\(sccpTestTronVerifierCodeHash)","verifier_key_hash_hex":"0x\(sccpTestTronVerifierKeyHash)","expected_destination_binding_hash_hex":"0x\(bindingHash)","tron_verifier_address":"\(sccpTestTronVerifierAddress)","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(burnDestinationBody)
-            XCTFail("bridge proof submit must reject destination tuple on burn bundle")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("message_bundle submissions"))
-        }
-
-        let destinationOnlyBody = Data("""
-        {"network_id_hex":"0x\(String(repeating: "71", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(destinationOnlyBody)
-            XCTFail("bridge message submit must reject destination material without proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex is required"))
-        }
-
-        let invalidNetworkIdBody = Data("""
-        {"network_id_hex":"0x1234","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(invalidNetworkIdBody)
-            XCTFail("bridge proof submit must reject invalid destination network id")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("network_id_hex"))
-            XCTAssertTrue(message.contains("32-byte"))
-        }
-
-        let paddedNetworkIdBody = Data("""
-        {"network_id_hex":" 0x\(String(repeating: "71", count: 32))","verifier_code_hash_hex":"0x\(String(repeating: "72", count: 32))","verifier_key_hash_hex":"0x\(String(repeating: "73", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(paddedNetworkIdBody)
-            XCTFail("bridge proof submit must reject padded destination network id")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("network_id_hex"))
-            XCTAssertTrue(message.contains("canonical hex"))
-        }
-
-        let paddedProofBytesBody = Data("""
-        {"network_id_hex":"0x\(String(repeating: "71", count: 32))","verifier_code_hash_hex":"0x\(String(repeating: "72", count: 32))","verifier_key_hash_hex":"0x\(String(repeating: "73", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x\(sccpSampleProofHex()) "}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(paddedProofBytesBody)
-            XCTFail("bridge message submit must reject padded proof bytes")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex"))
-            XCTAssertTrue(message.contains("canonical"))
-        }
-
-        let zeroEvmVerifierBody = Data("""
-        {"verifier_address_hex":"0x\(String(repeating: "00", count: 20))","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(zeroEvmVerifierBody)
-            XCTFail("bridge proof submit must reject all-zero EVM verifier address")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("verifier_address_hex"))
-            XCTAssertTrue(message.contains("all zero"))
-        }
-
-        let blankTronVerifierBody = Data("""
-        {"tron_verifier_address":"   ","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(blankTronVerifierBody)
-            XCTFail("bridge message submit must reject blank TRON verifier address")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("tron_verifier_address"))
-        }
-
-        let paddedTronVerifierBody = Data("""
-        {"tron_verifier_address":" TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(paddedTronVerifierBody)
-            XCTFail("bridge message submit must reject padded TRON verifier address")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("tron_verifier_address"))
-        }
-
-        let zeroTronVerifierBody = Data("""
-        {"tron_verifier_address":"T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(zeroTronVerifierBody)
-            XCTFail("bridge message submit must reject zero TRON verifier address")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("tron_verifier_address"))
-        }
-
-        let invalidTronVerifierBody = Data("""
-        {"tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv9","proof_bytes_hex":"0x\(sccpSampleProofHex())"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeMessageSubmitJson(invalidTronVerifierBody)
-            XCTFail("bridge message submit must reject invalid TRON verifier address")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("tron_verifier_address"))
-        }
-
-        let wrongSourceDomainDestinationBody = Data("""
-        {"authority":"alice","network_id_hex":"0x\(String(repeating: "71", count: 32))","verifier_code_hash_hex":"0x\(String(repeating: "72", count: 32))","verifier_key_hash_hex":"0x\(String(repeating: "73", count: 32))","expected_destination_binding_hash_hex":"0x\(String(repeating: "74", count: 32))","tron_verifier_address":"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8","proof_bytes_hex":"0x\(sccpSampleProofHex(sourceDomain: 5))"}
-        """.utf8)
-        do {
-            _ = try await client.postBridgeProofSubmitJson(wrongSourceDomainDestinationBody)
-            XCTFail("bridge proof submit must reject wrong source-domain destination proof")
-        } catch ToriiClientError.invalidPayload(let message) {
-            XCTAssertTrue(message.contains("proof_bytes_hex.source_domain"))
-        }
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionEntrypointAsync() async throws {
         StubURLProtocol.handler = { request in
@@ -14052,7 +13445,7 @@ id: 88
 
     func testRegisterContractCodePostsJSON() {
         let expectation = expectation(description: "register contract")
-        let codeHash = String(repeating: "a", count: 64)
+        let codeHash = String(repeating: "b", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/code")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -14065,7 +13458,10 @@ id: 88
             XCTAssertEqual(json["authority"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             XCTAssertEqual(json["private_key"] as? String, "ed25519:secret")
             let manifest = json["manifest"] as? [String: Any]
-            XCTAssertEqual(manifest?["code_hash"] as? String, codeHash)
+            XCTAssertEqual(
+                manifest?["code_hash"] as? String,
+                "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
+            )
             let hints = manifest?["access_set_hints"] as? [String: Any]
             XCTAssertEqual(hints?["read_keys"] as? [String], ["account:alice#wonderland"])
             XCTAssertEqual(hints?["write_keys"] as? [String], ["asset:coin#wonderland"])
@@ -14153,12 +13549,12 @@ id: 88
     func testFetchContractManifestParsesResponse() {
         let expectation = expectation(description: "fetch manifest")
         let codeHash = String(repeating: "b", count: 64)
-        let abiHash = String(repeating: "c", count: 64)
+        let abiHash = String(repeating: "d", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/code/\(codeHash)")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"manifest":{"code_hash":"\(codeHash)","abi_hash":"\(abiHash)","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]}},"code_bytes":null}
+            {"manifest":{"seiyaku_name":null,"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071","compiler_fingerprint":"rustc","features_bitmap":1,"access_set_hints":{"read_keys":["account:alice#wonderland"],"write_keys":[]},"entrypoints":null,"states":null,"error_codes":null},"code_hash":"\(codeHash)","abi_hash":"\(abiHash)"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -14168,6 +13564,8 @@ id: 88
             case .success(let record):
                 XCTAssertEqual(record.manifest.codeHash, codeHash)
                 XCTAssertEqual(record.manifest.abiHash, abiHash)
+                XCTAssertEqual(record.codeHash, codeHash)
+                XCTAssertEqual(record.abiHash, abiHash)
                 XCTAssertEqual(record.manifest.accessSetHints?.readKeys, ["account:alice#wonderland"])
                 XCTAssertEqual(record.manifest.accessSetHints?.writeKeys ?? [], [])
             case .failure(let error):
@@ -14176,6 +13574,587 @@ id: 88
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testContractManifestRecordRejectsMismatchedHashConveniences() throws {
+        let manifest = #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2","abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"}"#
+        let valid = "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}"
+        let record = try JSONDecoder().decode(
+            ToriiContractManifestRecord.self,
+            from: Data(valid.utf8)
+        )
+        XCTAssertEqual(record.codeHash, record.manifest.codeHash)
+        XCTAssertEqual(record.abiHash, record.manifest.abiHash)
+
+        let invalid = [
+            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "d", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "B", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\"manifest\":\(manifest),\"abi_hash\":\"\(String(repeating: "d", count: 64))\"}",
+            "{\"manifest\":\(manifest),\"code_hash\":\"\(String(repeating: "b", count: 64))\",\"abi_hash\":\"\(String(repeating: "d", count: 64))\",\"code_bytes\":null}",
+        ]
+        for payload in invalid {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractManifestRecord.self,
+                    from: Data(payload.utf8)
+                ),
+                "accepted inconsistent manifest response: \(payload)"
+            )
+        }
+    }
+
+    func testContractManifestPreservesExactV1InterfaceShape() throws {
+        let payload = """
+        {
+          "seiyaku_name":"Ledger",
+          "code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
+          "abi_hash":"hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071",
+          "compiler_fingerprint":"kotodama_lang",
+          "features_bitmap":0,
+          "access_set_hints":{
+            "read_keys":["state:Balances"],
+            "write_keys":["state:Balances"],
+            "dynamic_reads":[{
+              "base_key":"state:Balances",
+              "key_type":"AccountId",
+              "bound_kind":"take",
+              "max_keys":64
+            }],
+            "dynamic_writes":[]
+          },
+          "entrypoints":[{
+            "name":"transfer",
+            "kind":{"kind":"Kotoage","value":null},
+            "params":[
+              {"name":"request","type_name":"struct Transfer"},
+              {"name":"tags","type_name":"List<Name, 64>"}
+            ],
+            "argument_schema":{"fields":[
+              {"name":"request","ty":{"nodes":[
+                {"kind":"Struct","value":{"name":"Transfer","fields":["amount","memo"]}},
+                {"kind":"Leaf","value":{"kind":"Quantity","value":null}},
+                {"kind":"Option","value":null},
+                {"kind":"Leaf","value":{"kind":"String","value":null}}
+              ]}},
+              {"name":"tags","ty":{"nodes":[
+                {"kind":"List","value":{"capacity":64}},
+                {"kind":"Leaf","value":{"kind":"Name","value":null}}
+              ]}}
+            ]},
+            "return_type":"Result<(bool, decimal), string>",
+            "return_schema":{"nodes":[
+              {"kind":"Result","value":null},
+              {"kind":"Tuple","value":2},
+              {"kind":"Leaf","value":{"kind":"Bool","value":null}},
+              {"kind":"Leaf","value":{"kind":"Decimal","value":null}},
+              {"kind":"Leaf","value":{"kind":"String","value":null}}
+            ]},
+            "permission":"TransferAsset",
+            "read_keys":["state:Balances"],
+            "write_keys":["state:Balances"],
+            "access_hints_complete":true,
+            "access_hints_skipped":[],
+            "triggers":[{
+              "id":"settle",
+              "repeats":{"Exactly":2},
+              "filter":"TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA=",
+              "authority":null,
+              "metadata":{"purpose":"daily-settlement","round":7},
+              "callback":{"namespace":null,"entrypoint":"transfer"}
+            }]
+          }],
+          "states":[{"name":"Balances","type_name":"StateMap<AccountId, quantity>"}],
+          "error_codes":[{
+            "namespace":"TransferError",
+            "name":"InsufficientFunds",
+            "code":1001
+          }],
+          "kotoba":[{
+            "msg_id":"transfer.denied",
+            "translations":[
+              {"lang":"en","text":"Transfer denied"},
+              {"lang":"ja","text":"送金は拒否されました"}
+            ]
+          }],
+          "provenance":{"signer":"ed25519:fixture","signature":"fixture-signature"}
+        }
+        """.data(using: .utf8)!
+
+        let manifest = try JSONDecoder().decode(ToriiContractManifest.self, from: payload)
+        XCTAssertEqual(manifest.seiyakuName, "Ledger")
+        XCTAssertEqual(manifest.codeHash, String(repeating: "b", count: 64))
+        XCTAssertEqual(manifest.abiHash, String(repeating: "d", count: 64))
+        XCTAssertEqual(manifest.accessSetHints?.dynamicReads.first?.maxKeys, 64)
+        let entrypoint = try XCTUnwrap(manifest.entrypoints?.first)
+        XCTAssertEqual(entrypoint.kind, .kotoage)
+        XCTAssertEqual(entrypoint.argumentSchema?.fields.first?.type.wordCount, 2)
+        XCTAssertEqual(entrypoint.argumentSchema?.fields.last?.type.wordCount, 1)
+        guard case let .list(listNode)? = entrypoint.argumentSchema?.fields.last?.type.nodes.first else {
+            return XCTFail("expected bounded list argument schema")
+        }
+        XCTAssertEqual(listNode.capacity, 64)
+        XCTAssertEqual(entrypoint.returnSchema?.wordCount, 1)
+        guard case let .leaf(returnLeaf)? = entrypoint.returnSchema?.nodes[2] else {
+            return XCTFail("expected bool return leaf")
+        }
+        XCTAssertEqual(returnLeaf, .bool)
+        XCTAssertEqual(entrypoint.triggers.first?.callback.entrypoint, "transfer")
+        XCTAssertEqual(entrypoint.triggers.first?.metadata["round"], .number(7))
+        XCTAssertEqual(manifest.states?.first?.typeName, "StateMap<AccountId, quantity>")
+        XCTAssertEqual(manifest.errorCodes?.first?.code, 1001)
+        XCTAssertEqual(manifest.kotoba?.first?.translations.last?.language, "ja")
+        XCTAssertEqual(manifest.provenance?.signer, "ed25519:fixture")
+
+        let encoded = try JSONEncoder().encode(manifest)
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(object["seiyaku_name"] as? String, "Ledger")
+        XCTAssertEqual(
+            object["code_hash"] as? String,
+            "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2"
+        )
+        XCTAssertEqual(
+            object["abi_hash"] as? String,
+            "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071"
+        )
+        let entrypoints = try XCTUnwrap(object["entrypoints"] as? [[String: Any]])
+        XCTAssertNotNil(entrypoints[0]["argument_schema"])
+        XCTAssertNotNil(entrypoints[0]["return_schema"])
+        XCTAssertEqual((entrypoints[0]["triggers"] as? [Any])?.count, 1)
+        XCTAssertEqual((object["states"] as? [Any])?.count, 1)
+        XCTAssertEqual((object["error_codes"] as? [Any])?.count, 1)
+        XCTAssertEqual((object["kotoba"] as? [Any])?.count, 1)
+        XCTAssertNotNil(object["provenance"] as? [String: Any])
+    }
+
+    func testEntrypointSchemaUsesOneFlatPreorderTapeAndExactReservedNames() throws {
+        func leaf(_ kind: String) -> String {
+            "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"\(kind)\",\"value\":null}}"
+        }
+        func structNode(_ name: String, _ fields: [String]) -> String {
+            let encodedFields = fields.map { "\"\($0)\"" }.joined(separator: ",")
+            return "{\"kind\":\"Struct\",\"value\":{\"name\":\"\(name)\",\"fields\":[\(encodedFields)]}}"
+        }
+        func decode(_ nodes: [String]) throws -> ToriiEntrypointValueTypeV1 {
+            let payload = "{\"nodes\":[\(nodes.joined(separator: ","))]}"
+            return try JSONDecoder().decode(
+                ToriiEntrypointValueTypeV1.self,
+                from: Data(payload.utf8)
+            )
+        }
+
+        let views: [(String, [String], [String])] = [
+            (
+                "AccountView",
+                ["id", "metadata"],
+                [leaf("AccountId"), leaf("Json")]
+            ),
+            (
+                "AssetView",
+                ["id", "amount"],
+                [leaf("AssetId"), leaf("Quantity")]
+            ),
+            (
+                "AssetDefinitionView",
+                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+                [
+                    leaf("AssetDefinitionId"),
+                    leaf("String"),
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("String"),
+                    leaf("AccountId"),
+                    leaf("Quantity"),
+                    leaf("Json"),
+                ]
+            ),
+            (
+                "DomainView",
+                ["id", "owned_by", "metadata"],
+                [leaf("DomainId"), leaf("AccountId"), leaf("Json")]
+            ),
+            (
+                "NftView",
+                ["id", "owned_by", "content"],
+                [leaf("NftId"), leaf("AccountId"), leaf("Json")]
+            ),
+        ]
+
+        for (name, fields, children) in views {
+            let viewNodes = [structNode(name, fields)] + children
+            let view = try decode(viewNodes)
+            XCTAssertEqual(view.canonicalTypeName, name)
+
+            let optional = try decode([#"{"kind":"Option","value":null}"#] + viewNodes)
+            XCTAssertEqual(optional.canonicalTypeName, "Option<\(name)>")
+
+            let pageNodes = [
+                structNode("QueryPage", ["items", "next_offset"]),
+                #"{"kind":"List","value":{"capacity":64}}"#,
+            ] + viewNodes + [
+                #"{"kind":"Option","value":null}"#,
+                leaf("Int"),
+            ]
+            let page = try decode(pageNodes)
+            XCTAssertEqual(page.canonicalTypeName, "QueryPage<\(name)>")
+            XCTAssertEqual(page.wordCount, 2)
+
+            let encoded = try JSONEncoder().encode(page)
+            let object = try XCTUnwrap(
+                try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            )
+            let encodedNodes = try XCTUnwrap(object["nodes"] as? [[String: Any]])
+            let listPayload = try XCTUnwrap(encodedNodes[1]["value"] as? [String: Any])
+            XCTAssertEqual(listPayload["capacity"] as? Int, 64)
+            XCTAssertEqual(Set(listPayload.keys), ["capacity"])
+            XCTAssertEqual(
+                try JSONDecoder().decode(ToriiEntrypointValueTypeV1.self, from: encoded),
+                page
+            )
+        }
+
+        let pair = try decode([
+            structNode("Pair", ["left", "right"]),
+            leaf("Int"),
+            leaf("Bool"),
+        ])
+        XCTAssertEqual(pair.canonicalTypeName, "struct Pair")
+    }
+
+    func testEntrypointSchemaRejectsLegacyTruncatedDeepAndForgedTapes() throws {
+        func leaf(_ kind: String) -> String {
+            "{\"kind\":\"Leaf\",\"value\":{\"kind\":\"\(kind)\",\"value\":null}}"
+        }
+        func structNode(_ name: String, _ fields: [String]) -> String {
+            let encodedFields = fields.map { "\"\($0)\"" }.joined(separator: ",")
+            return "{\"kind\":\"Struct\",\"value\":{\"name\":\"\(name)\",\"fields\":[\(encodedFields)]}}"
+        }
+        func decode(_ nodes: [String]) throws -> ToriiEntrypointValueTypeV1 {
+            let payload = "{\"nodes\":[\(nodes.joined(separator: ","))]}"
+            return try JSONDecoder().decode(
+                ToriiEntrypointValueTypeV1.self,
+                from: Data(payload.utf8)
+            )
+        }
+        func reject(_ nodes: [String], _ label: String) {
+            XCTAssertThrowsError(try decode(nodes), "accepted \(label)")
+        }
+
+        let views: [(String, [String], [String])] = [
+            ("AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]),
+            ("AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]),
+            (
+                "AssetDefinitionView",
+                ["id", "name", "description", "owned_by", "total_quantity", "metadata"],
+                [
+                    leaf("AssetDefinitionId"),
+                    leaf("String"),
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("String"),
+                    leaf("AccountId"),
+                    leaf("Quantity"),
+                    leaf("Json"),
+                ]
+            ),
+            (
+                "DomainView",
+                ["id", "owned_by", "metadata"],
+                [leaf("DomainId"), leaf("AccountId"), leaf("Json")]
+            ),
+            (
+                "NftView",
+                ["id", "owned_by", "content"],
+                [leaf("NftId"), leaf("AccountId"), leaf("Json")]
+            ),
+        ]
+
+        for (name, fields, children) in views {
+            let validView = [structNode(name, fields)] + children
+            var wrongFields = fields
+            wrongFields[wrongFields.count - 1] = "forged"
+            reject(
+                [structNode(name, wrongFields)] + children,
+                "\(name) with forged fields"
+            )
+
+            var wrongLeaf = children
+            wrongLeaf[wrongLeaf.count - 1] = leaf("Blob")
+            reject(
+                [structNode(name, fields)] + wrongLeaf,
+                "\(name) with forged leaf kind"
+            )
+
+            let pagePrefix = [
+                structNode("QueryPage", ["items", "next_offset"]),
+                #"{"kind":"List","value":{"capacity":64}}"#,
+            ]
+            reject(
+                pagePrefix + validView + [
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("String"),
+                ],
+                "QueryPage<\(name)> with non-int next_offset"
+            )
+            reject(
+                [
+                    structNode("QueryPage", ["items", "next_offset"]),
+                    #"{"kind":"List","value":{"capacity":32}}"#,
+                ] + validView + [
+                    #"{"kind":"Option","value":null}"#,
+                    leaf("Int"),
+                ],
+                "QueryPage<\(name)> with capacity below 64"
+            )
+        }
+
+        reject(
+            [
+                #"{"kind":"List","value":{"capacity":64,"element":{"nodes":[{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}}"#,
+            ],
+            "retired nested list element"
+        )
+        reject([#"{"kind":"List","value":{"capacity":64}}"#], "truncated list tape")
+        reject([leaf("Bool"), leaf("Bool")], "extra root node")
+        reject(
+            [#"{"kind":"List","value":{"capacity":0}}"#, leaf("Int")],
+            "zero list capacity"
+        )
+        reject(
+            [#"{"kind":"List","value":{"capacity":65}}"#, leaf("Int")],
+            "list capacity above 64"
+        )
+
+        let forgedForEncoding = ToriiEntrypointValueTypeV1(nodes: [
+            .structType(
+                ToriiEntrypointStructTypeNodeV1(
+                    name: "AccountView",
+                    fields: ["id", "metadata"]
+                )
+            ),
+            .leaf(.accountId),
+            .leaf(.blob),
+        ])
+        XCTAssertThrowsError(try JSONEncoder().encode(forgedForEncoding))
+        XCTAssertThrowsError(
+            try JSONEncoder().encode(
+                ToriiEntrypointValueTypeV1(
+                    nodes: [.list(ToriiEntrypointListTypeNodeV1(capacity: 64))]
+                )
+            )
+        )
+
+        let atLimit = Array(
+            repeating: #"{"kind":"List","value":{"capacity":1}}"#,
+            count: 255
+        ) + [leaf("Int")]
+        XCTAssertEqual(try decode(atLimit).wordCount, 1)
+        reject(
+            Array(
+                repeating: #"{"kind":"List","value":{"capacity":1}}"#,
+                count: 256
+            ) + [leaf("Int")],
+            "schema depth and node budget overflow"
+        )
+    }
+
+    func testContractManifestRejectsNoncanonicalV1InterfaceShapes() throws {
+        let validLeaf = #"{"kind":"Leaf","value":{"kind":"Bool","value":null}}"#
+        var cases = [
+            #"{"seiyaku_name":" Ledger "}"#,
+            #"{"seiyaku_name":"seiyaku"}"#,
+            #"{"seiyaku_name":"match"}"#,
+            #"{"code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#,
+            #"{"code_hash":"hash:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#ABA2"}"#,
+            #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#0000"}"#,
+            #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#aba2"}"#,
+            #"{"code_hash":"hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B"}"#,
+            #"{"provenance":"not-an-object"}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Public","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":"Kotoage"},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[{\"name\":\"flag\",\"type_name\":\"bool\"}],\"argument_schema\":{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":1},\(validLeaf)]}}]},\"return_type\":null,\"return_schema\":null,\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}",
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":"bool","return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}},{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":["not-an-object"]}]}"#,
+            #"{"error_codes":[{"namespace":"Failure","name":"Denied","code":0}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]},"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"flag","type_name":"bool"}],"argument_schema":{"fields":[{"name":"different","ty":{"nodes":[{"kind":"Leaf","value":{"kind":"Bool","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+            #"{"entrypoints":[{"name":"run","kind":{"kind":"Kotoage","value":null},"params":[{"name":"tags","type_name":"List<Name, 64>"}],"argument_schema":{"fields":[{"name":"tags","ty":{"nodes":[{"kind":"List","value":{"capacity":65}},{"kind":"Leaf","value":{"kind":"Name","value":null}}]}}]},"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}"#,
+        ]
+        let wideLeaves = Array(repeating: validLeaf, count: 14).joined(separator: ",")
+        cases.append(
+            "{\"entrypoints\":[{\"name\":\"run\",\"kind\":{\"kind\":\"Kotoage\",\"value\":null},\"params\":[],\"argument_schema\":null,\"return_type\":\"wide tuple\",\"return_schema\":{\"nodes\":[{\"kind\":\"Tuple\",\"value\":14},\(wideLeaves)]},\"permission\":null,\"read_keys\":[],\"write_keys\":[],\"access_hints_complete\":true,\"access_hints_skipped\":[],\"triggers\":[]}]}")
+
+        for payload in cases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractManifest.self,
+                    from: Data(payload.utf8)
+                ),
+                "accepted noncanonical manifest payload: \(payload)"
+            )
+        }
+    }
+
+    func testContractManifestEnforcesStrictCrossFieldInvariants() throws {
+        let boolLeaf = #"{"kind":"Leaf","value":{"kind":"Bool","value":null}}"#
+        let boolSchema = "{\"fields\":[{\"name\":\"flag\",\"ty\":{\"nodes\":[\(boolLeaf)]}}]}"
+        let validFilter = "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA="
+
+        func descriptor(name: String = "run",
+                        kind: String = "Kotoage",
+                        params: String = "[]",
+                        argumentSchema: String = "null",
+                        returnType: String = "null",
+                        returnSchema: String = "null",
+                        permission: String = "\"Run\"",
+                        complete: String = "true",
+                        skipped: String = "[]",
+                        triggers: String = "[]") -> String {
+            """
+            {"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":\(params),"argument_schema":\(argumentSchema),"return_type":\(returnType),"return_schema":\(returnSchema),"permission":\(permission),"read_keys":[],"write_keys":[],"access_hints_complete":\(complete),"access_hints_skipped":\(skipped),"triggers":\(triggers)}
+            """
+        }
+
+        func manifest(_ entrypoints: [String]) -> String {
+            "{\"entrypoints\":[\(entrypoints.joined(separator: ","))]}"
+        }
+
+        func trigger(id: String = "tick", callback: String = "run") -> String {
+            """
+            {"id":"\(id)","repeats":{"Indefinitely":null},"filter":"\(validFilter)","authority":null,"metadata":{},"callback":{"namespace":null,"entrypoint":"\(callback)"}}
+            """
+        }
+
+        let invalid = [
+            #"{"unknown":true}"#,
+            #"{"features_bitmap":4}"#,
+            #"{"seiyaku_name":"Option"}"#,
+            #"{"seiyaku_name":"__kotodama_link_private"}"#,
+            #"{"seiyaku_name":"state_map_get"}"#,
+            #"{"states":[{"name":"Option","type_name":"bool"}]}"#,
+            #"{"error_codes":[{"namespace":"Option","name":"Denied","code":1}]}"#,
+            #"{"provenance":{"signer":"fixture","signature":"sig","unknown":true}}"#,
+            manifest([descriptor(permission: "null")]),
+            manifest([descriptor(name: "start", kind: "Hajimari", permission: "null")]),
+            manifest([descriptor(name: "始まり", kind: "Hajimari", permission: "\"Deploy\"")]),
+            manifest([descriptor(name: "hajimari", kind: "View", permission: "null")]),
+            manifest([descriptor(
+                params: #"[{"name":"flag","type_name":"int"}]"#,
+                argumentSchema: boolSchema
+            )]),
+            manifest([descriptor(
+                returnType: "\"int\"",
+                returnSchema: "{\"nodes\":[\(boolLeaf)]}"
+            )]),
+            manifest([descriptor(complete: "true", skipped: "[\"dynamic\"]")]),
+            manifest([descriptor(complete: "false", skipped: "[]")]),
+            manifest([descriptor(triggers: "[\(trigger(callback: "missing"))]")]),
+            manifest([
+                descriptor(name: "inspect", kind: "View", permission: "null"),
+                descriptor(triggers: "[\(trigger(callback: "inspect"))]"),
+            ]),
+            manifest([descriptor(triggers: "[\(trigger()),\(trigger())]")]),
+            manifest([descriptor(triggers: "[\(trigger().replacingOccurrences(of: #"{"Indefinitely":null}"#, with: #"{"kind":"Indefinitely","value":null}"#))]")]),
+            manifest([descriptor(triggers: "[\(trigger().replacingOccurrences(of: validFilter, with: "%%%"))]")]),
+            manifest([descriptor().replacingOccurrences(
+                of: #""triggers":[]"#,
+                with: #""triggers":[],"unknown":true"#
+            )]),
+        ]
+
+        for payload in invalid {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiContractManifest.self,
+                    from: Data(payload.utf8)
+                ),
+                "accepted inconsistent manifest payload: \(payload)"
+            )
+        }
+    }
+
+    func testContractManifestAcceptsRomanizedAndJapaneseLifecycleSelectors() throws {
+        let selectors = [
+            ("hajimari", "Hajimari"),
+            ("始まり", "Hajimari"),
+            ("kaizen", "Kaizen"),
+            ("改善", "Kaizen"),
+        ]
+        for (name, kind) in selectors {
+            let payload = """
+            {"entrypoints":[{"name":"\(name)","kind":{"kind":"\(kind)","value":null},"params":[],"argument_schema":null,"return_type":null,"return_schema":null,"permission":null,"read_keys":[],"write_keys":[],"access_hints_complete":true,"access_hints_skipped":[],"triggers":[]}]}
+            """
+            let manifest = try JSONDecoder().decode(
+                ToriiContractManifest.self,
+                from: Data(payload.utf8)
+            )
+            XCTAssertEqual(manifest.entrypoints?.first?.name, name)
+        }
+    }
+
+    func testContractManifestAcceptsOnlyBrandedV1EntrypointKinds() throws {
+        let cases: [(String, ToriiContractEntrypointKind)] = [
+            ("Kotoage", .kotoage),
+            ("View", .view),
+            ("Hajimari", .hajimari),
+            ("Kaizen", .kaizen),
+        ]
+        for (label, expected) in cases {
+            let payload = #"{"kind":"\#(label)","value":null}"#
+            XCTAssertEqual(
+                try JSONDecoder().decode(
+                    ToriiContractEntrypointKind.self,
+                    from: Data(payload.utf8)
+                ),
+                expected
+            )
+        }
+    }
+
+    func testContractManifestAcceptsOnlyFirstReleaseNumericLeafKinds() throws {
+        for (label, expected, canonicalName) in [
+            ("Int", ToriiEntrypointValueKindV1.int, "int"),
+            ("Decimal", ToriiEntrypointValueKindV1.decimal, "decimal"),
+            ("Quantity", ToriiEntrypointValueKindV1.quantity, "quantity"),
+        ] {
+            let payload = #"{"nodes":[{"kind":"Leaf","value":{"kind":"\#(label)","value":null}}]}"#
+            let valueType = try JSONDecoder().decode(
+                ToriiEntrypointValueTypeV1.self,
+                from: Data(payload.utf8)
+            )
+            guard case let .leaf(kind) = valueType.nodes[0] else {
+                return XCTFail("expected numeric leaf")
+            }
+            XCTAssertEqual(kind, expected)
+            XCTAssertEqual(valueType.canonicalTypeName, canonicalName)
+        }
+
+        for retired in ["U128", "Amount"] {
+            let payload = #"{"nodes":[{"kind":"Leaf","value":{"kind":"\#(retired)","value":null}}]}"#
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiEntrypointValueTypeV1.self,
+                    from: Data(payload.utf8)
+                )
+            )
+        }
+    }
+
+    func testContractManifestDecodesCheckedInCanonicalKotodamaManifests() throws {
+        let fixtures = [
+            ("authority_probe.manifest.json", "AuthorityProbe"),
+            ("irohaswap.manifest.json", "IrohaSwap"),
+            ("ivm_smoke.manifest.json", "SmokeTransfer"),
+            ("prediction_market.manifest.json", "PredictionMarket"),
+        ]
+        let demo = repositoryRootURL().appendingPathComponent("demo", isDirectory: true)
+        for (filename, expectedName) in fixtures {
+            let data = try Data(contentsOf: demo.appendingPathComponent(filename))
+            let manifest = try JSONDecoder().decode(ToriiContractManifest.self, from: data)
+            XCTAssertEqual(manifest.seiyakuName, expectedName)
+            XCTAssertEqual(manifest.codeHash?.count, 64)
+            XCTAssertEqual(manifest.abiHash?.count, 64)
+            XCTAssertFalse(manifest.entrypoints?.isEmpty ?? true)
+        }
     }
 
     func testDeployContractRejectsRemovedServerSideSigningFlow() async {
@@ -14225,19 +14204,19 @@ id: 88
         }
     }
 
-    func testDeployContractParsesUpgradeResponse() throws {
+    func testDeployContractParsesKaizenResponse() throws {
         let codeHash = String(repeating: "a", count: 64)
         let abiHash = String(repeating: "b", count: 64)
         let txHash = String(repeating: "c", count: 64)
         let payload = """
-        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","upgraded":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Queued","block_height":null,"rejection_reason":null},"summary":"Queued","diagnostics":[],"scope":"local","resolved_from":"queue"},"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
+        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","kaizen":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Queued","block_height":null,"rejection_reason":null},"summary":"Queued","diagnostics":[],"scope":"local","resolved_from":"queue"},"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
         """.data(using: .utf8)!
         let response = try JSONDecoder().decode(ToriiDeployContractResponse.self, from: payload)
         XCTAssertTrue(response.ok)
         XCTAssertEqual(response.contractAlias, "mint::universal")
         XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
         XCTAssertEqual(response.previousContractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9")
-        XCTAssertTrue(response.upgraded)
+        XCTAssertTrue(response.kaizen)
         XCTAssertEqual(response.dataspace, "universal")
         XCTAssertEqual(response.deployNonce, 7)
         XCTAssertEqual(response.txHashHex, txHash)
@@ -14277,11 +14256,60 @@ id: 88
         }
     }
 
+    func testContractCallBoundaryConsumesSharedRustArgumentRecordFixture() throws {
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent("fixtures/kotodama/entrypoint_argument_record_v1.json")
+        let fixtureData = try Data(contentsOf: fixtureURL)
+        guard let fixture = try JSONSerialization.jsonObject(with: fixtureData) as? [String: Any],
+              let boundary = fixture["torii_boundary"] as? [String: Any],
+              let authority = boundary["authority"] as? String,
+              let contractAlias = boundary["contract_alias"] as? String,
+              let entrypoint = boundary["entrypoint"] as? String,
+              let fixturePayload = boundary["payload"] as? [String: Any],
+              let gasLimit = (boundary["gas_limit"] as? NSNumber)?.uint64Value,
+              let schema = fixture["entrypoint_argument_schema_v1"] as? [String: Any],
+              let schemaHash = schema["schema_hash_hex"] as? String,
+              let record = fixture["entrypoint_argument_record_v1"] as? [String: Any],
+              let recordHex = record["norito_hex"] as? String else {
+            return XCTFail("invalid shared Kotodama argument-record fixture")
+        }
+        XCTAssertEqual(fixture["codec"] as? String, "EntrypointArgumentRecordV1")
+        XCTAssertEqual(fixture["generator"] as? String, "ivm::encode_argument_record_from_json")
+        XCTAssertNotNil(schemaHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression))
+        XCTAssertNotNil(recordHex.range(of: "^(?:[0-9a-f]{2})+$", options: .regularExpression))
+
+        let payloadData = try JSONSerialization.data(withJSONObject: fixturePayload)
+        let payload = try JSONDecoder().decode(ToriiJSONValue.self, from: payloadData)
+        let request = ToriiContractCallRequest(
+            authority: authority,
+            contractAlias: contractAlias,
+            entrypoint: entrypoint,
+            payload: payload,
+            gasLimit: gasLimit
+        )
+        let encoded = try JSONEncoder().encode(request)
+        guard let submitted = try JSONSerialization.jsonObject(with: encoded) as? [String: Any],
+              let submittedPayload = submitted["payload"] as? [String: Any] else {
+            return XCTFail("contract call did not encode a JSON object")
+        }
+
+        XCTAssertEqual(submitted["authority"] as? String, authority)
+        XCTAssertEqual(submitted["contract_alias"] as? String, contractAlias)
+        XCTAssertNil(submitted["contract_address"])
+        XCTAssertEqual(submitted["entrypoint"] as? String, entrypoint)
+        XCTAssertEqual(submittedPayload as NSDictionary, fixturePayload as NSDictionary)
+        XCTAssertEqual((submitted["gas_limit"] as? NSNumber)?.uint64Value, gasLimit)
+        XCTAssertNil(submitted["argument_record"])
+        XCTAssertNil(submitted["argument_record_norito_hex"])
+    }
+
     func testCallContractParsesResponse() {
         let expectation = expectation(description: "call contract")
         let codeHash = String(repeating: "d", count: 64)
         let abiHash = String(repeating: "e", count: 64)
         let txHash = String(repeating: "f", count: 64)
+        let entrypointHash = String(repeating: "a", count: 64)
+        let payloadDigest = String(repeating: "b", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/call")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -14305,7 +14333,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"gas_asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","fee_sponsor":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -14336,10 +14364,16 @@ id: 88
                 XCTAssertEqual(response.pipelineStatus?.content.status.rejectionReason, #"{"Validation":"missing permission"}"#)
                 XCTAssertEqual(response.pipelineStatus?.primaryDiagnostic?.decodedReason, "missing permission")
                 XCTAssertEqual(response.pipelineStatus?.isRejected, true)
+                XCTAssertEqual(response.transactionTtlMs, 60_000)
+                XCTAssertEqual(response.entrypointHashHex, entrypointHash)
                 XCTAssertEqual(response.transactionScaffoldB64, "Aw==")
                 XCTAssertEqual(response.signedTransactionB64, "AQ==")
                 XCTAssertEqual(response.signingMessageB64, "Ag==")
                 XCTAssertEqual(response.entrypoint, "create")
+                XCTAssertEqual(response.operationReceipt.operationKind, "contract_call")
+                XCTAssertEqual(response.operationReceipt.gasLimit, 7)
+                XCTAssertEqual(response.operationReceipt.gasUsed, 3)
+                XCTAssertEqual(response.operationReceipt.payloadDigestHex, payloadDigest)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -14352,6 +14386,7 @@ id: 88
         let request = ToriiContractCallRequest(
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             contractAlias: "mint::universal",
+            entrypoint: "create",
             gasLimit: 0
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
@@ -14366,6 +14401,7 @@ id: 88
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
             contractAlias: "mint::universal",
+            entrypoint: "create",
             gasLimit: 7
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
@@ -14373,6 +14409,30 @@ id: 88
                 return XCTFail("Expected invalidPayload error")
             }
         }
+    }
+
+    func testCallContractRejectsBlankEntrypoint() {
+        let request = ToriiContractCallRequest(
+            authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            contractAlias: "mint::universal",
+            entrypoint: "   ",
+            gasLimit: 7
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    func testCallContractResponseRequiresOperationReceipt() {
+        let codeHash = String(repeating: "d", count: 64)
+        let abiHash = String(repeating: "e", count: 64)
+        let payload = """
+        {"ok":true,"submitted":true,"dataspace":"universal","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":1,"entrypoint":"create"}
+        """.data(using: .utf8)!
+
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiContractCallResponse.self, from: payload))
     }
 
     func testProposeMultisigEncodesStructuredJsonInstructions() throws {
@@ -14849,6 +14909,7 @@ id: 88
                         authority: account,
                         signatureB64: signatureB64,
                         contractAlias: "mint::universal",
+                        entrypoint: "create",
                         gasLimit: 1
                     )
                 )
@@ -14896,16 +14957,6 @@ id: 88
                 XCTAssertTrue("\(error)".contains("signature_b64"))
             }
 
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(
-                    ToriiBridgeProofSubmitRequest(
-                        authority: account,
-                        signatureB64: signatureB64
-                    )
-                )
-            ) { error in
-                XCTAssertTrue("\(error)".contains("signature_b64"))
-            }
         }
     }
 

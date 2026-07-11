@@ -16,18 +16,24 @@ public final class TransportRequest {
   private final Map<String, List<String>> headers;
   private final byte[] body;
   private final Duration timeout;
+  private final Long maximumResponseBytes;
 
   private TransportRequest(
       final String method,
       final URI uri,
       final Map<String, List<String>> headers,
       final byte[] body,
-      final Duration timeout) {
+      final Duration timeout,
+      final Long maximumResponseBytes) {
     this.method = Objects.requireNonNull(method, "method");
     this.uri = Objects.requireNonNull(uri, "uri");
     this.headers = Collections.unmodifiableMap(headers);
     this.body = body == null ? new byte[0] : body.clone();
     this.timeout = timeout;
+    if (maximumResponseBytes != null) {
+      BoundedResponseBodyReader.validateMaximum(maximumResponseBytes.longValue());
+    }
+    this.maximumResponseBytes = maximumResponseBytes;
   }
 
   public String method() {
@@ -51,6 +57,11 @@ public final class TransportRequest {
     return timeout;
   }
 
+  /** Optional inclusive buffered response-body limit, or {@code null} for the executor limit. */
+  public Long maximumResponseBytes() {
+    return maximumResponseBytes;
+  }
+
   public static Builder builder() {
     return new Builder();
   }
@@ -62,6 +73,7 @@ public final class TransportRequest {
     private final Map<String, List<String>> headers = new java.util.LinkedHashMap<>();
     private byte[] body = new byte[0];
     private Duration timeout = null;
+    private Long maximumResponseBytes = null;
 
     public Builder setMethod(final String method) {
       this.method = Objects.requireNonNull(method, "method");
@@ -110,8 +122,18 @@ public final class TransportRequest {
       return this;
     }
 
+    /** Sets an inclusive buffered response-body byte limit for this request. */
+    public Builder setMaximumResponseBytes(final Long maximumResponseBytes) {
+      if (maximumResponseBytes != null) {
+        BoundedResponseBodyReader.validateMaximum(maximumResponseBytes.longValue());
+      }
+      this.maximumResponseBytes = maximumResponseBytes;
+      return this;
+    }
+
     public TransportRequest build() {
-      return new TransportRequest(method, uri, copyHeaders(headers), body, timeout);
+      return new TransportRequest(
+          method, uri, copyHeaders(headers), body, timeout, maximumResponseBytes);
     }
 
     private static Map<String, List<String>> copyHeaders(final Map<String, List<String>> source) {

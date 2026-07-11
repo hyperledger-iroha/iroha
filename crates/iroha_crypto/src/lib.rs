@@ -80,7 +80,8 @@ pub use blake2;
 #[cfg(feature = "bls")]
 pub use self::signature::bls::{
     BlsNormal, BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmall, BlsSmallPrivateKey,
-    BlsSmallPublicKey,
+    BlsSmallPublicKey, ETHEREUM_BLS_POP_DST, ethereum_bls_pop_fast_aggregate_verify,
+    ethereum_bls_pop_validate_public_key,
 };
 /// Convenience alias for the historical Blake2b-256 digest type which was
 /// previously exported directly from the `blake2` crate. The upstream crate

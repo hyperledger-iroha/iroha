@@ -41,6 +41,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Mapping,
     MutableMapping,
     Optional,
@@ -52,22 +53,41 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import requests
 
-SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384
-SCCP_GROTH16_BN254_BASE_FIELD_MODULUS = int(
-    "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47",
-    16,
+from .norito_frame import validate_norito_frame
+from .sccp import (
+    SccpBridgeSubmitResponse,
+    SccpCapabilities,
+    SccpRecentMessages,
+    SccpRegistry,
+    SccpRegistryLimits,
+    SccpResourceLimits,
+    normalize_bridge_message_submit_payload,
+    normalize_bridge_proof_submit_payload,
+    normalize_sccp_capabilities,
+    normalize_sccp_message_bundle,
+    normalize_sccp_proof_request,
+    normalize_sccp_recent_messages,
+    normalize_sccp_registry,
+    parse_sccp_bridge_submit_response_json,
+    parse_sccp_json_object,
 )
-SCCP_GROTH16_BN254_G2_B_C0 = int(
-    "2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5",
-    16,
+
+# SCCP response limits apply to bytes yielded by Requests after transfer
+# decoding. Content-Length remains an early rejection hint, never the sole
+# authority, because it may be missing, dishonest, or describe encoded bytes.
+_SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024
+_SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+_SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024
+_SCCP_SUBMIT_RESPONSE_MAX_BYTES = _SCCP_JSON_RESPONSE_MAX_BYTES
+_SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
+_SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES = (
+    _SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES + 64 * 1024
 )
-SCCP_GROTH16_BN254_G2_B_C1 = int(
-    "009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2",
-    16,
+_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME = "iroha_sccp::TairaSccpMessageProofV1"
+_SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
+    "iroha_sccp::SccpGroth16Bn254ProofRequestV1"
 )
-SCCP_DOMAIN_SORA = 0
-SCCP_DOMAIN_ETH = 1
-SCCP_DOMAIN_BSC = 2
+
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 IROHA_POEM_KANA_HALFWIDTH = (
@@ -99,36 +119,6 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "order_cancelled",
     "settlement_receipt_accepted",
 }
-SCCP_FINALITY_MODEL_VALUES = {
-    "EthereumBeaconExecution",
-    "BscValidatorSet",
-    "SolanaFinalizedSlot",
-    "TonMasterchain",
-    "TronDpos",
-}
-SCCP_VERIFIER_TARGET_VALUES = {
-    "EvmContract",
-    "SolanaProgram",
-    "TonContract",
-    "TronContract",
-}
-SCCP_HUB_MESSAGE_KIND_VALUES = {
-    "Burn",
-    "TokenAdd",
-    "TokenPause",
-    "TokenResume",
-    "AssetRegister",
-    "RouteActivate",
-    "Transfer",
-}
-SCCP_CHAIN_FAMILY_VALUES = {"Evm", "Solana", "Ton", "Tron"}
-SCCP_MESSAGE_PAYLOAD_KIND_VALUES = {
-    "AssetRegister",
-    "RouteActivate",
-    "Transfer",
-}
-
-
 def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     value = 0
     for digit in digits:
@@ -239,6 +229,43 @@ def _decode_i105_string(encoded: str) -> bytes:
     return canonical
 
 
+def _encode_i105_string(canonical: bytes, discriminant: int) -> str:
+    """Render decoded address bytes with the one canonical I105 sentinel."""
+
+    leading_zeroes = len(canonical) - len(canonical.lstrip(b"\x00"))
+    value = int.from_bytes(canonical, "big")
+    digits: List[int] = []
+    while value:
+        value, remainder = divmod(value, I105_BASE)
+        digits.append(remainder)
+    encoded_digits = [0] * leading_zeroes + list(reversed(digits))
+    if not encoded_digits:
+        encoded_digits = [0]
+
+    sentinel = next(
+        (
+            name
+            for name, known_discriminant in I105_SENTINEL_DISCRIMINANTS.items()
+            if known_discriminant == discriminant
+        ),
+        f"{I105_NUMERIC_SENTINEL_PREFIX}{discriminant}",
+    )
+    return sentinel + "".join(
+        I105_ALPHABET[digit]
+        for digit in (*encoded_digits, *_i105_checksum_digits(canonical))
+    )
+
+
+def _decode_canonical_i105_string(encoded: str) -> bytes:
+    """Parse an I105 literal and reject every non-canonical re-rendering."""
+
+    _, discriminant, _ = _parse_i105_sentinel_and_payload(encoded)
+    canonical = _decode_i105_string(encoded)
+    if _encode_i105_string(canonical, discriminant) != encoded:
+        raise ValueError("i105 address must use its exact canonical rendering")
+    return canonical
+
+
 @dataclass(frozen=True)
 class I105NetworkPrefix:
     """Network prefix decoded from a canonical I105 account/address literal."""
@@ -293,9 +320,10 @@ __all__ = [
     "GovernanceInstructionDraft",
     "GovernanceProposalDraft",
     "ContractDeployContractReceipt",
-    "ContractDeployCallReceipt",
+    "ContractDeployHajimariCallReceipt",
     "ContractDeployAssertionReceipt",
     "ContractDeployResponse",
+    "ContractOperationReceipt",
     "ContractCallResponse",
     "PipelineDiagnostic",
     "PipelineTransactionStatus",
@@ -328,26 +356,12 @@ __all__ = [
     "NodeCurveCapabilities",
     "NodeCryptoCapabilities",
     "NodeCapabilities",
-    "SccpCodecCapability",
-    "SccpCounterpartyCapability",
     "SccpCapabilities",
-    "SccpProofManifest",
-    "SccpProofManifestSet",
-    "SccpHubCommitment",
-    "SccpMerkleStep",
-    "SccpMerkleProof",
-    "SccpPayloadEnvelope",
-    "SccpMessageProofBundle",
-    "SccpMessageTransparentPublicInputs",
-    "SccpMessageTransparentProofArtifact",
-    "SccpSubmissionArgument",
-    "SccpSubmissionArgumentValue",
-    "SccpCounterpartySubmissionTemplate",
-    "SccpPlatformSubmissionPayload",
-    "SccpCounterpartySubmissionPackage",
-    "SccpNormalizedCodecValue",
-    "SccpPayloadProjection",
-    "SccpCounterpartyProofJob",
+    "SccpRegistryLimits",
+    "SccpResourceLimits",
+    "SccpRegistry",
+    "SccpRecentMessages",
+    "SccpBridgeSubmitResponse",
     "RuntimeAbiActive",
     "RuntimeAbiHash",
     "RuntimeUpgradeEventCounters",
@@ -1107,6 +1121,54 @@ def _format_error_body(text: str) -> str:
     return compact
 
 
+def _read_bounded_sccp_response_body(
+    response: requests.Response,
+    maximum_body_bytes: int,
+    context: str,
+) -> bytes:
+    """Drain one SCCP response through a strict actual-byte bound and close it."""
+
+    if (
+        isinstance(maximum_body_bytes, bool)
+        or not isinstance(maximum_body_bytes, int)
+        or maximum_body_bytes < 0
+    ):
+        raise ValueError(f"{context} response byte-size bound is invalid")
+
+    try:
+        raw_content_length = response.headers.get("Content-Length")
+        if raw_content_length is not None:
+            if not isinstance(raw_content_length, str) or re.fullmatch(
+                r"(?:0|[1-9][0-9]*)", raw_content_length
+            ) is None:
+                raise ValueError(
+                    f"{context} response Content-Length must be a canonical unsigned decimal integer"
+                )
+            maximum_literal = str(maximum_body_bytes)
+            if len(raw_content_length) > len(maximum_literal) or (
+                len(raw_content_length) == len(maximum_literal)
+                and raw_content_length > maximum_literal
+            ):
+                raise ValueError(
+                    f"{context} response exceeds its {maximum_body_bytes}-byte size bound"
+                )
+
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
+            if not chunk:
+                continue
+            if not isinstance(chunk, (bytes, bytearray)):
+                raise TypeError(f"{context} response body yielded a non-byte chunk")
+            if len(chunk) > maximum_body_bytes - len(body):
+                raise ValueError(
+                    f"{context} response exceeds its {maximum_body_bytes}-byte size bound"
+                )
+            body.extend(chunk)
+        return bytes(body)
+    finally:
+        response.close()
+
+
 def canonical_request_message(
     method: str,
     path: str,
@@ -1751,247 +1813,6 @@ class NodeCapabilities:
     abi_version: int
     data_model_version: int
     crypto: NodeCryptoCapabilities
-
-
-@dataclass(frozen=True)
-class SccpCodecCapability:
-    """Codec entry returned by ``GET /v1/sccp/capabilities``."""
-
-    id: int
-    key: str
-    description: str
-
-
-@dataclass(frozen=True)
-class SccpCounterpartyCapability:
-    """Counterparty entry returned by ``GET /v1/sccp/capabilities``."""
-
-    domain: int
-    chain: str
-    message_backend: str
-    registry_backend: str
-    counterparty_account_codec: int
-    counterparty_account_codec_key: str
-
-
-@dataclass(frozen=True)
-class SccpCapabilities:
-    """SCCP discovery advert returned by ``GET /v1/sccp/capabilities``."""
-
-    local_domain: int
-    local_chain: str
-    proof_family: str
-    burn_bundle_path: str
-    message_bundle_path: str
-    message_proof_path: str
-    message_job_path: str
-    proof_manifest_path: str
-    burn_registry_backend: str
-    proof_submit_path: Optional[str]
-    message_submit_path: Optional[str]
-    message_payload_kinds: List[str]
-    codecs: List[SccpCodecCapability]
-    counterparties: List[SccpCounterpartyCapability]
-
-
-@dataclass(frozen=True)
-class SccpProofManifest:
-    """Chain-specific SCCP proof manifest returned by ``GET /v1/sccp/manifests``."""
-
-    version: int
-    local_domain: int
-    local_chain: str
-    counterparty_domain: int
-    chain: str
-    proof_family: str
-    message_backend: str
-    registry_backend: str
-    counterparty_account_codec: int
-    counterparty_account_codec_key: str
-    finality_model: str
-    verifier_target: str
-    manifest_seed: str
-    required_public_inputs: List[str]
-    message_payload_kinds: List[str]
-    submission_template: "SccpCounterpartySubmissionTemplate"
-
-
-@dataclass(frozen=True)
-class SccpProofManifestSet:
-    """SCCP proof-manifest collection returned by ``GET /v1/sccp/manifests``."""
-
-    local_domain: int
-    local_chain: str
-    proof_family: str
-    manifests: List[SccpProofManifest]
-
-
-@dataclass(frozen=True)
-class SccpHubCommitment:
-    """Canonical SCCP message commitment."""
-
-    version: int
-    kind: str
-    target_domain: int
-    message_id: str
-    payload_hash: str
-
-
-@dataclass(frozen=True)
-class SccpMerkleStep:
-    """Single SCCP Merkle-branch step."""
-
-    sibling_hash: str
-    sibling_is_left: bool
-
-
-@dataclass(frozen=True)
-class SccpMerkleProof:
-    """Merkle inclusion proof for an SCCP message commitment."""
-
-    steps: List[SccpMerkleStep]
-
-
-@dataclass(frozen=True)
-class SccpPayloadEnvelope:
-    """External-tagged SCCP payload envelope."""
-
-    kind: str
-    value: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class SccpMessageProofBundle:
-    """Canonical SCCP message bundle embedded in transparent proof artifacts."""
-
-    version: int
-    commitment_root: str
-    commitment: SccpHubCommitment
-    merkle_proof: SccpMerkleProof
-    payload: SccpPayloadEnvelope
-    finality_proof: str
-
-
-@dataclass(frozen=True)
-class SccpMessageTransparentPublicInputs:
-    """Canonical public inputs for SCCP transparent message proofs."""
-
-    version: int
-    message_id: str
-    payload_hash: str
-    target_domain: int
-    commitment_root: str
-    finality_height: int
-    finality_block_hash: str
-
-
-@dataclass(frozen=True)
-class SccpMessageTransparentProofArtifact:
-    """Typed transparent SCCP proof artifact returned by Torii."""
-
-    version: int
-    local_domain: int
-    counterparty_domain: int
-    proof_family: str
-    message_backend: str
-    registry_backend: str
-    manifest_seed: str
-    finality_model: str
-    verifier_target: str
-    public_inputs: SccpMessageTransparentPublicInputs
-    proof_bytes: str
-    submission_package: "SccpCounterpartySubmissionPackage"
-    bundle: SccpMessageProofBundle
-
-
-@dataclass(frozen=True)
-class SccpSubmissionArgument:
-    """Submission argument required by a chain-specific SCCP verifier entrypoint."""
-
-    key: str
-    description: str
-
-
-@dataclass(frozen=True)
-class SccpCounterpartySubmissionTemplate:
-    """Chain-specific submission envelope for a counterparty SCCP verifier."""
-
-    version: int
-    encoding: str
-    submission_kind: str
-    verifier_entrypoint: str
-    required_arguments: List[SccpSubmissionArgument]
-
-
-@dataclass(frozen=True)
-class SccpSubmissionArgumentValue:
-    """Concrete argument blob emitted for a counterparty SCCP submission."""
-
-    key: str
-    encoding: str
-    bytes: str
-
-
-@dataclass(frozen=True)
-class SccpPlatformSubmissionPayload:
-    """Normalized per-platform SCCP proof payload."""
-
-    kind: str
-    value: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class SccpCounterpartySubmissionPackage:
-    """Concrete submission package emitted for a counterparty SCCP verifier."""
-
-    version: int
-    proof_family: str
-    verifier_backend_key: str
-    envelope_encoding: str
-    submission_kind: str
-    verifier_entrypoint: str
-    platform_payload: SccpPlatformSubmissionPayload
-    arguments: List[SccpSubmissionArgumentValue]
-    envelope_bytes: str
-
-
-@dataclass(frozen=True)
-class SccpNormalizedCodecValue:
-    """Normalized chain-specific codec value collapsed from the SCCP job enum surface."""
-
-    kind: str
-    value: Union[str, Mapping[str, Any]]
-
-
-@dataclass(frozen=True)
-class SccpPayloadProjection:
-    """Normalized SCCP payload projection collapsed from the SCCP job enum surface."""
-
-    kind: str
-    value: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class SccpCounterpartyProofJob:
-    """Normalized SCCP counterparty proof job returned by Torii."""
-
-    version: int
-    chain_family: str
-    chain: str
-    local_domain: int
-    counterparty_domain: int
-    proof_family: str
-    message_backend: str
-    registry_backend: str
-    manifest_seed: str
-    finality_model: str
-    verifier_target: str
-    public_inputs: SccpMessageTransparentPublicInputs
-    payload_kind: str
-    payload_projection: SccpPayloadProjection
-    submission_template: SccpCounterpartySubmissionTemplate
-    submission_package: SccpCounterpartySubmissionPackage
-    bundle: SccpMessageProofBundle
 
 
 @dataclass(frozen=True)
@@ -3282,7 +3103,7 @@ class ContractDeployContractReceipt:
     contract_alias: Optional[str]
     contract_address: Optional[str]
     previous_contract_address: Optional[str]
-    upgraded: bool
+    kaizen: bool
     dataspace: Optional[str]
     deploy_nonce: Optional[int]
     tx_hash_hex: Optional[str]
@@ -3293,8 +3114,8 @@ class ContractDeployContractReceipt:
 
 
 @dataclass(frozen=True)
-class ContractDeployCallReceipt:
-    """One init-call receipt returned by ``POST /v1/contracts/deploy``."""
+class ContractDeployHajimariCallReceipt:
+    """One hajimari-call receipt returned by ``POST /v1/contracts/deploy``."""
 
     id: str
     contract_alias: Optional[str]
@@ -3329,8 +3150,30 @@ class ContractDeployResponse:
     completed_stages: List[str]
     failure_point: Optional[str]
     contracts: List[ContractDeployContractReceipt]
-    init_calls: List[ContractDeployCallReceipt]
+    hajimari_calls: List[ContractDeployHajimariCallReceipt]
     assertions: List[ContractDeployAssertionReceipt]
+
+
+@dataclass(frozen=True)
+class ContractOperationReceipt:
+    """Public normalized evidence for a contract operation."""
+
+    operation_kind: str
+    status: str
+    transport: str
+    dataspace: str
+    contract_alias: Optional[str]
+    contract_address: Optional[str]
+    code_hash_hex: Optional[str]
+    abi_hash_hex: Optional[str]
+    tx_hash_hex: Optional[str]
+    entrypoint: Optional[str]
+    entrypoint_hash_hex: Optional[str]
+    gas_limit: Optional[int]
+    gas_used: Optional[int]
+    gas_asset_id: Optional[str]
+    fee_sponsor: Optional[str]
+    payload_digest_hex: str
 
 
 @dataclass(frozen=True)
@@ -3347,9 +3190,12 @@ class ContractCallResponse:
     tx_hash_hex: Optional[str]
     pipeline_status: Optional[PipelineTransactionStatusResponse]
     entrypoint: Optional[str]
+    transaction_ttl_ms: Optional[int]
+    entrypoint_hash_hex: Optional[str]
     transaction_scaffold_b64: Optional[str]
     signed_transaction_b64: Optional[str]
     signing_message_b64: Optional[str]
+    operation_receipt: ContractOperationReceipt
 
 
 @dataclass(frozen=True)
@@ -4366,200 +4212,117 @@ class ToriiClient:
         return self._parse_node_capabilities(payload, context="node capabilities")
 
     def get_sccp_capabilities(self) -> SccpCapabilities:
-        """Fetch SCCP capability discovery (`GET /v1/sccp/capabilities`)."""
+        """Fetch exact SCCP capability discovery (`GET /v1/sccp/capabilities`)."""
 
-        payload = self._get_json_object(
+        payload = self._get_sccp_json_object(
             "/v1/sccp/capabilities",
             context="sccp capabilities",
+            maximum_body_bytes=_SCCP_CAPABILITIES_RESPONSE_MAX_BYTES,
         )
-        return self._parse_sccp_capabilities(payload, context="sccp capabilities")
+        return normalize_sccp_capabilities(payload)
 
-    def get_sccp_proof_manifests(self) -> SccpProofManifestSet:
-        """Fetch SCCP proof manifests (`GET /v1/sccp/manifests`)."""
+    def get_sccp_registry(self) -> SccpRegistry:
+        """Fetch the authoritative typed SCCP registry (`GET /v1/sccp/registry`)."""
 
-        payload = self._get_json_object(
-            "/v1/sccp/manifests",
-            context="sccp proof manifests",
+        payload = self._get_sccp_json_object(
+            "/v1/sccp/registry",
+            context="sccp registry",
+            maximum_body_bytes=_SCCP_JSON_RESPONSE_MAX_BYTES,
         )
-        return self._parse_sccp_proof_manifests(payload, context="sccp proof manifests")
+        return normalize_sccp_registry(payload)
 
-    def get_sccp_message_proof_artifact(
-        self,
-        message_id: Union[str, bytes, bytearray, memoryview],
-        *,
-        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_address_hex: Optional[str] = None,
-        bridge_address_hex: Optional[str] = None,
-        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        expected_destination_binding_hash_hex: Optional[
-            Union[str, bytes, bytearray, memoryview]
-        ] = None,
-        tron_verifier_address: Optional[str] = None,
-        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-    ) -> SccpMessageTransparentProofArtifact:
-        """Fetch a typed SCCP message proof artifact (`GET /v1/sccp/artifacts/message/{message_id}`)."""
+    def get_sccp_message_bundle(
+        self, message_id: str, *, format: str = "json"
+    ) -> Union[Mapping[str, Any], bytes]:
+        """Fetch one state-derived message/finality bundle by canonical message id.
 
-        normalized_message_id = self._normalize_hex_string(
-            message_id,
-            context="sccp message proof artifact message_id",
-            expected_length=64,
-        )
-        params = self._normalize_sccp_evm_destination_params(
-            network_id_hex=network_id_hex,
-            verifier_address_hex=verifier_address_hex,
-            bridge_address_hex=bridge_address_hex,
-            verifier_code_hash_hex=verifier_code_hash_hex,
-            verifier_key_hash_hex=verifier_key_hash_hex,
-            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
-            tron_verifier_address=tron_verifier_address,
-            proof_bytes_hex=proof_bytes_hex,
-            context="sccp message proof artifact",
-            expected_message_id_hex=normalized_message_id,
-        )
-        payload = self._get_json_object(
-            f"/v1/sccp/artifacts/message/{normalized_message_id}",
-            context="sccp message proof artifact",
-            params=params,
-        )
-        return self._parse_sccp_message_proof_artifact(
-            payload,
-            context="sccp message proof artifact",
+        Native responses are preflighted as canonical uncompressed Norito frames bound to
+        ``TairaSccpMessageProofV1``. The frame remains opaque, so this lightweight client does
+        not independently bind the embedded message id to the request path.
+        """
+
+        return self._get_sccp_typed_object(
+            f"/v1/sccp/proofs/message/{self._sccp_message_id(message_id)}",
+            format=format,
+            context="sccp message bundle",
+            normalize=normalize_sccp_message_bundle,
+            maximum_norito_body_bytes=_SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES,
+            expected_norito_type_name=_SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME,
         )
 
-    def get_sccp_message_proof_job(
-        self,
-        message_id: Union[str, bytes, bytearray, memoryview],
-        *,
-        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_address_hex: Optional[str] = None,
-        bridge_address_hex: Optional[str] = None,
-        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        expected_destination_binding_hash_hex: Optional[
-            Union[str, bytes, bytearray, memoryview]
-        ] = None,
-        tron_verifier_address: Optional[str] = None,
-        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-    ) -> SccpCounterpartyProofJob:
-        """Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`)."""
+    def get_sccp_proof_request(
+        self, message_id: str, *, format: str = "json"
+    ) -> Union[Mapping[str, Any], bytes]:
+        """Fetch one query-free state-derived Groth16 request by canonical message id.
 
-        normalized_message_id = self._normalize_hex_string(
-            message_id,
-            context="sccp message proof job message_id",
-            expected_length=64,
+        Native responses are preflighted as canonical uncompressed Norito frames bound to
+        ``SccpGroth16Bn254ProofRequestV1``. The frame remains opaque, so this lightweight client
+        does not independently bind the embedded message id to the request path.
+        """
+
+        return self._get_sccp_typed_object(
+            f"/v1/sccp/proof-requests/{self._sccp_message_id(message_id)}",
+            format=format,
+            context="sccp proof request",
+            normalize=normalize_sccp_proof_request,
+            maximum_norito_body_bytes=_SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES,
+            expected_norito_type_name=_SCCP_PROOF_REQUEST_NORITO_TYPE_NAME,
         )
-        params = self._normalize_sccp_evm_destination_params(
-            network_id_hex=network_id_hex,
-            verifier_address_hex=verifier_address_hex,
-            bridge_address_hex=bridge_address_hex,
-            verifier_code_hash_hex=verifier_code_hash_hex,
-            verifier_key_hash_hex=verifier_key_hash_hex,
-            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
-            tron_verifier_address=tron_verifier_address,
-            proof_bytes_hex=proof_bytes_hex,
-            context="sccp message proof job",
-            expected_message_id_hex=normalized_message_id,
+
+    def get_sccp_recent_messages(
+        self, *, from_height: Optional[int] = None, limit: Optional[int] = None
+    ) -> SccpRecentMessages:
+        """Fetch newest-first SCCP messages (`GET /v1/sccp/messages/recent`)."""
+
+        params_dict: Dict[str, str] = {}
+        if from_height is not None:
+            if (
+                isinstance(from_height, bool)
+                or not isinstance(from_height, int)
+                or not 1 <= from_height <= 0xFFFF_FFFF_FFFF_FFFF
+            ):
+                raise ValueError("SCCP recent-message from_height must be a positive u64")
+            params_dict["from"] = str(from_height)
+        if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+                raise ValueError("SCCP recent-message limit must be an integer in 1..50")
+            params_dict["limit"] = str(limit)
+        payload = self._get_sccp_json_object(
+            "/v1/sccp/messages/recent",
+            context="sccp recent messages",
+            params=params_dict or None,
+            maximum_body_bytes=_SCCP_RECENT_RESPONSE_MAX_BYTES,
         )
-        payload = self._get_json_object(
-            f"/v1/sccp/jobs/message/{normalized_message_id}",
-            context="sccp message proof job",
-            params=params,
-        )
-        return self._parse_sccp_message_proof_job(
-            payload,
-            context="sccp message proof job",
-        )
+        return normalize_sccp_recent_messages(payload)
 
     def submit_bridge_proof(
         self,
         *,
         authority: str,
-        private_key: Optional[Any] = None,
-        public_key_hex: Optional[str] = None,
+        destination_proof_b64: str,
         signature_b64: Optional[str] = None,
-        burn_bundle: Optional[Mapping[str, Any]] = None,
-        message_bundle: Optional[Mapping[str, Any]] = None,
-        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_address_hex: Optional[str] = None,
-        bridge_address_hex: Optional[str] = None,
-        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        expected_destination_binding_hash_hex: Optional[
-            Union[str, bytes, bytearray, memoryview]
-        ] = None,
-        tron_verifier_address: Optional[str] = None,
-        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        creation_time_ms: Optional[Union[int, str]] = None,
-    ) -> Mapping[str, Any]:
-        """Submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`)."""
+        transaction_payload_b64: Optional[str] = None,
+        creation_time_ms: Optional[int] = None,
+    ) -> SccpBridgeSubmitResponse:
+        """Prepare or submit one exact SORA-origin proof.
 
-        payload: Dict[str, Any] = {
-            "authority": _require_exact_non_empty_string(
-                authority,
-                "bridge proof submit.authority",
-            )
+        Signed submission requires the byte-identical prepared transaction payload, its detached
+        signature, and the preparation response's creation timestamp.
+        """
+
+        candidate: Dict[str, Any] = {
+            "authority": authority,
+            "destination_proof_b64": destination_proof_b64,
         }
-        if private_key is not None:
-            payload["private_key"] = private_key
-        if public_key_hex is not None:
-            _require_exact_non_empty_string(
-                public_key_hex,
-                "bridge proof submit.public_key_hex",
-            )
-            self._require_exact_inline_hex_string(
-                public_key_hex,
-                context="bridge proof submit.public_key_hex",
-            )
-            payload["public_key_hex"] = self._normalize_hex_string(
-                public_key_hex,
-                context="bridge proof submit.public_key_hex",
-                expected_length=64,
-            )
-        if signature_b64 is not None:
-            _require_exact_non_empty_string(
-                signature_b64,
-                "bridge proof submit.signature_b64",
-            )
-            payload["signature_b64"] = self._normalize_required_exact_base64_payload(
-                signature_b64,
-                "bridge proof submit.signature_b64",
-            )
-        if burn_bundle is not None:
-            payload["burn_bundle"] = burn_bundle
-        if message_bundle is not None:
-            payload["message_bundle"] = message_bundle
-        bundle_count = int(burn_bundle is not None) + int(message_bundle is not None)
-        if bundle_count != 1:
-            raise RuntimeError(
-                "bridge proof submit must provide exactly one of burn_bundle or message_bundle"
-            )
-        destination_params = self._normalize_sccp_evm_destination_params(
-            network_id_hex=network_id_hex,
-            verifier_address_hex=verifier_address_hex,
-            bridge_address_hex=bridge_address_hex,
-            verifier_code_hash_hex=verifier_code_hash_hex,
-            verifier_key_hash_hex=verifier_key_hash_hex,
-            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
-            tron_verifier_address=tron_verifier_address,
-            proof_bytes_hex=proof_bytes_hex,
-            context="bridge proof submit",
-        )
-        if destination_params is not None:
-            if "proof_bytes_hex" in destination_params:
-                self._validate_sccp_groth16_proof_hex_for_message_bundle(
-                    destination_params["proof_bytes_hex"],
-                    message_bundle,
-                    context="bridge proof submit",
-                )
-            payload.update(destination_params)
-        if burn_bundle is not None and destination_params is not None:
-            raise RuntimeError(
-                "bridge proof submit SCCP destination fields and proof_bytes_hex are only valid for message_bundle submissions"
-            )
-        if creation_time_ms is not None:
-            payload["creation_time_ms"] = creation_time_ms
-        return self._post_json(
+        for key, value in (
+            ("signature_b64", signature_b64),
+            ("transaction_payload_b64", transaction_payload_b64),
+            ("creation_time_ms", creation_time_ms),
+        ):
+            if value is not None:
+                candidate[key] = value
+        payload = normalize_bridge_proof_submit_payload(candidate)
+        return self._submit_sccp_bridge(
             "/v1/bridge/proofs/submit",
             payload,
             context="bridge proof submit",
@@ -4569,100 +4332,148 @@ class ToriiClient:
         self,
         *,
         authority: str,
-        message_bundle: Mapping[str, Any],
-        private_key: Optional[Any] = None,
-        public_key_hex: Optional[str] = None,
+        native_proof_b64: str,
         signature_b64: Optional[str] = None,
-        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_address_hex: Optional[str] = None,
-        bridge_address_hex: Optional[str] = None,
-        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        expected_destination_binding_hash_hex: Optional[
-            Union[str, bytes, bytearray, memoryview]
-        ] = None,
-        tron_verifier_address: Optional[str] = None,
-        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        receipt_lane: Optional[Union[int, str]] = None,
-        settlement: Optional[Mapping[str, Any]] = None,
-        creation_time_ms: Optional[Union[int, str]] = None,
-    ) -> Mapping[str, Any]:
-        """Submit an inbound bridge message DTO (`POST /v1/bridge/messages`)."""
+        transaction_payload_b64: Optional[str] = None,
+        creation_time_ms: Optional[int] = None,
+    ) -> SccpBridgeSubmitResponse:
+        """Prepare or submit one exact native inbound proof.
 
-        if not isinstance(message_bundle, Mapping):
-            raise RuntimeError("bridge message submit message_bundle must be a mapping")
-        payload: Dict[str, Any] = {
-            "authority": _require_exact_non_empty_string(
-                authority,
-                "bridge message submit.authority",
-            ),
-            "message_bundle": message_bundle,
+        Signed submission requires the byte-identical prepared transaction payload, its detached
+        signature, and the preparation response's creation timestamp.
+        """
+
+        candidate: Dict[str, Any] = {
+            "authority": authority,
+            "native_proof_b64": native_proof_b64,
         }
-        if private_key is not None:
-            payload["private_key"] = private_key
-        if public_key_hex is not None:
-            _require_exact_non_empty_string(
-                public_key_hex,
-                "bridge message submit.public_key_hex",
-            )
-            self._require_exact_inline_hex_string(
-                public_key_hex,
-                context="bridge message submit.public_key_hex",
-            )
-            payload["public_key_hex"] = self._normalize_hex_string(
-                public_key_hex,
-                context="bridge message submit.public_key_hex",
-                expected_length=64,
-            )
-        if signature_b64 is not None:
-            _require_exact_non_empty_string(
-                signature_b64,
-                "bridge message submit.signature_b64",
-            )
-            payload["signature_b64"] = self._normalize_required_exact_base64_payload(
-                signature_b64,
-                "bridge message submit.signature_b64",
-            )
-        destination_params = self._normalize_sccp_evm_destination_params(
-            network_id_hex=network_id_hex,
-            verifier_address_hex=verifier_address_hex,
-            bridge_address_hex=bridge_address_hex,
-            verifier_code_hash_hex=verifier_code_hash_hex,
-            verifier_key_hash_hex=verifier_key_hash_hex,
-            expected_destination_binding_hash_hex=expected_destination_binding_hash_hex,
-            tron_verifier_address=tron_verifier_address,
-            proof_bytes_hex=proof_bytes_hex,
-            context="bridge message submit",
-        )
-        if destination_params is not None:
-            if "proof_bytes_hex" in destination_params:
-                self._validate_sccp_groth16_proof_hex_for_message_bundle(
-                    destination_params["proof_bytes_hex"],
-                    message_bundle,
-                    context="bridge message submit",
-                )
-            payload.update(destination_params)
-        if receipt_lane is not None:
-            if isinstance(receipt_lane, bool):
-                raise RuntimeError("bridge message submit receipt_lane must fit in u32")
-            lane = self._coerce_optional_unsigned(
-                receipt_lane,
-                context="bridge message submit receipt_lane",
-            )
-            if lane is None or lane > 0xFFFF_FFFF:
-                raise RuntimeError("bridge message submit receipt_lane must fit in u32")
-            payload["receipt_lane"] = lane
-        if settlement is not None:
-            if not isinstance(settlement, Mapping):
-                raise RuntimeError("bridge message submit settlement must be a mapping")
-            payload["settlement"] = settlement
-        if creation_time_ms is not None:
-            payload["creation_time_ms"] = creation_time_ms
-        return self._post_json(
+        for key, value in (
+            ("signature_b64", signature_b64),
+            ("transaction_payload_b64", transaction_payload_b64),
+            ("creation_time_ms", creation_time_ms),
+        ):
+            if value is not None:
+                candidate[key] = value
+        payload = normalize_bridge_message_submit_payload(candidate)
+        return self._submit_sccp_bridge(
             "/v1/bridge/messages",
             payload,
             context="bridge message submit",
         )
+
+    @staticmethod
+    def _sccp_message_id(value: Any) -> str:
+        if (
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            or set(value) == {"0"}
+        ):
+            raise ValueError("SCCP message id must be canonical lowercase nonzero 32-byte hex")
+        return value
+
+    def _get_sccp_json_object(
+        self,
+        path: str,
+        *,
+        context: str,
+        params: Optional[Mapping[str, str]] = None,
+        maximum_body_bytes: int,
+    ) -> Mapping[str, Any]:
+        response = self._request(
+            "GET",
+            path,
+            params=params,
+            headers={"Accept": "application/json"},
+            stream=True,
+        )
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=maximum_body_bytes,
+            context=context,
+        )
+        content_type = response.headers.get("Content-Type", "")
+        if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+            response.close()
+            raise TypeError(f"{context} response must use application/json content type")
+        body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
+        return parse_sccp_json_object(body, context)
+
+    def _get_sccp_typed_object(
+        self,
+        path: str,
+        *,
+        format: str,
+        context: str,
+        normalize: Callable[[Any], Mapping[str, Any]],
+        maximum_norito_body_bytes: int,
+        expected_norito_type_name: str,
+    ) -> Union[Mapping[str, Any], bytes]:
+        if format not in {"json", "norito"}:
+            raise ValueError("SCCP response format must be exactly `json` or `norito`")
+        accept = "application/x-norito" if format == "norito" else "application/json"
+        maximum_body_bytes = (
+            maximum_norito_body_bytes
+            if format == "norito"
+            else _SCCP_JSON_RESPONSE_MAX_BYTES
+        )
+        response = self._request("GET", path, headers={"Accept": accept}, stream=True)
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=maximum_body_bytes,
+            context=context,
+        )
+        content_type = response.headers.get("Content-Type", "")
+        if format == "norito":
+            if re.fullmatch(r"application/x-norito(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+                response.close()
+                raise TypeError(f"{context} response must use application/x-norito content type")
+            body = _read_bounded_sccp_response_body(
+                response, maximum_body_bytes, context
+            )
+            validate_norito_frame(
+                body,
+                context=f"{context} response",
+                expected_type_name=expected_norito_type_name,
+                expected_padding_length=0,
+            )
+            return body
+        if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+            response.close()
+            raise TypeError(f"{context} response must use application/json content type")
+        body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
+        return normalize(parse_sccp_json_object(body, context))
+
+    def _submit_sccp_bridge(
+        self,
+        path: str,
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpBridgeSubmitResponse:
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        response = self._request(
+            "POST", path, headers=headers, data=data, stream=True
+        )
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=_SCCP_SUBMIT_RESPONSE_MAX_BYTES,
+            context=context,
+        )
+        content_type = response.headers.get("Content-Type", "")
+        if re.fullmatch(r"application/json(?:\s*;.*)?", content_type, re.IGNORECASE) is None:
+            response.close()
+            raise TypeError(f"{context} response must use application/json content type")
+        expectations: Dict[str, Any] = {"submitted": "signature_b64" in payload}
+        if "creation_time_ms" in payload:
+            expectations["creation_time_ms"] = payload["creation_time_ms"]
+        body = _read_bounded_sccp_response_body(
+            response, _SCCP_SUBMIT_RESPONSE_MAX_BYTES, context
+        )
+        return parse_sccp_bridge_submit_response_json(body, expectations)
 
     def get_runtime_abi_active(self) -> RuntimeAbiActive:
         """Fetch the active ABI version (`GET /v1/runtime/abi/active`)."""
@@ -6033,9 +5844,9 @@ class ToriiClient:
         *,
         authority: str,
         private_key: str,
+        entrypoint: str,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
-        entrypoint: Optional[str] = None,
         payload: Any = None,
         gas_asset_id: Optional[str] = None,
         fee_sponsor: Optional[str] = None,
@@ -6060,11 +5871,10 @@ class ToriiClient:
                 context="call_contract",
             )
         )
-        if entrypoint is not None:
-            request_payload["entrypoint"] = self._require_non_empty_string(
-                entrypoint,
-                "call_contract.entrypoint",
-            )
+        request_payload["entrypoint"] = self._require_non_empty_string(
+            entrypoint,
+            "call_contract.entrypoint",
+        )
         if payload is not None:
             request_payload["payload"] = self._clone_json_value(
                 payload,
@@ -6081,8 +5891,8 @@ class ToriiClient:
                 "call_contract.fee_sponsor",
             )
         gas_limit_value = self._coerce_int(gas_limit, "call_contract.gas_limit")
-        if gas_limit_value < 0:
-            raise ValueError("call_contract.gas_limit must be non-negative")
+        if gas_limit_value <= 0:
+            raise ValueError("call_contract.gas_limit must be positive")
         request_payload["gas_limit"] = gas_limit_value
         response = self._request(
             "POST",
@@ -6317,7 +6127,7 @@ class ToriiClient:
         code_hash: str,
         abi_hash: str,
         window: Optional[Tuple[int, int]] = None,
-        mode: Optional[str] = None,
+        mode: Optional[Literal["Zk", "Plain"]] = None,
         limits: Optional[Mapping[str, Any]] = None,
     ) -> GovernanceProposalDraft:
         """Draft a deploy-contract proposal via ``POST /v1/gov/proposals/deploy-contract``."""
@@ -6337,7 +6147,9 @@ class ToriiClient:
             payload["contract_alias"] = contract_alias
         if window is not None:
             payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
-        if mode:
+        if mode is not None:
+            if mode not in ("Zk", "Plain"):
+                raise ValueError("mode must be exactly 'Zk' or 'Plain'")
             payload["mode"] = mode
         if limits is not None:
             payload["limits"] = dict(limits)
@@ -7208,17 +7020,41 @@ class ToriiClient:
         params: Optional[Mapping[str, Any]] = None,
         headers: Optional[MutableMapping[str, str]] = None,
         data: Optional[bytes] = None,
+        stream: bool = False,
     ) -> requests.Response:
         url = f"{self._base_url}{path}"
-        response = self._session.request(method, url, params=params, headers=headers, data=data)
+        response = self._session.request(
+            method,
+            url,
+            params=params,
+            headers=headers,
+            data=data,
+            stream=stream,
+        )
         return response
 
     @staticmethod
-    def _expect_status(response: requests.Response, expected: Iterable[int]) -> None:
+    def _expect_status(
+        response: requests.Response,
+        expected: Iterable[int],
+        *,
+        maximum_body_bytes: Optional[int] = None,
+        context: str = "Torii",
+    ) -> None:
         expected_set = set(expected)
         if response.status_code in expected_set:
             return
-        message = _format_error_body(response.text)
+        if maximum_body_bytes is None:
+            message = _format_error_body(response.text)
+        else:
+            body = _read_bounded_sccp_response_body(
+                response, maximum_body_bytes, f"{context} error"
+            )
+            try:
+                text = body.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"{context} error response body must be strict UTF-8") from exc
+            message = _format_error_body(text)
         raise RuntimeError(
             f"unexpected status {response.status_code}; expected {sorted(expected_set)}; body={message}"
         )
@@ -10282,503 +10118,6 @@ class ToriiClient:
         )
 
     @staticmethod
-    def _sccp_abi_word_u32_hex(value: int) -> str:
-        if not isinstance(value, int) or value < 0 or value > 0xFFFF_FFFF:
-            raise RuntimeError("SCCP ABI word value must fit in u32")
-        return value.to_bytes(32, "big").hex()
-
-    @classmethod
-    def _optional_sccp_message_proof_context(
-        cls,
-        message_bundle: Optional[Mapping[str, Any]],
-        *,
-        context: str,
-    ) -> Optional[Dict[str, str]]:
-        if message_bundle is None:
-            return None
-        if not isinstance(message_bundle, Mapping):
-            raise RuntimeError(
-                f"{context}.message_bundle must contain commitment metadata"
-            )
-        commitment = message_bundle.get("commitment")
-        if not isinstance(commitment, Mapping):
-            raise RuntimeError(
-                f"{context}.message_bundle.commitment.message_id is required"
-            )
-        message_id = commitment.get("message_id", commitment.get("messageId"))
-        commitment_root = message_bundle.get(
-            "commitment_root",
-            message_bundle.get("commitmentRoot"),
-        )
-        if message_id is None or commitment_root is None:
-            raise RuntimeError(
-                f"{context}.message_bundle.commitment.message_id and "
-                "message_bundle.commitment_root are required"
-            )
-        return {
-            "message_id": cls._normalize_hex_string(
-                message_id,
-                context=f"{context}.message_bundle.commitment.message_id",
-                expected_length=64,
-            ),
-            "commitment_root": cls._normalize_hex_string(
-                commitment_root,
-                context=f"{context}.message_bundle.commitment_root",
-                expected_length=64,
-            ),
-        }
-
-    @classmethod
-    def _validate_sccp_groth16_proof_hex_for_message_bundle(
-        cls,
-        proof_hex: str,
-        message_bundle: Optional[Mapping[str, Any]],
-        *,
-        context: str,
-    ) -> None:
-        cls._validate_sccp_groth16_proof_hex(proof_hex, context=context)
-        proof_context = cls._optional_sccp_message_proof_context(
-            message_bundle,
-            context=context,
-        )
-        if proof_context is None:
-            return
-
-        def word(index: int) -> str:
-            start = index * 64
-            return proof_hex[start : start + 64]
-
-        if word(0) != cls._sccp_abi_word_u32_hex(1):
-            raise RuntimeError(f"{context}.proof_bytes_hex.version must be 1")
-        if word(1) != proof_context["message_id"]:
-            raise RuntimeError(
-                f"{context}.proof_bytes_hex.message_id must match message_bundle.commitment.message_id"
-            )
-        if word(2) != cls._sccp_abi_word_u32_hex(SCCP_DOMAIN_SORA):
-            raise RuntimeError(f"{context}.proof_bytes_hex.source_domain must be SORA")
-        if word(3) != proof_context["commitment_root"]:
-            raise RuntimeError(
-                f"{context}.proof_bytes_hex.commitment_root must match message_bundle.commitment_root"
-            )
-
-    @staticmethod
-    def _sccp_groth16_proof_word_hex(proof_hex: str, index: int) -> str:
-        start = index * 64
-        return proof_hex[start : start + 64]
-
-    @classmethod
-    def _sccp_groth16_proof_word_value(cls, proof_hex: str, index: int) -> int:
-        return int(cls._sccp_groth16_proof_word_hex(proof_hex, index), 16)
-
-    @classmethod
-    def _sccp_groth16_proof_word_is_zero(cls, proof_hex: str, index: int) -> bool:
-        return cls._sccp_groth16_proof_word_value(proof_hex, index) == 0
-
-    @classmethod
-    def _require_sccp_groth16_base_field_word(
-        cls,
-        proof_hex: str,
-        index: int,
-        label: str,
-    ) -> None:
-        if cls._sccp_groth16_proof_word_value(
-            proof_hex,
-            index,
-        ) >= SCCP_GROTH16_BN254_BASE_FIELD_MODULUS:
-            raise RuntimeError(f"{label} must be a BN254 base-field element")
-
-    @classmethod
-    def _require_sccp_groth16_nonzero_point(
-        cls,
-        proof_hex: str,
-        indexes: Sequence[int],
-        label: str,
-    ) -> None:
-        if all(cls._sccp_groth16_proof_word_is_zero(proof_hex, index) for index in indexes):
-            raise RuntimeError(f"{label} must not be zero")
-
-    @staticmethod
-    def _sccp_bn254_fq(value: int) -> int:
-        return value % SCCP_GROTH16_BN254_BASE_FIELD_MODULUS
-
-    @classmethod
-    def _sccp_bn254_fq2_add(
-        cls,
-        left: Tuple[int, int],
-        right: Tuple[int, int],
-    ) -> Tuple[int, int]:
-        return (
-            cls._sccp_bn254_fq(left[0] + right[0]),
-            cls._sccp_bn254_fq(left[1] + right[1]),
-        )
-
-    @classmethod
-    def _sccp_bn254_fq2_mul(
-        cls,
-        left: Tuple[int, int],
-        right: Tuple[int, int],
-    ) -> Tuple[int, int]:
-        return (
-            cls._sccp_bn254_fq(left[0] * right[0] - left[1] * right[1]),
-            cls._sccp_bn254_fq(left[0] * right[1] + left[1] * right[0]),
-        )
-
-    @classmethod
-    def _require_sccp_groth16_g1_point(
-        cls,
-        proof_hex: str,
-        indexes: Sequence[int],
-        label: str,
-    ) -> None:
-        cls._require_sccp_groth16_nonzero_point(proof_hex, indexes, label)
-        x = cls._sccp_groth16_proof_word_value(proof_hex, indexes[0])
-        y = cls._sccp_groth16_proof_word_value(proof_hex, indexes[1])
-        if cls._sccp_bn254_fq(y * y) != cls._sccp_bn254_fq(x * x * x + 3):
-            raise RuntimeError(f"{label} must be a BN254 G1 point")
-
-    @classmethod
-    def _require_sccp_groth16_g2_point(
-        cls,
-        proof_hex: str,
-        indexes: Sequence[int],
-        label: str,
-    ) -> None:
-        cls._require_sccp_groth16_nonzero_point(proof_hex, indexes, label)
-        x = (
-            cls._sccp_groth16_proof_word_value(proof_hex, indexes[0]),
-            cls._sccp_groth16_proof_word_value(proof_hex, indexes[1]),
-        )
-        y = (
-            cls._sccp_groth16_proof_word_value(proof_hex, indexes[2]),
-            cls._sccp_groth16_proof_word_value(proof_hex, indexes[3]),
-        )
-        left = cls._sccp_bn254_fq2_mul(y, y)
-        x2 = cls._sccp_bn254_fq2_mul(x, x)
-        right = cls._sccp_bn254_fq2_add(
-            cls._sccp_bn254_fq2_mul(x2, x),
-            (SCCP_GROTH16_BN254_G2_B_C0, SCCP_GROTH16_BN254_G2_B_C1),
-        )
-        if left != right:
-            raise RuntimeError(f"{label} must be a BN254 G2 point")
-
-    @classmethod
-    def _validate_sccp_groth16_proof_hex(cls, proof_hex: str, *, context: str) -> None:
-        if cls._sccp_groth16_proof_word_value(proof_hex, 0) != 1:
-            raise RuntimeError(f"{context}.proof_bytes_hex.version must be 1")
-        if cls._sccp_groth16_proof_word_is_zero(proof_hex, 1):
-            raise RuntimeError(f"{context}.proof_bytes_hex.message_id must not be zero")
-        source_domain = cls._sccp_groth16_proof_word_value(proof_hex, 2)
-        if source_domain > 0xFFFF_FFFF:
-            raise RuntimeError(f"{context}.proof_bytes_hex.source_domain must fit u32")
-        if source_domain != SCCP_DOMAIN_SORA:
-            raise RuntimeError(f"{context}.proof_bytes_hex.source_domain must be SORA")
-        if cls._sccp_groth16_proof_word_is_zero(proof_hex, 3):
-            raise RuntimeError(f"{context}.proof_bytes_hex.commitment_root must not be zero")
-        for offset, field in enumerate(
-            ("a.x", "a.y", "b.x0", "b.x1", "b.y0", "b.y1", "c.x", "c.y")
-        ):
-            cls._require_sccp_groth16_base_field_word(
-                proof_hex,
-                4 + offset,
-                f"{context}.proof_bytes_hex.{field}",
-            )
-        cls._require_sccp_groth16_g1_point(
-            proof_hex,
-            (4, 5),
-            f"{context}.proof_bytes_hex.a",
-        )
-        cls._require_sccp_groth16_g2_point(
-            proof_hex,
-            (6, 7, 8, 9),
-            f"{context}.proof_bytes_hex.b",
-        )
-        cls._require_sccp_groth16_g1_point(
-            proof_hex,
-            (10, 11),
-            f"{context}.proof_bytes_hex.c",
-        )
-
-    @classmethod
-    def _normalize_sccp_evm_destination_params(
-        cls,
-        *,
-        network_id_hex: Optional[Union[str, bytes, bytearray, memoryview]],
-        verifier_address_hex: Optional[str],
-        bridge_address_hex: Optional[str],
-        verifier_code_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]],
-        verifier_key_hash_hex: Optional[Union[str, bytes, bytearray, memoryview]],
-        expected_destination_binding_hash_hex: Optional[
-            Union[str, bytes, bytearray, memoryview]
-        ],
-        tron_verifier_address: Optional[str],
-        proof_bytes_hex: Optional[Union[str, bytes, bytearray, memoryview]],
-        context: str,
-        expected_message_id_hex: Optional[str] = None,
-    ) -> Optional[Dict[str, str]]:
-        params: Dict[str, str] = {}
-        if network_id_hex is not None:
-            params["network_id_hex"] = cls._normalize_exact_nonzero_hex_bytes(
-                network_id_hex,
-                context=f"{context}.network_id_hex",
-                expected_byte_length=32,
-            )
-        if verifier_address_hex is not None:
-            params["verifier_address_hex"] = cls._normalize_exact_nonzero_hex_bytes(
-                verifier_address_hex,
-                context=f"{context}.verifier_address_hex",
-                expected_byte_length=20,
-            )
-        if bridge_address_hex is not None:
-            params["bridge_address_hex"] = cls._normalize_exact_nonzero_hex_bytes(
-                bridge_address_hex,
-                context=f"{context}.bridge_address_hex",
-                expected_byte_length=20,
-            )
-        if verifier_code_hash_hex is not None:
-            params["verifier_code_hash_hex"] = cls._normalize_exact_nonzero_hex_bytes(
-                verifier_code_hash_hex,
-                context=f"{context}.verifier_code_hash_hex",
-                expected_byte_length=32,
-            )
-        if verifier_key_hash_hex is not None:
-            params["verifier_key_hash_hex"] = cls._normalize_exact_nonzero_hex_bytes(
-                verifier_key_hash_hex,
-                context=f"{context}.verifier_key_hash_hex",
-                expected_byte_length=32,
-            )
-        if expected_destination_binding_hash_hex is not None:
-            params["expected_destination_binding_hash_hex"] = cls._normalize_exact_nonzero_hex_bytes(
-                expected_destination_binding_hash_hex,
-                context=f"{context}.expected_destination_binding_hash_hex",
-                expected_byte_length=32,
-            )
-        if tron_verifier_address is not None:
-            params["tron_verifier_address"] = cls._normalize_tron_base58check_address(
-                tron_verifier_address,
-                context=f"{context}.tron_verifier_address",
-            )
-        if proof_bytes_hex is not None:
-            params["proof_bytes_hex"] = cls._normalize_exact_nonzero_hex_bytes(
-                proof_bytes_hex,
-                context=f"{context}.proof_bytes_hex",
-                expected_byte_length=SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
-            )
-            cls._validate_sccp_groth16_proof_hex(params["proof_bytes_hex"], context=context)
-            if (
-                expected_message_id_hex is not None
-                and cls._sccp_groth16_proof_word_hex(params["proof_bytes_hex"], 1)
-                != expected_message_id_hex
-            ):
-                raise RuntimeError(
-                    f"{context}.proof_bytes_hex.message_id must match message_id"
-                )
-        destination_material_fields = (
-            "network_id_hex",
-            "verifier_address_hex",
-            "bridge_address_hex",
-            "verifier_code_hash_hex",
-            "verifier_key_hash_hex",
-            "expected_destination_binding_hash_hex",
-            "tron_verifier_address",
-        )
-        has_destination_material = any(field in params for field in destination_material_fields)
-        has_proof_bytes = "proof_bytes_hex" in params
-        if has_destination_material and not has_proof_bytes:
-            raise RuntimeError(
-                f"{context}.proof_bytes_hex is required when SCCP destination proof parameters are supplied"
-            )
-        if has_proof_bytes and not has_destination_material:
-            raise RuntimeError(
-                f"{context}.deployment destination fields are required when proof_bytes_hex is supplied"
-            )
-        if has_destination_material and has_proof_bytes:
-            cls._require_sccp_destination_proof_material_tuple(params, context=context)
-        return params or None
-
-    @classmethod
-    def _require_sccp_destination_proof_material_tuple(
-        cls, params: Mapping[str, str], *, context: str
-    ) -> None:
-        has_evm_fields = (
-            "verifier_address_hex" in params or "bridge_address_hex" in params
-        )
-        has_tron_fields = "tron_verifier_address" in params
-        if has_evm_fields and has_tron_fields:
-            raise RuntimeError(
-                f"{context}.EVM and TRON SCCP destination fields cannot be mixed"
-            )
-
-        shared_fields = (
-            "network_id_hex",
-            "verifier_code_hash_hex",
-            "verifier_key_hash_hex",
-            "expected_destination_binding_hash_hex",
-        )
-        has_shared_fields = any(field in params for field in shared_fields)
-        if has_tron_fields:
-            required = (
-                "network_id_hex",
-                "tron_verifier_address",
-                "verifier_code_hash_hex",
-                "verifier_key_hash_hex",
-                "expected_destination_binding_hash_hex",
-            )
-            missing = [field for field in required if field not in params]
-            if missing:
-                raise RuntimeError(
-                    f"{context}.complete TRON SCCP deployment destination fields are required; missing {', '.join(missing)}"
-                )
-            cls._require_tron_sccp_destination_binding_hash_matches(
-                params,
-                context=context,
-            )
-            return
-
-        if has_evm_fields:
-            required = (
-                "network_id_hex",
-                "verifier_address_hex",
-                "bridge_address_hex",
-                "verifier_code_hash_hex",
-                "verifier_key_hash_hex",
-                "expected_destination_binding_hash_hex",
-            )
-            missing = [field for field in required if field not in params]
-            if missing:
-                raise RuntimeError(
-                    f"{context}.complete EVM SCCP deployment destination fields are required; missing {', '.join(missing)}"
-                )
-            cls._require_evm_sccp_destination_binding_hash_matches(
-                params,
-                context=context,
-            )
-            return
-
-        if has_shared_fields:
-            raise RuntimeError(
-                f"{context}.complete EVM or TRON SCCP deployment destination fields are required"
-            )
-
-    @staticmethod
-    def _require_evm_sccp_destination_binding_hash_matches(
-        params: Mapping[str, str], *, context: str
-    ) -> None:
-        from .sccp import evm_sccp_destination_binding_hash
-
-        actual = params["expected_destination_binding_hash_hex"]
-        for target_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
-            try:
-                expected = evm_sccp_destination_binding_hash(
-                    {
-                        "target_domain": target_domain,
-                        "network_id_hex": params["network_id_hex"],
-                        "verifier_address_hex": params["verifier_address_hex"],
-                        "bridge_address_hex": params["bridge_address_hex"],
-                        "verifier_code_hash_hex": params["verifier_code_hash_hex"],
-                        "verifier_key_hash_hex": params["verifier_key_hash_hex"],
-                    }
-                ).removeprefix("0x")
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError(f"{context}.{exc}") from exc
-            if actual == expected:
-                return
-        raise RuntimeError(
-            f"{context}.expected_destination_binding_hash_hex must match canonical EVM destination binding"
-        )
-
-    @staticmethod
-    def _require_tron_sccp_destination_binding_hash_matches(
-        params: Mapping[str, str], *, context: str
-    ) -> None:
-        from .sccp import tron_sccp_destination_binding_hash
-
-        try:
-            expected = tron_sccp_destination_binding_hash(
-                {
-                    "network_id_hex": params["network_id_hex"],
-                    "verifier_address": params["tron_verifier_address"],
-                    "verifier_code_hash_hex": params["verifier_code_hash_hex"],
-                    "verifier_key_hash_hex": params["verifier_key_hash_hex"],
-                }
-            ).removeprefix("0x")
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"{context}.{exc}") from exc
-        actual = params["expected_destination_binding_hash_hex"]
-        if actual != expected:
-            raise RuntimeError(
-                f"{context}.expected_destination_binding_hash_hex must match canonical TRON destination binding"
-            )
-
-    @staticmethod
-    def _normalize_tron_base58check_address(value: Any, *, context: str) -> str:
-        if not isinstance(value, str) or not value.strip():
-            raise RuntimeError(f"{context} must be a non-empty string")
-        if value.strip() != value:
-            raise RuntimeError(f"{context} must be a canonical TRON Base58Check address")
-        normalized = value
-        ToriiClient._decode_tron_base58check_address_payload(normalized, context=context)
-        return normalized
-
-    @staticmethod
-    def _decode_tron_base58check_address_payload(value: str, *, context: str) -> bytes:
-        number = 0
-        for character in value:
-            try:
-                digit = BASE58_ALPHABET.index(character)
-            except ValueError as exc:
-                raise RuntimeError(f"{context} must be a TRON Base58Check address") from exc
-            number = number * 58 + digit
-        decoded = number.to_bytes((number.bit_length() + 7) // 8, "big") if number else b""
-        leading_zeroes = len(value) - len(value.lstrip("1"))
-        decoded = (b"\x00" * leading_zeroes) + decoded
-        if len(decoded) != 25:
-            raise RuntimeError(f"{context} must be a TRON Base58Check address")
-        payload = decoded[:-4]
-        checksum = decoded[-4:]
-        expected_checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
-        if checksum != expected_checksum:
-            raise RuntimeError(f"{context} must be a TRON Base58Check address")
-        if len(payload) != 21 or payload[0] != 0x41 or not any(payload[1:]):
-            raise RuntimeError(f"{context} must be a TRON Base58Check address")
-        return payload
-
-    @staticmethod
-    def _normalize_tron_base58check_payload(value: Any, *, context: str) -> str:
-        if isinstance(value, (bytes, bytearray, memoryview)):
-            payload = bytes(value)
-        elif isinstance(value, (list, tuple)):
-            try:
-                payload = bytes(
-                    ToriiClient._coerce_unsigned(entry, f"{context}[{index}]")
-                    for index, entry in enumerate(value)
-                )
-            except ValueError as exc:
-                raise RuntimeError(f"{context} must contain byte values") from exc
-        elif isinstance(value, str):
-            if value.strip() != value:
-                raise RuntimeError(f"{context} must be a canonical TRON Base58Check payload")
-            literal = value
-            if not literal:
-                raise RuntimeError(f"{context} must be a non-empty string")
-            hex_literal = literal[2:] if literal.startswith(("0x", "0X")) else literal
-            if (
-                hex_literal
-                and len(hex_literal) % 2 == 0
-                and all(ch in "0123456789abcdefABCDEF" for ch in hex_literal)
-            ):
-                payload = bytes.fromhex(hex_literal)
-            else:
-                payload = ToriiClient._decode_tron_base58check_address_payload(
-                    literal,
-                    context=context,
-                )
-        else:
-            raise RuntimeError(f"{context} must be bytes, a byte array, or a non-empty string")
-        if len(payload) != 21 or payload[0] != 0x41 or not any(payload[1:]):
-            raise RuntimeError(f"{context} must be a 21-byte TRON Base58Check payload")
-        return payload.hex()
-
-    @staticmethod
     def _normalize_uaid_literal(value: Any, *, context: str) -> str:
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a UAID string")
@@ -11093,932 +10432,6 @@ class ToriiClient:
         return literal
 
     @staticmethod
-    def _parse_sccp_capabilities(payload: Mapping[str, Any], *, context: str) -> SccpCapabilities:
-        record = ToriiClient._ensure_mapping(payload, context)
-        codecs = [
-            ToriiClient._parse_sccp_codec_capability(entry, context=f"{context}.codecs[{index}]")
-            for index, entry in enumerate(
-                ToriiClient._parse_mapping_list(record.get("codecs"), context=f"{context}.codecs")
-            )
-        ]
-        counterparties = [
-            ToriiClient._parse_sccp_counterparty_capability(
-                entry,
-                context=f"{context}.counterparties[{index}]",
-            )
-            for index, entry in enumerate(
-                ToriiClient._parse_mapping_list(
-                    record.get("counterparties"),
-                    context=f"{context}.counterparties",
-                )
-            )
-        ]
-        return SccpCapabilities(
-            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
-            local_chain=ToriiClient._require_string(record.get("local_chain"), f"{context}.local_chain"),
-            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
-            burn_bundle_path=ToriiClient._require_string(
-                record.get("burn_bundle_path"),
-                f"{context}.burn_bundle_path",
-            ),
-            message_bundle_path=ToriiClient._require_string(
-                record.get("message_bundle_path"),
-                f"{context}.message_bundle_path",
-            ),
-            message_proof_path=ToriiClient._require_string(
-                record.get("message_proof_path"),
-                f"{context}.message_proof_path",
-            ),
-            message_job_path=ToriiClient._require_string(
-                record.get("message_job_path"),
-                f"{context}.message_job_path",
-            ),
-            proof_manifest_path=ToriiClient._require_string(
-                record.get("proof_manifest_path"),
-                f"{context}.proof_manifest_path",
-            ),
-            burn_registry_backend=ToriiClient._require_string(
-                record.get("burn_registry_backend"),
-                f"{context}.burn_registry_backend",
-            ),
-            proof_submit_path=ToriiClient._coerce_optional_string(
-                record.get("proof_submit_path"),
-                context=f"{context}.proof_submit_path",
-            ),
-            message_submit_path=ToriiClient._coerce_optional_string(
-                record.get("message_submit_path"),
-                context=f"{context}.message_submit_path",
-            ),
-            message_payload_kinds=ToriiClient._parse_string_list(
-                record.get("message_payload_kinds"),
-                context=f"{context}.message_payload_kinds",
-            ),
-            codecs=codecs,
-            counterparties=counterparties,
-        )
-
-    @staticmethod
-    def _parse_sccp_codec_capability(value: Mapping[str, Any], *, context: str) -> SccpCodecCapability:
-        record = ToriiClient._ensure_mapping(value, context)
-        return SccpCodecCapability(
-            id=ToriiClient._coerce_unsigned(record.get("id"), f"{context}.id"),
-            key=ToriiClient._require_string(record.get("key"), f"{context}.key"),
-            description=ToriiClient._require_string(record.get("description"), f"{context}.description"),
-        )
-
-    @staticmethod
-    def _parse_sccp_counterparty_capability(
-        value: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpCounterpartyCapability:
-        record = ToriiClient._ensure_mapping(value, context)
-        return SccpCounterpartyCapability(
-            domain=ToriiClient._coerce_unsigned(record.get("domain"), f"{context}.domain"),
-            chain=ToriiClient._require_string(record.get("chain"), f"{context}.chain"),
-            message_backend=ToriiClient._require_string(
-                record.get("message_backend"),
-                f"{context}.message_backend",
-            ),
-            registry_backend=ToriiClient._require_string(
-                record.get("registry_backend"),
-                f"{context}.registry_backend",
-            ),
-            counterparty_account_codec=ToriiClient._coerce_unsigned(
-                record.get("counterparty_account_codec"),
-                f"{context}.counterparty_account_codec",
-            ),
-            counterparty_account_codec_key=ToriiClient._require_string(
-                record.get("counterparty_account_codec_key"),
-                f"{context}.counterparty_account_codec_key",
-            ),
-        )
-
-    @staticmethod
-    def _parse_sccp_proof_manifests(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpProofManifestSet:
-        record = ToriiClient._ensure_mapping(payload, context)
-        manifests = [
-            ToriiClient._parse_sccp_proof_manifest(entry, context=f"{context}.manifests[{index}]")
-            for index, entry in enumerate(
-                ToriiClient._parse_mapping_list(record.get("manifests"), context=f"{context}.manifests")
-            )
-        ]
-        return SccpProofManifestSet(
-            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
-            local_chain=ToriiClient._require_string(record.get("local_chain"), f"{context}.local_chain"),
-            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
-            manifests=manifests,
-        )
-
-    @staticmethod
-    def _parse_sccp_proof_manifest(value: Mapping[str, Any], *, context: str) -> SccpProofManifest:
-        record = ToriiClient._ensure_mapping(value, context)
-        return SccpProofManifest(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
-            local_chain=ToriiClient._require_string(record.get("local_chain"), f"{context}.local_chain"),
-            counterparty_domain=ToriiClient._coerce_unsigned(
-                record.get("counterparty_domain"),
-                f"{context}.counterparty_domain",
-            ),
-            chain=ToriiClient._require_string(record.get("chain"), f"{context}.chain"),
-            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
-            message_backend=ToriiClient._require_string(
-                record.get("message_backend"),
-                f"{context}.message_backend",
-            ),
-            registry_backend=ToriiClient._require_string(
-                record.get("registry_backend"),
-                f"{context}.registry_backend",
-            ),
-            counterparty_account_codec=ToriiClient._coerce_unsigned(
-                record.get("counterparty_account_codec"),
-                f"{context}.counterparty_account_codec",
-            ),
-            counterparty_account_codec_key=ToriiClient._require_string(
-                record.get("counterparty_account_codec_key"),
-                f"{context}.counterparty_account_codec_key",
-            ),
-            finality_model=ToriiClient._require_choice(
-                record.get("finality_model"),
-                allowed=SCCP_FINALITY_MODEL_VALUES,
-                context=f"{context}.finality_model",
-            ),
-            verifier_target=ToriiClient._require_choice(
-                record.get("verifier_target"),
-                allowed=SCCP_VERIFIER_TARGET_VALUES,
-                context=f"{context}.verifier_target",
-            ),
-            manifest_seed=ToriiClient._require_string(record.get("manifest_seed"), f"{context}.manifest_seed"),
-            required_public_inputs=ToriiClient._parse_string_list(
-                record.get("required_public_inputs"),
-                context=f"{context}.required_public_inputs",
-            ),
-            message_payload_kinds=ToriiClient._parse_string_list(
-                record.get("message_payload_kinds"),
-                context=f"{context}.message_payload_kinds",
-            ),
-            submission_template=ToriiClient._parse_sccp_counterparty_submission_template(
-                ToriiClient._ensure_mapping(
-                    record.get("submission_template"),
-                    f"{context}.submission_template",
-                ),
-                context=f"{context}.submission_template",
-            ),
-        )
-
-    @staticmethod
-    def _parse_sccp_message_proof_artifact(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpMessageTransparentProofArtifact:
-        record = ToriiClient._ensure_mapping(payload, context)
-        artifact = SccpMessageTransparentProofArtifact(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
-            counterparty_domain=ToriiClient._coerce_unsigned(
-                record.get("counterparty_domain"),
-                f"{context}.counterparty_domain",
-            ),
-            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
-            message_backend=ToriiClient._require_string(
-                record.get("message_backend"),
-                f"{context}.message_backend",
-            ),
-            registry_backend=ToriiClient._require_string(
-                record.get("registry_backend"),
-                f"{context}.registry_backend",
-            ),
-            manifest_seed=ToriiClient._require_string(record.get("manifest_seed"), f"{context}.manifest_seed"),
-            finality_model=ToriiClient._require_choice(
-                record.get("finality_model"),
-                allowed=SCCP_FINALITY_MODEL_VALUES,
-                context=f"{context}.finality_model",
-            ),
-            verifier_target=ToriiClient._require_choice(
-                record.get("verifier_target"),
-                allowed=SCCP_VERIFIER_TARGET_VALUES,
-                context=f"{context}.verifier_target",
-            ),
-            public_inputs=ToriiClient._parse_sccp_message_transparent_public_inputs(
-                ToriiClient._ensure_mapping(record.get("public_inputs"), f"{context}.public_inputs"),
-                context=f"{context}.public_inputs",
-            ),
-            proof_bytes=ToriiClient._require_hex_string(record.get("proof_bytes"), f"{context}.proof_bytes"),
-            submission_package=ToriiClient._parse_sccp_counterparty_submission_package(
-                ToriiClient._ensure_mapping(record.get("submission_package"), f"{context}.submission_package"),
-                context=f"{context}.submission_package",
-            ),
-            bundle=ToriiClient._parse_sccp_message_proof_bundle(
-                ToriiClient._ensure_mapping(record.get("bundle"), f"{context}.bundle"),
-                context=f"{context}.bundle",
-            ),
-        )
-        if artifact.bundle.commitment.message_id.lower() != artifact.public_inputs.message_id.lower():
-            raise RuntimeError(
-                f"{context}.bundle.commitment.message_id must match {context}.public_inputs.message_id"
-            )
-        if artifact.bundle.commitment.payload_hash.lower() != artifact.public_inputs.payload_hash.lower():
-            raise RuntimeError(
-                f"{context}.bundle.commitment.payload_hash must match {context}.public_inputs.payload_hash"
-            )
-        if artifact.bundle.commitment_root.lower() != artifact.public_inputs.commitment_root.lower():
-            raise RuntimeError(
-                f"{context}.bundle.commitment_root must match {context}.public_inputs.commitment_root"
-            )
-        return artifact
-
-    @staticmethod
-    def _parse_sccp_submission_argument(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpSubmissionArgument:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return SccpSubmissionArgument(
-            key=ToriiClient._require_string(record.get("key"), f"{context}.key"),
-            description=ToriiClient._require_string(
-                record.get("description"),
-                f"{context}.description",
-            ),
-        )
-
-    @staticmethod
-    def _parse_sccp_counterparty_submission_template(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpCounterpartySubmissionTemplate:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return SccpCounterpartySubmissionTemplate(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            encoding=ToriiClient._require_string(record.get("encoding"), f"{context}.encoding"),
-            submission_kind=ToriiClient._require_string(
-                record.get("submission_kind"),
-                f"{context}.submission_kind",
-            ),
-            verifier_entrypoint=ToriiClient._require_string(
-                record.get("verifier_entrypoint"),
-                f"{context}.verifier_entrypoint",
-            ),
-            required_arguments=[
-                ToriiClient._parse_sccp_submission_argument(
-                    entry,
-                    context=f"{context}.required_arguments[{index}]",
-                )
-                for index, entry in enumerate(
-                    ToriiClient._parse_mapping_list(
-                        record.get("required_arguments"),
-                        context=f"{context}.required_arguments",
-                    )
-                )
-            ],
-        )
-
-    @staticmethod
-    def _parse_sccp_submission_argument_value(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpSubmissionArgumentValue:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return SccpSubmissionArgumentValue(
-            key=ToriiClient._require_string(record.get("key"), f"{context}.key"),
-            encoding=ToriiClient._require_string(record.get("encoding"), f"{context}.encoding"),
-            bytes=ToriiClient._require_hex_string(record.get("bytes"), f"{context}.bytes"),
-        )
-
-    @staticmethod
-    def _parse_sccp_destination_binding(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> Mapping[str, Any]:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return {
-            "version": ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            "key": ToriiClient._require_string(record.get("key"), f"{context}.key"),
-            "binding_hash": ToriiClient._normalize_hex_string(
-                record.get("binding_hash"),
-                context=f"{context}.binding_hash",
-                expected_length=64,
-            ),
-        }
-
-    @staticmethod
-    def _parse_sccp_platform_submission_payload(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpPlatformSubmissionPayload:
-        record = ToriiClient._ensure_mapping(payload, context)
-        kind = ToriiClient._require_string(record.get("platform"), f"{context}.platform")
-        body = ToriiClient._ensure_mapping(record.get("payload"), f"{context}.payload")
-        if kind in {"evm_contract_call", "tron_contract_call"}:
-            public_inputs = ToriiClient._ensure_mapping(
-                body.get("public_inputs"),
-                f"{context}.payload.public_inputs",
-            )
-            value = {
-                "proof_bytes": ToriiClient._require_hex_string(
-                    body.get("proof_bytes"),
-                    f"{context}.payload.proof_bytes",
-                ),
-                "public_inputs": {
-                    "message_id": ToriiClient._normalize_hex_string(
-                        public_inputs.get("message_id"),
-                        context=f"{context}.payload.public_inputs.message_id",
-                        expected_length=64,
-                    ),
-                    "payload_hash": ToriiClient._normalize_hex_string(
-                        public_inputs.get("payload_hash"),
-                        context=f"{context}.payload.public_inputs.payload_hash",
-                        expected_length=64,
-                    ),
-                    "target_domain_word": ToriiClient._normalize_hex_string(
-                        public_inputs.get("target_domain_word"),
-                        context=f"{context}.payload.public_inputs.target_domain_word",
-                        expected_length=64,
-                    ),
-                    "commitment_root": ToriiClient._normalize_hex_string(
-                        public_inputs.get("commitment_root"),
-                        context=f"{context}.payload.public_inputs.commitment_root",
-                        expected_length=64,
-                    ),
-                    "finality_height_word": ToriiClient._normalize_hex_string(
-                        public_inputs.get("finality_height_word"),
-                        context=f"{context}.payload.public_inputs.finality_height_word",
-                        expected_length=64,
-                    ),
-                    "finality_block_hash": ToriiClient._normalize_hex_string(
-                        public_inputs.get("finality_block_hash"),
-                        context=f"{context}.payload.public_inputs.finality_block_hash",
-                        expected_length=64,
-                    ),
-                },
-                "statement_hash": ToriiClient._normalize_hex_string(
-                    body.get("statement_hash"),
-                    context=f"{context}.payload.statement_hash",
-                    expected_length=64,
-                ),
-            }
-            return SccpPlatformSubmissionPayload(kind=kind, value=value)
-        if kind == "solana_program_instruction":
-            value = {
-                "proof_bytes": ToriiClient._require_hex_string(
-                    body.get("proof_bytes"),
-                    f"{context}.payload.proof_bytes",
-                ),
-                "public_inputs_bytes": ToriiClient._require_hex_string(
-                    body.get("public_inputs_bytes"),
-                    f"{context}.payload.public_inputs_bytes",
-                ),
-                "bundle_bytes": ToriiClient._require_hex_string(
-                    body.get("bundle_bytes"),
-                    f"{context}.payload.bundle_bytes",
-                ),
-                "destination_binding": ToriiClient._parse_sccp_destination_binding(
-                    body.get("destination_binding"),
-                    context=f"{context}.payload.destination_binding",
-                ),
-                "destination_binding_hash": ToriiClient._normalize_hex_string(
-                    body.get("destination_binding_hash"),
-                    context=f"{context}.payload.destination_binding_hash",
-                    expected_length=64,
-                ),
-                "statement_hash": ToriiClient._normalize_hex_string(
-                    body.get("statement_hash"),
-                    context=f"{context}.payload.statement_hash",
-                    expected_length=64,
-                ),
-                "proof_context_hash": ToriiClient._normalize_hex_string(
-                    body.get("proof_context_hash"),
-                    context=f"{context}.payload.proof_context_hash",
-                    expected_length=64,
-                ),
-            }
-            return SccpPlatformSubmissionPayload(kind=kind, value=value)
-        if kind == "ton_internal_message":
-            if "message_body_boc" in body:
-                value = {
-                    "message_body_boc": ToriiClient._require_hex_string(
-                        body.get("message_body_boc"),
-                        f"{context}.payload.message_body_boc",
-                    ),
-                    "query_id": ToriiClient._coerce_unsigned(
-                        body.get("query_id"),
-                        f"{context}.payload.query_id",
-                    ),
-                    "destination_binding": ToriiClient._parse_sccp_destination_binding(
-                        body.get("destination_binding"),
-                        context=f"{context}.payload.destination_binding",
-                    ),
-                    "destination_binding_hash": ToriiClient._normalize_hex_string(
-                        body.get("destination_binding_hash"),
-                        context=f"{context}.payload.destination_binding_hash",
-                        expected_length=64,
-                    ),
-                    "proof_bytes": ToriiClient._require_hex_string(
-                        body.get("proof_bytes"),
-                        f"{context}.payload.proof_bytes",
-                    ),
-                    "public_inputs_bytes": ToriiClient._require_hex_string(
-                        body.get("public_inputs_bytes"),
-                        f"{context}.payload.public_inputs_bytes",
-                    ),
-                    "bundle_bytes": ToriiClient._require_hex_string(
-                        body.get("bundle_bytes"),
-                        f"{context}.payload.bundle_bytes",
-                    ),
-                    "statement_hash": ToriiClient._normalize_hex_string(
-                        body.get("statement_hash"),
-                        context=f"{context}.payload.statement_hash",
-                        expected_length=64,
-                    ),
-                }
-                return SccpPlatformSubmissionPayload(kind=kind, value=value)
-            value = {
-                "proof_cell": ToriiClient._require_hex_string(
-                    body.get("proof_cell"),
-                    f"{context}.payload.proof_cell",
-                ),
-                "public_inputs_cell": ToriiClient._require_hex_string(
-                    body.get("public_inputs_cell"),
-                    f"{context}.payload.public_inputs_cell",
-                ),
-                "bundle_cell": ToriiClient._require_hex_string(
-                    body.get("bundle_cell"),
-                    f"{context}.payload.bundle_cell",
-                ),
-            }
-            return SccpPlatformSubmissionPayload(kind=kind, value=value)
-        raise RuntimeError(f"{context}.platform must be a supported SCCP platform payload")
-
-    @staticmethod
-    def _parse_sccp_counterparty_submission_package(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpCounterpartySubmissionPackage:
-        record = ToriiClient._ensure_mapping(payload, context)
-        verifier_backend = ToriiClient._ensure_mapping(
-            record.get("verifier_backend"),
-            f"{context}.verifier_backend",
-        )
-        return SccpCounterpartySubmissionPackage(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
-            verifier_backend_key=ToriiClient._require_string(
-                verifier_backend.get("key"),
-                f"{context}.verifier_backend.key",
-            ),
-            envelope_encoding=ToriiClient._require_string(
-                record.get("envelope_encoding"),
-                f"{context}.envelope_encoding",
-            ),
-            submission_kind=ToriiClient._require_string(
-                record.get("submission_kind"),
-                f"{context}.submission_kind",
-            ),
-            verifier_entrypoint=ToriiClient._require_string(
-                record.get("verifier_entrypoint"),
-                f"{context}.verifier_entrypoint",
-            ),
-            platform_payload=ToriiClient._parse_sccp_platform_submission_payload(
-                ToriiClient._ensure_mapping(record.get("platform_payload"), f"{context}.platform_payload"),
-                context=f"{context}.platform_payload",
-            ),
-            arguments=[
-                ToriiClient._parse_sccp_submission_argument_value(
-                    entry,
-                    context=f"{context}.arguments[{index}]",
-                )
-                for index, entry in enumerate(
-                    ToriiClient._parse_mapping_list(
-                        record.get("arguments"),
-                        context=f"{context}.arguments",
-                    )
-                )
-            ],
-            envelope_bytes=ToriiClient._require_hex_string(
-                record.get("envelope_bytes"),
-                f"{context}.envelope_bytes",
-            ),
-        )
-
-    @staticmethod
-    def _coerce_sccp_codec_scalar(value: Any, *, context: str) -> str:
-        if isinstance(value, (bytes, bytearray, memoryview)):
-            return bytes(value).hex()
-        if isinstance(value, (list, tuple)):
-            try:
-                return bytes(
-                    ToriiClient._coerce_unsigned(entry, f"{context}[{index}]")
-                    for index, entry in enumerate(value)
-                ).hex()
-            except ValueError as exc:
-                raise RuntimeError(f"{context} must contain byte values") from exc
-        if isinstance(value, str):
-            literal = value.strip()
-            if not literal:
-                raise RuntimeError(f"{context} must be a non-empty string")
-            if literal.startswith(("0x", "0X")):
-                literal = literal[2:]
-            if literal and all(ch in "0123456789abcdefABCDEF" for ch in literal):
-                return literal.lower()
-            return literal
-        raise RuntimeError(f"{context} must be bytes, a byte array, or a non-empty string")
-
-    @staticmethod
-    def _parse_sccp_normalized_codec_value(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpNormalizedCodecValue:
-        record = ToriiClient._ensure_mapping(payload, context)
-        if len(record) != 1:
-            raise RuntimeError(f"{context} must contain exactly one SCCP codec variant")
-        kind, body = next(iter(record.items()))
-        body_record = ToriiClient._ensure_mapping(body, f"{context}.{kind}")
-        if kind == "TextUtf8":
-            return SccpNormalizedCodecValue(
-                kind=kind,
-                value=ToriiClient._require_string(body_record.get("value"), f"{context}.{kind}.value"),
-            )
-        if kind in {"EvmHex", "SolanaBase58"}:
-            return SccpNormalizedCodecValue(
-                kind=kind,
-                value=ToriiClient._coerce_sccp_codec_scalar(
-                    body_record.get("bytes"),
-                    context=f"{context}.{kind}.bytes",
-                ),
-            )
-        if kind == "TonRaw":
-            return SccpNormalizedCodecValue(
-                kind=kind,
-                value={
-                    "workchain": ToriiClient._coerce_int(
-                        body_record.get("workchain"),
-                        f"{context}.{kind}.workchain",
-                    ),
-                    "account": ToriiClient._coerce_sccp_codec_scalar(
-                        body_record.get("account"),
-                        context=f"{context}.{kind}.account",
-                    ),
-                },
-            )
-        if kind == "TronBase58Check":
-            return SccpNormalizedCodecValue(
-                kind=kind,
-                value=ToriiClient._normalize_tron_base58check_payload(
-                    body_record.get("payload"),
-                    context=f"{context}.{kind}.payload",
-                ),
-            )
-        raise RuntimeError(f"{context} has unsupported SCCP codec variant {kind}")
-
-    @staticmethod
-    def _parse_sccp_payload_projection(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpPayloadProjection:
-        record = ToriiClient._ensure_mapping(payload, context)
-        if len(record) != 1:
-            raise RuntimeError(f"{context} must contain exactly one SCCP payload projection variant")
-        kind, body = next(iter(record.items()))
-        body_record = ToriiClient._ensure_mapping(body, f"{context}.{kind}")
-
-        if kind == "AssetRegister":
-            value = {
-                "version": ToriiClient._coerce_unsigned(
-                    body_record.get("version"),
-                    f"{context}.{kind}.version",
-                ),
-                "target_domain": ToriiClient._coerce_unsigned(
-                    body_record.get("target_domain"),
-                    f"{context}.{kind}.target_domain",
-                ),
-                "home_domain": ToriiClient._coerce_unsigned(
-                    body_record.get("home_domain"),
-                    f"{context}.{kind}.home_domain",
-                ),
-                "nonce": ToriiClient._coerce_unsigned(
-                    body_record.get("nonce"),
-                    f"{context}.{kind}.nonce",
-                ),
-                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
-                    ToriiClient._ensure_mapping(
-                        body_record.get("asset_id"),
-                        f"{context}.{kind}.asset_id",
-                    ),
-                    context=f"{context}.{kind}.asset_id",
-                ),
-                "decimals": ToriiClient._coerce_unsigned(
-                    body_record.get("decimals"),
-                    f"{context}.{kind}.decimals",
-                ),
-            }
-            return SccpPayloadProjection(kind=kind, value=value)
-
-        if kind == "RouteActivate":
-            value = {
-                "version": ToriiClient._coerce_unsigned(
-                    body_record.get("version"),
-                    f"{context}.{kind}.version",
-                ),
-                "source_domain": ToriiClient._coerce_unsigned(
-                    body_record.get("source_domain"),
-                    f"{context}.{kind}.source_domain",
-                ),
-                "target_domain": ToriiClient._coerce_unsigned(
-                    body_record.get("target_domain"),
-                    f"{context}.{kind}.target_domain",
-                ),
-                "nonce": ToriiClient._coerce_unsigned(
-                    body_record.get("nonce"),
-                    f"{context}.{kind}.nonce",
-                ),
-                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
-                    ToriiClient._ensure_mapping(
-                        body_record.get("asset_id"),
-                        f"{context}.{kind}.asset_id",
-                    ),
-                    context=f"{context}.{kind}.asset_id",
-                ),
-                "route_id": ToriiClient._parse_sccp_normalized_codec_value(
-                    ToriiClient._ensure_mapping(
-                        body_record.get("route_id"),
-                        f"{context}.{kind}.route_id",
-                    ),
-                    context=f"{context}.{kind}.route_id",
-                ),
-            }
-            return SccpPayloadProjection(kind=kind, value=value)
-
-        if kind == "Transfer":
-            value = {
-                "version": ToriiClient._coerce_unsigned(
-                    body_record.get("version"),
-                    f"{context}.{kind}.version",
-                ),
-                "source_domain": ToriiClient._coerce_unsigned(
-                    body_record.get("source_domain"),
-                    f"{context}.{kind}.source_domain",
-                ),
-                "dest_domain": ToriiClient._coerce_unsigned(
-                    body_record.get("dest_domain"),
-                    f"{context}.{kind}.dest_domain",
-                ),
-                "nonce": ToriiClient._coerce_unsigned(
-                    body_record.get("nonce"),
-                    f"{context}.{kind}.nonce",
-                ),
-                "asset_home_domain": ToriiClient._coerce_unsigned(
-                    body_record.get("asset_home_domain"),
-                    f"{context}.{kind}.asset_home_domain",
-                ),
-                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
-                    ToriiClient._ensure_mapping(
-                        body_record.get("asset_id"),
-                        f"{context}.{kind}.asset_id",
-                    ),
-                    context=f"{context}.{kind}.asset_id",
-                ),
-                "amount": ToriiClient._coerce_unsigned(
-                    body_record.get("amount"),
-                    f"{context}.{kind}.amount",
-                ),
-                "sender": ToriiClient._parse_sccp_normalized_codec_value(
-                    ToriiClient._ensure_mapping(
-                        body_record.get("sender"),
-                        f"{context}.{kind}.sender",
-                    ),
-                    context=f"{context}.{kind}.sender",
-                ),
-                "recipient": ToriiClient._parse_sccp_normalized_codec_value(
-                    ToriiClient._ensure_mapping(
-                        body_record.get("recipient"),
-                        f"{context}.{kind}.recipient",
-                    ),
-                    context=f"{context}.{kind}.recipient",
-                ),
-                "route_id": ToriiClient._parse_sccp_normalized_codec_value(
-                    ToriiClient._ensure_mapping(
-                        body_record.get("route_id"),
-                        f"{context}.{kind}.route_id",
-                    ),
-                    context=f"{context}.{kind}.route_id",
-                ),
-            }
-            return SccpPayloadProjection(kind=kind, value=value)
-
-        raise RuntimeError(f"{context} has unsupported SCCP payload projection variant {kind}")
-
-    @staticmethod
-    def _parse_sccp_message_proof_job(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpCounterpartyProofJob:
-        record = ToriiClient._ensure_mapping(payload, context)
-        chain_family = ToriiClient._require_choice(
-            record.get("chain_family"),
-            allowed=SCCP_CHAIN_FAMILY_VALUES,
-            context=f"{context}.chain_family",
-        )
-        job = SccpCounterpartyProofJob(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            chain_family=chain_family,
-            chain=ToriiClient._require_string(record.get("chain"), f"{context}.chain"),
-            local_domain=ToriiClient._coerce_unsigned(
-                record.get("local_domain"),
-                f"{context}.local_domain",
-            ),
-            counterparty_domain=ToriiClient._coerce_unsigned(
-                record.get("counterparty_domain"),
-                f"{context}.counterparty_domain",
-            ),
-            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
-            message_backend=ToriiClient._require_string(
-                record.get("message_backend"),
-                f"{context}.message_backend",
-            ),
-            registry_backend=ToriiClient._require_string(
-                record.get("registry_backend"),
-                f"{context}.registry_backend",
-            ),
-            manifest_seed=ToriiClient._require_string(record.get("manifest_seed"), f"{context}.manifest_seed"),
-            finality_model=ToriiClient._require_choice(
-                record.get("finality_model"),
-                allowed=SCCP_FINALITY_MODEL_VALUES,
-                context=f"{context}.finality_model",
-            ),
-            verifier_target=ToriiClient._require_choice(
-                record.get("verifier_target"),
-                allowed=SCCP_VERIFIER_TARGET_VALUES,
-                context=f"{context}.verifier_target",
-            ),
-            public_inputs=ToriiClient._parse_sccp_message_transparent_public_inputs(
-                ToriiClient._ensure_mapping(record.get("public_inputs"), f"{context}.public_inputs"),
-                context=f"{context}.public_inputs",
-            ),
-            payload_kind=ToriiClient._require_string(record.get("payload_kind"), f"{context}.payload_kind"),
-            payload_projection=ToriiClient._parse_sccp_payload_projection(
-                ToriiClient._ensure_mapping(
-                    record.get("payload_projection"),
-                    f"{context}.payload_projection",
-                ),
-                context=f"{context}.payload_projection",
-            ),
-            submission_template=ToriiClient._parse_sccp_counterparty_submission_template(
-                ToriiClient._ensure_mapping(
-                    record.get("submission_template"),
-                    f"{context}.submission_template",
-                ),
-                context=f"{context}.submission_template",
-            ),
-            submission_package=ToriiClient._parse_sccp_counterparty_submission_package(
-                ToriiClient._ensure_mapping(
-                    record.get("submission_package"),
-                    f"{context}.submission_package",
-                ),
-                context=f"{context}.submission_package",
-            ),
-            bundle=ToriiClient._parse_sccp_message_proof_bundle(
-                ToriiClient._ensure_mapping(record.get("bundle"), f"{context}.bundle"),
-                context=f"{context}.bundle",
-            ),
-        )
-        if job.bundle.commitment.message_id != job.public_inputs.message_id:
-            raise RuntimeError(
-                f"{context}.bundle.commitment.message_id must match public_inputs.message_id"
-            )
-        if job.bundle.commitment.payload_hash != job.public_inputs.payload_hash:
-            raise RuntimeError(
-                f"{context}.bundle.commitment.payload_hash must match public_inputs.payload_hash"
-            )
-        if job.bundle.commitment_root != job.public_inputs.commitment_root:
-            raise RuntimeError(
-                f"{context}.bundle.commitment_root must match public_inputs.commitment_root"
-            )
-        return job
-
-    @staticmethod
-    def _parse_sccp_message_transparent_public_inputs(
-        value: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpMessageTransparentPublicInputs:
-        record = ToriiClient._ensure_mapping(value, context)
-        return SccpMessageTransparentPublicInputs(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            message_id=ToriiClient._require_hex_string(record.get("message_id"), f"{context}.message_id"),
-            payload_hash=ToriiClient._require_hex_string(record.get("payload_hash"), f"{context}.payload_hash"),
-            target_domain=ToriiClient._coerce_unsigned(record.get("target_domain"), f"{context}.target_domain"),
-            commitment_root=ToriiClient._require_hex_string(
-                record.get("commitment_root"),
-                f"{context}.commitment_root",
-            ),
-            finality_height=ToriiClient._coerce_unsigned(
-                record.get("finality_height"),
-                f"{context}.finality_height",
-            ),
-            finality_block_hash=ToriiClient._require_hex_string(
-                record.get("finality_block_hash"),
-                f"{context}.finality_block_hash",
-            ),
-        )
-
-    @staticmethod
-    def _parse_sccp_message_proof_bundle(
-        value: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> SccpMessageProofBundle:
-        record = ToriiClient._ensure_mapping(value, context)
-        return SccpMessageProofBundle(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            commitment_root=ToriiClient._require_hex_string(
-                record.get("commitment_root"),
-                f"{context}.commitment_root",
-            ),
-            commitment=ToriiClient._parse_sccp_hub_commitment(
-                ToriiClient._ensure_mapping(record.get("commitment"), f"{context}.commitment"),
-                context=f"{context}.commitment",
-            ),
-            merkle_proof=ToriiClient._parse_sccp_merkle_proof(
-                ToriiClient._ensure_mapping(record.get("merkle_proof"), f"{context}.merkle_proof"),
-                context=f"{context}.merkle_proof",
-            ),
-            payload=ToriiClient._parse_sccp_payload_envelope(
-                record.get("payload"),
-                context=f"{context}.payload",
-            ),
-            finality_proof=ToriiClient._require_hex_string(
-                record.get("finality_proof"),
-                f"{context}.finality_proof",
-            ),
-        )
-
-    @staticmethod
-    def _parse_sccp_hub_commitment(value: Mapping[str, Any], *, context: str) -> SccpHubCommitment:
-        record = ToriiClient._ensure_mapping(value, context)
-        return SccpHubCommitment(
-            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
-            kind=ToriiClient._require_choice(
-                record.get("kind"),
-                allowed=SCCP_HUB_MESSAGE_KIND_VALUES,
-                context=f"{context}.kind",
-            ),
-            target_domain=ToriiClient._coerce_unsigned(record.get("target_domain"), f"{context}.target_domain"),
-            message_id=ToriiClient._require_hex_string(record.get("message_id"), f"{context}.message_id"),
-            payload_hash=ToriiClient._require_hex_string(record.get("payload_hash"), f"{context}.payload_hash"),
-        )
-
-    @staticmethod
-    def _parse_sccp_merkle_proof(value: Mapping[str, Any], *, context: str) -> SccpMerkleProof:
-        record = ToriiClient._ensure_mapping(value, context)
-        steps = [
-            ToriiClient._parse_sccp_merkle_step(step, context=f"{context}.steps[{index}]")
-            for index, step in enumerate(
-                ToriiClient._parse_mapping_list(record.get("steps"), context=f"{context}.steps")
-            )
-        ]
-        return SccpMerkleProof(steps=steps)
-
-    @staticmethod
-    def _parse_sccp_merkle_step(value: Mapping[str, Any], *, context: str) -> SccpMerkleStep:
-        record = ToriiClient._ensure_mapping(value, context)
-        sibling_is_left = record.get("sibling_is_left")
-        if not isinstance(sibling_is_left, bool):
-            raise RuntimeError(f"{context}.sibling_is_left must be a boolean")
-        return SccpMerkleStep(
-            sibling_hash=ToriiClient._require_hex_string(
-                record.get("sibling_hash"),
-                f"{context}.sibling_hash",
-            ),
-            sibling_is_left=sibling_is_left,
-        )
-
-    @staticmethod
-    def _parse_sccp_payload_envelope(value: Any, *, context: str) -> SccpPayloadEnvelope:
-        record = ToriiClient._ensure_mapping(value, context)
-        if len(record) != 1:
-            raise RuntimeError(f"{context} must contain exactly one SCCP payload variant")
-        kind, inner = next(iter(record.items()))
-        if kind not in SCCP_MESSAGE_PAYLOAD_KIND_VALUES:
-            allowed = ", ".join(sorted(SCCP_MESSAGE_PAYLOAD_KIND_VALUES))
-            raise RuntimeError(f"{context} must use one of: {allowed}")
-        payload_value = ToriiClient._ensure_mapping(inner, f"{context}.{kind}")
-        return SccpPayloadEnvelope(kind=kind, value=payload_value)
-
-    @staticmethod
     def _parse_node_sm_capabilities(value: Any, *, context: str) -> NodeSmCapabilities:
         record = ToriiClient._ensure_mapping(value or {}, context)
         enabled = ToriiClient._coerce_bool(record.get("enabled"), f"{context}.enabled")
@@ -12201,7 +10614,7 @@ class ToriiClient:
                 record.get("previous_contract_address"),
                 context=f"{context}.previous_contract_address",
             ),
-            upgraded=bool(record.get("upgraded")),
+            kaizen=bool(record.get("kaizen")),
             dataspace=ToriiClient._coerce_optional_string(
                 record.get("dataspace"),
                 context=f"{context}.dataspace",
@@ -12233,7 +10646,7 @@ class ToriiClient:
         payload: Mapping[str, Any],
         *,
         context: str,
-    ) -> ContractDeployCallReceipt:
+    ) -> ContractDeployHajimariCallReceipt:
         record = ToriiClient._ensure_mapping(payload, context)
         tx_hash_hex_value = record.get("tx_hash_hex")
         tx_hash_hex = None
@@ -12243,7 +10656,7 @@ class ToriiClient:
                 context=f"{context}.tx_hash_hex",
                 expected_length=64,
             )
-        return ContractDeployCallReceipt(
+        return ContractDeployHajimariCallReceipt(
             id=ToriiClient._require_non_empty_string(record.get("id"), f"{context}.id"),
             contract_alias=ToriiClient._coerce_optional_string(
                 record.get("contract_alias"),
@@ -12304,9 +10717,9 @@ class ToriiClient:
             record.get("contracts"),
             context=f"{context}.contracts",
         )
-        init_calls = ToriiClient._ensure_list(
-            record.get("init_calls"),
-            context=f"{context}.init_calls",
+        hajimari_calls = ToriiClient._ensure_list(
+            record.get("hajimari_calls"),
+            context=f"{context}.hajimari_calls",
         )
         assertions = ToriiClient._ensure_list(
             record.get("assertions"),
@@ -12345,15 +10758,15 @@ class ToriiClient:
                 )
                 for index, item in enumerate(contracts)
             ],
-            init_calls=[
+            hajimari_calls=[
                 ToriiClient._parse_contract_deploy_call_receipt(
                     ToriiClient._ensure_mapping(
                         item,
-                        f"{context}.init_calls[{index}]",
+                        f"{context}.hajimari_calls[{index}]",
                     ),
-                    context=f"{context}.init_calls[{index}]",
+                    context=f"{context}.hajimari_calls[{index}]",
                 )
-                for index, item in enumerate(init_calls)
+                for index, item in enumerate(hajimari_calls)
             ],
             assertions=[
                 ToriiClient._parse_contract_deploy_assertion_receipt(
@@ -12382,6 +10795,21 @@ class ToriiClient:
                 context=f"{context}.tx_hash_hex",
                 expected_length=64,
             )
+        entrypoint_hash_hex_value = record.get("entrypoint_hash_hex")
+        entrypoint_hash_hex = None
+        if entrypoint_hash_hex_value is not None:
+            entrypoint_hash_hex = ToriiClient._normalize_hex_string(
+                entrypoint_hash_hex_value,
+                context=f"{context}.entrypoint_hash_hex",
+                expected_length=64,
+            )
+        operation_receipt = ToriiClient._parse_contract_operation_receipt(
+            ToriiClient._ensure_mapping(
+                record.get("operation_receipt"),
+                f"{context}.operation_receipt",
+            ),
+            context=f"{context}.operation_receipt",
+        )
         return ContractCallResponse(
             ok=bool(record.get("ok")),
             submitted=bool(record.get("submitted")),
@@ -12416,6 +10844,11 @@ class ToriiClient:
                 record.get("entrypoint"),
                 context=f"{context}.entrypoint",
             ),
+            transaction_ttl_ms=ToriiClient._coerce_optional_unsigned(
+                record.get("transaction_ttl_ms"),
+                context=f"{context}.transaction_ttl_ms",
+            ),
+            entrypoint_hash_hex=entrypoint_hash_hex,
             transaction_scaffold_b64=ToriiClient._normalize_optional_base64_payload(
                 record.get("transaction_scaffold_b64"),
                 context=f"{context}.transaction_scaffold_b64",
@@ -12427,6 +10860,85 @@ class ToriiClient:
             signing_message_b64=ToriiClient._normalize_optional_base64_payload(
                 record.get("signing_message_b64"),
                 context=f"{context}.signing_message_b64",
+            ),
+            operation_receipt=operation_receipt,
+        )
+
+    @staticmethod
+    def _parse_contract_operation_receipt(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractOperationReceipt:
+        record = ToriiClient._ensure_mapping(payload, context)
+
+        def optional_hash(field: str) -> Optional[str]:
+            value = record.get(field)
+            if value is None:
+                return None
+            return ToriiClient._normalize_hex_string(
+                value,
+                context=f"{context}.{field}",
+                expected_length=64,
+            )
+
+        gas_limit = ToriiClient._coerce_optional_unsigned(
+            record.get("gas_limit"),
+            context=f"{context}.gas_limit",
+        )
+        if gas_limit is not None and gas_limit == 0:
+            raise RuntimeError(f"{context}.gas_limit must be positive")
+
+        return ContractOperationReceipt(
+            operation_kind=ToriiClient._require_non_empty_string(
+                record.get("operation_kind"),
+                f"{context}.operation_kind",
+            ),
+            status=ToriiClient._require_non_empty_string(
+                record.get("status"),
+                f"{context}.status",
+            ),
+            transport=ToriiClient._require_non_empty_string(
+                record.get("transport"),
+                f"{context}.transport",
+            ),
+            dataspace=ToriiClient._require_non_empty_string(
+                record.get("dataspace"),
+                f"{context}.dataspace",
+            ),
+            contract_alias=ToriiClient._coerce_optional_string(
+                record.get("contract_alias"),
+                context=f"{context}.contract_alias",
+            ),
+            contract_address=ToriiClient._coerce_optional_string(
+                record.get("contract_address"),
+                context=f"{context}.contract_address",
+            ),
+            code_hash_hex=optional_hash("code_hash_hex"),
+            abi_hash_hex=optional_hash("abi_hash_hex"),
+            tx_hash_hex=optional_hash("tx_hash_hex"),
+            entrypoint=ToriiClient._coerce_optional_string(
+                record.get("entrypoint"),
+                context=f"{context}.entrypoint",
+            ),
+            entrypoint_hash_hex=optional_hash("entrypoint_hash_hex"),
+            gas_limit=gas_limit,
+            gas_used=ToriiClient._coerce_optional_unsigned(
+                record.get("gas_used"),
+                context=f"{context}.gas_used",
+            ),
+            gas_asset_id=ToriiClient._coerce_optional_string(
+                record.get("gas_asset_id"),
+                context=f"{context}.gas_asset_id",
+            ),
+            fee_sponsor=ToriiClient._coerce_optional_string(
+                record.get("fee_sponsor"),
+                context=f"{context}.fee_sponsor",
+            ),
+            payload_digest_hex=ToriiClient._normalize_hex_string(
+                record.get("payload_digest_hex"),
+                context=f"{context}.payload_digest_hex",
+                expected_length=64,
             ),
         )
 

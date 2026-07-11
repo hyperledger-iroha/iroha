@@ -107,32 +107,25 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 
 ### ISO бүркеншік ат көмекшісі
 
-`recipes/iso_alias.mjs` ISO бүркеншік атының соңғы нүктелеріне бағытталған, осылайша жаттығулар қамтылуы мүмкін.
-соқыр элементтерді хэштеу және арнайы құралдарды жазбай бүркеншік аттарды іздеу. Ол
-қоңыраулар `ToriiClient.evaluateAliasVoprf` плюс `resolveAlias` / `resolveAliasByIndex`
-және серверді, дайджестті, тіркелгіні байланыстыруды, бастапқы және детерминирленген индексті басып шығарады
-Torii арқылы қайтарылды.
+`recipes/iso_alias.mjs` арнайы құралдарды қажет етпей, ISO бүркеншік аттарын іздеуді тексереді.
+Ол `resolveAlias` және `resolveAliasByIndex` әдістерін шақырады, содан кейін Torii қайтарған тіркелгі байланысын, дереккөзді және детерминирленген индексті басып шығарады.
 
 Қоршаған ортаның айнымалылары:
 
 - `TORII_URL` — Torii соңғы нүкте бүркеншік ат көмекшілерін көрсетеді.
-- `ISO_VOPRF_INPUT` — алтылық кодталған соқыр элемент (әдепкі бойынша `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — тек іздеулерді тексеру кезінде VOPRF қоңырауын өткізіп жіберіңіз.
 - `ISO_ALIAS_LABEL` — шешуге арналған әріптік бүркеншік ат (мысалы, IBAN стиліндегі жолдар).
 - `ISO_ALIAS_INDEX` — ондық немесе `0x`-префиксті индекс `resolveAliasByIndex`-қа өтті.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — қорғалған Torii орналастыруларына арналған қосымша тақырыптар.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

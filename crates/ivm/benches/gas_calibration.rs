@@ -8,7 +8,11 @@
 //! Use output to calibrate a target `ns_per_gas` scalar for your baseline CPU and
 //! to tune `ivm_gas_limit_per_block` for a desired block time (e.g., ~200 ms).
 
-use criterion::{BatchSize, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
+use iroha_primitives::{
+    bigint::BigInt,
+    numeric::{Numeric, RoundingMode},
+};
 use ivm::{IVM, encoding, instruction};
 
 // Assemble header + code (mode=0, max_cycles=0, abi=1) — copied from tests/common.rs
@@ -57,6 +61,90 @@ fn bench_instr(c: &mut Criterion, name: &str, instr: u32, reps: usize) {
     group.finish();
 }
 
+fn positive_with_limbs(limbs: usize, low: u8) -> BigInt {
+    let mut bytes = vec![0_u8; limbs * 8];
+    bytes[0] = low;
+    *bytes.last_mut().expect("at least one limb") = 0x3f;
+    BigInt::from_twos_bytes(&bytes).expect("calibration operand fits generic bigint")
+}
+
+fn bench_numeric_limb_work(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ivm-numeric-limb-cal");
+    for limbs in 1_usize..=8 {
+        let lhs = positive_with_limbs(limbs, 0x5b);
+        let rhs = positive_with_limbs(limbs, 0x13);
+        group.bench_with_input(
+            BenchmarkId::new("add", format!("limbs={limbs};work={limbs}")),
+            &limbs,
+            |b, _| {
+                b.iter(|| {
+                    std::hint::black_box(
+                        lhs.checked_add(&rhs).expect("calibration addition fits"),
+                    )
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(
+                "multiply",
+                format!("limbs={limbs};work={}", limbs * limbs),
+            ),
+            &limbs,
+            |b, _| {
+                b.iter(|| {
+                    std::hint::black_box(
+                        lhs.checked_mul(&rhs)
+                            .expect("512-bit inputs fit the generic product domain"),
+                    )
+                });
+            },
+        );
+        let division_work = ivm::numeric_gas::quotient_remainder_work(
+            u64::try_from(limbs).expect("limb count"),
+            u64::try_from(limbs).expect("limb count"),
+        )
+        .expect("bounded division work");
+        group.bench_with_input(
+            BenchmarkId::new(
+                "divide_remainder",
+                format!("limbs={limbs};work={division_work}"),
+            ),
+            &limbs,
+            |b, _| {
+                b.iter(|| {
+                    std::hint::black_box(
+                        lhs.checked_div_rem(&rhs).expect("nonzero calibration divisor"),
+                    )
+                });
+            },
+        );
+    }
+
+    let one: Numeric = "1".parse().expect("decimal one");
+    let seven: Numeric = "7".parse().expect("decimal seven");
+    group.bench_function("decimal_div_round/scale=28", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                one.try_decimal_div_round(&seven, 28, RoundingMode::NearestEven)
+                    .expect("rounded division"),
+            )
+        });
+    });
+    let mut maximum_bytes = vec![0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
+    *maximum_bytes.last_mut().expect("nonempty mantissa") = 0x7f;
+    let maximum = Numeric::new(
+        BigInt::from_twos_bytes(&maximum_bytes).expect("signed maximum"),
+        0,
+    );
+    let scale_28: Numeric = "0.0000000000000000000000000001"
+        .parse()
+        .expect("scale-28 decimal");
+    group.bench_function("decimal_compare/aligned_limbs=10", |b| {
+        b.iter(|| std::hint::black_box(maximum.cmp(&scale_28)));
+    });
+    group.finish();
+}
+
 fn run_benchmarks(c: &mut Criterion) {
     // Wide arithmetic with small register indices (rd=3, rs1=1, rs2=2)
     let add = encoding::wide::encode_rr(instruction::wide::arithmetic::ADD, 3, 1, 2);
@@ -68,6 +156,11 @@ fn run_benchmarks(c: &mut Criterion) {
     bench_instr(c, "ADD", add, reps);
     bench_instr(c, "MUL", mul, reps);
     bench_instr(c, "DIVU", divu, reps);
+
+    // Numeric benchmark IDs pin the logical-work denominator used to compare
+    // backend latency against the consensus factor of four gas per limb-work
+    // unit. Run this on every release baseline; see kotodama_numeric_v1.md.
+    bench_numeric_limb_work(c);
 
     // You can extend with more: logic ops, shifts, branches, loads/stores, vector ops, crypto ops.
 }

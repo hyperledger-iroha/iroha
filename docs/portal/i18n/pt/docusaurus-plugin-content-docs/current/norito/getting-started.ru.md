@@ -16,14 +16,14 @@ Este é um processo de compilação de contrato mínimo Kotodama, provado Verifi
 
 1. Configure o conjunto de ferramentas Rust (1.76 ou novo) e clone este repositório.
 2. Verifique ou baixe os binários:
-   - `koto_compile` - compilador Kotodama, gerador de bateria IVM/Norito
+   - `koto build` - compilador Kotodama, gerador de bateria IVM/Norito
    - `ivm_run` e `ivm_tool` - use verificação e inspeção local
    - `iroha_cli` - usado para a implementação do contrato de trabalho Torii
 
    O repositório Makefile foi instalado em `PATH`. Você pode encontrar artefatos originais ou desmontá-los. Se você compilar o conjunto de ferramentas localmente, use o Makefile para ajudá-lo com o binário:
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Verifique se o Iroha foi usado durante o tempo de execução. Por exemplo, não há necessidade de usar o Torii fornecido no URL do perfil `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,16 +34,15 @@ No repositório há um contrato mínimo "olá mundo" em `examples/hello/hello.ko
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 Bandeiras de sucesso:
 
-- `--abi 1` contrato de atualização na versão 1 da ABI (é possível usar a versão no momento da atualização).
-- `--max-cycles 0` é uma falha negativa; Use um código de segurança para usar ciclos de preenchimento para documentos de conhecimento zero.
+- `ABI V1` contrato de atualização na versão 1 da ABI (é possível usar a versão no momento da atualização).
+- `--max-cycles 1000000` é uma falha negativa; Use um código de segurança para usar ciclos de preenchimento para documentos de conhecimento zero.
 
 ## 2. Prover o artefato Norito (opcional)
 
@@ -70,7 +69,7 @@ O exemplo `hello` é exibido no log e executa o syscall `SET_ACCOUNT_DETAIL`. A 
 Para que você possa usar o contrato, instale-o na CLI. Use uma conta-autorizada, este é um arquivo de registro e um arquivo `.to`, uma carga útil Base64 gratuita:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 O comando отправляет pacote манифеста Norito + байткода через Torii e печатает статус tranзакции. После коммита показанный ответе хэш кода можно использовать для получения манифестов или списка instantes:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Verifique a configuração Torii
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 Ao registrar o banco de dados, você pode usá-lo também, abrindo as instruções e escolhendo a opção de proteção código (por exemplo, digite `iroha_cli ledger transaction submit` ou seu cliente cliente). Claro, esta conta está gerando novos syscalls (`set_account_detail`, `transfer_asset` e etc.).
 
 ## Problema de solução e operação- Use `make examples-run`, isso é feito e iniciado primeiro. Verifique a configuração do `KOTO`/`IVM`, exceto o binário não instalado no `PATH`.
-- Если `koto_compile` отклоняет ABI версию, проверьте, что компилятор e узел нацелены на ABI v1 (запустите `koto_compile --abi` Não há argumentos que possam ser encontrados).
+- Если `koto build` отклоняет ABI версию, проверьте, что компилятор e узел нацелены на ABI v1 (запустите `koto build --help` Não há argumentos que possam ser encontrados).
 - CLI cria chaves em hexadecimal ou Base64. Para o teste, você pode usar um teclado, use `iroha_cli tools crypto keypair`.
 - Ao usar cargas úteis Norito, use o comando `ivm_tool disassemble`, que contém instruções e isolações Kotodama.
 

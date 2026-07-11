@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 
 1. مورچا ٹولچین (1.76 یا نیا) انسٹال کریں اور اس ذخیرے کو کلون کریں۔
 2. سپورٹ بائنریز بنائیں یا ڈاؤن لوڈ کریں:
-   - `koto_compile` - مرتب Kotodama خارج ہونے والا بائیکوڈ IVM/Norito
+   - `koto build` - مرتب Kotodama خارج ہونے والا بائیکوڈ IVM/Norito
    - `ivm_run` اور `ivm_tool` - مقامی عملدرآمد اور معائنہ کی افادیت
    - `iroha_cli` - Torii کے ذریعے معاہدے کی تعیناتی کے لئے استعمال کیا جاتا ہے
 
    ریپوزٹری میک فائل ان بائنریوں کی توقع ہے کہ `PATH` پر۔ آپ پہلے سے تیار کردہ نمونے ڈاؤن لوڈ کرسکتے ہیں یا انہیں ماخذ کوڈ سے مرتب کرسکتے ہیں۔ اگر آپ مقامی طور پر ٹولچین مرتب کرتے ہیں تو ، میک فائل مددگاروں کو بائنریز کی طرف اشارہ کریں:
 
    ```sh
-   KOTO=./target/debug/koto_compile Kotodama=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto Kotodama=./target/debug/ivm_run make examples-run
    ```
 
 3. اس بات کو یقینی بنائیں کہ جب آپ تعیناتی کے مرحلے پر پہنچیں تو Iroha نوڈ چل رہا ہے۔ ذیل کی مثالوں میں یہ فرض کیا گیا ہے کہ Torii `iroha_cli` (`~/.config/iroha/cli.toml`) کے آپ کے پروفائل میں تشکیل شدہ URL پر قابل رسائی ہے۔
@@ -34,16 +34,15 @@ translation_last_reviewed: 2026-02-07
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
 کلیدی اختیارات:
 
-- `--abi 1` معاہدہ ABI ورژن 1 (تحریری وقت میں سپورٹ کرنے والا واحد) پر معاہدہ کرتا ہے۔
-- `--max-cycles 0` حدود کے بغیر عمل درآمد کی درخواست کرتا ہے۔ صفر علم کے ثبوتوں کے لئے سائیکلوں کی بھرتی کو محدود کرنے کے لئے ایک مثبت نمبر قائم کرتا ہے۔
+- `ABI V1` معاہدہ ABI ورژن 1 (تحریری وقت میں سپورٹ کرنے والا واحد) پر معاہدہ کرتا ہے۔
+- `--max-cycles 1000000` حدود کے بغیر عمل درآمد کی درخواست کرتا ہے۔ صفر علم کے ثبوتوں کے لئے سائیکلوں کی بھرتی کو محدود کرنے کے لئے ایک مثبت نمبر قائم کرتا ہے۔
 
 ## 2. نمونہ Norito (اختیاری) کا معائنہ کریں
 
@@ -70,7 +69,7 @@ ivm_run target/examples/hello.to --args '{}'
 جب آپ معاہدے سے خوش ہوں تو ، سی ایل آئی کا استعمال کرتے ہوئے نوڈ پر تعینات کریں۔ اتھارٹی اکاؤنٹ ، اس کی دستخطی کلید ، اور `.to` فائل یا بیس 64 پے لوڈ فراہم کریں:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -79,8 +78,8 @@ iroha_cli app contracts deploy \
 کمانڈ Torii کے لئے ایک مینی فیسٹ بنڈل Norito + بائیک کوڈ بھیجتا ہے اور اس کے نتیجے میں لین دین کی حیثیت دکھاتا ہے۔ ایک بار تصدیق ہونے کے بعد ، جواب میں دکھائے جانے والے کوڈ ہیش کا استعمال ظاہر یا فہرست مثالوں کو بازیافت کرنے کے لئے استعمال کیا جاسکتا ہے:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Torii کے خلاف چلائیںرجسٹرڈ بائیکوڈ کے ساتھ ، آپ اس ہدایت کو بھیج کر اس کی درخواست کرسکتے ہیں جو ذخیرہ شدہ کوڈ کا حوالہ دیتا ہے (جیسے ، `iroha_cli ledger transaction submit` یا آپ کے ایپلی کیشن کلائنٹ کا استعمال کرتے ہوئے)۔ اس بات کو یقینی بنائیں کہ اکاؤنٹ کی اجازت مطلوبہ سیسکلز (`set_account_detail` ، `transfer_asset` ، وغیرہ) کی اجازت دیتی ہے۔
@@ -88,7 +87,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## اشارے اور خرابیوں کا سراغ لگانا
 
 - ایک ہی مرحلے میں مثالوں کو مرتب کرنے اور چلانے کے لئے `make examples-run` استعمال کریں۔ اگر بائنریز `PATH` میں نہیں ہیں تو `KOTO`/`IVM` ماحولیاتی متغیر کو اوور رائٹس کریں۔
-- اگر `koto_compile` ABI ورژن کو مسترد کرتا ہے تو ، چیک کریں کہ مرتب اور نوڈ ABI V1 (Kotodama کو بغیر کسی دلائل کے تعاون کے لئے چلائیں) کی طرف اشارہ کریں)۔
+- اگر `koto build` ABI ورژن کو مسترد کرتا ہے تو ، چیک کریں کہ مرتب اور نوڈ ABI V1 (Kotodama کو بغیر کسی دلائل کے تعاون کے لئے چلائیں) کی طرف اشارہ کریں)۔
 - سی ایل آئی ہیکس یا بیس 64 میں دستخط کرنے والی چابیاں قبول کرتا ہے۔ جانچ کے ل you ، آپ `iroha_cli tools crypto keypair` کے ذریعہ جاری کردہ چابیاں استعمال کرسکتے ہیں۔
 - جب Norito پے لوڈ کو ڈیبگ کرتے ہو تو ، `ivm_tool disassemble` سب کمانڈ Kotodama سورس کوڈ کے نقشے کی ہدایات میں مدد کرتا ہے۔
 

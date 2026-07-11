@@ -16,14 +16,14 @@ Ce projet de contrat de travail miniaturisé comprend le contrat Kotodama, pour 
 
 1. Installez la chaîne d'outils Rust (1.76 ou nouvelle) et clonez ce dépôt.
 2. Sélectionnez ou téléchargez vos fichiers binaires :
-   - `koto_compile` - Compilateur Kotodama, pour générer le code de batterie IVM/Norito
+   - `koto build` - Compilateur Kotodama, pour générer le code de batterie IVM/Norito
    - `ivm_run` et `ivm_tool` - Services locaux d'inspection et d'inspection
    - `iroha_cli` - utilisé pour le déploiement de contrats à partir de Torii
 
    Le dépôt Makefile contient ces fichiers binaires dans `PATH`. Vous pouvez acheter des objets d'art ou les comparer à des objets. Si vous compilez une chaîne d'outils localement, utilisez l'aide de Makefile pour le binaire :
 
    ```sh
-   KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
+   KOTO=./target/debug/koto IVM=./target/debug/ivm_run make examples-run
    ```
 
 3. Assurez-vous d'utiliser le Iroha au moment du déploiement. Nous proposons par exemple que Torii soit téléchargé via l'URL du profil `iroha_cli` (`~/.config/iroha/cli.toml`).
@@ -34,14 +34,13 @@ Dans le référentiel, il y a un contrat mini "hello world" dans `examples/hello
 
 ```sh
 mkdir -p target/examples
-koto_compile examples/hello/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/examples/hello.to
+koto build examples/hello/hello.ko \
+  --max-cycles 1000000 \
+  --out target/examples/hello.to
 ```
 
-Drapeaux clés :- `--abi 1` fixe le contrat pour la version 1 d'ABI (la version disponible est la version actuelle).
-- `--max-cycles 0` запрашивает неограниченное выполнение ; Utilisez un outil simple pour organiser les cycles de remplissage pour les chercheurs à connaissance nulle.
+Drapeaux clés :- `ABI V1` fixe le contrat pour la version 1 d'ABI (la version disponible est la version actuelle).
+- `--max-cycles 1000000` запрашивает неограниченное выполнение ; Utilisez un outil simple pour organiser les cycles de remplissage pour les chercheurs à connaissance nulle.
 
 ## 2. Vérifier l'artéfact Norito (officiellement)
 
@@ -68,7 +67,7 @@ L'exemple `hello` vous permet d'accéder au journal et d'utiliser l'appel systè
 Lorsque vous contractez, vous pouvez l'utiliser en utilisant CLI. Recherchez l'auteur du compte, entre autres, et le fichier `.to`, qui utilise la charge utile Base64 :
 
 ```sh
-iroha_cli app contracts deploy \
+iroha contract deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -77,8 +76,8 @@ iroha_cli app contracts deploy \
 La commande ouvre le manifeste du bundle Norito + le code de batterie correspondant à Torii et indique la transition d'état. Une fois que le comité a décidé d'ouvrir votre code, vous pouvez l'utiliser pour les manifestes ou les installations de surveillance :
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha contract manifest get --code-hash 0x<hash>
+iroha contract instances --namespace apps --table
 ```
 
 ## 5. Запуск через ToriiAprès l'enregistrement du code de navigation, vous pouvez vous y rendre, en suivant les instructions, qui correspondent au code correspondant (par exemple, ici `iroha_cli ledger transaction submit` ou votre offre client). En outre, votre compte déclenche tous les appels système (`set_account_detail`, `transfer_asset` et etc.).
@@ -86,7 +85,7 @@ iroha_cli app contracts instances --namespace apps --table
 ## Problèmes de résolution et d'exploitation
 
 - Utilisez `make examples-run` pour sauvegarder et utiliser les exemples de configuration. Sélectionnez l'option `KOTO`/`IVM` si les fichiers binaires ne sont pas disponibles dans `PATH`.
-- Si `koto_compile` ouvre la version ABI, vérifiez ce que le compilateur et l'utilisation de ABI v1 (installez `koto_compile --abi` sans arguments, чтобы увидеть подддержку).
+- Si `koto build` ouvre la version ABI, vérifiez ce que le compilateur et l'utilisation de ABI v1 (installez `koto build --help` sans arguments, чтобы увидеть подддержку).
 - La CLI permet d'accéder aux clés en hexadécimal ou en Base64. Pour les tests, vous pouvez utiliser les clés `iroha_cli tools crypto keypair`.
 - Lorsque vous utilisez les charges utiles Norito en utilisant la commande `ivm_tool disassemble`, vous pouvez utiliser les instructions relatives aux applications Kotodama.
 

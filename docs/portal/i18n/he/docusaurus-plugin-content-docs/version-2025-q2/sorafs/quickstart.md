@@ -127,3 +127,23 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - **אוטומציה של CI** - הוסף את הפקודות שלמעלה כדי לשחרר צינורות כך שמסמכים,
   מתקנים וחפצים מפרסמים מניפסטים דטרמיניסטיים לצד חתומים
   מטא נתונים.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

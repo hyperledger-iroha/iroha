@@ -43,10 +43,13 @@
 //!    typed Kura receipt, and exact finality artifact together so rollover
 //!    cannot accidentally discard either durability proof.
 //!
-//! TODO: Define the rollover transaction's partial-success type before wiring
-//! the final step: adapter WAL retirement and body-file retirement are two
-//! separately fallible durability mutations and must not be reported as one
-//! reversible operation.
+//! # Finalized rollover cleanup
+//!
+//! Kura receipt/finality validation is the fail-closed commit boundary. After
+//! that boundary, obsolete WAL, body, chunk, and worker resources are retired
+//! on a best-effort basis. [`PostFinalityCleanupOutcome`] retains every typed
+//! cleanup warning in execution order; callers must report the warnings but
+//! must not reinterpret an already durable decision as unfinalized.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -510,6 +513,80 @@ pub(crate) enum CompletionDisposition {
     Deferred,
     /// The work identifier was already completed or belongs to an old owner.
     Stale,
+}
+
+/// Local resource whose retirement failed after Kura-authorized finality.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PostFinalityCleanupTarget {
+    /// Reducer safety WAL for the finalized height.
+    SafetyWal,
+    /// Exact durable body files for the finalized height.
+    DurableBodies,
+    /// Reconstructed payload chunk files for the finalized height.
+    PayloadChunks,
+    /// Ordered I/O worker lifecycle or protocol state.
+    CleanupWorker,
+}
+
+impl PostFinalityCleanupTarget {
+    /// Stable operational label for structured diagnostics.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::SafetyWal => "safety_wal",
+            Self::DurableBodies => "durable_bodies",
+            Self::PayloadChunks => "payload_chunks",
+            Self::CleanupWorker => "cleanup_worker",
+        }
+    }
+}
+
+/// One explicit local-cleanup diagnostic after durable finality.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PostFinalityCleanupWarning {
+    target: PostFinalityCleanupTarget,
+    reason: String,
+}
+
+impl PostFinalityCleanupWarning {
+    /// Resource whose cleanup failed.
+    pub(crate) const fn target(&self) -> PostFinalityCleanupTarget {
+        self.target
+    }
+
+    /// Exact diagnostic returned by the local cleanup operation.
+    pub(crate) fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
+/// Ordered partial-success report for cleanup after Kura-authorized finality.
+///
+/// An empty outcome means all local cleanup completed. Warnings never alter
+/// the finalized block or successor context and are kept in deterministic
+/// cleanup order so operators receive every available diagnostic.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PostFinalityCleanupOutcome {
+    warnings: Vec<PostFinalityCleanupWarning>,
+}
+
+impl PostFinalityCleanupOutcome {
+    /// Record one cleanup warning without discarding earlier diagnostics.
+    pub(crate) fn record(&mut self, target: PostFinalityCleanupTarget, reason: impl Into<String>) {
+        self.warnings.push(PostFinalityCleanupWarning {
+            target,
+            reason: reason.into(),
+        });
+    }
+
+    /// Append a later cleanup stage while preserving execution order.
+    pub(crate) fn append(&mut self, mut later: Self) {
+        self.warnings.append(&mut later.warnings);
+    }
+
+    /// Borrow all retained cleanup diagnostics in execution order.
+    pub(crate) fn warnings(&self) -> &[PostFinalityCleanupWarning] {
+        &self.warnings
+    }
 }
 
 /// Effect-executor construction, contract, durability, or service failure.
@@ -2700,6 +2777,42 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn post_finality_cleanup_accumulates_typed_warnings_in_order() {
+        let mut outcome = PostFinalityCleanupOutcome::default();
+        outcome.record(PostFinalityCleanupTarget::SafetyWal, "WAL directory sync");
+
+        let mut storage_cleanup = PostFinalityCleanupOutcome::default();
+        storage_cleanup.record(
+            PostFinalityCleanupTarget::DurableBodies,
+            "body worker disconnected",
+        );
+        storage_cleanup.record(
+            PostFinalityCleanupTarget::PayloadChunks,
+            "chunk root retained",
+        );
+        outcome.append(storage_cleanup);
+
+        assert_eq!(outcome.warnings().len(), 3);
+        assert_eq!(
+            outcome
+                .warnings()
+                .iter()
+                .map(PostFinalityCleanupWarning::target)
+                .collect::<Vec<_>>(),
+            vec![
+                PostFinalityCleanupTarget::SafetyWal,
+                PostFinalityCleanupTarget::DurableBodies,
+                PostFinalityCleanupTarget::PayloadChunks,
+            ]
+        );
+        assert_eq!(outcome.warnings()[0].reason(), "WAL directory sync");
+        assert_eq!(
+            PostFinalityCleanupTarget::CleanupWorker.as_str(),
+            "cleanup_worker"
+        );
+    }
+
     #[derive(Debug)]
     enum RuntimeCompletion {
         BodyAvailable(EventTag, wire::PayloadManifest),
@@ -3087,6 +3200,7 @@ mod tests {
                 height: 1,
                 epoch: 0,
                 epoch_end_height: 100,
+                next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 roster: roster.clone(),
@@ -4307,7 +4421,7 @@ mod tests {
             fixture.context.clone(),
             fixture.manifest.subject,
             commit,
-            None,
+            vec![vec![0x5C]; fixture.context.roster.len()],
         );
         let receipt = KuraV2CommitReceipt::for_test(&artifact);
         assert_eq!(
@@ -4449,7 +4563,7 @@ mod tests {
             fixture.context.clone(),
             fixture.manifest.subject,
             commit,
-            None,
+            vec![vec![0x5D]; fixture.context.roster.len()],
         );
         artifact.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong block"));
         let receipt = KuraV2CommitReceipt::for_test(&artifact);

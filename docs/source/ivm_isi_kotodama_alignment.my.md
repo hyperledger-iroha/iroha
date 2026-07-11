@@ -49,8 +49,8 @@ bytecode ပစ်မှတ်အပေါ် မှတ်ချက်- Kotodama
 ### Kotodama → IVM
 - Frontend အပိုင်းများ ရှိပါသည် (lexer/parser/minimal semantics/IR/regalloc)။
 - Codegen (`kotodama::compiler`) သည် IVM ops ၏ အခွဲတစ်ခုကို ထုတ်လွှတ်ပြီး ပိုင်ဆိုင်မှုဆိုင်ရာ လုပ်ဆောင်ချက်များအတွက် `SCALL` ကို အသုံးပြုသည်-
-  - `MintAsset` → set x10=account၊ x11=asset၊ x12=&NoritoBytes(Numeric); `SCALL SYSCALL_MINT_ASSET`။
-  - `BurnAsset`/`TransferAsset` အလားတူ (ပမာဏကို NoritoBytes(Numeric) ညွှန်ပြချက်အဖြစ် ကျော်သွားသည်)။
+  - `MintAsset` → set x10=account၊ x11=asset၊ x12=&Amount; `SCALL SYSCALL_MINT_ASSET`။
+  - `BurnAsset`/`TransferAsset` အလားတူ (ပမာဏကို Amount ညွှန်ပြချက်အဖြစ် ကျော်သွားသည်)။
 - `koto_*_demo.rs` ကို အမြန်စမ်းသပ်ရန်အတွက် ID များထံ ပုံဖော်ထားသော ကိန်းပြည့်အညွှန်းများဖြင့် `WsvHost` ကို အသုံးပြုထားသော သရုပ်ပြ။
 
 ---
@@ -130,9 +130,9 @@ bytecode ပစ်မှတ်အပေါ် မှတ်ချက်- Kotodama
 ကိုယ်စားလှယ်အဖွဲ့ခွဲ - လက်ခံဆောင်ရွက်ပေးနေစဉ်အတွင်း အပြီးသတ်ပြီး ချဲ့ထွင်ပါ။- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI မှတ်ပုံတင်ခြင်း
 - SYSCALL_REGISTER_ACCOUNT(id- ptr AccountId) → ISI မှတ်ပုံတင်ခြင်း
 - SYSCALL_REGISTER_ASSET(id- ptr AssetDefinitionId၊ mintable- u8) → ISI မှတ်ပုံတင်ခြင်း
-- SYSCALL_MINT_ASSET(အကောင့်- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr NoritoBytes(Numeric)) → ISI Mint 
-- SYSCALL_BURN_ASSET(အကောင့်- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr NoritoBytes(Numeric)) → ISI Burn 
-- SYSCALL_TRANSFER_ASSET(မှ- ptr AccountId၊ သို့- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr NoritoBytes(Numeric))) → ISI Transfer
+- SYSCALL_MINT_ASSET(အကောင့်- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET(အကောင့်- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(မှ- ptr AccountId၊ သို့- ptr AccountId၊ ပိုင်ဆိုင်မှု- ptr AssetDefinitionId၊ ပမာဏ- ptr Amount)) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (နယ်ပယ်ကိုဖွင့်/ပိတ်၊ တစ်ဦးချင်းထည့်သွင်းမှုများကို `transfer_asset` မှတစ်ဆင့် လျှော့ချသည်)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → စာချုပ်များသည် ကွင်းဆက်ပြင်ပတွင် ထည့်သွင်းထားသောစာရင်းများကို အမှတ်အသားပြုပြီးသောအခါတွင် ကြိုတင်ကုဒ်လုပ်ထားသည့်အသုတ်ကို တင်သွင်းပါ
 - SYSCALL_NFT_MINT_ASSET(id- ptr NftId၊ ပိုင်ရှင်- ptr AccountId) → ISI မှတ်ပုံတင်ခြင်း

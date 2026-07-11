@@ -29,8 +29,13 @@ const REQUIRED_OUTPUTS = [
   "address.js",
   "curveRegistry.js",
   "ivmArtifact.js",
+  "numericV1.js",
   "toriiClient.js",
   "kotodamaCompiler/index.js",
+  "kotodamaCompiler/browser.js",
+  "kotodamaCompiler/client.js",
+  "kotodamaCompiler/nativeBridge.js",
+  "kotodamaCompiler/normalize.js",
 ];
 const STAGING_PREFIX = ".dist-stage-";
 const BACKUP_PREFIX = ".dist-backup-";

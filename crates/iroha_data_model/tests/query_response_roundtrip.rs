@@ -115,12 +115,10 @@ fn da_pin_intent_singular_roundtrip() {
 
 #[test]
 fn iterable_query_response_roundtrips_header_and_json() {
-    let batch = QueryOutputBatchBoxTuple {
-        tuple: vec![QueryOutputBatchBox::String(vec![
-            "alpha".to_owned(),
-            "beta".to_owned(),
-        ])],
-    };
+    let batch = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(vec![
+        "alpha".to_owned(),
+        "beta".to_owned(),
+    ]));
     let cursor = ForwardCursor {
         query: "iterable-query".to_owned(),
         cursor: nonzero!(2u64),
@@ -173,9 +171,7 @@ fn rwa_iterable_query_response_roundtrips_header_and_json() {
         RwaControlPolicy::default(),
         checked_random_account_id(),
     );
-    let batch = QueryOutputBatchBoxTuple {
-        tuple: vec![QueryOutputBatchBox::Rwa(vec![rwa.clone()])],
-    };
+    let batch = QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Rwa(vec![rwa.clone()]));
     let output = QueryOutput {
         batch: batch.clone(),
         remaining_items: Some(0),

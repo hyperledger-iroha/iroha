@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "फ़ंक्शन `{func}` का पैरामीटर `{name}` कभी उपयोग नहीं होता",
     lint_unreachable_after_return: "{context} में अप्राप्य कथन मिला: return के बाद का कोड कभी निष्पादित नहीं होता",
     lint_ok: "ठीक",
-    lint_usage: "उपयोग: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "उपयोग: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "दिए गए स्रोतों पर Kotodama लिंट चलाता है।",
     ..english::MESSAGES
 };

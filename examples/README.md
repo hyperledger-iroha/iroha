@@ -1,63 +1,56 @@
-# Kotodama + IVM Examples
+# Kotodama and IVM examples
 
-This folder contains small, auditable examples of Kotodama source `.ko` and how to compile them to IVM bytecode `.to`, then run with an IVM runner.
+This directory contains small strict-V1 Kotodama sources (`.ko`). The unified
+`koto` driver checks them and builds canonical IVM artifacts (`.to`).
 
-Note: This repository may not include the `koto_compile` or `ivm_run` binaries. The commands below are a doc-test style walkthrough you can run locally if you have those binaries on your PATH. If not present, see the ignored integration test at `integration_tests/tests/kotodama_examples.rs` which auto-skips.
-
-Quick start (doc-test style, safe to copy/paste)
+## Check and build
 
 ```sh
-# Compile Kotodama to IVM bytecode (.to)
-koto_compile examples/hello/hello.ko -o target/examples/hello.to --abi 1 --max-cycles 0
-# Lint runs automatically; add --no-lint to skip or --deny-lint-warnings to fail on warnings.
+koto check examples/hello/hello.ko
+koto build examples/hello/hello.ko \
+  --out target/examples/hello.to \
+  --max-cycles 1000000
 
-# Inspect header (optional)
-ivm_tool inspect target/examples/hello.to
-
-# Run on the IVM (starts from the artifact's default entrypoint)
-ivm_run target/examples/hello.to --args '{}'
-
-# Transfer example (if your runtime host supports it)
-koto_compile examples/transfer/transfer.ko -o target/examples/transfer.to --abi 1
-ivm_run target/examples/transfer.to --args '{}'
+koto check examples/transfer/transfer.ko examples/nft/nft.ko
+koto build examples/transfer/transfer.ko examples/nft/nft.ko
 ```
 
-Expected output
-- An info log like: `Hello from Kotodama`.
-- A successful `SET_ACCOUNT_DETAIL` syscall with the current authority as the account, writing a small JSON blob.
-- For transfer: a successful `TRANSFER_ASSET` syscall (depends on host permissions/state).
+Without `--out`, artifacts and hash-keyed sidecars are published under
+`target/kotodama/<profile>/`. Unchanged inputs are reported as `fresh` and do
+not rewrite outputs.
 
-Raw `ivm_run` and `iroha transaction ivm` execution start from a single compiled
-default entrypoint. In `hello/hello.ko`, that entrypoint is `main`, which logs
-the greeting and then calls `write_detail()`.
+Use the Iroha CLI for a local named-entrypoint check:
 
-Files
-- `hello/hello.ko`: Minimal contract whose raw-IVM `main()` entrypoint logs a greeting and calls `write_detail()`.
-- `transfer/transfer.ko`: Example that calls `transfer_asset(...)` using typed pointer constructors.
-- `nft/nft.ko`: Examples that call `nft_mint_asset(...)` and `nft_transfer_asset(...)`.
-- `crates/kotodama_lang/src/samples/native_escrow.ko`: Native escrow wrapper that calls the ledger-managed escrow ISIs instead of using a contract escrow account.
-- `map/map.ko`: Design example showing deterministic map iteration using `.take(n)`; compile/run may depend on compiler/runtime support.
-
-Docs
-- See `docs/source/kotodama_examples.md` for the syscall mappings and a design example of deterministic map iteration with bounds.
-- Rust snippets in the docs (wide opcode helpers, lowering examples) describe compiler internals and are not valid Kotodama `.ko` source.
-
-Sample `ivm_tool inspect` output (illustrative)
-
+```sh
+iroha --config defaults/client.toml \
+  app contracts debug-call \
+  --code-file target/examples/hello.to \
+  --source-file examples/hello/hello.ko \
+  --entrypoint main \
+  --payload-json '{}'
 ```
-Artifact: target/examples/hello.to
-Header:
-  magic:      IVM\0
-  version:    1.0
-  abi_version: 1
-  feature_bits: ZK=off, VECTOR=off
-  vector_len:  0
-  max_cycles:  0
-Sections:
-  code_size:   312 bytes
-  data_size:   128 bytes (Norito TLVs)
-Entry points:
-  main
-  hajimari
-  write_detail
-```
+
+Kotodama V1 has no implicit entrypoint or source-order dispatch. Always select
+the public `kotoage fn`/`言挙げ fn` or `view fn` by name. The local debugger reports gas,
+cycles, syscalls, queued instructions, durable-state changes, and source-aware
+traps.
+
+## Files
+
+- `hello/hello.ko` logs a greeting and calls
+  `ledger::account::set_detail` for `context::authority()`.
+- `transfer/transfer.ko` uses typed pointer constructors and
+  `ledger::asset::transfer`.
+- `nft/nft.ko` uses `ledger::nft::mint` and `ledger::nft::transfer`.
+- `map/map.ko` demonstrates compiler-bounded durable map iteration.
+- `crates/kotodama_lang/src/samples/native_escrow.ko` wraps ledger-managed
+  escrow operations instead of relying on a contract-controlled account.
+
+The source language cannot select ABI/vector metadata, allocate raw host
+memory, invoke direct syscall variants, or submit opaque instruction bytes. ABI
+v1 is unconditional, and the selected cycle ceiling is embedded in the hashed
+artifact header.
+
+See `docs/source/kotodama_grammar.md` for the normative language and
+`docs/source/kotodama_examples.md` for compile-checked examples and security
+boundaries.

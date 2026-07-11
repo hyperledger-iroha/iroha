@@ -22,10 +22,10 @@ slug: /norito/início rápido
 
 - [Docker](https://docs.docker.com/engine/install/) جس میں Compose V2 فعال ہو (اسے `defaults/docker-compose.single.yml` میں متعین sample peer شروع کرنے کے لئے استعمال کیا جاتا ہے).
 - Cadeia de ferramentas Rust (1.76+) تاکہ binários auxiliares
-- `koto_compile`, `ivm_run`, e `iroha_cli` binários۔ آپ انہیں checkout do espaço de trabalho سے نیچے دکھائے گئے طریقے کے مطابق بنا سکتے ہیں یا artefatos de lançamento correspondentes ڈاؤن لوڈ O que fazer:
+- `koto build`, `ivm_run`, e `iroha_cli` binários۔ آپ انہیں checkout do espaço de trabalho سے نیچے دکھائے گئے طریقے کے مطابق بنا سکتے ہیں یا artefatos de lançamento correspondentes ڈاؤن لوڈ O que fazer:
 
 ```sh
-cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --locked --path crates/ivm --bin koto --bin ivm_run
 cargo install --locked --path crates/iroha_cli --bin iroha
 ```
 
@@ -49,22 +49,22 @@ O valor mínimo de Kotodama é o valor mínimo de Kotodama:
 ```sh
 mkdir -p target/quickstart
 cat > target/quickstart/hello.ko <<'KO'
-// Writes a deterministic account detail for the transaction authority.
-
 seiyaku Hello {
-  // Optional initializer invoked during deployment.
-  hajimari() {
-    info("Hello from Kotodama");
-  }
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
 
-  // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
-    set_account_detail(
-      authority(),
-      name!("example"),
-      json!{ hello: "world" }
-    );
-  }
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
 }
 KO
 ```
@@ -76,15 +76,14 @@ KO
 کنٹریکٹ کو IVM/Norito bytecode (`.to`) میں کمپائل کریں اور اسے مقامی طور پر چلائیں تاکہ نیٹ ورک کو چھونے سے پہلے host syscalls کی کامیابی کی تصدیق ہو:
 
 ```sh
-koto_compile target/quickstart/hello.ko \
-  --abi 1 \
-  --max-cycles 0 \
-  -o target/quickstart/hello.to
+koto build target/quickstart/hello.ko \
+  --max-cycles 1000000 \
+  --out target/quickstart/hello.to
 
 ivm_run target/quickstart/hello.to --args '{}'
 ```
 
-O Runner `info("Hello from Kotodama")` é um host zombado e um host zombado `SET_ACCOUNT_DETAIL` syscall é um host zombado اگر اختیاری `ivm_tool` binário دستیاب ہو تو `ivm_tool inspect target/quickstart/hello.to` cabeçalho ABI, bits de recursos e pontos de entrada exportados دکھاتا ہے۔
+O Runner `debug::info("Hello from Kotodama")` é um host zombado e um host zombado `SET_ACCOUNT_DETAIL` syscall é um host zombado اگر اختیاری `ivm_tool` binário دستیاب ہو تو `ivm_tool inspect target/quickstart/hello.to` cabeçalho ABI, bits de recursos e pontos de entrada exportados دکھاتا ہے۔
 
 ## 4. Torii کے ذریعے bytecode بھیجیں
 

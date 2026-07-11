@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - Существуют части внешнего интерфейса (лексер/парсер/минимальная семантика/IR/regalloc).
 - Codegen (`kotodama::compiler`) генерирует подмножество операций IVM и использует `SCALL` для операций с активами:
-  - `MintAsset` → установить x10=учетная запись, x11=актив, x12=&NoritoBytes(Numeric); `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` аналогично (количество передается как указатель NoritoBytes (числовой)).
+  - `MintAsset` → установить x10=учетная запись, x11=актив, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` аналогично (количество передается как указатель Amount).
 - Демонстрации `koto_*_demo.rs` демонстрируют использование `WsvHost` с целочисленными индексами, сопоставленными с идентификаторами для быстрого тестирования.
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 Репрезентативное подмножество — доработать и расширить во время реализации хоста.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI Register
 - SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI Register
 - SYSCALL_REGISTER_ASSET (id: ptr AssetDefinitionId, mintable: u8) → ISI Register
-- SYSCALL_MINT_ASSET(учетная запись: ptr AccountId, актив: ptr AssetDefinitionId, сумма: ptr NoritoBytes(Numeric)) → ISI Mint
-- SYSCALL_BURN_ASSET (учетная запись: ptr AccountId, актив: ptr AssetDefinitionId, сумма: ptr NoritoBytes (Numeric)) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(от: ptr AccountId, до: ptr AccountId, актив: ptr AssetDefinitionId, сумма: ptr NoritoBytes(Numeric)) → ISI Transfer
+- SYSCALL_MINT_ASSET(учетная запись: ptr AccountId, актив: ptr AssetDefinitionId, сумма: ptr Amount) → ISI Mint
+- SYSCALL_BURN_ASSET (учетная запись: ptr AccountId, актив: ptr AssetDefinitionId, сумма: ptr Amount) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(от: ptr AccountId, до: ptr AccountId, актив: ptr AssetDefinitionId, сумма: ptr Amount) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (открытие/закрытие области; отдельные записи понижаются через `transfer_asset`)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Отправьте предварительно закодированный пакет, когда контракты уже сериализовали записи вне цепочки.
 - SYSCALL_NFT_MINT_ASSET (идентификатор: ptr NftId, владелец: ptr AccountId) → ISI Register

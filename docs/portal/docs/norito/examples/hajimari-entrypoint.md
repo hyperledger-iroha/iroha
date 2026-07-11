@@ -2,18 +2,18 @@
 
 ---
 slug: /norito/examples/hajimari-entrypoint
-title: Hajimari entrypoint skeleton
-description: Minimal Kotodama contract scaffold with a single public entrypoint and state handle.
+title: Hajimari skeleton
+description: Minimal strict-V1 Kotodama contract scaffold with a dedicated hajimari lifecycle declaration.
 source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
-Minimal Kotodama contract scaffold with a single public entrypoint and state handle.
+Minimal strict-V1 Kotodama contract scaffold with a dedicated hajimari lifecycle declaration.
 
 ## Ledger walkthrough
 
-- Compile the contract with `koto_compile --abi 1` as shown in [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) or via `cargo test -p ivm developer_portal_norito_snippets_compile`.
-- Smoke-test the bytecode locally with `ivm_run` / `developer_portal_norito_snippets_run` to verify the `info!` log and initial syscall before touching a node.
-- Deploy the artifact through `iroha app contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha).
+- Check and compile the contract with `koto check` and `koto build` as shown in [Norito Getting Started](/norito/getting-started#1-check-and-build-a-kotodama-contract), or run `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- Use `iroha contract debug-call` or `developer_portal_norito_snippets_run` for a local runtime check before touching a node.
+- Deploy the artifact through `iroha contract deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha).
 
 ## Related SDK guides
 
@@ -23,11 +23,11 @@ Minimal Kotodama contract scaffold with a single public entrypoint and state han
 
 [Download the Kotodama source](/norito-snippets/hajimari-entrypoint.ko)
 
-```text
-// Minimal initializer-style function inside a contract.
-seiyaku HajimariExample {
-  hajimari() {
-    info("Hello from hajimari");
-  }
+```kotodama
+// Canonical 始まり declaration.
+誓約 HajimariExample {
+    始まり() {
+        debug::info("Hello from hajimari");
+    }
 }
 ```

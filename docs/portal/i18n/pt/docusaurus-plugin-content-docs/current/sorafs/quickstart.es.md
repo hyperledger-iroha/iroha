@@ -125,3 +125,23 @@ quando a carga reconstruída for desviada da manifestação.
 - **Automatização de CI** – adiciona comandos anteriores aos pipelines de lançamento para que
   a documentação, luminárias e artefatos públicos manifestam deterministas junto com
   metadados firmados.
+
+```kotodama
+seiyaku Hello {
+    hajimari() {
+        debug::info("Hello from hajimari");
+    }
+
+    kotoage fn write_detail() authorize("Admin") {
+        ledger::account::set_detail(
+            account: context::authority(),
+            key: Name::parse("example"),
+            value: Json::parse("{\"hello\":\"world\"}"),
+        );
+    }
+
+    view fn healthy() -> bool {
+        return true;
+    }
+}
+```

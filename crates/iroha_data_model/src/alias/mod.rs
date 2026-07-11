@@ -1,10 +1,8 @@
 //! Alias resolution data structures.
 //!
 //! This module currently provides data model primitives for alias records,
-//! attestation tracking, and Merkle snapshot bookkeeping. The cryptographic
-//! plumbing (VOPRF evaluation, STARK proofs, etc.) is intentionally left as a
-//! follow-up; the data model intentionally leaves cryptographic wiring for a
-//! subsequent integration tracked in the alias roadmap.
+//! attestation tracking, and Merkle snapshot bookkeeping. Iroha v1 does not
+//! define or expose an OPRF/VOPRF protocol for alias lookup.
 
 use std::vec::Vec;
 

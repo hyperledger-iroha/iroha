@@ -28,7 +28,7 @@ description: תוכנית תפעולית להעלאת אשכול הוולידט�
 ## סביבות רשת
 - להפעיל שתי סביבות Nexus עם prefixes שונים:
 - **Sora Nexus (mainnet)** - prefix רשת הפקה `nexus`, מארח ממשל קנוני ושירותי piggyback של SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefix רשת staging `testus`, המשקף את תצורת mainnet לצורך בדיקות אינטגרציה ואימות pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - prefix רשת staging `testus`, המשקף את תצורת mainnet לצורך בדיקות אינטגרציה ואימות pre-release (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - לשמור על קבצי genesis, מפתחות ממשל וטביעות תשתית נפרדות לכל סביבה. Testus משמשת כקרקע בדיקה לכל rollouts של SoraFS/SoraNet לפני קידום ל-Nexus.
 - pipelines של CI/CD צריכים לפרוס תחילה ל-Testus, להריץ smoke tests אוטומטיים, ולדרוש קידום ידני ל-Nexus לאחר שהבדיקות עברו.
 - חבילות תצורה רפרנסיות נמצאות תחת `configs/soranexus/nexus/` (mainnet) ו-`configs/soranexus/testus/` (testnet), וכל אחת כוללת `config.toml`, `genesis.json` ותיקיות admission של Torii.

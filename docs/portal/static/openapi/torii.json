@@ -436,40 +436,6 @@
         ],
         "type": "object"
       },
-      "AliasVoprfEvaluateRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "blinded_element_hex": {
-            "description": "Hex-encoded blinded element to evaluate.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "blinded_element_hex"
-        ],
-        "type": "object"
-      },
-      "AliasVoprfEvaluateResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "backend": {
-            "description": "Name of the evaluator implementation.",
-            "enum": [
-              "blake2b512-mock"
-            ],
-            "type": "string"
-          },
-          "evaluated_element_hex": {
-            "description": "Hex-encoded evaluated element.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "evaluated_element_hex",
-          "backend"
-        ],
-        "type": "object"
-      },
       "ApiVersionInfo": {
         "additionalProperties": false,
         "properties": {
@@ -7338,59 +7304,6 @@
           "Aliases"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/aliases/voprf/evaluate": {
-      "post": {
-        "description": "Takes a blinded alias element (hex) and returns the deterministically evaluated mock response used by tooling.",
-        "operationId": "aliasVoprfEvaluate",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AliasVoprfEvaluateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AliasVoprfEvaluateResponse"
-                }
-              }
-            },
-            "description": "Blinded element successfully evaluated."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Malformed request (invalid hex encoding)."
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Internal server error."
-          }
-        },
-        "summary": "Evaluate the mock alias VOPRF helper.",
-        "tags": [
-          "Aliases"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/api/version": {

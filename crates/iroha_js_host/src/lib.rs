@@ -101,7 +101,6 @@ use iroha_data_model::{
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
         Unregister, UnregisterBox,
-        bridge::{RemoveSccpRouteManifest, UpsertSccpRouteManifest},
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -170,29 +169,6 @@ use iroha_primitives::{
         GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
         derive_gateway_hosts_with_profile,
     },
-};
-use iroha_sccp::{
-    NexusSccpMessageProofV1, SccpSourceAdapterEngineDeploymentV1, SccpSourceConsensusProofV1,
-    SccpSourceVerifierMaterialV1,
-    build_sccp_source_adapter_verification_proof_with_material_and_deployment,
-    build_sccp_source_verifier_evidence_with_material_and_deployment, canonical_sccp_payload_bytes,
-    decode_sccp_source_chain_proof_envelope, decode_sccp_source_consensus_proof,
-    merkle_root_from_commitment, payload_hash, sccp_message_id, sccp_message_kind,
-    sccp_message_source_domain, sccp_message_target_domain,
-    sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment,
-    sccp_source_adapter_engine_deployment_hash,
-    sccp_source_adapter_ready_with_material_and_deployment_for_domain,
-    sccp_source_chain_proof_adapter_deployment_match_diagnostics,
-    sccp_source_chain_proof_adapter_verifier_commitment, sccp_source_chain_proof_envelope_hash,
-    sccp_source_chain_proof_matches_adapter_deployment,
-    sccp_source_chain_proof_source_event_binds_to_bundle_with_material,
-    sccp_source_verifier_evidence_hash, sccp_ton_full_light_client_gate_hash_from_deployment_v1,
-    taira_bsc_xor_transfer_source_event_digest_with_material,
-    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment,
-    verify_message_bundle_structure_with_source_verifier_material_and_deployment,
-    verify_sccp_payload_structure,
-    verify_sccp_source_chain_proof_binding_with_material_and_deployment,
-    verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment,
 };
 use kaigi_zk::{
     KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
@@ -295,6 +271,106 @@ fn ensure_packed_struct_disabled() {
     INIT.call_once(|| {});
 }
 
+const MAX_KOTODAMA_SOURCE_NAME_BYTES: usize = 4096;
+
+/// Bounded canonical Kotodama compiler request accepted by the Node binding.
+#[napi(object)]
+pub struct JsKotodamaCompileRequest {
+    /// Complete deployable Kotodama source.
+    pub source: String,
+    /// Optional logical source path preserved in diagnostics and sidecars.
+    pub source_name: Option<String>,
+    /// Whether to compile with the canonical ZK contract policy.
+    pub zk: bool,
+}
+
+/// Compile Kotodama with the canonical Rust compiler without blocking the Node event loop.
+#[napi(js_name = "compileKotodama")]
+pub async fn compile_kotodama(
+    request: JsKotodamaCompileRequest,
+) -> napi::Result<JsKotodamaCompileResult> {
+    tokio::task::spawn_blocking(move || compile_kotodama_request(&request))
+        .await
+        .map_err(|err| napi::Error::from_reason(format!("Kotodama compiler task failed: {err}")))?
+        .map_err(napi::Error::from_reason)
+}
+
+fn validate_kotodama_source_name(source_name: Option<&str>) -> Result<(), String> {
+    let Some(source_name) = source_name else {
+        return Ok(());
+    };
+    if source_name.is_empty() {
+        return Err("Kotodama sourceName must not be empty".to_owned());
+    }
+    if source_name.len() > MAX_KOTODAMA_SOURCE_NAME_BYTES {
+        return Err(format!(
+            "Kotodama sourceName exceeds the {MAX_KOTODAMA_SOURCE_NAME_BYTES}-byte limit"
+        ));
+    }
+    if source_name.chars().any(char::is_control) {
+        return Err("Kotodama sourceName must not contain control characters".to_owned());
+    }
+    Ok(())
+}
+
+fn compile_kotodama_request(
+    request: &JsKotodamaCompileRequest,
+) -> Result<JsKotodamaCompileResult, String> {
+    validate_kotodama_source_name(request.source_name.as_deref())?;
+    let session =
+        kotodama_lang::session::CompilerSession::new(kotodama_lang::compiler::CompilerOptions {
+            force_zk: request.zk,
+            ..kotodama_lang::compiler::CompilerOptions::default()
+        });
+    let output = match session.build(kotodama_lang::session::CompileRequest {
+        source: &request.source,
+        source_name: request.source_name.as_deref(),
+    }) {
+        Ok(output) => output,
+        Err(diagnostics) => {
+            let diagnostics_json = diagnostics
+                .render_json()
+                .map_err(|err| format!("encode Kotodama diagnostics: {err}"))?;
+            return Ok(JsKotodamaCompileResult {
+                ok: false,
+                output: None,
+                diagnostics_json: Some(diagnostics_json),
+            });
+        }
+    };
+    let source_map_json = output
+        .report
+        .render_source_map_json()
+        .map_err(|err| format!("encode Kotodama source map: {err}"))?;
+    let budget_report_json = output
+        .report
+        .render_budget_json()
+        .map_err(|err| format!("encode Kotodama budget report: {err}"))?;
+    let artifact = output.artifact;
+    let manifest = output.manifest;
+
+    let manifest_json = norito::json::to_json(&manifest)
+        .map_err(|err| format!("encode Kotodama manifest: {err}"))?;
+    let code_hash = manifest
+        .code_hash
+        .ok_or_else(|| "Kotodama manifest is missing code_hash".to_owned())?;
+    let abi_hash = manifest
+        .abi_hash
+        .ok_or_else(|| "Kotodama manifest is missing abi_hash".to_owned())?;
+    Ok(JsKotodamaCompileResult {
+        ok: true,
+        output: Some(JsKotodamaCompileOutput {
+            artifact_bytes: artifact.into(),
+            manifest_json,
+            code_hash: code_hash.to_string(),
+            abi_hash: abi_hash.to_string(),
+            source_map_json,
+            budget_report_json,
+        }),
+        diagnostics_json: None,
+    })
+}
+
 /// Ed25519 key pair returned to JavaScript.
 #[napi(object)]
 pub struct JsKeyPair {
@@ -306,6 +382,38 @@ pub struct JsKeyPair {
     pub private_key: Buffer,
     /// Optional distinguishing identifier for algorithms that require it (SM2).
     pub distid: Option<String>,
+}
+
+/// Canonical Kotodama compilation result envelope returned by the Rust compiler.
+///
+/// Source errors are data, not rejected JavaScript promises. Exactly one of
+/// `output` and `diagnostics_json` is present according to `ok`; rejected
+/// promises are reserved for task or serialization failures in the binding.
+#[napi(object)]
+pub struct JsKotodamaCompileResult {
+    /// Whether canonical compilation succeeded.
+    pub ok: bool,
+    /// Successful deployable output.
+    pub output: Option<JsKotodamaCompileOutput>,
+    /// Canonical Norito JSON diagnostic array on compilation failure.
+    pub diagnostics_json: Option<String>,
+}
+
+/// Successful canonical Kotodama compilation output returned by the Rust compiler.
+#[napi(object)]
+pub struct JsKotodamaCompileOutput {
+    /// Complete deployable `.to` artifact.
+    pub artifact_bytes: Buffer,
+    /// Canonical Norito JSON representation of the embedded manifest.
+    pub manifest_json: String,
+    /// Domain-separated full-artifact code hash.
+    pub code_hash: String,
+    /// ABI policy hash.
+    pub abi_hash: String,
+    /// Canonical source-map sidecar, bound to `code_hash`.
+    pub source_map_json: String,
+    /// Canonical compiler-budget sidecar, bound to `code_hash`.
+    pub budget_report_json: String,
 }
 
 /// Confidential key hierarchy returned to JavaScript callers.
@@ -665,374 +773,6 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
 pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     let digest = blake3_hash(payload.as_ref());
     Ok(Buffer::from(digest.as_bytes().to_vec()))
-}
-
-fn sccp_json_value_from_payload(raw: &str, context: &str) -> napi::Result<json::Value> {
-    json::from_json(raw).map_err(|err| norito_to_napi(format!("{context}: {err}")))
-}
-
-fn strip_sccp_message_bundle_json_aliases(value: &mut json::Value) {
-    if let json::Value::Object(fields) = value {
-        fields.remove("finalityProof");
-    }
-}
-
-fn sccp_message_bundle_value(mut value: json::Value) -> json::Value {
-    if let json::Value::Object(fields) = &mut value {
-        let maybe_nested = fields
-            .remove("messageBundle")
-            .or_else(|| fields.remove("message_bundle"));
-        if let Some(mut nested) = maybe_nested {
-            strip_sccp_message_bundle_json_aliases(&mut nested);
-            return nested;
-        }
-    }
-    strip_sccp_message_bundle_json_aliases(&mut value);
-    value
-}
-
-fn normalize_sccp_source_material_empty_defaults(value: &mut json::Value) {
-    const ZERO_HEX32: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
-
-    let json::Value::Object(fields) = value else {
-        return;
-    };
-
-    for (key, field_value) in fields {
-        let json::Value::String(raw) = field_value else {
-            continue;
-        };
-        if !raw.is_empty() {
-            continue;
-        }
-
-        if key.ends_with("_hash") || key.ends_with("_network_id") {
-            ZERO_HEX32.clone_into(raw);
-        } else if key.ends_with("_address") {
-            "0x".clone_into(raw);
-        }
-    }
-}
-
-fn parse_sccp_message_bundle_json(raw: &str) -> napi::Result<NexusSccpMessageProofV1> {
-    let value = sccp_message_bundle_value(sccp_json_value_from_payload(
-        raw,
-        "parse SCCP message bundle JSON",
-    )?);
-    json::from_value(value)
-        .map_err(|err| norito_to_napi(format!("decode SCCP message bundle: {err}")))
-}
-
-fn parse_sccp_source_verifier_material_json(
-    raw: &str,
-) -> napi::Result<SccpSourceVerifierMaterialV1> {
-    let mut value = sccp_json_value_from_payload(raw, "parse SCCP source verifier material JSON")?;
-    normalize_sccp_source_material_empty_defaults(&mut value);
-    json::from_value(value)
-        .map_err(|err| norito_to_napi(format!("decode SCCP source verifier material: {err}")))
-}
-
-fn parse_sccp_source_adapter_deployment_json(
-    raw: &str,
-) -> napi::Result<SccpSourceAdapterEngineDeploymentV1> {
-    let mut value = sccp_json_value_from_payload(raw, "parse SCCP source adapter deployment JSON")?;
-    normalize_sccp_source_material_empty_defaults(&mut value);
-    json::from_value(value)
-        .map_err(|err| norito_to_napi(format!("decode SCCP source adapter deployment: {err}")))
-}
-
-fn hex_0x_lower(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
-}
-
-fn hex_0x_lower_opt(bytes: Option<[u8; 32]>) -> String {
-    bytes.map_or_else(|| "none".to_owned(), |value| hex_0x_lower(&value))
-}
-
-/// Derive the TON full light-client gate hash for source verifier material and deployment JSON.
-#[napi(js_name = "sccpTonFullLightClientGateHash")]
-#[allow(clippy::needless_pass_by_value)]
-pub fn sccp_ton_full_light_client_gate_hash(
-    source_material_json: String,
-    source_deployment_json: String,
-) -> napi::Result<String> {
-    let material = parse_sccp_source_verifier_material_json(&source_material_json)?;
-    let deployment = parse_sccp_source_adapter_deployment_json(&source_deployment_json)?;
-    sccp_ton_full_light_client_gate_hash_from_deployment_v1(&material, &deployment)
-        .map(|hash| hex_0x_lower(&hash))
-        .ok_or_else(|| norito_to_napi("derive TON full light-client gate hash"))
-}
-
-/// Rebuild a BSC-source SCCP message bundle with deployment-bound source proof material.
-#[napi(js_name = "sccpRebuildMessageBundleSourceProofWithDeployment")]
-#[allow(clippy::needless_pass_by_value)]
-pub fn sccp_rebuild_message_bundle_source_proof_with_deployment(
-    message_bundle_json: String,
-    source_material_json: String,
-    source_deployment_json: String,
-) -> napi::Result<String> {
-    let mut bundle = parse_sccp_message_bundle_json(&message_bundle_json)?;
-    let material = parse_sccp_source_verifier_material_json(&source_material_json)?;
-    let deployment = parse_sccp_source_adapter_deployment_json(&source_deployment_json)?;
-
-    let mut source_proof = decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)
-        .ok_or_else(|| norito_to_napi("decode SCCP source-chain proof envelope"))?;
-    if source_proof.source_domain != material.source_domain
-        || source_proof.source_domain != deployment.source_domain
-        || source_proof.target_domain != deployment.target_domain
-        || source_proof.source_domain == source_proof.target_domain
-        || source_proof.target_domain != 0
-    {
-        return Err(norito_to_napi(format!(
-            "SCCP source proof domains do not match supplied deployment material: \
-             proof_source_domain={} material_source_domain={} deployment_source_domain={} \
-             proof_target_domain={} deployment_target_domain={}",
-            source_proof.source_domain,
-            material.source_domain,
-            deployment.source_domain,
-            source_proof.target_domain,
-            deployment.target_domain,
-        )));
-    }
-    let consensus = decode_sccp_source_consensus_proof(&source_proof.consensus_proof)
-        .ok_or_else(|| norito_to_napi("decode SCCP source consensus proof"))?;
-    let verifier_evidence = build_sccp_source_verifier_evidence_with_material_and_deployment(
-        &source_proof,
-        &consensus.adapter_proof,
-        consensus.adapter_transcript_hash,
-        &material,
-        &deployment,
-    )
-    .ok_or_else(|| norito_to_napi("build deployment-bound SCCP source verifier evidence"))?;
-    let adapter_verification_proof =
-        build_sccp_source_adapter_verification_proof_with_material_and_deployment(
-            &source_proof,
-            &consensus.adapter_proof,
-            consensus.adapter_transcript_hash,
-            &material,
-            &deployment,
-        )
-        .ok_or_else(|| {
-            norito_to_napi("build deployment-bound SCCP source adapter verification proof")
-        })?;
-    let verifier_evidence_hash = sccp_source_verifier_evidence_hash(&verifier_evidence);
-    let evidence_source_deployment_hash = verifier_evidence.source_adapter_deployment_hash;
-    let evidence_source_deployment_receipt_hash =
-        verifier_evidence.source_adapter_deployment_receipt_hash;
-    let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&deployment);
-    let rebuilt_consensus = SccpSourceConsensusProofV1 {
-        verifier_evidence,
-        adapter_verification_proof,
-        ..consensus
-    };
-    source_proof.consensus_proof = norito::to_bytes(&rebuilt_consensus)
-        .map_err(|err| norito_to_napi(format!("encode SCCP source consensus proof: {err}")))?;
-    bundle.finality_proof = norito::to_bytes(&source_proof)
-        .map_err(|err| norito_to_napi(format!("encode SCCP source-chain proof envelope: {err}")))?;
-
-    if !verify_message_bundle_structure_with_source_verifier_material_and_deployment(
-        &bundle,
-        &material,
-        &deployment,
-    ) {
-        let proof_adapter_vk_hash =
-            sccp_source_chain_proof_adapter_verifier_commitment(&source_proof);
-        let payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
-        let expected_message_id = sccp_message_id(&bundle.payload);
-        let expected_payload_hash = payload_hash(&payload_bytes);
-        let expected_commitment_root =
-            merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
-        let expected_kind = sccp_message_kind(&bundle.payload);
-        let source_domain = sccp_message_source_domain(&bundle.payload);
-        let target_domain = sccp_message_target_domain(&bundle.payload);
-        let payload_structure = verify_sccp_payload_structure(&bundle.payload);
-        let route_event_digest =
-            taira_bsc_xor_transfer_source_event_digest_with_material(&bundle, &material);
-        let source_event_binds = sccp_source_chain_proof_source_event_binds_to_bundle_with_material(
-            &source_proof,
-            &bundle,
-            &material,
-        );
-        let source_proof_binding =
-            verify_sccp_source_chain_proof_binding_with_material_and_deployment(
-                &source_proof,
-                &bundle,
-                source_domain,
-                target_domain,
-                &material,
-                &deployment,
-            );
-        let public_inputs_ready =
-            sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
-                &bundle,
-                &material,
-                &deployment,
-            )
-            .is_some();
-        return Err(norito_to_napi(format!(
-            "rebuilt SCCP message bundle does not verify against supplied deployment material: \
-             proof_structure={} matches_deployment={} adapter_ready={} \
-             payload_structure={} public_inputs_ready={} \
-             route_event_digest={} source_event_binds={} source_proof_binding={} \
-             bundle_source_domain={} bundle_target_domain={} \
-             commitment_kind={:?} expected_kind={:?} kind_matches={} \
-             commitment_target_domain={} expected_target_domain={} target_matches={} \
-             proof_source_domain={} proof_target_domain={} deployment_target_domain={} \
-             proof_message_id={} bundle_message_id={} proof_payload_hash={} bundle_payload_hash={} \
-             expected_message_id={} message_id_matches={} expected_payload_hash={} payload_hash_matches={} \
-             proof_commitment_root={} bundle_commitment_root={} \
-             expected_commitment_root={} commitment_root_matches={} \
-             proof_adapter_vk_hash={} deployment_adapter_vk_hash={} \
-             evidence_deployment_hash={} expected_deployment_hash={} \
-             evidence_deployment_receipt_hash={} deployment_receipt_hash={} \
-             verifier_evidence_hash={} match_diagnostics=\"{}\"",
-            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
-                &source_proof,
-                &material,
-                &deployment,
-            ),
-            sccp_source_chain_proof_matches_adapter_deployment(&source_proof, &deployment),
-            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
-                source_proof.source_domain,
-                &material,
-                &deployment,
-            ),
-            payload_structure,
-            public_inputs_ready,
-            hex_0x_lower_opt(route_event_digest),
-            source_event_binds,
-            source_proof_binding,
-            source_domain,
-            target_domain,
-            bundle.commitment.kind,
-            expected_kind,
-            bundle.commitment.kind == expected_kind,
-            bundle.commitment.target_domain,
-            target_domain,
-            bundle.commitment.target_domain == target_domain,
-            source_proof.source_domain,
-            source_proof.target_domain,
-            deployment.target_domain,
-            hex_0x_lower(&source_proof.message_id),
-            hex_0x_lower(&bundle.commitment.message_id),
-            hex_0x_lower(&source_proof.payload_hash),
-            hex_0x_lower(&bundle.commitment.payload_hash),
-            hex_0x_lower(&expected_message_id),
-            bundle.commitment.message_id == expected_message_id,
-            hex_0x_lower(&expected_payload_hash),
-            bundle.commitment.payload_hash == expected_payload_hash,
-            hex_0x_lower(&source_proof.commitment_root),
-            hex_0x_lower(&bundle.commitment_root),
-            hex_0x_lower(&expected_commitment_root),
-            bundle.commitment_root == expected_commitment_root,
-            hex_0x_lower_opt(proof_adapter_vk_hash),
-            hex_0x_lower(&deployment.adapter_verifier_vk_hash),
-            hex_0x_lower(&evidence_source_deployment_hash),
-            hex_0x_lower(&source_deployment_hash),
-            hex_0x_lower(&evidence_source_deployment_receipt_hash),
-            hex_0x_lower(&deployment.deployment_receipt_hash),
-            hex_0x_lower(&verifier_evidence_hash),
-            sccp_source_chain_proof_adapter_deployment_match_diagnostics(
-                &source_proof,
-                &deployment
-            ),
-        )));
-    }
-    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
-        &bundle,
-        &material,
-        &deployment,
-    )
-    .ok_or_else(|| {
-        let proof_adapter_vk_hash =
-            sccp_source_chain_proof_adapter_verifier_commitment(&source_proof);
-        norito_to_napi(format!(
-            "rebuilt SCCP message bundle failed production source-chain verification: \
-             structure={} target_sora={} matches_deployment={} adapter_ready={} \
-             proof_source_domain={} proof_target_domain={} deployment_target_domain={} \
-             proof_adapter_vk_hash={} deployment_adapter_vk_hash={} \
-             evidence_deployment_hash={} expected_deployment_hash={} \
-             evidence_deployment_receipt_hash={} deployment_receipt_hash={} \
-             verifier_evidence_hash={} match_diagnostics=\"{}\"",
-            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
-                &source_proof,
-                &material,
-                &deployment,
-            ),
-            source_proof.target_domain == 0,
-            sccp_source_chain_proof_matches_adapter_deployment(&source_proof, &deployment),
-            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
-                source_proof.source_domain,
-                &material,
-                &deployment,
-            ),
-            source_proof.source_domain,
-            source_proof.target_domain,
-            deployment.target_domain,
-            hex_0x_lower_opt(proof_adapter_vk_hash),
-            hex_0x_lower(&deployment.adapter_verifier_vk_hash),
-            hex_0x_lower(&evidence_source_deployment_hash),
-            hex_0x_lower(&source_deployment_hash),
-            hex_0x_lower(&evidence_source_deployment_receipt_hash),
-            hex_0x_lower(&deployment.deployment_receipt_hash),
-            hex_0x_lower(&verifier_evidence_hash),
-            sccp_source_chain_proof_adapter_deployment_match_diagnostics(
-                &source_proof,
-                &deployment
-            ),
-        ))
-    })?;
-
-    let source_proof_hash = sccp_source_chain_proof_envelope_hash(&source_proof);
-    let message_bundle_value = json::to_value(&bundle).map_err(norito_to_napi)?;
-    let mut root = Map::new();
-    root.insert(
-        "schema".to_owned(),
-        Value::String("sccp-message-bundle-source-deployment-binding/v1".to_owned()),
-    );
-    root.insert("messageBundle".to_owned(), message_bundle_value.clone());
-    root.insert("message_bundle".to_owned(), message_bundle_value);
-    root.insert(
-        "sourceProofHex".to_owned(),
-        Value::String(hex_0x_lower(&bundle.finality_proof)),
-    );
-    root.insert(
-        "source_proof_hex".to_owned(),
-        Value::String(hex_0x_lower(&bundle.finality_proof)),
-    );
-    root.insert(
-        "sourceProofHash".to_owned(),
-        Value::String(hex_0x_lower(&source_proof_hash)),
-    );
-    root.insert(
-        "source_proof_hash".to_owned(),
-        Value::String(hex_0x_lower(&source_proof_hash)),
-    );
-    root.insert(
-        "sourceAdapterDeploymentHash".to_owned(),
-        Value::String(hex_0x_lower(&source_deployment_hash)),
-    );
-    root.insert(
-        "source_adapter_deployment_hash".to_owned(),
-        Value::String(hex_0x_lower(&source_deployment_hash)),
-    );
-    root.insert(
-        "sourceAdapterDeploymentReceiptHash".to_owned(),
-        Value::String(hex_0x_lower(&deployment.deployment_receipt_hash)),
-    );
-    root.insert(
-        "source_adapter_deployment_receipt_hash".to_owned(),
-        Value::String(hex_0x_lower(&deployment.deployment_receipt_hash)),
-    );
-    root.insert(
-        "sourceVerifierEvidenceHash".to_owned(),
-        Value::String(hex_0x_lower(&verifier_evidence_hash)),
-    );
-    root.insert(
-        "source_verifier_evidence_hash".to_owned(),
-        Value::String(hex_0x_lower(&verifier_evidence_hash)),
-    );
-    json::to_json(&Value::Object(root)).map_err(norito_to_napi)
 }
 
 fn parse_zk_ace_verifier_key_id(value: Option<String>) -> napi::Result<VerifyingKeyId> {
@@ -8639,18 +8379,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             {
                 return kagemusha_instruction_archive_from_json(kagemusha_value);
             }
-            if let Some(upsert_value) = remove_case_insensitive(&mut map, "UpsertSccpRouteManifest")
-            {
-                let instruction: UpsertSccpRouteManifest =
-                    json::from_value(upsert_value).map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(instruction));
-            }
-            if let Some(remove_value) = remove_case_insensitive(&mut map, "RemoveSccpRouteManifest")
-            {
-                let instruction: RemoveSccpRouteManifest =
-                    json::from_value(remove_value).map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(instruction));
-            }
             if let Some(parameter_value) = remove_case_insensitive(&mut map, "SetParameter") {
                 let parameter = json::from_value::<Parameter>(parameter_value.clone())
                     .or_else(|_| {
@@ -15571,6 +15299,143 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    fn canonical_kotodama_request(source: &str) -> JsKotodamaCompileRequest {
+        JsKotodamaCompileRequest {
+            source: source.to_owned(),
+            source_name: None,
+            zk: false,
+        }
+    }
+
+    #[test]
+    fn canonical_kotodama_binding_returns_full_artifact_manifest() {
+        let request = canonical_kotodama_request(
+            r#"seiyaku Demo {
+                hajimari() {}
+                kaizen() {}
+                kotoage fn run() authorize("RunDemo") {}
+                view fn ping() -> i64 { return 1; }
+            }"#,
+        );
+        let result = compile_kotodama_request(&request).expect("compile canonical Kotodama source");
+        assert!(result.ok);
+        assert!(result.diagnostics_json.is_none());
+        let output = result.output.expect("successful compiler output");
+        assert!(!output.artifact_bytes.is_empty());
+        assert!(output.manifest_json.contains("compiler_fingerprint"));
+        for branded in ["Kotoage", "View", "Hajimari", "Kaizen"] {
+            assert!(
+                output.manifest_json.contains(branded),
+                "manifest omitted branded entrypoint kind {branded}: {}",
+                output.manifest_json
+            );
+        }
+        for retired in ["Public", "Init", "Upgrade"] {
+            assert!(
+                !output
+                    .manifest_json
+                    .contains(&format!(r#""kind":"{retired}""#)),
+                "manifest exposed retired English entrypoint kind {retired}: {}",
+                output.manifest_json
+            );
+        }
+        assert_eq!(output.code_hash.len(), 64);
+        assert_eq!(output.abi_hash.len(), 64);
+        assert!(output.source_map_json.contains("\"kind\": \"source-map\""));
+        assert!(output.source_map_json.contains(&output.code_hash));
+        assert!(output.budget_report_json.contains("\"kind\": \"budget\""));
+        assert!(output.budget_report_json.contains(&output.code_hash));
+    }
+
+    #[test]
+    fn canonical_kotodama_binding_preserves_structured_unicode_diagnostics() {
+        let source = "seiyaku Demo {\n🙂\n🙂\n}";
+        let request = kotodama_lang::session::CompileRequest {
+            source,
+            source_name: None,
+        };
+        let expected = kotodama_lang::session::CompilerSession::default()
+            .build(request)
+            .expect_err("invalid Unicode tokens must fail compilation");
+        assert!(
+            expected.diagnostics.len() >= 2,
+            "independent invalid tokens must produce multiple diagnostics"
+        );
+        let spans = expected
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.primary_span.as_ref())
+            .map(|span| (span.start.line, span.start.column, span.end.column))
+            .collect::<Vec<_>>();
+        assert!(spans.contains(&(2, 1, 2)));
+        assert!(spans.contains(&(3, 1, 2)));
+
+        let result = compile_kotodama_request(&canonical_kotodama_request(source))
+            .expect("render compiler diagnostics");
+        assert!(!result.ok);
+        assert!(result.output.is_none());
+        let expected_json = expected.render_json().expect("render expected diagnostics");
+        assert_eq!(
+            result.diagnostics_json.as_deref(),
+            Some(expected_json.as_str()),
+            "the binding must expose the canonical Norito JSON without reformatting fields"
+        );
+    }
+
+    #[test]
+    fn canonical_kotodama_request_preserves_source_name_and_selects_zk_policy() {
+        let source = r#"
+seiyaku Privacy {
+  kotoage fn commit() authorize("CanCommitPrivateInput") {
+    let value: Secret<i64> = crypto::private_input(0);
+    let blinding: Secret<i64> = crypto::private_input(1);
+    let nullifier = crypto::valcom(left: value, right: blinding);
+    crypto::use_nullifier(nullifier);
+    crypto::commit_output();
+  }
+}
+"#;
+        let request = JsKotodamaCompileRequest {
+            source: source.to_owned(),
+            source_name: Some("contracts/privacy.ko".to_owned()),
+            zk: true,
+        };
+        let result = compile_kotodama_request(&request).expect("compile canonical ZK request");
+        assert!(result.ok);
+        let output = result.output.expect("successful ZK compiler output");
+        assert!(output.source_map_json.contains("contracts/privacy.ko"));
+        assert!(output.budget_report_json.contains("contracts/privacy.ko"));
+
+        let non_zk = JsKotodamaCompileRequest {
+            zk: false,
+            ..request
+        };
+        let result = compile_kotodama_request(&non_zk).expect("render non-ZK diagnostics");
+        assert!(!result.ok);
+        assert!(
+            result
+                .diagnostics_json
+                .as_deref()
+                .is_some_and(|diagnostics| diagnostics.contains("E_SECRET_REQUIRES_ZK"))
+        );
+    }
+
+    #[test]
+    fn canonical_kotodama_request_rejects_unbounded_or_control_source_names() {
+        for source_name in [
+            String::new(),
+            "contracts/private\nleak.ko".to_owned(),
+            "x".repeat(MAX_KOTODAMA_SOURCE_NAME_BYTES + 1),
+        ] {
+            let request = JsKotodamaCompileRequest {
+                source: "seiyaku Demo { view fn ping() -> i64 { return 1; } }".to_owned(),
+                source_name: Some(source_name),
+                zk: false,
+            };
+            assert!(compile_kotodama_request(&request).is_err());
+        }
+    }
 
     #[test]
     fn disabled_local_fetch_integrity_checks_are_invalid_arguments() {
@@ -25150,6 +25015,23 @@ mod tests {
     }
 
     #[test]
+    fn retired_sccp_route_manifest_instructions_are_rejected() {
+        for retired in ["UpsertSccpRouteManifest", "RemoveSccpRouteManifest"] {
+            let value = json::Value::Object(json::Map::from_iter([(
+                retired.to_owned(),
+                json::Value::Object(json::Map::new()),
+            )]));
+            let error = value_to_instruction(value)
+                .expect_err("retired SCCP route-manifest instruction must not decode");
+            assert!(
+                error.reason.contains("unsupported instruction"),
+                "unexpected rejection for {retired}: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
     fn governance_cast_zk_ballot_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(CastZkBallot {
             election_id: "ref-1".to_owned(),
@@ -25553,6 +25435,7 @@ mod tests {
         let signing_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
             .expect("fixture seed keypair");
         let manifest = ContractManifest {
+            seiyaku_name: None,
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
             abi_hash: Some(Hash::prehashed(sample_hash(0xBB))),
             compiler_fingerprint: Some("rustc-1.79".to_owned()),
@@ -25564,14 +25447,33 @@ mod tests {
                 dynamic_writes: Vec::new(),
             }),
             entrypoints: Some(vec![EntrypointDescriptor {
-                name: "upgrade_ledger".to_owned(),
+                name: "kaizen".to_owned(),
                 kind: EntryPointKind::Kaizen,
                 params: vec![EntrypointParamDescriptor {
                     name: "reason".to_owned(),
-                    type_name: "String".to_owned(),
+                    type_name: "string".to_owned(),
                 }],
+                argument_schema: Some(
+                    iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1 {
+                        fields: vec![iroha_data_model::smart_contract::entrypoint::EntrypointArgumentFieldV1 {
+                            name: "reason".to_owned(),
+                            ty: iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                                    iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::String,
+                                )],
+                            },
+                        }],
+                    },
+                ),
                 return_type: Some("bool".to_owned()),
-                permission: Some("can_upgrade".to_owned()),
+                return_schema: Some(
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                        nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Leaf(
+                            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Bool,
+                        )],
+                    },
+                ),
+                permission: None,
                 read_keys: vec!["contract:ledger".to_owned()],
                 write_keys: vec!["contract:ledger".to_owned()],
                 access_hints_complete: Some(true),
@@ -25586,6 +25488,7 @@ mod tests {
                     text: "Ledger Contract".to_owned(),
                 }],
             }]),
+            error_codes: None,
             provenance: None,
         }
         .signed(&signing_key);

@@ -1286,6 +1286,9 @@ mod tests {
                     commit_inflight_timeout: std::time::Duration::from_millis(
                         iroha_config::parameters::defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS,
                     ),
+                    post_finality_cleanup_timeout: std::time::Duration::from_millis(
+                        iroha_config::parameters::defaults::sumeragi::POST_FINALITY_CLEANUP_TIMEOUT_MS,
+                    ),
                     commit_work_queue_cap:
                         iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
                     commit_result_queue_cap:
@@ -1816,6 +1819,7 @@ mod tests {
                         iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_FUSED,
                 },
                 stark: iroha_config::parameters::actual::Stark::default(),
+                sccp: iroha_config::parameters::actual::Sccp::default(),
                 root_history_cap: iroha_config::parameters::defaults::zk::ledger::ROOT_HISTORY_CAP,
                 ballot_history_cap:
                     iroha_config::parameters::defaults::zk::vote::BALLOT_HISTORY_CAP,
@@ -1837,13 +1841,6 @@ mod tests {
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
                 bridge_proof_max_future_drift_blocks:
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-                sccp_launch_mode:
-                    iroha_config::parameters::actual::SccpLaunchMode::EthereumMainnetLane,
-                sccp_source_verifier_materials: Vec::new(),
-                sccp_source_adapter_engine_deployments: Vec::new(),
-                sccp_destination_rollouts: Vec::new(),
-                sccp_route_allowlists: Vec::new(),
-                sccp_route_manifests: Vec::new(),
                 poseidon_params_id:
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:

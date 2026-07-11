@@ -107,32 +107,25 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 
 ### ИСО псевдоним ярҙамсыһы
 
-Torii маҡсатлы ISO псевдонимы ос нөктәләре шулай репетициялар ҡаплай ала
-һуҡыр-элемент хеширование һәм псевдоним эҙләүҙәр яҙмай, заказ буйынса инструменттар. Был
-шылтыратыуҙары I18NI0000000056X плюс `resolveAlias` / I18NI000000058X .
-һәм бэкэнд, үҙләштереү, иҫәп бәйләү, сығанаҡ һәм детерминистик индексы баҫтыра
-Torii ҡайтарып ҡайтара.
+`recipes/iso_alias.mjs` махсус ҡоралдар талап итмәйенсә ISO псевдонимдарын эҙләүҙе тикшерә.
+Ул `resolveAlias` һәм `resolveAliasByIndex` ысулдарын саҡыра, шунан Torii ҡайтарған иҫәп бәйләнешен, сығанаҡты һәм детерминистик индексты баҫтыра.
 
 Тирә-яҡ мөхит үҙгәртеүселәре:
 
 - I18NI000000059X — Torii тамамлаусы псевдоним ярҙамсыларын фашлау.
-- `ISO_VOPRF_INPUT` — алты кодлы һуҡыр элемент (`deadbeef` тиклем ғәҙәттәгесә).
-- I18NI000000062X — VOPRF шылтыратыуын үткәреп ебәргәндә тик һынау ғына.
 - `ISO_ALIAS_LABEL` — туранан-тура псевдоним хәл итеү өсөн (мәҫәлән, IBAN стилендәге ҡылдар).
 - I18NI000000064X — унлыҡ йәки I18NI000000065X-префиксированный индекс `resolveAliasByIndex` XX.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — Torii-ны һаҡлау өсөн өҫтәмә башлыҡтар.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

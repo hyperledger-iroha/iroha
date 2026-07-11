@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-11-10T17:34:36.494808+00:00"
 translation_last_reviewed: 2025-12-30
 ---
@@ -34,7 +34,7 @@ description: خطة تشغيلية لتشغيل عنقود المدققين ال
 ## بيئات الشبكة
 - تشغيل بيئتين لـ Nexus مع بادئات شبكة مختلفة:
 - **Sora Nexus (mainnet)** - بادئة شبكة انتاج `nexus` تستضيف الحوكمة القانونية وخدمات SoraFS/SoraNet المتراكبة (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Taira (testnet)** - بادئة شبكة staging `taira` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Taira (testnet)** - بادئة شبكة staging `taira` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - الحفاظ على ملفات genesis ومفاتيح حوكمة وبصمات بنية تحتية منفصلة لكل بيئة. تعمل Taira كساحة اثبات لكل عمليات نشر SoraFS/SoraNet قبل الترقية الى Nexus.
 - يجب ان تنشر خطوط CI/CD الى Taira اولا وتنفذ smoke tests تلقائية وتطلب ترقية يدوية الى Nexus بعد نجاح الفحوصات.
 - حزم التكوين المرجعية موجودة تحت `configs/soranexus/nexus/` (mainnet) و `configs/soranexus/taira/` (testnet)، وكل منها يحتوي `config.toml` و`genesis.json` وادلة قبول Torii نموذجية.

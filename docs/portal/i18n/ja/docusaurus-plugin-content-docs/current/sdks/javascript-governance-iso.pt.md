@@ -108,32 +108,25 @@ Torii が端末を報告しない場合、両方のスクリプトはステー�
 
 ### ISO エイリアス ヘルパー
 
-`recipes/iso_alias.mjs` は ISO エイリアス エンドポイントをターゲットにするため、リハーサルでカバーできるようになります。
-カスタムのツールを作成せずに、ブラインド要素のハッシュとエイリアス検索を実行できます。それ
-`ToriiClient.evaluateAliasVoprf` と `resolveAlias` / `resolveAliasByIndex` を呼び出します
-バックエンド、ダイジェスト、アカウント バインディング、ソース、および決定論的インデックスを出力します。
-Torii によって返されます。
+`recipes/iso_alias.mjs` は、専用ツールを必要とせずに ISO エイリアス検索を検証します。
+`resolveAlias` と `resolveAliasByIndex` を呼び出し、Torii が返したアカウントのバインディング、ソース、決定論的インデックスを出力します。
 
 環境変数:
 
 - `TORII_URL` — エイリアス ヘルパーを公開する Torii エンドポイント。
-- `ISO_VOPRF_INPUT` — 16 進数でエンコードされたブラインド要素 (デフォルトは `deadbeef`)。
-- `ISO_SKIP_VOPRF=1` — ルックアップのみをテストする場合は、VOPRF 呼び出しをスキップします。
 - `ISO_ALIAS_LABEL` — 解決するリテラル エイリアス (IBAN スタイルの文字列など)。
 - `ISO_ALIAS_INDEX` — `resolveAliasByIndex` に渡される 10 進数または `0x` という接頭辞が付いたインデックス。
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — 安全な Torii 展開用のオプションのヘッダー。
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```

@@ -30,7 +30,7 @@ Known public chains infer their canonical prefix from `chain`, so Taira and Nexu
 need a second manual knob:
 
 ```toml
-chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 torii_url = "https://taira.sora.org/"
 
 [account]
@@ -47,9 +47,9 @@ Use the built-in wait flow instead of shell polling:
 
 ```bash
 iroha tx status --hash <SIGNED_TX_HASH> --wait
-iroha app contracts deploy --authority <ACCOUNT_ID> --private-key <HEX> --code-file ./contract.to --wait
-iroha app contracts call --contract-alias router::dex.universal --entrypoint swap --wait
-iroha app contracts call --contract-alias router::dex.universal --entrypoint swap --simulate
+iroha contract deploy --authority <ACCOUNT_ID> --private-key <HEX> --code-file ./contract.to --wait
+iroha contract call --contract-alias router::dex.universal --entrypoint swap --wait
+iroha contract call --contract-alias router::dex.universal --entrypoint swap --simulate
 ```
 
 See [Command-Line Help](CommandLineHelp.md).
@@ -217,8 +217,8 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 
 - Combined manifest command (prints or saves when --out is provided):
 
-  iroha app contracts manifest get --code-hash 0xAA..AA
-  iroha app contracts manifest get --code-hash 0xAA..AA --out manifest.json
+  iroha contract manifest get --code-hash 0xAA..AA
+  iroha contract manifest get --code-hash 0xAA..AA --out manifest.json
 
 ```
 
@@ -587,14 +587,26 @@ iroha contract dev doctor --manifest iroha.contracts.toml --profile local
 iroha contract dev check --manifest iroha.contracts.toml --profile local
 iroha contract dev build --manifest iroha.contracts.toml --profile local
 iroha contract dev test --manifest iroha.contracts.toml --coverage
+iroha contract dev test --manifest iroha.contracts.toml --path-filter payments --filter rejects
+iroha contract dev test --manifest iroha.contracts.toml --filter rejects_invalid_payment --exact
 iroha contract dev schema --manifest iroha.contracts.toml --out docs/interface.md
 ```
 
-`build` emits compiled `.to` artifacts plus `.manifest.json`,
-`.interface.json`, `.source-map.json`, and `.budget.json` sidecars next to each
-configured artifact. `check --locked` rejects missing or stale generated files,
-which lets CI fail when checked-in interfaces or payload examples drift from the
-Kotodama source.
+Test source and function selection are deliberately separate: `--path-filter`
+selects `.ko` test paths, while `--filter` selects test function names and
+`--exact` requires a complete function-name match. A supplied filter that
+matches no source or function fails instead of silently running a broader
+suite.
+
+`build` emits compiled `.to` artifacts plus adjacent `.manifest.json` and
+`.interface.json` files. Source maps and budget reports are content addressed
+under `.sidecars/<artifact-hash>/source-map.json` and `budget.json`; mutating
+any deployable artifact field therefore selects a different diagnostic
+sidecar. An authenticated commit record under `.fingerprints/` binds every
+generated output and lets unchanged builds perform no compilation or output
+rewrite. `check --locked` rejects missing or stale generated files, which lets
+CI fail when checked-in interfaces or payload examples drift from the Kotodama
+source.
 
 `deploy`, `resume`, `call`, and `view` resolve contracts by manifest name and
 reuse the existing contract app/deploy/call machinery with typed payload

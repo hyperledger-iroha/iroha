@@ -41,7 +41,7 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authori
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
 
 const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
-const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
@@ -635,6 +635,7 @@ impl std::error::Error for OpenVerifyEnvelopeValidationError {}
 /// This structure is serialized with Norito and used as the TLV payload for
 /// `&NoritoBytes` pointer-ABI types passed to IVM verify syscalls or host vendor bridges.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

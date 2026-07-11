@@ -65,11 +65,11 @@ _最後通過 `python3 scripts/inventory_env_toggles.py --json docs/source/agent
 
 - 測試：mochi/mochi-integration/tests/supervisor.rs:33 — `let kagami = env!("CARGO_BIN_EXE_kagami_mock");`
 
-## CARGO_BIN_EXE_koto_compile（測試：3）
+## CARGO_BIN_EXE_koto build（測試：3）
 
-- 測試：板條箱/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- 測試：板條箱/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- 測試：板條箱/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
+- 測試：板條箱/ivm/tests/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- 測試：板條箱/ivm/tests/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- 測試：板條箱/ivm/tests/cli_smoke.rs:88 — `let bin = env!("CARGO_BIN_EXE_koto build");`
 
 ## CARGO_BIN_EXE_sorafs_chunk_dump（測試：1）
 
@@ -653,7 +653,7 @@ _最後通過 `python3 scripts/inventory_env_toggles.py --json docs/source/agent
 
 ## LANG（測試：3）
 
-- 測試：crates/ivm/src/bin/koto_lint.rs:702 — `let previous = env::var("LANG").ok();`
+- 測試：crates/ivm/src/bin/koto check.rs:702 — `let previous = env::var("LANG").ok();`
 - 測試：crates/ivm/tests/i18n.rs:11 — `let old_lang = env::var("LANG").ok();`
 - 測試：板條箱/ivm/tests/i18n.rs:69 — `let old_lang = env::var("LANG").ok();`
 
@@ -744,10 +744,6 @@ _最後通過 `python3 scripts/inventory_env_toggles.py --json docs/source/agent
 - 產品：crates/ivm/src/cuda.rs:22 — `static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));`
 - 測試：crates/ivm/src/ptx_tests.rs:7 — `let out_dir = match std::env::var("OUT_DIR") {`
 - 測試：板條箱/ivm/tests/ptx_kernels.rs:5 — `let out_dir = env!("OUT_DIR");`
-
-## P2P_TURN（產品：1）
-
-- 產品：板條箱/iroha_p2p/src/transport.rs:296 — `let endpoint = std::env::var("P2P_TURN")`
 
 ## 路徑（產品：2，測試：1）
 

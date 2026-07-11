@@ -33,6 +33,21 @@ fn syscall_policy_allows_known_and_rejects_unknown_for_v1() {
 }
 
 #[test]
+fn first_release_compiler_runtime_syscalls_are_ungated_in_abi_v1() {
+    for number in [
+        ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
+        ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT,
+        ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE,
+        ivm::syscalls::SYSCALL_STATE_VALUE_DECODE,
+    ] {
+        assert!(
+            ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number),
+            "first-release syscall 0x{number:06x} must be available in ABI v1"
+        );
+    }
+}
+
+#[test]
 fn pointer_type_policy_allows_soracloud_response_under_abi_v1() {
     assert!(ivm::is_type_allowed_for_policy(
         SyscallPolicy::AbiV1,

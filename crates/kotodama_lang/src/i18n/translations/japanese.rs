@@ -14,7 +14,7 @@ pub const MESSAGES: Messages = Messages {
     lint_unused_parameter: "関数`{func}`の引数`{name}`は使用されていません",
     lint_unreachable_after_return: "{context} で到達不能な文を検出しました: return の後のコードは実行されません",
     lint_ok: "正常",
-    lint_usage: "使用方法: koto_lint <file.ko> [<file2.ko> ...]",
+    lint_usage: "使用方法: koto check <file.ko> [<file2.ko> ...]",
     lint_usage_help: "指定したソースに Kotodama の lint を実行します。",
     ..english::MESSAGES
 };

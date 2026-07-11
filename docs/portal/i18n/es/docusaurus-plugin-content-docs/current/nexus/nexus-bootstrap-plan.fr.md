@@ -31,7 +31,7 @@ Esta página refleja `docs/source/soranexus_bootstrap_plan.md`. Guarde las dos c
 - Configuración bootstrap mise a day (`configs/nexus/bootstrap/*.toml`) que refleja los últimos parámetros de consenso.## Investigación de entornos
 - Operar dos entornos Nexus con prefijos de búsqueda distintos:
 - **Sora Nexus (mainnet)** - prefijo de producción `nexus`, que protege el gobierno canónico y los servicios a cuestas SoraFS/SoraNet (ID de cadena `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefijo de investigación de preparación `testus`, espejo de la configuración de la red principal para las pruebas de integración y validación previa al lanzamiento (UUID de cadena `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- **Sora Testus (testnet)** - prefijo de investigación de preparación `testus`, espejo de la configuración de la red principal para las pruebas de integración y validación previa al lanzamiento (UUID de cadena `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Mantenimiento de los archivos génesis, de las claves de gobierno y de las empresas de infraestructura separadas para cada entorno. Testus sert de terreno de preuve pour todos los lanzamientos SoraFS/SoraNet antes de la promoción versión Nexus.
 - Las tuberías CI/CD deben desplegar el acceso a las pruebas, ejecutar las pruebas de humo de forma automática y exigir un manual de promoción según Nexus una vez que se aprueben las comprobaciones.
 - Los paquetes de configuración de referencia se encuentran en `configs/soranexus/nexus/` (mainnet) y `configs/soranexus/testus/` (testnet), cada uno de los contenidos, por ejemplo, `config.toml`, `genesis.json` y los repertorios de admisión Torii.## Etapa 1 - Revisión de configuración

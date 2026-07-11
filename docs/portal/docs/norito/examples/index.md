@@ -8,9 +8,9 @@ description: Curated Kotodama snippets with ledger walkthroughs.
 
 These examples mirror the SDK quickstarts and ledger walkthroughs. Each snippet bundles a ledger checklist and links back to the Rust, Python, and JavaScript guides so you can replay the same scenario end to end.
 
-- **[Hajimari entrypoint skeleton](./hajimari-entrypoint)** — Minimal Kotodama contract scaffold with a single public entrypoint and state handle.
+- **[Hajimari skeleton](./hajimari-entrypoint)** — Minimal strict-V1 Kotodama contract scaffold with a dedicated hajimari lifecycle declaration.
 - **[Register domain and mint assets](./register-and-mint)** — Demonstrates permissioned domain creation, asset registration, and deterministic minting.
-- **[Invoke host transfer from Kotodama](./call-transfer-asset)** — Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instruction with inline metadata validation.
+- **[Invoke host transfer from Kotodama](./call-transfer-asset)** — Demonstrates how an authorized Kotodama entrypoint invokes `ledger::asset::transfer` with typed identifiers.
 - **[Transfer asset between accounts](./transfer-asset)** — Straightforward asset transfer workflow that mirrors SDK quickstarts and ledger walkthroughs.
 - **[Mint, transfer, and burn an NFT](./nft-flow)** — Walks through an NFT lifecycle end to end: minting to the owner, transferring, tagging metadata, and burning.
 - **[Threshold escrow](./threshold-escrow)** — Single-payer escrow that accepts top-ups to an exact target amount, then releases or refunds the funds.

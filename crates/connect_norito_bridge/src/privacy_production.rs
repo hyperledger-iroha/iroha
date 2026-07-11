@@ -545,7 +545,7 @@ pub(crate) mod test_fixtures {
 
     use super::*;
 
-    const TEST_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+    const TEST_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
     const TEST_ASSET_ID: &str = "xor#universal";
 
     pub(super) fn valid_transfer_witness() -> PrivacyConfidentialWitnessV1 {
@@ -745,7 +745,7 @@ mod tests {
 
     fn sdk_transfer_witness_contract_fixture() -> PrivacyConfidentialWitnessV1 {
         PrivacyConfidentialWitnessV1 {
-            chain_id: "809574f5-fee7-5e69-bfcf-52451e42d50f".to_owned(),
+            chain_id: "fc56984b-2be7-431d-840e-21514d1883f0".to_owned(),
             asset_definition_id: "xor#universal".to_owned(),
             spend_key: vec![0x11; 32],
             tree_commitments: vec![vec![0x10; 32]],
@@ -767,7 +767,7 @@ mod tests {
     }
 
     fn sdk_transfer_witness_contract_archive() -> Vec<u8> {
-        let sdk_archive_base64 = "TlJUMAAAfsqLqoiuWPS/Oqqw1+q/rAC2AQAAAAAAAB8kbLx8YYiUAgAAAAAAAAAAJSQ4MDk1NzRmNS1mZWU3LTVlNjktYmZjZi01MjQ1MWU0MmQ1MGYODXhvciN1bml2ZXJzYWwoIAAAAAAAAAARERERERERERERERERERERERERERERERERERERERERETEBAAAAAAAAACggAAAAAAAAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQdQEAAAAAAAAAbBAHAAAAAAAAAAAAAAAAAAAAKCAAAAAAAAAAIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIoIAAAAAAAAAAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMwgAAAAAAAAAAGwBAAAAAAAAAGMQBwAAAAAAAAAAAAAAAAAAACggAAAAAAAAAEREREREREREREREREREREREREREREREREREREREREREKCAAAAAAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUIAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAACggAAAAAAAAAGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm";
+        let sdk_archive_base64 = "TlJUMAAAfsqLqoiuWPS/Oqqw1+q/rAC2AQAAAAAAAB8kbLx8YYiUAgAAAAAAAAAAJSRmYzU2OTg0Yi0yYmU3LTQzMWQtODQwZS0yMTUxNGQxODgzZjAODXhvciN1bml2ZXJzYWwoIAAAAAAAAAARERERERERERERERERERERERERERERERERERERERERETEBAAAAAAAAACggAAAAAAAAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQdQEAAAAAAAAAbBAHAAAAAAAAAAAAAAAAAAAAKCAAAAAAAAAAIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIoIAAAAAAAAAAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMwgAAAAAAAAAAGwBAAAAAAAAAGMQBwAAAAAAAAAAAAAAAAAAACggAAAAAAAAAEREREREREREREREREREREREREREREREREREREREREREKCAAAAAAAAAAVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUIAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAACggAAAAAAAAAGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZm";
         BASE64_STANDARD
             .decode(sdk_archive_base64)
             .expect("SDK golden witness archive base64 decodes")
@@ -791,7 +791,7 @@ mod tests {
 
         let witness = privacy_decode_witness(&sdk_archive).expect("SDK witness decodes natively");
 
-        assert_eq!(witness.chain_id, "809574f5-fee7-5e69-bfcf-52451e42d50f");
+        assert_eq!(witness.chain_id, "fc56984b-2be7-431d-840e-21514d1883f0");
         assert_eq!(witness.asset_definition_id, "xor#universal");
         assert_eq!(witness.spend_key, vec![0x11; 32]);
         assert_eq!(witness.tree_commitments, vec![vec![0x10; 32]]);

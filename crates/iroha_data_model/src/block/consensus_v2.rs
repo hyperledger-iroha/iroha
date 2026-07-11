@@ -27,6 +27,8 @@ pub mod fingerprint;
 
 /// Sumeragi v2 wire protocol version.
 pub const PROTOCOL_VERSION: u16 = 2;
+/// Consensus-wide upper bound for one voting roster.
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 4_096;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// NPoS Sumeragi v2 handshake and domain-separation tag.
@@ -295,6 +297,12 @@ pub struct HeightContext {
     pub epoch: u64,
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
+    /// Complete transition selected from the committed pre-state when this is
+    /// the last height of an epoch. The CommitQC authenticates these bytes
+    /// through [`Self::id`]; non-boundary contexts must carry `None`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     /// Consensus mode that produced the voting-power snapshot.
     pub mode: ConsensusMode,
     /// Commit certificate for the parent block, absent only at genesis.
@@ -346,7 +354,16 @@ impl HeightContext {
             da_layout: self.da_layout,
             leader_seed: self.leader_seed,
         };
-        HeightContextId(HashOf::from_untyped_unchecked(Hash::new(identity.encode())))
+        let encoded = match self.next_epoch_snapshot.as_ref() {
+            None => identity.encode(),
+            Some(next_epoch_snapshot) => EpochBoundaryHeightContextIdentity {
+                    domain: b"iroha:sumeragi:v2:height-context:epoch-transition:v1".to_vec(),
+                    base: identity,
+                    next_epoch_snapshot: next_epoch_snapshot.clone(),
+                }
+                .encode(),
+        };
+        HeightContextId(HashOf::from_untyped_unchecked(Hash::new(encoded)))
     }
 
     /// Validate the immutable context and its quorum snapshot.
@@ -366,6 +383,15 @@ impl HeightContext {
         }
         if self.epoch_end_height < self.height {
             return Err(ValidationError::EpochEndsBeforeHeight);
+        }
+        match (
+            self.height == self.epoch_end_height,
+            self.next_epoch_snapshot.as_ref(),
+        ) {
+            (true, Some(snapshot)) => snapshot.validate_against(self)?,
+            (true, None) => return Err(ValidationError::MissingNextEpochSnapshot),
+            (false, Some(_)) => return Err(ValidationError::UnexpectedNextEpochSnapshot),
+            (false, None) => {}
         }
         self.quorum.validate_roster(&self.roster)?;
         if self.mode == ConsensusMode::Permissioned
@@ -452,6 +478,13 @@ struct HeightContextIdentity {
     nexus_amx_context_hash: Hash,
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
+}
+
+#[derive(Encode)]
+struct EpochBoundaryHeightContextIdentity {
+    domain: Vec<u8>,
+    base: HeightContextIdentity,
+    next_epoch_snapshot: finality::FinalizedNextEpochSnapshot,
 }
 
 #[derive(Encode)]
@@ -1828,6 +1861,18 @@ pub enum ValidationError {
     PermissionedPowerNotOne,
     /// The frozen epoch end precedes the height governed by this context.
     EpochEndsBeforeHeight,
+    /// An epoch-ending context omitted its old-roster-authenticated transition.
+    MissingNextEpochSnapshot,
+    /// A non-boundary context attempted to install an epoch transition.
+    UnexpectedNextEpochSnapshot,
+    /// The next-epoch number is not the immediate successor or overflowed.
+    InvalidNextEpoch,
+    /// The next-epoch snapshot changes the genesis-selected consensus mode.
+    NextEpochModeMismatch,
+    /// The next-epoch quorum is not canonically derived from its roster.
+    NextEpochQuorumMismatch,
+    /// A permissioned next-epoch snapshot assigned non-unit voting power.
+    NextEpochPermissionedPowerNotOne,
     /// The parent certificate is not a CommitQC for the previous height.
     InvalidParentCommit,
     /// The mandatory data-availability layout is internally inconsistent.
@@ -1930,6 +1975,24 @@ impl fmt::Display for ValidationError {
             }
             Self::EpochEndsBeforeHeight => {
                 f.write_str("height context epoch ends before its governed height")
+            }
+            Self::MissingNextEpochSnapshot => {
+                f.write_str("epoch-ending height context is missing its next-epoch snapshot")
+            }
+            Self::UnexpectedNextEpochSnapshot => {
+                f.write_str("non-boundary height context carries a next-epoch snapshot")
+            }
+            Self::InvalidNextEpoch => {
+                f.write_str("next-epoch snapshot is not for the immediate successor epoch")
+            }
+            Self::NextEpochModeMismatch => {
+                f.write_str("next-epoch snapshot changes the frozen consensus mode")
+            }
+            Self::NextEpochQuorumMismatch => {
+                f.write_str("next-epoch quorum is not canonical for its roster")
+            }
+            Self::NextEpochPermissionedPowerNotOne => {
+                f.write_str("permissioned next-epoch validators must each have voting power one")
             }
             Self::InvalidParentCommit => {
                 f.write_str("height context parent is not the previous height CommitQC")
@@ -2082,6 +2145,9 @@ fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationErr
     if roster.is_empty() {
         return Err(ValidationError::EmptyRoster);
     }
+    if roster.len() > MAX_VALIDATORS_PER_HEIGHT {
+        return Err(ValidationError::RosterTooLarge);
+    }
     let mut seen = BTreeSet::new();
     let mut total = 0_u64;
     for pair in roster.windows(2) {
@@ -2212,6 +2278,7 @@ mod tests {
             height: 1,
             epoch: 2,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),

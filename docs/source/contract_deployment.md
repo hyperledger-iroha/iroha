@@ -12,8 +12,9 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
 - Contract `.to` artifacts are self-describing: the required `CNTR` section
   embeds the contract interface ahead of the executable stream, and Torii
   derives the on-chain `ContractManifest` from that section after verification.
-- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
-  reject deterministically.
+- Nodes recompute `code_hash` over the complete deployable `.to` bytes,
+  including the execution header, `CNTR`, literals, and code, and recompute the
+  canonical ABI hash locally; mismatches reject deterministically.
 - Stored artifacts live under the on-chain `contract_manifests` and
   `contract_code` registries. Manifests reference hashes only and remain small;
   code bytes are keyed by `code_hash`.
@@ -63,16 +64,23 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
     `contract_address`, binds the requested stable `contract_alias` to that
     address, prepends a domainless self-registration for the authority, and
     submits the resulting transaction on behalf of the caller.
-  - Redeploying the same `contract_alias` performs an in-place upgrade:
+  - Redeploying the same `contract_alias` performs an in-place `kaizen`/`改善`:
     Torii deploys a new address, rebinds the alias atomically, and deactivates
     the previous address.
   - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
   - Errors: invalid base64, invalid contract artifact, size cap exceeded,
     governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`
-  - Returns `{ manifest: { code_hash, abi_hash } }`.
-    Additional manifest fields are preserved internally but omitted here for a
-    stable API.
+  - Returns `{ code_hash, abi_hash, manifest: <ContractManifest> }`. The two
+    top-level convenience values are raw lowercase hex; `manifest` uses the
+    complete canonical Norito JSON representation, including `seiyaku_name`,
+    both checksummed `Hash` literals, exact entrypoint argument/return schemas,
+    state and error declarations, access metadata, trigger descriptors,
+    localization data, and signed provenance when present. Fields are never
+    silently truncated. V1 aggregate schemas are one flat preorder tape. A
+    `List` node contains only `capacity`; its exact element subtree immediately
+    follows it. Missing or trailing nodes and the retired nested `element`
+    representation are rejected.
 - `GET /v1/contracts/code-bytes/{code_hash}`
   - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
@@ -92,8 +100,10 @@ returns HTTP 429; any handler error increments
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- Unprotected namespaces are public: any signer may register code bytes,
-  register manifests, and deploy alias-backed public contracts there.
+- Every raw bytecode registration, manifest registration, activation,
+  deactivation, or bytecode removal requires `CanRegisterSmartContractCode`.
+  Protected namespaces additionally require `CanEnactGovernance`; an empty
+  `gov_protected_namespaces` list never makes lifecycle mutation permissionless.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(contract_address, code_hash, abi_hash, abi_version)`.
@@ -110,18 +120,18 @@ returns HTTP 429; any handler error increments
 
 ## CLI helpers
 
-- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
+- `iroha contract deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
   submits the alias-first Torii deploy request (computing hashes on the fly).
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+- `iroha contract manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or
   writing to `--out`.
-- `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
+- `iroha contract simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
   runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
   (counts and instruction ids) without touching the network.
-- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+- `iroha contract manifest get --code-hash <hex>` fetches the manifest via Torii
   and optionally writes it to disk.
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+- `iroha contract code get --code-hash <hex> --out <path>` downloads
   the stored `.to` image.
 - Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
   `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and

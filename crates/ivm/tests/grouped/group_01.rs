@@ -26,6 +26,8 @@ mod alu_circuit;
 mod api;
 #[path = "../arithmetic.rs"]
 mod arithmetic;
+#[path = "../arithmetic_checked_boundaries.rs"]
+mod arithmetic_checked_boundaries;
 #[path = "../assert.rs"]
 mod assert;
 #[path = "../assert_circuit.rs"]

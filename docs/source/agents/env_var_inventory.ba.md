@@ -67,8 +67,8 @@ _Һуңғы яңыртылған аша `python3 scripts/inventory_env_toggles.p
 
 ## CARGO_BIN_EXE_koto_компиляция (тест: 3)
 
-- тест: йәшниктәр/вм/тестар/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
-- тест: йәшниктәр/вм/тестар/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto_compile");`
+- тест: йәшниктәр/вм/тестар/cli_smoke.rs:8 — `let bin = env!("CARGO_BIN_EXE_koto build");`
+- тест: йәшниктәр/вм/тестар/cli_smoke.rs:56 — `let bin = env!("CARGO_BIN_EXE_koto build");`
 - тест: йәшниктәр/вм/тестар/cly_smoke.rs:88 — `let raw_url = env::var("ACTIONS_ID_TOKEN_REQUEST_URL").map_err(|_| {`.
 
 ## CARGO_BIN_EXE_sorafs_chunk_dump (тест: 1)
@@ -744,10 +744,6 @@ _Һуңғы яңыртылған аша `python3 scripts/inventory_env_toggles.p
 - prod: йәшниктәр/vm/src/cuda.rs:22 — `static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));`
 - тест: йәшниктәр/вм/срк/ptx_tests.rs:7 — `let out_dir = match std::env::var("OUT_DIR") {`
 - тест: йәшниктәр/вм/тестар/ptx_kernels.rs:5 — `let out_dir = env!("OUT_DIR");`
-
-## P2P_TURN (прод: 1)
-
-- prod: йәшниктәр/ироха_п2п/срк/транспорт.р. 296 — `let endpoint = std::env::var("P2P_TURN")`
 
 ## ПАТТ (прод: 2, тест: 1)
 

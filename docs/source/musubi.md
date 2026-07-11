@@ -46,7 +46,7 @@ namespace = "dex.universal"
 name = "swap-core"
 version = "0.1.0"
 
-[dependencies.math]
+[dependencies.arith]
 package = "std.universal/math"
 version = "^1.0.0"
 
@@ -74,13 +74,13 @@ Useful local commands:
 
 ```bash
 cargo run -p musubi -- init --namespace dex.universal --name swap-core --dapp
-cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias math
+cargo run -p musubi -- add std.universal/math --version '^1.0.0' --alias arith
 cargo run -p musubi -- install --config client.toml
 cargo run -p musubi -- install --config client.toml --fetch --provider-payload math.payload
-cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64,package=math'
-cargo run -p musubi -- cache import math --source-root ../math
-cargo run -p musubi -- cache fetch math --provider-payload math.payload
-cargo run -p musubi -- cache fetch math --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64'
+cargo run -p musubi -- install --config client.toml --fetch --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64,package=arith'
+cargo run -p musubi -- cache import arith --source-root ../math
+cargo run -p musubi -- cache fetch arith --provider-payload math.payload
+cargo run -p musubi -- cache fetch arith --config client.toml --gateway-provider 'name=hot-a,provider-id=1111111111111111111111111111111111111111111111111111111111111111,gateway-key=ED25519_PUBLIC_KEY_HEX,base-url=https://gw.example/,stream-token=BASE64'
 cargo run -p musubi -- pack --car-out source.car --sorafs-manifest-out manifest.norito --source-plan-out source-plan.norito
 cargo run -p musubi -- build src/lib.ko --manifest-out target/lib.contract.json
 cargo run -p musubi -- search swap --config client.toml
@@ -129,11 +129,13 @@ kind of public origin with the exact `/privacy/events` path. Plaintext HTTP,
 localhost/private/reserved addresses, non-root base paths, redirects,
 credentials, queries, and fragments are rejected in every build.
 Stream tokens are runtime credentials; they are not written into `Musubi.lock`.
-`build` links cached dependency sources by rewriting calls such as
-`math::add()` to deterministic internal Kotodama function names, and rejects
-calls to functions that the dependency did not export. Musubi v1 libraries are
-function-only: dependency source files containing state declarations, triggers,
-kotoba blocks, constants, or other non-function contract items are rejected.
+`build` resolves calls such as `arith::add()` through explicit lockfile aliases,
+type-checks each module before linking, and assigns deterministic internal
+identities in typed HIR. It never rewrites source ASTs, and it rejects calls to
+functions that the dependency did not export. Musubi V1 modules may declare
+structs, error enums, constants, and private functions. Durable state, triggers,
+`kotoage`/`言挙げ`, `hajimari`/`始まり`, `kaizen`/`改善`, and other
+`seiyaku`/`誓約`-only declarations are rejected inside reusable modules.
 
 `pack` computes the deterministic BLAKE3-256 source archive hash plus the source
 byte and file counts. With `--car-out`, `--sorafs-manifest-out`, or
@@ -145,8 +147,16 @@ rejects digest-only archive submissions, optionally uploads the manifest and
 payload through Torii's SoraFS storage-pin endpoint with `--upload`, registers
 the generated SoraFS pin, then submits the signed `PublishMusubiRelease`
 transaction using the Iroha client config. Publish also parses package `.ko`
-sources and rejects exports that are not defined by a Kotodama function in the
-source tree. `yank` works the same way for `YankMusubiRelease`.
+sources through the canonical production compiler session before writing any
+archive output. Every local source must be a production `module`; a deployable
+`seiyaku`/`誓約`, test-only function, invalid body or type, duplicate module or
+symbol, missing export, or ambiguous export rejects publication. When the
+manifest has dependencies, publish requires the resolved lockfile and
+authenticated source cache (selectable with `--cache-dir`), validates the full
+locked typed package graph, and rejects dependency cycles and calls to hidden
+or unexported functions. Package source identities and fingerprints use
+normalized package-relative paths, so cache locations do not affect release
+validation. `yank` works the same way for `YankMusubiRelease`.
 
 `search`, `versions`, and `alias resolve` query the same registry. `alias set
 --dry-run` prints a curated short-alias binding, and without `--dry-run` submits

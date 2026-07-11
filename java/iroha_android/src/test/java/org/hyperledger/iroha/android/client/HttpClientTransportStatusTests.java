@@ -37,6 +37,7 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusTruncatesOversizedErrorBody();
     waitForTransactionStatusMatchesSharedErrorMessageContractFixture();
     waitForTransactionStatusHonoursMaxAttempts();
+    waitForTransactionStatusSaturatesOverflowingDeadline();
     waitForTransactionStatusFailsOnInvalidPayload();
     submitTransactionProvidesCanonicalHashForPolling();
     submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling();
@@ -534,6 +535,40 @@ public final class HttpClientTransportStatusTests {
       assert ((TransactionTimeoutException) cause).attempts() == 2 : "Expected two attempts";
     }
     assert threw : "Expected waitForTransactionStatus to time out";
+  }
+
+  private static void waitForTransactionStatusSaturatesOverflowingDeadline() {
+    final AtomicInteger requests = new AtomicInteger();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            request -> {
+              requests.incrementAndGet();
+              return CompletableFuture.completedFuture(
+                  newResponse(200, statusPayload("Pending")));
+            },
+            ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+
+    boolean threw = false;
+    try {
+      transport
+          .waitForTransactionStatus(
+              "feed",
+              PipelineStatusOptions.builder()
+                  .intervalMillis(0L)
+                  .maxAttempts(2)
+                  .timeoutMillis(Long.MAX_VALUE)
+                  .build())
+          .join();
+    } catch (final RuntimeException ex) {
+      threw = true;
+      final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+      assert cause instanceof TransactionTimeoutException
+          : "Expected TransactionTimeoutException";
+      assert ((TransactionTimeoutException) cause).attempts() == 2
+          : "Expected two attempts";
+    }
+    assert threw : "Expected waitForTransactionStatus to reach maxAttempts";
+    assert requests.get() == 2 : "Overflowing timeout must not expire after one request";
   }
 
   private static void waitForTransactionStatusFailsOnInvalidPayload() {

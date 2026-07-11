@@ -53,7 +53,7 @@ if IROHA_PYTHON_ADDRESS.exists():
         AccountAddress = None
 
 
-DEFAULT_CHAIN_ID = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+DEFAULT_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 DEFAULT_CHAIN_DISCRIMINANT = 369
 DEFAULT_DOMAIN = "wonderland.universal"
 DEFAULT_ALIAS_PREFIX = "taira-rollout-canary"

@@ -1,4 +1,4 @@
-use ivm::{IVM, VMError, encoding, instruction, kotodama::wide};
+use ivm::{IVM, VMError, VmTrapKind, encoding, instruction, kotodama::wide};
 mod common;
 use common::{assemble, assemble_zk};
 
@@ -120,6 +120,11 @@ fn test_getgas_zero_remaining() {
 struct ExtraCostHost;
 
 impl ivm::IVMHost for ExtraCostHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        Ok(2)
+    }
+
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, 1);
         let a0 = vm.register(10);
@@ -135,9 +140,119 @@ impl ivm::IVMHost for ExtraCostHost {
 struct MeteredErrorHost;
 
 impl ivm::IVMHost for MeteredErrorHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
+        Ok(7)
+    }
+
     fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
         assert_eq!(number, ivm::syscalls::SYSCALL_EXIT);
         Err(VMError::metered(7, VMError::PermissionDenied))
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+struct UnmeteredErrorHost {
+    calls: usize,
+}
+
+impl ivm::IVMHost for UnmeteredErrorHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        Ok(7)
+    }
+
+    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        self.calls += 1;
+        Err(VMError::PermissionDenied)
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+struct SideEffectHost {
+    calls: usize,
+}
+
+impl ivm::IVMHost for SideEffectHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        Ok(2)
+    }
+
+    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        self.calls += 1;
+        Ok(2)
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+struct RefundingHost {
+    observed_remaining: u64,
+}
+
+impl ivm::IVMHost for RefundingHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        Ok(7)
+    }
+
+    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        self.observed_remaining = vm.remaining_gas();
+        Ok(2)
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+struct UnderquotingHost;
+
+impl ivm::IVMHost for UnderquotingHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        Ok(1)
+    }
+
+    fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        assert_eq!(number, 1);
+        Ok(2)
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+struct CompactProofHost {
+    calls: usize,
+}
+
+impl ivm::IVMHost for CompactProofHost {
+    fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
+        assert!(matches!(
+            number,
+            ivm::syscalls::SYSCALL_GET_MERKLE_COMPACT
+                | ivm::syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT
+        ));
+        Ok(2)
+    }
+
+    fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+        self.calls += 1;
+        Ok(2)
     }
 
     fn as_any(&mut self) -> &mut dyn std::any::Any {
@@ -167,6 +282,103 @@ fn test_syscall_additional_gas() {
     vm.run().expect("syscall should succeed");
     assert_eq!(vm.register(10), 6);
     assert_eq!(vm.remaining_gas(), 0);
+}
+
+#[test]
+fn syscall_quote_is_debited_before_host_side_effects() {
+    let mut vm = IVM::new(u64::MAX);
+    let mut host = SideEffectHost { calls: 0 };
+    let mut prog = Vec::new();
+    prog.extend_from_slice(
+        &encoding::wide::encode_sys(instruction::wide::system::SCALL, 1).to_le_bytes(),
+    );
+    prog.extend_from_slice(&HALT);
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.set_gas_limit(6); // five for SCALL, but only one of the quoted two remains
+
+    let result = vm.run_with_host(&mut host);
+
+    assert!(matches!(result, Err(VMError::OutOfGas)));
+    assert_eq!(
+        host.calls, 0,
+        "host must not run when its quote cannot be paid"
+    );
+}
+
+#[test]
+fn compact_proof_helpers_debit_quotes_and_restore_the_host_on_failure() {
+    let mut vm = IVM::new(1);
+    vm.set_host(CompactProofHost { calls: 0 });
+
+    assert!(matches!(
+        vm.get_memory_compact_bundle(0, None),
+        Err(VMError::OutOfGas)
+    ));
+    assert!(matches!(
+        vm.get_registers_compact_bundle(0, None),
+        Err(VMError::OutOfGas)
+    ));
+
+    let host = vm
+        .host_mut_any()
+        .expect("host must be restored after metering failure")
+        .downcast_mut::<CompactProofHost>()
+        .expect("compact proof host");
+    assert_eq!(
+        host.calls, 0,
+        "unaffordable helper calls must never reach the host"
+    );
+}
+
+#[test]
+fn syscall_refunds_unused_quote_and_preserves_host_budget_view() {
+    let mut vm = IVM::new(u64::MAX);
+    let mut host = RefundingHost {
+        observed_remaining: 0,
+    };
+    let mut prog = Vec::new();
+    prog.extend_from_slice(
+        &encoding::wide::encode_sys(instruction::wide::system::SCALL, 1).to_le_bytes(),
+    );
+    prog.extend_from_slice(&HALT);
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.set_gas_limit(12); // five for SCALL plus the seven-gas quote
+
+    vm.run_with_host(&mut host).expect("syscall should succeed");
+
+    assert_eq!(host.observed_remaining, 7);
+    assert_eq!(vm.remaining_gas(), 5); // only the two-gas actual cost remains charged
+}
+
+#[test]
+fn syscall_rejects_a_host_cost_above_its_quote() {
+    let mut vm = IVM::new(u64::MAX);
+    let mut host = UnderquotingHost;
+    let mut prog = Vec::new();
+    prog.extend_from_slice(
+        &encoding::wide::encode_sys(instruction::wide::system::SCALL, 1).to_le_bytes(),
+    );
+    prog.extend_from_slice(&HALT);
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.set_gas_limit(6);
+
+    let result = vm.run_with_host(&mut host);
+
+    assert!(matches!(
+        result,
+        Err(VMError::SyscallGasQuoteExceeded {
+            quoted: 1,
+            actual: 2
+        })
+    ));
+    assert_eq!(vm.remaining_gas(), 0);
+    assert_eq!(
+        vm.last_diagnostic().map(|diagnostic| diagnostic.trap_kind),
+        Some(VmTrapKind::SyscallGasQuoteExceeded)
+    );
 }
 
 #[test]
@@ -209,6 +421,30 @@ fn metered_syscall_error_returns_out_of_gas_when_debit_cannot_be_paid() {
     let res = vm.run();
     assert!(matches!(res, Err(VMError::OutOfGas)));
     assert_eq!(vm.remaining_gas(), 5);
+}
+
+#[test]
+fn unmetered_syscall_error_consumes_the_fail_closed_quote() {
+    let mut vm = IVM::new(u64::MAX);
+    let mut host = UnmeteredErrorHost { calls: 0 };
+    let mut prog = Vec::new();
+    prog.extend_from_slice(
+        &encoding::wide::encode_sys(instruction::wide::system::SCALL, 1).to_le_bytes(),
+    );
+    prog.extend_from_slice(&HALT);
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.set_gas_limit(20);
+
+    let result = vm.run_with_host(&mut host);
+
+    assert_eq!(result, Err(VMError::PermissionDenied));
+    assert_eq!(host.calls, 1, "the host executes only after quote debit");
+    assert_eq!(
+        vm.remaining_gas(),
+        8,
+        "an unmetered failure must not refund potentially expensive host work"
+    );
 }
 
 #[test]

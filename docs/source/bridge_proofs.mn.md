@@ -2,59 +2,58 @@
 lang: mn
 direction: ltr
 source: docs/source/bridge_proofs.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 65aff839e8970e96edb07dfb9655cb4e79f56d1d885b7782647f5dc8f328027b
-source_last_modified: "2025-12-29T18:16:35.921274+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
+source_last_modified: "2026-07-11T15:09:39+04:00"
+translation_last_reviewed: 2026-07-11
+translator: machine-assisted
 ---
 
-# Гүүрний баталгаа
+> Энэ нь 2026-07-11-ний товчилсон нутагшуулсан тойм бөгөөд бүрэн норматив
+> орчуулга биш. Яг төрөл, API гэрээ, хувилбарын шаардлагыг
+> [англи канон хуудаснаас](bridge_proofs.md) үзнэ үү.
 
-Гүүр нотлох баримтууд нь стандарт зааврын замаар (`SubmitBridgeProof`) дамжиж, баталгаажуулсан статустай баталгааны бүртгэлд ордог. Одоогийн гадаргуу нь ICS загварын Merkle proofs ба ил тод ZK ачааллыг бэхэлсэн хадгалалт, манифест холболттой хамардаг.
+# SCCP V1 гүүрийн нотолгоо — товч тойм
 
-## Хүлээн авах дүрэм
+## Анхны хувилбарын хил
 
-- Хүрээ нь дараалсан/хоосон биш байх ёстой бөгөөд `zk.bridge_proof_max_range_len` (0 нь хязгаарыг идэвхгүй болгодог).
-- Нэмэлт өндөртэй цонхнууд нь хуучирсан/ирээдүйн баталгааг үгүйсгэдэг: `zk.bridge_proof_max_past_age_blocks` болон `zk.bridge_proof_max_future_drift_blocks` нь нотолгоог шингээж буй блокийн өндрөөр хэмжигддэг (0 нь хамгаалалтын хашлагыг идэвхгүй болгодог).
-- Гүүрний нотлох баримтууд нь ижил арын хэсэгт байгаа нотлох баримттай давхцахгүй байж болно (заасан нотлох баримтууд хадгалагдаж, давхцлыг блоклодог).
-- Манифест хэш нь тэгээс өөр байх ёстой; Ачааллын хэмжээ нь `zk.max_proof_size_bytes`-ээр хязгаарлагддаг.
-- ICS-ийн ачаалал нь тохируулсан Merkle гүний хязгаарыг дагаж мөрдөж, зарласан хэш функцийг ашиглан замыг баталгаажуулдаг; ил тод ачаалал нь хоосон биш арын шошгыг зарлах ёстой.
-- Хадгалагдсан нотлох баримтууд нь тайрахаас чөлөөлөгдөнө; тогтоогдоогүй нотолгоо нь дэлхийн `zk.proof_history_cap`/grace/batch тохиргоог хүндэтгэсээр байна.
+- SCCP V1 нь хаалттай гадаргуу: зөвхөн Ethereum mainnet, BSC mainnet, TRON
+  mainnet дэмжигдэнэ; SORA талын цорын ганц төгсгөлийн цэг нь `sora-taira`.
+  Бусад сүлжээний profile эсвэл SORA identity-г татгалзана.
+- `SubmitBridgeProof` зөвхөн route-д холбогдсон төрөлжсөн `NativeProtocol` ба
+  `SccpDestination` нотолгоог хүлээн авна. Ерөнхий `Ics` болон `TransparentZk`
+  payload илгээх боломжгүй бөгөөд fail-closed журмаар татгалзана.
 
-## Torii API гадаргуу
+## Төрөлжсөн бүртгэл ба түүх
 
-- `GET /v1/zk/proofs` болон `GET /v1/zk/proofs/count` нь гүүрийг мэддэг шүүлтүүрийг хүлээн авдаг:
-  - `bridge_only=true` нь зөвхөн гүүрний баталгааг буцаана.
-  - `bridge_pinned_only=true` нь бэхлэгдсэн гүүрний баталгаа хүртэл нарийсдаг.
-  - `bridge_start_from_height` / `bridge_end_until_height` гүүрний хүрээний цонхыг хавчих.
-- `GET /v1/zk/proof/{backend}/{hash}` нь нотлох id/status/VK холболтын зэрэгцээ гүүрний мета өгөгдлийг (муж, манифест хэш, ачааллын хураангуй) буцаана.
-- Norito баталгаажуулалтын бүрэн бичлэг (ачааллын байтыг оруулаад) нь `GET /v1/proofs/{proof_id}`-ээр дамжуулан зангилаанаас гадуурх баталгаажуулагчдад боломжтой хэвээр байна.
+- `SccpRegistryV1` нь төрөлжсөн, append-only. Lane бүр хамгийн ихдээ 64 route
+  revision, 4,096 native trust anchor хадгална. Бичлэгийг далд байдлаар
+  устгахгүй; хязгаараас давсан дараагийн нэмэлтийг атомоор татгалзана.
+- Anchor interval нь баталгаажсан consensus coordinate ашиглана: Ethereum-д
+  finalized beacon slot, BSC/TRON-д finalized native block height. Хуучин
+  anchor нь залгамж checkpoint-ийг оролцуулан хүчинтэй, түүнээс цааш хүчингүй.
+- Durable inbound record нь event/finality height болон
+  `anchor_interval_height`-ийг тусад нь хадгална. lane+anchor high-water зөвхөн
+  өснө; дараагийн checkpoint түүнээс бага байж болохгүй. Snapshot hydration
+  индексийг бүрэн дахин тооцож, дутуу, хуучирсан эсвэл илүү утгыг татгалзана.
+  Message id давтах болон replay-г мөн татгалзана.
 
-## Баримт хүлээн авах гүүрний үйл явдал
+## Нэг удаагийн шалгалт ба детерминист хязгаар
 
-Гүүрний замууд нь `RecordBridgeReceipt` заавраар бичигдсэн баримтыг гаргадаг. Энэ зааврыг биелүүлж байна
-`BridgeReceipt` ачааллыг бүртгэж, үйл явдал дээр `DataEvent::Bridge(BridgeEvent::Emitted)` ялгаруулдаг
-урсгал, өмнөх зөвхөн бүртгэлийн бүдүүвчийг солих. CLI `iroha bridge emit-receipt` туслах нь
-бичсэн заавар нь индексжүүлэгчид төлбөрийн баримтыг тодорхой хэмжээгээр ашиглах боломжтой.
+- Native болон destination нотолгоог каноноор нэг удаа decode хийж, үнэтэй
+  криптограф шалгалтыг нэг удаа гүйцэтгэнэ. Үүнээс өмнө consensus нь
+  консерватив, hardware-independent ажлын тооцоог нөөцөлнө.
+- `[zk.sccp]` нь proof count/bytes, native headers, Ethereum light-client
+  updates, header bytes, secp256k1 recoveries, BLS aggregate checks/signing
+  contributions, BN254 pairing-product checks-д заавал тэгээс их per-proof,
+  per-transaction, per-block хязгаар тогтооно. Эдгээр admission limit нь
+  consensus-bound тул бүх validator ижил утгатай байна.
 
-## Гадаад баталгаажуулалтын ноорог (ICS)
+## Torii-ийн хязгаар
 
-```rust
-use iroha_data_model::bridge::{BridgeHashFunction, BridgeProofPayload, BridgeProofRecord};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
-
-fn verify_ics(record: &BridgeProofRecord) -> bool {
-    let BridgeProofPayload::Ics(ics) = &record.proof.payload else {
-        return false;
-    };
-    let leaf = HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(ics.leaf_hash));
-    let root =
-        HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(ics.state_root));
-    match ics.hash_function {
-        BridgeHashFunction::Sha256 => ics.proof.clone().verify_sha256(&leaf, &root, ics.proof.audit_path().len()),
-        BridgeHashFunction::Blake2b => ics.proof.clone().verify(&leaf, &root, ics.proof.audit_path().len()),
-    }
-}
-```
+`/v1/bridge/proofs/submit` болон `/v1/bridge/messages` нь endpoint-specific HTTP
+body хязгаартай. Authentication, rate limit, `Content-Length`-ийг body уншихаас
+өмнө шалгана; chunked body-г зөвхөн хатуу хязгаар хүртэл уншина. Хэт том хүсэлт
+`413`, malformed transport/JSON тусдаа `400` буцаана. Detached transaction
+payload 16 MiB, signature payload 16 KiB-ээр хязгаарлагдана.

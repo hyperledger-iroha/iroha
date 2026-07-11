@@ -26,23 +26,25 @@ where
 
     // If no projection was requested, return the entire items as a single tuple element
     if iter.peek().is_none() {
-        return Ok(QueryOutputBatchBoxTuple {
-            tuple: vec![QueryOutputBatchBox::from(batch)],
-        });
+        return Ok(QueryOutputBatchBoxTuple::from_batch(
+            QueryOutputBatchBox::from(batch),
+        ));
     }
 
     while let Some(item) = iter.next() {
         if iter.peek().is_none() {
             // do not clone the last item
             batch_tuple.push(item.project(batch.into_iter())?);
-            return Ok(QueryOutputBatchBoxTuple { tuple: batch_tuple });
+            return QueryOutputBatchBoxTuple::new(batch_tuple)
+                .map_err(|error| QueryExecutionFail::Conversion(error.to_string()));
         }
 
         batch_tuple.push(item.project_clone(batch.iter())?);
     }
 
     // unreachable: handled empty selector above
-    Ok(QueryOutputBatchBoxTuple { tuple: batch_tuple })
+    QueryOutputBatchBoxTuple::new(batch_tuple)
+        .map_err(|error| QueryExecutionFail::Conversion(error.to_string()))
 }
 
 trait BatchedTrait {
@@ -309,11 +311,11 @@ mod tests {
         let (batch_tuple, next) = it.next_batch(0).expect("batch");
         assert!(next.is_none(), "one batch only");
         assert_eq!(
-            batch_tuple.tuple.len(),
+            batch_tuple.column_count(),
             1,
             "single tuple element for full projection"
         );
-        match &batch_tuple.tuple[0] {
+        match batch_tuple.columns().first().expect("one projected column") {
             QueryOutputBatchBox::DomainId(v) => {
                 assert_eq!(v.len(), 2);
                 assert_eq!(v[0], d1);

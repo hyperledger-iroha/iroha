@@ -429,7 +429,7 @@ mod tests {
         #[cfg(feature = "fast_dsl")]
         let batch = empty_iterable_batch_fast(query);
 
-        QueryOutputBatchBoxTuple::new(vec![batch])
+        QueryOutputBatchBoxTuple::from_batch(batch)
     }
 
     #[unsafe(no_mangle)]
@@ -453,7 +453,7 @@ mod tests {
                 QueryResponse::Iterable(QueryOutput::new(empty_iterable_batch(&query), 0, None))
             }
             Some(QueryRequest::Continue(_)) | None => QueryResponse::Iterable(QueryOutput::new(
-                QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Permission(Vec::new())]),
+                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Permission(Vec::new())),
                 0,
                 None,
             )),

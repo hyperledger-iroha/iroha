@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa25c267f36e3245866776d5149039e1b9833407a84126d66a21cf5296e51414
+source_hash: 1859a31eac02d839cfb032c9a2bea520272c8310554f1fbc4e3691fc35cd7318
 source_last_modified: "2025-12-29T18:16:35.135788+00:00"
 translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 ## የአውታረ መረብ አከባቢዎች
 - ሁለት I18NT0000008X አካባቢዎችን ከተለዩ የአውታረ መረብ ቅድመ ቅጥያዎች ጋር ይስሩ።
 - ** Sora Nexus (ዋናኔት)** - የምርት አውታረ መረብ ቅድመ ቅጥያ `nexus`፣ ቀኖናዊ አስተዳደርን እና SoraFS/SoraNet piggyback አገልግሎቶችን (ሰንሰለት መታወቂያ `0x02F1` / UUID0028X/2090NI)።
-- ** Sora Taira (testnet) *** - የአውታረ መረብ ቅድመ-ቅጥያ `taira`, የማዋሃድ ሙከራ እና የቅድመ-መለቀቅ ማረጋገጫ (ሰንሰለት UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`) የሚያንፀባርቅ የአውታረ መረብ ቅድመ ቅጥያ።
+- ** Sora Taira (testnet) *** - የአውታረ መረብ ቅድመ-ቅጥያ `taira`, የማዋሃድ ሙከራ እና የቅድመ-መለቀቅ ማረጋገጫ (ሰንሰለት UUID `fc56984b-2be7-431d-840e-21514d1883f0`) የሚያንፀባርቅ የአውታረ መረብ ቅድመ ቅጥያ።
 - ለእያንዳንዱ አካባቢ የተለየ የዘፍጥረት ፋይሎችን፣ የአስተዳደር ቁልፎችን እና የመሠረተ ልማት አሻራዎችን ያቆዩ። Taira ወደ Nexus ከማስተዋወቅ በፊት ለሁሉም የSoraFS/SoraNet ልቀቶች እንደ ማረጋገጫ ሆኖ ያገለግላል።
 - CI/CD ቧንቧዎች መጀመሪያ ወደ Taira መዘርጋት፣ አውቶሜትድ የጭስ ሙከራዎችን ማድረግ እና ቼኮች ካለፉ በኋላ ወደ Nexus በእጅ ማስተዋወቅ አለባቸው።
 - የማጣቀሻ ውቅር ቅርቅቦች በ`configs/soranexus/nexus/` (ሜይንኔት) እና በ`configs/soranexus/taira/` (testnet) ስር ይኖራሉ፣ እያንዳንዱም ናሙና `config.toml`፣ `genesis.json` እና Torii የመግቢያ ማውጫዎችን ይይዛል።

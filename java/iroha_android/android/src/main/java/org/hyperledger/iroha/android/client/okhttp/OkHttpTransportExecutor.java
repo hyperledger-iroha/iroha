@@ -1,8 +1,8 @@
 package org.hyperledger.iroha.android.client.okhttp;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.time.Duration;
-import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -20,10 +20,11 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
+import org.hyperledger.iroha.android.client.transport.BoundedResponseBodyReader;
+import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
-import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 
 /** OkHttp-backed {@link HttpTransportExecutor} for Android runtimes. */
 public final class OkHttpTransportExecutor
@@ -31,25 +32,38 @@ public final class OkHttpTransportExecutor
 
   private final OkHttpClient client;
   private final boolean ownsClient;
+  private final long maximumResponseBytes;
   private final Set<Call> trackedCalls = ConcurrentHashMap.newKeySet();
 
   public OkHttpTransportExecutor(final OkHttpClient client) {
-    this(client, true);
+    this(client, true, BoundedResponseBodyReader.DEFAULT_MAXIMUM_RESPONSE_BYTES);
+  }
+
+  /** Creates an executor with a custom buffered-response limit. */
+  public OkHttpTransportExecutor(final OkHttpClient client, final long maximumResponseBytes) {
+    this(client, true, maximumResponseBytes);
   }
 
   static OkHttpTransportExecutor shared(final OkHttpClient client) {
-    return new OkHttpTransportExecutor(client, false);
+    return new OkHttpTransportExecutor(
+        client, false, BoundedResponseBodyReader.DEFAULT_MAXIMUM_RESPONSE_BYTES);
   }
 
-  private OkHttpTransportExecutor(final OkHttpClient client, final boolean ownsClient) {
+  private OkHttpTransportExecutor(
+      final OkHttpClient client,
+      final boolean ownsClient,
+      final long maximumResponseBytes) {
     this.client = Objects.requireNonNull(client, "client");
     this.ownsClient = ownsClient;
+    BoundedResponseBodyReader.validateMaximum(maximumResponseBytes);
+    this.maximumResponseBytes = maximumResponseBytes;
   }
 
   @Override
   public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
     Objects.requireNonNull(request, "request");
     final Request okRequest = buildRequest(request);
+    final long responseLimit = responseLimit(request, maximumResponseBytes);
     final Call call = client.newCall(okRequest);
     trackedCalls.add(call);
     final Duration timeout = request.timeout();
@@ -69,7 +83,11 @@ public final class OkHttpTransportExecutor
           public void onResponse(final Call call, final Response response) {
             try (response) {
               final byte[] bodyBytes =
-                  response.body() == null ? new byte[0] : response.body().bytes();
+                  BoundedResponseBodyReader.read(
+                      response.body() == null ? null : response.body().byteStream(),
+                      response.headers().toMultimap(),
+                      responseLimit,
+                      responseMayHaveBody(request.method(), response.code()));
               final TransportResponse transportResponse =
                   new TransportResponse(
                       response.code(), bodyBytes, response.message(), response.headers().toMultimap());
@@ -196,6 +214,21 @@ public final class OkHttpTransportExecutor
           }
         });
     builder.headers(headersBuilder.build());
+  }
+
+  private static boolean responseMayHaveBody(final String requestMethod, final int status) {
+    return !"HEAD".equalsIgnoreCase(requestMethod)
+        && (status < 100 || status >= 200)
+        && status != 204
+        && status != 304;
+  }
+
+  private static long responseLimit(
+      final TransportRequest request, final long executorMaximumResponseBytes) {
+    final Long requestMaximum = request.maximumResponseBytes();
+    return requestMaximum == null
+        ? executorMaximumResponseBytes
+        : Math.min(executorMaximumResponseBytes, requestMaximum.longValue());
   }
 
   private static boolean requiresUnsafeNonAscii(final String value) {

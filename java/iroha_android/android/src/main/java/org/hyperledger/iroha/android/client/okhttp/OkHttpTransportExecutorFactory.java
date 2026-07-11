@@ -16,4 +16,10 @@ public final class OkHttpTransportExecutorFactory {
   public static HttpTransportExecutor create(final OkHttpClient client) {
     return new OkHttpTransportExecutor(client);
   }
+
+  /** Creates an executor with a custom buffered-response limit. */
+  public static HttpTransportExecutor create(
+      final OkHttpClient client, final long maximumResponseBytes) {
+    return new OkHttpTransportExecutor(client, maximumResponseBytes);
+  }
 }

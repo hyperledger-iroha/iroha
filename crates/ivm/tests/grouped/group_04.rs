@@ -8,8 +8,6 @@ mod ivm_cache;
 mod ivm_cache_artifact;
 #[path = "../ivm_header_doc_sync.rs"]
 mod ivm_header_doc_sync;
-#[path = "../koto_compile_env.rs"]
-mod koto_compile_env;
 #[path = "../kotodama.rs"]
 mod kotodama;
 #[path = "../kotodama_call_user.rs"]

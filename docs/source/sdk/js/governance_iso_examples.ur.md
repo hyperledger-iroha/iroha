@@ -141,39 +141,34 @@ await torii.submitIsoMessage(
 );
 ```
 
-### ISO alias helper
+### ISO عرف مددگار
 
-`recipes/iso_alias.mjs` exercises the alias endpoints that back the ISO bridge.
-It evaluates a blinded alias element via `ToriiClient.evaluateAliasVoprf` and
-resolves aliases either by literal label (IBAN-style strings) or by deterministic
-index (`resolveAlias` / `resolveAliasByIndex`). Configure it with:
+`recipes/iso_alias.mjs` کسی مخصوص ٹول کی ضرورت کے بغیر ISO عرف کی تلاش کو آزماتا ہے۔
+یہ `resolveAlias` اور `resolveAliasByIndex` کو کال کرتا ہے، پھر Torii کی طرف سے واپس کردہ اکاؤنٹ بائنڈنگ، ماخذ اور متعین اشاریہ پرنٹ کرتا ہے۔
 
-- `TORII_URL` — Torii endpoint exposing the ISO alias APIs.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element forwarded to the VOPRF helper
-  (defaults to `deadbeef`). Set `ISO_SKIP_VOPRF=1` to skip this call.
-- `ISO_ALIAS_LABEL` — literal alias to resolve; omit when only testing VOPRF or indexed lookups.
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index used with `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for locked-down deployments.
+ماحولیاتی متغیرات:
+
+- `TORII_URL` - Torii اختتامی نقطہ عرف مددگاروں کو بے نقاب کررہا ہے۔
+- `ISO_ALIAS_LABEL`- حل کرنے کے لئے لفظی عرف (جیسے ، ابن طرز کے تار)۔
+- `ISO_ALIAS_INDEX`- اعشاریہ یا `0x`-prefixed انڈیکس `resolveAliasByIndex` میں منتقل ہوا۔
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` - محفوظ Torii تعیناتیوں کے لئے اختیاری ہیڈر۔
 
 ```bash
-# Evaluate a blinded element and resolve both a label and deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
-# Skip VOPRF and only resolve a stored alias.
+# Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The script prints the backend/digest metadata for the VOPRF helper and displays
-the account, source, and deterministic index returned by the alias resolution
-endpoints. When the ISO bridge runtime is disabled, the helper reports the same
-error message surfaced by Torii so CI runs can treat it as a soft skip.
+مددگار آئینہ Torii کا طرز عمل: جب 404s کی سطحیں آتی ہیں جب عرفی نام غائب ہوتے ہیں
+اور رن ٹائم ڈس ایبلڈ غلطیوں کا علاج کرتا ہے جیسا کہ نرم اسکیپس ہے تاکہ سی آئی فلو پل کو برداشت کرسکے
+بحالی ونڈوز
 
 The ISO message builders apply the same identifier validation rules captured in
 [`docs/source/finance/settlement_iso_mapping.md`](../../finance/settlement_iso_mapping.md);

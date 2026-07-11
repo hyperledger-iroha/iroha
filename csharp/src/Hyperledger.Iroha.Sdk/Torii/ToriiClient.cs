@@ -14,7 +14,7 @@ using Hyperledger.Iroha.Zk;
 
 namespace Hyperledger.Iroha.Torii;
 
-public sealed class ToriiClient : IDisposable
+public sealed partial class ToriiClient : IDisposable
 {
     private const int QueryProjectionArchiveVersion = 1;
     private const int QueryProjectionSchemaVersion = 1;

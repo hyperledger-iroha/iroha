@@ -3269,6 +3269,190 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_v2_ingress_rejects_retired_queues_before_allocation() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(1);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let block_payload_fill_tx = block_payload_tx.clone();
+        let vote_dedup = Arc::new(Mutex::new(DedupCache::new(4, VOTE_DEDUP_CACHE_TTL)));
+        let block_payload_dedup = Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+            4,
+            BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+        )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        )
+        .with_v2_ingress_for_test();
+
+        let signed = test_signed_block(3, 1);
+        let block_hash = signed.hash();
+        let legacy_vote = Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: Hash::prehashed([0x11; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0x12; Hash::LENGTH]),
+            height: 3,
+            view: 1,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let retired = [
+            BlockMessage::BlockCreated(message::BlockCreated::from(&signed)),
+            BlockMessage::RbcChunk(RbcChunk {
+                block_hash,
+                height: 3,
+                view: 1,
+                epoch: 0,
+                idx: 0,
+                bytes: vec![0xA5],
+            }),
+            BlockMessage::QcVote(legacy_vote.clone()),
+            BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            }),
+            BlockMessage::FetchPendingBlock(message::FetchPendingBlock {
+                requester: checked_peer(),
+                block_hash,
+                height: 3,
+                view: 1,
+                priority: Some(message::FetchPendingBlockPriority::Consensus),
+                requester_roster_proof_known: Some(true),
+                commit_qc_only: Some(true),
+            }),
+        ];
+        for message in retired {
+            assert!(
+                !handle.incoming_block_message(message),
+                "retired traffic must be rejected before queue allocation"
+            );
+        }
+
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        let evidence = crate::sumeragi::consensus::Evidence {
+            kind: crate::sumeragi::consensus::EvidenceKind::DoublePrepare,
+            payload: crate::sumeragi::consensus::EvidencePayload::DoubleVote {
+                v1: legacy_vote.clone(),
+                v2: legacy_vote,
+            },
+        };
+        let control = ControlFlow::Evidence(evidence);
+        assert!(!handle.try_incoming_consensus_control_flow_message(control.clone()));
+        handle.broadcast_control_flow(control);
+        handle.post_to_peer(
+            checked_peer(),
+            BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            }),
+        );
+        handle.broadcast(BlockMessage::ConsensusParams(
+            message::ConsensusParamsAdvert {
+                collectors_k: 1,
+                redundant_send_r: 1,
+                membership: None,
+            },
+        ));
+        assert!(matches!(
+            consensus_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            background_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        let (proposal, _) = sample_lane_block_proposal();
+        assert!(handle.try_incoming_block_message(BlockMessage::LaneBlockProposal(proposal)));
+        assert!(
+            handle.try_incoming_block_message(BlockMessage::LaneBlockVote(sample_lane_block_vote(
+                Phase::Prepare
+            ),))
+        );
+        assert!(handle.try_incoming_block_message(BlockMessage::LaneBlockQc(
+            sample_lane_block_qc(Phase::Commit),
+        )));
+        assert!(matches!(
+            block_rx.try_recv().map(|entry| entry.message),
+            Ok(BlockMessage::LaneBlockProposal(_))
+        ));
+        assert!(matches!(
+            block_rx.try_recv().map(|entry| entry.message),
+            Ok(BlockMessage::LaneBlockQc(_))
+        ));
+        assert!(matches!(
+            vote_rx.try_recv().map(|entry| entry.message),
+            Ok(BlockMessage::LaneBlockVote(_))
+        ));
+
+        block_payload_fill_tx
+            .send(inbound(BlockMessage::ConsensusParams(
+                message::ConsensusParamsAdvert {
+                    collectors_k: 1,
+                    redundant_send_r: 1,
+                    membership: None,
+                },
+            )))
+            .expect("fill retired payload queue");
+        let (done_tx, done_rx) = mpsc::channel();
+        let saturated_handle = handle.clone();
+        let retired_created =
+            BlockMessage::BlockCreated(message::BlockCreated::from(&test_signed_block(4, 0)));
+        let join = std::thread::spawn(move || {
+            let accepted = saturated_handle.incoming_block_message(retired_created);
+            let _ = done_tx.send(accepted);
+        });
+        let accepted = match done_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                let _ = block_payload_rx.recv();
+                let eventual = done_rx.recv_timeout(Duration::from_secs(1));
+                join.join().expect("join saturated retired ingress sender");
+                panic!(
+                    "retired ingress blocked on a saturated queue: {error}; eventual result: {eventual:?}"
+                );
+            }
+        };
+        join.join().expect("join rejected retired ingress sender");
+        assert!(!accepted);
+        assert!(matches!(
+            block_payload_rx.try_recv().map(|entry| entry.message),
+            Ok(BlockMessage::ConsensusParams(_))
+        ));
+    }
+
+    #[test]
     fn try_incoming_rbc_chunk_waits_when_queue_full_and_dedups_after_enqueue() {
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -12716,62 +12900,24 @@ pub(crate) mod safety_wal;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
-// TODO: Remove this temporary allowance when the actor's canonical height-context/body rollover
-// adapter is wired and Sumeragi v2 can safely open network ingress.
-#[allow(dead_code)]
 pub(crate) mod v2;
-// TODO: Remove this temporary allowance when the production v2 service thread
-// owns the idempotent apply transaction.
-#[allow(dead_code)]
 pub(crate) mod v2_apply;
-pub(crate) mod v2_body_store;
-// TODO: Remove this temporary allowance when the v2 runner schedules
-// sequential CommitQC discovery and routes its responses into the reducer.
-#[allow(dead_code)]
 pub(crate) mod v2_block_sync;
-// TODO: Remove this temporary allowance when the live v2 height runner owns
-// bounded candidate assembly and losing-candidate requeue.
-#[allow(dead_code)]
+pub(crate) mod v2_body_store;
 pub(crate) mod v2_candidate;
-// TODO: Remove this temporary allowance when the live v2 transport service
-// owns the persistent chunk sessions.
-#[allow(dead_code)]
 pub(crate) mod v2_chunks;
 pub(crate) mod v2_context;
-// TODO: Remove this temporary allowance when the live v2 worker owns context
-// persistence for every height.
-#[allow(dead_code)]
 pub(crate) mod v2_context_store;
 pub use v2_context::{
     GenesisV2Bootstrap, V2GenesisBootstrapError, freeze_staged_genesis_v2,
     signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
 };
-// TODO: Remove this temporary allowance when the live v2 worker owns and drains the effect executor.
-#[allow(dead_code)]
 pub(crate) mod v2_effects;
-// TODO: Remove this temporary allowance when the v2 production gate is opened
-// after the lane/AMX chaos and soak gates complete.
-#[allow(dead_code)]
 pub(crate) mod v2_lane_work;
-// TODO: Remove this temporary allowance when the v2 startup path transfers exclusive adapter
-// ownership to the serialized runtime shell.
-#[allow(dead_code)]
-pub(crate) mod v2_runtime;
-// TODO: Remove this temporary allowance when the live v2 height runner calls
-// active-height recovery before opening network ingress.
-#[allow(dead_code)]
 pub(crate) mod v2_recovery;
-// TODO: Remove this temporary allowance when SumeragiWorker delegates global
-// consensus to the serialized v2 height runner.
-#[allow(dead_code)]
 pub(crate) mod v2_runner;
-// TODO: Remove this temporary allowance when the production v2 network adapter routes
-// payload dissemination and certified fetch traffic through the authenticated boundary.
-#[allow(dead_code)]
+pub(crate) mod v2_runtime;
 pub(crate) mod v2_transport;
-// TODO: Remove this temporary allowance when SumeragiWorker delegates its
-// global-consensus loop to the v2 height runner below.
-#[allow(dead_code)]
 pub(crate) mod v2_worker;
 pub(crate) mod vnext;
 pub mod witness;
@@ -13558,6 +13704,31 @@ enum IngressMode {
     NonBlocking,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SumeragiIngressPolicy {
+    V2Only,
+    #[cfg(test)]
+    LegacyTestOnly,
+}
+
+impl SumeragiIngressPolicy {
+    fn admits_block_message(self, message: &BlockMessage) -> bool {
+        match self {
+            Self::V2Only => message.is_authoritative_v2_ingress(),
+            #[cfg(test)]
+            Self::LegacyTestOnly => true,
+        }
+    }
+
+    fn admits_legacy_internal_queue(self) -> bool {
+        match self {
+            Self::V2Only => false,
+            #[cfg(test)]
+            Self::LegacyTestOnly => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct InboundBlockMessage {
     message: BlockMessage,
@@ -13736,6 +13907,7 @@ pub struct SumeragiHandle {
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
     ingress_ready: Arc<AtomicBool>,
+    ingress_policy: SumeragiIngressPolicy,
     state: Option<Arc<State>>,
 }
 
@@ -13749,7 +13921,7 @@ impl SumeragiHandle {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    fn new_with_policy(
         block_payload_tx: mpsc::SyncSender<InboundBlockMessage>,
         block_tx: mpsc::SyncSender<InboundBlockMessage>,
         rbc_chunk_tx: mpsc::SyncSender<InboundBlockMessage>,
@@ -13759,6 +13931,7 @@ impl SumeragiHandle {
         lane_relay_tx: mpsc::SyncSender<LaneRelayMessage>,
         vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
         block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+        ingress_policy: SumeragiIngressPolicy,
     ) -> Self {
         let frontier_block_sync_hint = Arc::new(FrontierBlockSyncHint::default());
         Self {
@@ -13776,8 +13949,68 @@ impl SumeragiHandle {
             // Low-level unit fixtures construct handles directly. Production
             // start replaces this with a shared, initially closed replay gate.
             ingress_ready: Arc::new(AtomicBool::new(true)),
+            ingress_policy,
             state: None,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_v2(
+        block_payload_tx: mpsc::SyncSender<InboundBlockMessage>,
+        block_tx: mpsc::SyncSender<InboundBlockMessage>,
+        rbc_chunk_tx: mpsc::SyncSender<InboundBlockMessage>,
+        vote_tx: mpsc::SyncSender<InboundBlockMessage>,
+        consensus_control_tx: mpsc::SyncSender<ControlFlow>,
+        background_tx: mpsc::SyncSender<BackgroundRequest>,
+        lane_relay_tx: mpsc::SyncSender<LaneRelayMessage>,
+        vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
+        block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+    ) -> Self {
+        Self::new_with_policy(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_control_tx,
+            background_tx,
+            lane_relay_tx,
+            vote_dedup,
+            block_payload_dedup,
+            SumeragiIngressPolicy::V2Only,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        block_payload_tx: mpsc::SyncSender<InboundBlockMessage>,
+        block_tx: mpsc::SyncSender<InboundBlockMessage>,
+        rbc_chunk_tx: mpsc::SyncSender<InboundBlockMessage>,
+        vote_tx: mpsc::SyncSender<InboundBlockMessage>,
+        consensus_control_tx: mpsc::SyncSender<ControlFlow>,
+        background_tx: mpsc::SyncSender<BackgroundRequest>,
+        lane_relay_tx: mpsc::SyncSender<LaneRelayMessage>,
+        vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
+        block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+    ) -> Self {
+        Self::new_with_policy(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_control_tx,
+            background_tx,
+            lane_relay_tx,
+            vote_dedup,
+            block_payload_dedup,
+            SumeragiIngressPolicy::LegacyTestOnly,
+        )
+    }
+
+    #[cfg(test)]
+    fn with_v2_ingress_for_test(mut self) -> Self {
+        self.ingress_policy = SumeragiIngressPolicy::V2Only;
+        self
     }
 
     fn with_ingress_ready(mut self, ingress_ready: Arc<AtomicBool>) -> Self {
@@ -14022,6 +14255,12 @@ impl SumeragiHandle {
         if !self.ingress_is_ready() {
             iroha_logger::debug!(
                 "rejecting Sumeragi ingress until context and safety WAL replay complete"
+            );
+            return false;
+        }
+        if !self.ingress_policy.admits_block_message(&msg) {
+            iroha_logger::debug!(
+                "rejecting retired or wrong-version message before authoritative v2 queue admission"
             );
             return false;
         }
@@ -14856,6 +15095,12 @@ impl SumeragiHandle {
         msg: ControlFlow,
         mode: IngressMode,
     ) -> bool {
+        if !self.ingress_policy.admits_legacy_internal_queue() {
+            iroha_logger::debug!(
+                "rejecting retired consensus-control traffic on authoritative v2 ingress"
+            );
+            return false;
+        }
         if !self.ingress_is_ready() {
             return false;
         }
@@ -15159,6 +15404,12 @@ impl SumeragiHandle {
 
     /// Schedule a high-priority consensus message to be posted to a specific peer.
     pub fn post_to_peer(&self, peer: PeerId, msg: BlockMessage) {
+        if !self.ingress_policy.admits_legacy_internal_queue() {
+            iroha_logger::debug!(
+                "rejecting retired background post path on authoritative v2 runtime"
+            );
+            return;
+        }
         self.wake();
         let start = Instant::now();
         match self.background.send(BackgroundRequest::Post {
@@ -15181,6 +15432,12 @@ impl SumeragiHandle {
 
     /// Schedule a consensus broadcast to all peers.
     pub fn broadcast(&self, msg: BlockMessage) {
+        if !self.ingress_policy.admits_legacy_internal_queue() {
+            iroha_logger::debug!(
+                "rejecting retired background broadcast path on authoritative v2 runtime"
+            );
+            return;
+        }
         self.wake();
         let start = Instant::now();
         match self.background.send(BackgroundRequest::Broadcast {
@@ -15202,6 +15459,12 @@ impl SumeragiHandle {
 
     /// Schedule a control-flow broadcast to all peers.
     pub fn broadcast_control_flow(&self, frame: ControlFlow) {
+        if !self.ingress_policy.admits_legacy_internal_queue() {
+            iroha_logger::debug!(
+                "rejecting retired background control-flow path on authoritative v2 runtime"
+            );
+            return;
+        }
         self.wake();
         let start = Instant::now();
         match self
@@ -15653,8 +15916,8 @@ impl SumeragiStartArgs {
     /// # Errors
     ///
     /// Returns an error before allocating ingress channels or spawning the
-    /// worker when the configured live protocol has no complete production
-    /// runtime in this build.
+    /// worker unless the configured live protocol is the authoritative
+    /// Sumeragi v2 runtime shipped by this release.
     #[allow(clippy::too_many_lines)]
     pub fn start(self, shutdown_signal: ShutdownSignal) -> Result<(SumeragiHandle, Child)> {
         ensure_authoritative_consensus_runtime(self.config.protocol_version)?;
@@ -15707,7 +15970,7 @@ impl SumeragiStartArgs {
             )));
         let ingress_ready = Arc::new(AtomicBool::new(false));
 
-        let handle = SumeragiHandle::new(
+        let handle = SumeragiHandle::new_v2(
             block_payload_tx.clone(),
             block_tx.clone(),
             rbc_chunk_tx.clone(),
@@ -15813,28 +16076,15 @@ struct SumeragiWorker {
     rbc_status_handle: rbc_status::Handle,
 }
 
-/// Whether the production actor can execute every asynchronous effect emitted
-/// by the authoritative v2 reducer for the full lifetime of a chain.
-///
-/// Keep this false until the actor owns a replayed reducer for every height and
-/// can bind body-store, deterministic-validation, certified-fetch, apply, and
-/// next-height effects to their production adapters.  Advertising protocol v2
-/// while falling through to the legacy actor would violate the protocol
-/// fingerprint and, more importantly, the reducer's durability proof.
-// TODO: Set this true only after the v2 adapter exposes per-height rollover and
-// the actor implements every body, validation, signing, fetch, apply, and timer effect.
-const SUMERAGI_V2_PRODUCTION_RUNTIME_COMPLETE: bool = false;
+fn is_authoritative_v2_protocol(protocol_version: u32) -> bool {
+    protocol_version == u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)
+}
 
 fn ensure_authoritative_consensus_runtime(protocol_version: u32) -> Result<()> {
     let expected = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
-    if protocol_version != expected {
+    if !is_authoritative_v2_protocol(protocol_version) {
         return Err(eyre::eyre!(
             "live consensus protocol {protocol_version} is unsupported; this build requires Sumeragi v2 ({expected})"
-        ));
-    }
-    if !SUMERAGI_V2_PRODUCTION_RUNTIME_COMPLETE {
-        return Err(eyre::eyre!(
-            "Sumeragi v2 is configured, but its production effect runtime is incomplete; refusing to start the legacy consensus actor under a v2 handshake"
         ));
     }
     Ok(())
@@ -15844,20 +16094,19 @@ fn ensure_authoritative_consensus_runtime(protocol_version: u32) -> Result<()> {
 mod authoritative_runtime_gate_tests {
     use std::sync::atomic::Ordering;
 
-    use super::{BlockMessage, ensure_authoritative_consensus_runtime, test_sumeragi_handle};
+    use super::{
+        BlockMessage, ensure_authoritative_consensus_runtime, is_authoritative_v2_protocol,
+        test_sumeragi_handle,
+    };
 
     #[test]
-    fn v2_cannot_fall_through_to_legacy_actor() {
-        let error = ensure_authoritative_consensus_runtime(u32::from(
-            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
-        ))
-        .expect_err("incomplete v2 effect runtime must fail closed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("refusing to start the legacy consensus actor")
-        );
+    fn v2_is_the_only_authoritative_runtime() {
+        let version = u32::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION);
+        assert!(is_authoritative_v2_protocol(version));
+        ensure_authoritative_consensus_runtime(version)
+            .expect("the complete v2 runner must be admitted");
+        assert!(!is_authoritative_v2_protocol(version.saturating_add(1)));
+        assert!(ensure_authoritative_consensus_runtime(version.saturating_add(1)).is_err());
     }
 
     #[test]
@@ -18031,6 +18280,10 @@ mod worker_iteration_warn_tests {
 impl SumeragiWorker {
     #[allow(clippy::too_many_lines)]
     fn run(self) {
+        if is_authoritative_v2_protocol(self.config.protocol_version) {
+            v2_runner::run(self);
+            return;
+        }
         let startup_trace_started_at = Instant::now();
         log_sumeragi_startup_trace("sumeragi.worker.run.enter", startup_trace_started_at);
         let Self {

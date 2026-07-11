@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use iroha_crypto::{HashOf, KeyPair, Signature};
@@ -31,7 +31,8 @@ use super::{
     v2_effects::{
         ApplyTask, BodyFetchTask, BodyStoreTask, BodyValidationTask, ConsensusSignTask,
         DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectTransportError,
-        EffectWorkId, V2EffectExecutor, V2EffectServices,
+        EffectWorkId, PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor,
+        V2EffectServices,
     },
     v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk},
 };
@@ -70,6 +71,7 @@ enum V2IoCompletion {
     CertifiedRequestIgnored,
     CandidateLoaded(LoadedCandidateBody),
     Retired,
+    RetirementFailed(String),
     Failed(String),
 }
 
@@ -77,6 +79,85 @@ struct V2IoHandle {
     command_tx: mpsc::SyncSender<V2IoCommand>,
     completion_rx: mpsc::Receiver<V2IoCompletion>,
     join: Option<thread::JoinHandle<()>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CleanupWorkerIdentity {
+    height: u64,
+    context_id: wire::HeightContextId,
+    block_hash: HashOf<iroha_data_model::block::BlockHeader>,
+}
+
+impl CleanupWorkerIdentity {
+    fn from_receipt(receipt: &KuraV2CommitReceipt) -> Self {
+        Self {
+            height: receipt.height(),
+            context_id: receipt.context_id(),
+            block_hash: receipt.block_hash(),
+        }
+    }
+}
+
+struct SupervisedCleanupWorker {
+    identity: CleanupWorkerIdentity,
+    join: thread::JoinHandle<()>,
+}
+
+/// Runner-owned reaper for cleanup workers which outlive their configured
+/// post-finality response deadline.
+///
+/// Timed-out workers remain supervised instead of being detached. Finished
+/// workers are reaped during subsequent height processing; shutdown joins any
+/// remaining workers after their command/completion channels have been closed.
+#[derive(Default)]
+pub(crate) struct V2CleanupSupervisor {
+    workers: Vec<SupervisedCleanupWorker>,
+}
+
+impl V2CleanupSupervisor {
+    fn supervise(&mut self, identity: CleanupWorkerIdentity, join: thread::JoinHandle<()>) {
+        self.workers
+            .push(SupervisedCleanupWorker { identity, join });
+    }
+
+    /// Reap every completed cleanup worker without blocking height processing.
+    pub(crate) fn reap_finished(&mut self) {
+        let mut pending = Vec::with_capacity(self.workers.len());
+        for worker in std::mem::take(&mut self.workers) {
+            if worker.join.is_finished() {
+                report_cleanup_worker_join(worker);
+            } else {
+                pending.push(worker);
+            }
+        }
+        self.workers = pending;
+    }
+
+    #[cfg(test)]
+    fn pending_workers(&self) -> usize {
+        self.workers.len()
+    }
+}
+
+impl Drop for V2CleanupSupervisor {
+    fn drop(&mut self) {
+        for worker in std::mem::take(&mut self.workers) {
+            report_cleanup_worker_join(worker);
+        }
+    }
+}
+
+fn report_cleanup_worker_join(worker: SupervisedCleanupWorker) {
+    if worker.join.join().is_err() {
+        iroha_logger::warn!(
+            height = worker.identity.height,
+            context_id = ?worker.identity.context_id,
+            block_hash = %worker.identity.block_hash,
+            cleanup_target = PostFinalityCleanupTarget::CleanupWorker.as_str(),
+            reason = "Sumeragi v2 I/O worker panicked during supervised finalized cleanup",
+            "Sumeragi v2 finalized with retained local cleanup state"
+        );
+    }
 }
 
 impl V2IoHandle {
@@ -127,11 +208,11 @@ impl V2IoHandle {
                             load_candidate_body(&body_store, tag, subject)
                         }
                         V2IoCommand::Retire(receipt) => {
-                            let result = body_store
-                                .retire_height(&receipt)
-                                .map(|()| V2IoCompletion::Retired)
-                                .map_err(|error| error.to_string());
-                            send_completion(&completion_tx, result);
+                            let completion = match body_store.retire_height(&receipt) {
+                                Ok(()) => V2IoCompletion::Retired,
+                                Err(error) => V2IoCompletion::RetirementFailed(error.to_string()),
+                            };
+                            let _ = completion_tx.send(completion);
                             break;
                         }
                         V2IoCommand::Shutdown => break,
@@ -189,6 +270,28 @@ fn send_completion(
 ) {
     let completion = completion.unwrap_or_else(V2IoCompletion::Failed);
     let _ = sender.send(completion);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CleanupCompletionWaitError {
+    DeadlineElapsed,
+    Disconnected,
+}
+
+fn recv_cleanup_completion(
+    receiver: &mpsc::Receiver<V2IoCompletion>,
+    deadline: Instant,
+) -> Result<V2IoCompletion, CleanupCompletionWaitError> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(CleanupCompletionWaitError::DeadlineElapsed)?;
+    receiver
+        .recv_timeout(remaining)
+        .map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => CleanupCompletionWaitError::DeadlineElapsed,
+            mpsc::RecvTimeoutError::Disconnected => CleanupCompletionWaitError::Disconnected,
+        })
 }
 
 fn sign_consensus_task(
@@ -441,6 +544,7 @@ impl ProductionV2Services {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         context: wire::HeightContext,
+        validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
         key_pair: KeyPair,
@@ -473,6 +577,7 @@ impl ProductionV2Services {
             block_cadence,
             genesis_account,
             events_sender,
+            validator_set_pops,
         );
         let io = V2IoHandle::spawn(
             body_store,
@@ -798,6 +903,14 @@ impl ProductionV2Services {
                         self,
                     ));
                 }
+                V2IoCompletion::RetirementFailed(reason) => {
+                    return Err(executor.external_service_failed(
+                        format!(
+                            "unexpected early Sumeragi v2 storage retirement failure: {reason}"
+                        ),
+                        self,
+                    ));
+                }
             }
         }
         while let Some(completion) = self.local_completions.pop_front() {
@@ -820,48 +933,154 @@ impl ProductionV2Services {
     }
 
     /// Retire all height-local body and chunk files after finalized rollover.
-    pub(crate) fn finish_height(mut self, receipt: KuraV2CommitReceipt) -> Result<(), String> {
-        let mut io = self
-            .io
-            .take()
-            .ok_or_else(|| "Sumeragi v2 I/O worker already stopped".to_owned())?;
-        let mut command = V2IoCommand::Retire(receipt);
-        loop {
-            match io.command_tx.try_send(command) {
-                Ok(()) => break,
-                Err(mpsc::TrySendError::Full(returned)) => {
-                    command = returned;
-                    match io.completion_rx.recv() {
-                        Ok(V2IoCompletion::Failed(reason)) => return Err(reason),
-                        Ok(_) => {}
-                        Err(_) => {
-                            return Err("Sumeragi v2 I/O worker disconnected".to_owned());
+    ///
+    /// The caller invokes this only after the adapter verified Kura's typed
+    /// receipt. Cleanup is therefore irreversible local maintenance: every
+    /// failure is retained in the returned outcome and later cleanup stages
+    /// still run, but none can invalidate the committed block.
+    pub(crate) fn finish_height(
+        mut self,
+        receipt: KuraV2CommitReceipt,
+        cleanup_timeout: Duration,
+        supervisor: &mut V2CleanupSupervisor,
+    ) -> PostFinalityCleanupOutcome {
+        let mut outcome = PostFinalityCleanupOutcome::default();
+        let identity = CleanupWorkerIdentity::from_receipt(&receipt);
+        let deadline = Instant::now()
+            .checked_add(cleanup_timeout)
+            .unwrap_or_else(Instant::now);
+        if let Some(mut io) = self.io.take() {
+            let mut command = V2IoCommand::Retire(receipt);
+            let retirement_requested = 'enqueue: loop {
+                match io.command_tx.try_send(command) {
+                    Ok(()) => break true,
+                    Err(mpsc::TrySendError::Full(returned)) => {
+                        command = returned;
+                        match recv_cleanup_completion(&io.completion_rx, deadline) {
+                            Ok(V2IoCompletion::Failed(reason)) => outcome.record(
+                                PostFinalityCleanupTarget::CleanupWorker,
+                                format!(
+                                    "pending I/O work failed while enqueueing body retirement: {reason}"
+                                ),
+                            ),
+                            Ok(V2IoCompletion::Retired) => {
+                                outcome.record(
+                                    PostFinalityCleanupTarget::CleanupWorker,
+                                    "I/O worker reported retirement before accepting the retirement request",
+                                );
+                                break 'enqueue false;
+                            }
+                            Ok(V2IoCompletion::RetirementFailed(reason)) => {
+                                outcome.record(
+                                    PostFinalityCleanupTarget::CleanupWorker,
+                                    "Sumeragi v2 I/O worker reported body retirement failure",
+                                );
+                                outcome.record(PostFinalityCleanupTarget::DurableBodies, reason);
+                                break 'enqueue false;
+                            }
+                            Ok(_) => {}
+                            Err(CleanupCompletionWaitError::DeadlineElapsed) => {
+                                outcome.record(
+                                    PostFinalityCleanupTarget::CleanupWorker,
+                                    format!(
+                                        "Sumeragi v2 body retirement enqueue exceeded the configured {cleanup_timeout:?} post-finality cleanup deadline"
+                                    ),
+                                );
+                                break 'enqueue false;
+                            }
+                            Err(CleanupCompletionWaitError::Disconnected) => {
+                                outcome.record(
+                                    PostFinalityCleanupTarget::CleanupWorker,
+                                    "Sumeragi v2 I/O worker disconnected before body retirement",
+                                );
+                                break 'enqueue false;
+                            }
+                        }
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        outcome.record(
+                            PostFinalityCleanupTarget::CleanupWorker,
+                            "Sumeragi v2 I/O worker disconnected before body retirement",
+                        );
+                        break false;
+                    }
+                }
+            };
+            if retirement_requested {
+                loop {
+                    match recv_cleanup_completion(&io.completion_rx, deadline) {
+                        Ok(V2IoCompletion::Retired) => break,
+                        Ok(V2IoCompletion::RetirementFailed(reason)) => {
+                            outcome.record(
+                                PostFinalityCleanupTarget::CleanupWorker,
+                                "Sumeragi v2 I/O worker reported body retirement failure",
+                            );
+                            outcome.record(PostFinalityCleanupTarget::DurableBodies, reason);
+                            break;
+                        }
+                        Ok(V2IoCompletion::Failed(reason)) => outcome.record(
+                            PostFinalityCleanupTarget::CleanupWorker,
+                            format!(
+                                "pending I/O work failed before body retirement completed: {reason}"
+                            ),
+                        ),
+                        Ok(_) => continue,
+                        Err(CleanupCompletionWaitError::DeadlineElapsed) => {
+                            outcome.record(
+                                PostFinalityCleanupTarget::CleanupWorker,
+                                format!(
+                                    "Sumeragi v2 body retirement exceeded the configured {cleanup_timeout:?} post-finality cleanup deadline"
+                                ),
+                            );
+                            break;
+                        }
+                        Err(CleanupCompletionWaitError::Disconnected) => {
+                            outcome.record(
+                                PostFinalityCleanupTarget::CleanupWorker,
+                                "Sumeragi v2 I/O worker disconnected without confirming body retirement",
+                            );
+                            break;
                         }
                     }
                 }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    return Err("Sumeragi v2 I/O worker disconnected".to_owned());
+            }
+            let join = io.join.take();
+            // Closing both channels makes a worker which accepted Retire but
+            // withheld its completion leave its command loop. A worker still
+            // inside context-local filesystem retirement remains owned by the
+            // runner supervisor and cannot block successor construction.
+            drop(io);
+            if let Some(join) = join {
+                if join.is_finished() {
+                    if join.join().is_err() {
+                        outcome.record(
+                            PostFinalityCleanupTarget::CleanupWorker,
+                            "Sumeragi v2 I/O worker panicked during finalized cleanup",
+                        );
+                    }
+                } else {
+                    supervisor.supervise(identity, join);
                 }
             }
+        } else {
+            outcome.record(
+                PostFinalityCleanupTarget::CleanupWorker,
+                "Sumeragi v2 I/O worker was unavailable for body retirement",
+            );
         }
-        loop {
-            match io.completion_rx.recv() {
-                Ok(V2IoCompletion::Retired) => break,
-                Ok(V2IoCompletion::Failed(reason)) => return Err(reason),
-                Ok(_) => continue,
-                Err(_) => return Err("Sumeragi v2 I/O worker disconnected".to_owned()),
-            }
-        }
-        if let Some(join) = io.join.take() {
-            join.join()
-                .map_err(|_| "Sumeragi v2 I/O worker panicked".to_owned())?;
-        }
+
         match std::fs::remove_dir_all(&self.chunk_root) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) => outcome.record(
+                PostFinalityCleanupTarget::PayloadChunks,
+                format!(
+                    "failed to remove Sumeragi v2 chunk root {}: {error}",
+                    self.chunk_root.display()
+                ),
+            ),
         }
-        Ok(())
+        outcome
     }
 
     fn io(&self) -> Result<&V2IoHandle, String> {
@@ -1236,6 +1455,7 @@ mod tests {
         block::{BlockHeader, CertifiedMergeLedgerReference},
         merge::{MergeLedgerEntry, MergeQuorumCertificate},
     };
+    use tempfile::TempDir;
 
     use super::*;
     use crate::sumeragi::v2_chunks::encode_payload;
@@ -1261,6 +1481,7 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
@@ -1310,6 +1531,264 @@ mod tests {
 
     fn manifest_hash(label: &[u8]) -> HashOf<wire::PayloadManifest> {
         HashOf::from_untyped_unchecked(Hash::new(label))
+    }
+
+    fn durable_receipt(service: &ProductionV2Services, keys: &[KeyPair]) -> KuraV2CommitReceipt {
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"finalized worker block")),
+            payload_hash: Hash::new(b"finalized worker payload"),
+        };
+        let round = wire::ConsensusRound {
+            context_id: service.context.id(),
+            height: service.context.height,
+            view: 0,
+        };
+        let preimage = wire::Vote {
+            round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            signer: 0,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let signature_shares = keys[..3]
+            .iter()
+            .map(|key| {
+                Signature::new(key.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signature_shares
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let certificate = wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            signers: vec![0, 1, 2],
+            aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("aggregate valid worker CommitQC"),
+        };
+        let artifact = wire::finality::V2FinalityArtifact::new(
+            service.context.clone(),
+            subject,
+            certificate,
+            keys.iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("worker fixture validator PoP")
+                })
+                .collect(),
+        );
+        artifact.validate().expect("valid worker finality artifact");
+        KuraV2CommitReceipt::for_test(&artifact)
+    }
+
+    #[test]
+    fn finalized_cleanup_reports_absent_worker_and_accumulates_chunk_warning() {
+        let (mut service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+        let directory = TempDir::new().expect("cleanup test directory");
+        let chunk_root = directory.path().join("chunk-root-is-a-file");
+        std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
+        service.chunk_root = chunk_root;
+
+        let mut supervisor = V2CleanupSupervisor::default();
+        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
+
+        assert_eq!(
+            outcome
+                .warnings()
+                .iter()
+                .map(|warning| warning.target())
+                .collect::<Vec<_>>(),
+            vec![
+                PostFinalityCleanupTarget::CleanupWorker,
+                PostFinalityCleanupTarget::PayloadChunks,
+            ],
+            "an unavailable worker must not prevent independent chunk cleanup diagnostics"
+        );
+        assert!(outcome.warnings()[0].reason().contains("unavailable"));
+        assert!(outcome.warnings()[1].reason().contains("chunk root"));
+    }
+
+    #[test]
+    fn finalized_cleanup_reports_disconnected_worker_without_failing_rollover() {
+        let (mut service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+        let directory = TempDir::new().expect("cleanup test directory");
+        service.chunk_root = directory.path().join("already-absent-chunks");
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        drop(command_rx);
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+        });
+
+        let mut supervisor = V2CleanupSupervisor::default();
+        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
+
+        assert_eq!(outcome.warnings().len(), 1);
+        assert_eq!(
+            outcome.warnings()[0].target(),
+            PostFinalityCleanupTarget::CleanupWorker
+        );
+        assert!(outcome.warnings()[0].reason().contains("disconnected"));
+    }
+
+    #[test]
+    fn finalized_cleanup_retains_pending_worker_failure_then_confirms_retirement() {
+        let (mut service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+        let directory = TempDir::new().expect("cleanup test directory");
+        service.chunk_root = directory.path().join("already-absent-chunks");
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        let join = thread::spawn(move || {
+            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
+            completion_tx
+                .send(V2IoCompletion::Failed(
+                    "late queued service diagnostic".to_owned(),
+                ))
+                .expect("send retained worker failure");
+            completion_tx
+                .send(V2IoCompletion::Retired)
+                .expect("confirm body retirement");
+        });
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: Some(join),
+        });
+
+        let mut supervisor = V2CleanupSupervisor::default();
+        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
+
+        assert_eq!(outcome.warnings().len(), 1);
+        assert_eq!(
+            outcome.warnings()[0].target(),
+            PostFinalityCleanupTarget::CleanupWorker
+        );
+        assert!(
+            outcome.warnings()[0]
+                .reason()
+                .contains("late queued service diagnostic")
+        );
+    }
+
+    #[test]
+    fn finalized_cleanup_deadline_releases_rollover_and_supervises_silent_worker() {
+        let (mut service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+        let directory = TempDir::new().expect("cleanup test directory");
+        service.chunk_root = directory.path().join("already-absent-chunks");
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
+        let join = thread::spawn(move || {
+            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
+            accepted_tx
+                .send(())
+                .expect("announce accepted retirement request");
+            // Deliberately withhold a completion. Closing the command channel
+            // at the deadline must still give this worker a supervised exit.
+            assert!(command_rx.recv().is_err());
+            drop(completion_tx);
+        });
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: Some(join),
+        });
+        let mut supervisor = V2CleanupSupervisor::default();
+        let started = Instant::now();
+
+        let outcome = service.finish_height(receipt, Duration::from_millis(10), &mut supervisor);
+
+        accepted_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker accepted the queued Retire request");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a silent post-finality worker must not hold successor rollover"
+        );
+        assert_eq!(outcome.warnings().len(), 1);
+        assert_eq!(
+            outcome.warnings()[0].target(),
+            PostFinalityCleanupTarget::CleanupWorker
+        );
+        assert!(outcome.warnings()[0].reason().contains("deadline"));
+
+        let reap_deadline = Instant::now() + Duration::from_secs(1);
+        while supervisor.pending_workers() != 0 && Instant::now() < reap_deadline {
+            supervisor.reap_finished();
+            thread::yield_now();
+        }
+        assert_eq!(
+            supervisor.pending_workers(),
+            0,
+            "the timed-out worker must be reaped rather than detached"
+        );
+    }
+
+    #[test]
+    fn retirement_failure_and_chunk_failure_preserve_typed_warning_order() {
+        let (mut service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+        let directory = TempDir::new().expect("cleanup test directory");
+        let chunk_root = directory.path().join("chunk-root-is-a-file");
+        std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
+        service.chunk_root = chunk_root;
+        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let join = thread::spawn(move || {
+            assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
+            completion_tx
+                .send(V2IoCompletion::RetirementFailed(
+                    "adversarial body retirement failure".to_owned(),
+                ))
+                .expect("send body retirement failure");
+        });
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: Some(join),
+        });
+        let mut supervisor = V2CleanupSupervisor::default();
+
+        let outcome = service.finish_height(receipt, Duration::from_secs(1), &mut supervisor);
+
+        assert_eq!(
+            outcome
+                .warnings()
+                .iter()
+                .map(|warning| warning.target())
+                .collect::<Vec<_>>(),
+            vec![
+                PostFinalityCleanupTarget::CleanupWorker,
+                PostFinalityCleanupTarget::DurableBodies,
+                PostFinalityCleanupTarget::PayloadChunks,
+            ]
+        );
+        assert!(outcome.warnings()[1].reason().contains("adversarial"));
+        assert!(outcome.warnings()[2].reason().contains("chunk root"));
+    }
+
+    #[test]
+    fn cleanup_diagnostics_retain_height_context_and_block_hash() {
+        let (service, keys) = fixture();
+        let receipt = durable_receipt(&service, &keys);
+
+        let identity = CleanupWorkerIdentity::from_receipt(&receipt);
+
+        assert_eq!(identity.height, receipt.height());
+        assert_eq!(identity.context_id, receipt.context_id());
+        assert_eq!(identity.block_hash, receipt.block_hash());
     }
 
     fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {

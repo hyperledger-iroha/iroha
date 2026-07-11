@@ -50,7 +50,7 @@ translation_last_reviewed: 2025-11-14
 استعمال سے متعلق نکات
 
 - `examples/` فولڈر میں موجود مثالوں کو بیرونی ٹولز
-  ‎(`koto_compile`, `ivm_run`)‎ کے ذریعے بلڈ اور رن کریں:
+  ‎(`koto build`, `ivm_run`)‎ کے ذریعے بلڈ اور رن کریں:
   - ‎`make examples-run`‎ (اور اگر ‎`ivm_tool`‎ دستیاب ہو تو ‎`make examples-inspect`‎)
 - مثالوں اور ہیڈر چیکس کے لیے اختیاری انٹیگریشن ٹیسٹس (جو ڈیفالٹ کے طور پر
   ignore ہوتے ہیں) ‎`integration_tests/tests/`‎ میں موجود ہیں۔

@@ -104,41 +104,34 @@ node javascript/iroha_js/recipes/iso_bridge.mjs
 Both scripts exit with status code `1` if Torii never reports a terminal
 transition, making them suitable for CI gate jobs.
 
-### ISO alias helper
+### Ayudante de alias ISO
 
-`recipes/iso_alias.mjs` targets the ISO alias endpoints so rehearsals can cover
-blinded-element hashing and alias lookups without writing bespoke tooling. It
-calls `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-and prints the backend, digest, account binding, source, and deterministic index
-returned by Torii.
+`recipes/iso_alias.mjs` prueba las búsquedas de alias ISO sin requerir herramientas personalizadas.
+Llama a `resolveAlias` y `resolveAliasByIndex`, y después imprime la vinculación de cuenta, el origen y el índice determinista devueltos por Torii.
 
-Environment variables:
+Variables de entorno:
 
-- `TORII_URL` — Torii endpoint exposing the alias helpers.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — skip the VOPRF call when only testing lookups.
-- `ISO_ALIAS_LABEL` — literal alias to resolve (e.g., IBAN-style strings).
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index passed to `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
+- `TORII_URL`: punto final Torii que expone los ayudantes de alias.
+- `ISO_ALIAS_LABEL`: alias literal a resolver (por ejemplo, cadenas de estilo IBAN).
+- `ISO_ALIAS_INDEX`: índice decimal o con prefijo `0x` pasado a `resolveAliasByIndex`.
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN`: encabezados opcionales para implementaciones seguras de Torii.
 
 ```bash
-# Evaluate a blinded element and resolve an alias literal + deterministic index.
+# Resolve an alias literal + deterministic index.
 TORII_URL=https://torii.testnet.sora \
-ISO_VOPRF_INPUT=deadbeefcafebabe \
 ISO_ALIAS_LABEL="GB82 WEST 1234 5698 7654 32" \
 ISO_ALIAS_INDEX=0 \
 node javascript/iroha_js/recipes/iso_alias.mjs
 
 # Only perform literal resolution.
 TORII_URL=https://torii.testnet.sora \
-ISO_SKIP_VOPRF=1 \
 ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The helper mirrors Torii’s behaviour: it surfaces 404s when aliases are missing
-and treats runtime-disabled errors as soft skips so CI flows can tolerate bridge
-maintenance windows.
+El asistente refleja el comportamiento de Torii: muestra 404 cuando faltan alias
+y trata los errores deshabilitados en tiempo de ejecución como omisiones suaves para que los flujos de CI puedan tolerar el puente.
+ventanas de mantenimiento.
 
 ## Governance workflows
 
