@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use super::{
     BlockSubject, ConsensusMode, DualQuorum, GlobalPhase, Height, HeightContext, HeightContextId,
-    PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower,
+    PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
 };
 use crate::block::BlockHeader;
 
@@ -34,13 +34,18 @@ pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct FinalizedNextEpochSnapshot {
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,
+    /// Last height governed by the next epoch.
+    pub epoch_end_height: Height,
     /// Genesis-selected consensus mode used to interpret voting powers.
     pub mode: ConsensusMode,
     /// Canonically ordered voting roster and exact integer powers.
     pub roster: Vec<ValidatorPower>,
+    /// BLS proofs of possession aligned exactly with `roster`.
+    pub validator_set_pops: Vec<Vec<u8>>,
     /// Canonical dual quorum derived from `roster`.
     pub quorum: DualQuorum,
     /// Finalized seed used for deterministic leader rotation in this epoch.
@@ -56,12 +61,32 @@ impl FinalizedNextEpochSnapshot {
         if self.epoch != expected_epoch {
             return Err(ValidationError::InvalidNextEpoch);
         }
+        let successor_height = context
+            .height
+            .checked_add(1)
+            .ok_or(ValidationError::NextEpochEndsBeforeSuccessor)?;
+        if self.epoch_end_height < successor_height {
+            return Err(ValidationError::NextEpochEndsBeforeSuccessor);
+        }
         if self.mode != context.mode {
             return Err(ValidationError::NextEpochModeMismatch);
         }
         let canonical = DualQuorum::from_roster(&self.roster)?;
         if self.quorum != canonical {
             return Err(ValidationError::NextEpochQuorumMismatch);
+        }
+        if self.validator_set_pops.len() != self.roster.len() {
+            return Err(ValidationError::NextEpochProofOfPossessionCount);
+        }
+        if self.validator_set_pops.iter().any(Vec::is_empty) {
+            return Err(ValidationError::MissingNextEpochProofOfPossession);
+        }
+        if self
+            .validator_set_pops
+            .iter()
+            .any(|proof| proof.len() > MAX_VALIDATOR_POP_BYTES)
+        {
+            return Err(ValidationError::NextEpochProofOfPossessionTooLarge);
         }
         if self.mode == ConsensusMode::Permissioned
             && self.roster.iter().any(|validator| validator.power != 1)
@@ -82,6 +107,7 @@ impl FinalizedNextEpochSnapshot {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct V2FinalityArtifact {
     /// Norito layout version; currently [`V2_FINALITY_ARTIFACT_VERSION`].
     pub format_version: u16,
@@ -249,6 +275,34 @@ impl V2FinalityArtifact {
         Ok(())
     }
 
+    /// Validate this artifact against a complete canonical block header.
+    ///
+    /// In addition to height and header-hash association, this binds the
+    /// header's predecessor and view-change index to the exact CommitQC
+    /// subject and round. These duplicated fields must never be allowed to
+    /// describe different chains or views.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when internal validation fails or any height, hash,
+    /// predecessor, or view binding differs from the supplied header.
+    pub fn validate_for_header(
+        &self,
+        header: &BlockHeader,
+    ) -> Result<(), V2FinalityValidationError> {
+        self.validate_for_block(header.height().get(), header.hash())?;
+        if self.subject.parent_block_hash != header.prev_block_hash() {
+            return Err(V2FinalityValidationError::AssociatedParentBlockHashMismatch);
+        }
+        if self.commit_qc.round.view != header.view_change_index() {
+            return Err(V2FinalityValidationError::AssociatedViewMismatch {
+                certificate: self.commit_qc.round.view,
+                block: header.view_change_index(),
+            });
+        }
+        Ok(())
+    }
+
     /// Verify the artifact's commit certificate against its frozen roster and
     /// roster-aligned BLS proofs of possession.
     ///
@@ -266,11 +320,23 @@ impl V2FinalityArtifact {
     pub fn verify(&self) -> Result<(), V2QuorumCertificateVerificationError> {
         self.validate()
             .map_err(V2QuorumCertificateVerificationError::InvalidArtifact)?;
+        // Authenticate the context (which commits any future snapshot) before
+        // doing full-roster future-PoP work. The certificate path already
+        // verifies every signer PoP; only the current non-signers remain.
         verify_quorum_certificate_with_validator_pops(
             &self.height_context,
             &self.commit_qc,
             &self.validator_set_pops,
-        )
+        )?;
+        verify_validator_power_roster_pops_except(
+            &self.height_context.roster,
+            &self.validator_set_pops,
+            &self.commit_qc.signers,
+        )?;
+        if let Some(snapshot) = &self.height_context.next_epoch_snapshot {
+            verify_validator_power_roster_pops(&snapshot.roster, &snapshot.validator_set_pops)?;
+        }
+        Ok(())
     }
 }
 
@@ -351,9 +417,16 @@ pub fn verify_quorum_certificate_with_validator_pops(
             ValidationError::InsufficientSignerCount,
         ),
     )?;
-    let preimage = certificate
-        .signer_preimage(context, first_signer)
-        .map_err(V2QuorumCertificateVerificationError::InvalidCertificate)?;
+    // The certificate was validated above. Rebuilding the signer-independent
+    // vote preimage directly avoids a second full context validation/hash.
+    let preimage = Vote {
+        round: certificate.round,
+        phase: certificate.phase,
+        subject: certificate.subject,
+        signer: first_signer,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
     let mut public_keys = Vec::with_capacity(certificate.signers.len());
     let mut pops = Vec::with_capacity(certificate.signers.len());
     for signer in &certificate.signers {
@@ -410,20 +483,44 @@ pub fn verify_validator_roster_pops(
     context: &HeightContext,
     validator_set_pops: &[Vec<u8>],
 ) -> Result<(), V2QuorumCertificateVerificationError> {
-    if validator_set_pops.len() != context.roster.len() {
+    verify_validator_power_roster_pops(&context.roster, validator_set_pops)
+}
+
+/// Verify BLS keys and proofs for one canonical powered roster.
+///
+/// # Errors
+///
+/// Returns a typed error for count drift, malformed or non-BLS keys, or an
+/// invalid proof of possession.
+pub fn verify_validator_power_roster_pops(
+    roster: &[ValidatorPower],
+    validator_set_pops: &[Vec<u8>],
+) -> Result<(), V2QuorumCertificateVerificationError> {
+    verify_validator_power_roster_pops_except(roster, validator_set_pops, &[])
+}
+
+fn verify_validator_power_roster_pops_except(
+    roster: &[ValidatorPower],
+    validator_set_pops: &[Vec<u8>],
+    excluded_indices: &[u32],
+) -> Result<(), V2QuorumCertificateVerificationError> {
+    if validator_set_pops.len() != roster.len() {
         return Err(
             V2QuorumCertificateVerificationError::ProofOfPossessionCount {
-                expected: context.roster.len(),
+                expected: roster.len(),
                 actual: validator_set_pops.len(),
             },
         );
     }
-    for (index, (entry, pop)) in context.roster.iter().zip(validator_set_pops).enumerate() {
+    for (index, (entry, pop)) in roster.iter().zip(validator_set_pops).enumerate() {
         let index = u32::try_from(index).map_err(|_| {
             V2QuorumCertificateVerificationError::InvalidCertificate(
                 ValidationError::RosterTooLarge,
             )
         })?;
+        if excluded_indices.binary_search(&index).is_ok() {
+            continue;
+        }
         let algorithm = entry.validator.public_key().try_algorithm().map_err(|_| {
             V2QuorumCertificateVerificationError::MalformedValidatorPublicKey { index }
         })?;
@@ -519,6 +616,15 @@ pub enum V2FinalityValidationError {
     },
     /// Artifact block hash differs from the externally associated block hash.
     AssociatedBlockHashMismatch,
+    /// Artifact subject parent differs from the associated header predecessor.
+    AssociatedParentBlockHashMismatch,
+    /// CommitQC view differs from the associated header view-change index.
+    AssociatedViewMismatch {
+        /// View carried by the CommitQC round.
+        certificate: u64,
+        /// View carried by the canonical block header.
+        block: u64,
+    },
 }
 
 impl fmt::Display for V2FinalityValidationError {
@@ -586,6 +692,13 @@ impl fmt::Display for V2FinalityValidationError {
             Self::AssociatedBlockHashMismatch => {
                 f.write_str("v2 finality artifact does not match the canonical block hash")
             }
+            Self::AssociatedParentBlockHashMismatch => f.write_str(
+                "v2 finality subject parent does not match the canonical block predecessor",
+            ),
+            Self::AssociatedViewMismatch { certificate, block } => write!(
+                f,
+                "v2 finality CommitQC view {certificate} does not match block view {block}"
+            ),
         }
     }
 }
@@ -625,9 +738,11 @@ mod tests {
         let roster = roster();
         let next_epoch_snapshot = FinalizedNextEpochSnapshot {
             epoch: 8,
+            epoch_end_height: 9,
             mode: ConsensusMode::Permissioned,
             roster: roster.clone(),
             quorum: DualQuorum::from_roster(&roster).expect("valid next-epoch quorum"),
+            validator_set_pops: vec![vec![0xC2]; roster.len()],
             leader_seed: [0xC3; 32],
         };
         HeightContext {
@@ -816,6 +931,33 @@ mod tests {
                 actual: MAX_VALIDATOR_POP_BYTES + 1,
                 max: MAX_VALIDATOR_POP_BYTES,
             })
+        );
+
+        let mut oversized_future = artifact();
+        oversized_future
+            .height_context
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("boundary snapshot")
+            .validator_set_pops[0] = vec![0xA5; MAX_VALIDATOR_POP_BYTES + 1];
+        assert_eq!(
+            oversized_future.validate(),
+            Err(V2FinalityValidationError::InvalidHeightContext(
+                ValidationError::NextEpochProofOfPossessionTooLarge
+            ))
+        );
+    }
+
+    #[test]
+    fn artifact_rejects_an_oversized_commit_aggregate_before_cryptography() {
+        let mut oversized = artifact();
+        oversized.commit_qc.aggregate_signature =
+            vec![0xA6; crate::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES + 1];
+        assert_eq!(
+            oversized.validate(),
+            Err(V2FinalityValidationError::InvalidCommitCertificate(
+                ValidationError::SignatureTooLarge
+            ))
         );
     }
 

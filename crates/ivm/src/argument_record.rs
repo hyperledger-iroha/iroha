@@ -1917,6 +1917,13 @@ mod tests {
         argument_record_gas_for_schema_bound(record_bytes, schema_bytes.len(), bound)
     }
 
+    fn int_atom(value: i128) -> EntrypointValueAtomV1 {
+        EntrypointValueAtomV1::Pointer(
+            crate::numeric_tlv::encode_int(&BigInt::from_i128(value))
+                .expect("encode canonical Int atom"),
+        )
+    }
+
     #[test]
     fn numeric_argument_atoms_require_canonical_decimal_strings() {
         assert_eq!(decode_int(&norito::json!("-7")), Ok(BigInt::from_i128(-7)));
@@ -2590,7 +2597,7 @@ mod tests {
                 },
                 EntrypointArgumentFieldV1 {
                     name: "wide".to_owned(),
-                    ty: argument_type(EntrypointValueKindV1::U128),
+                    ty: argument_type(EntrypointValueKindV1::Int),
                 },
                 EntrypointArgumentFieldV1 {
                     name: "account".to_owned(),
@@ -2640,11 +2647,11 @@ mod tests {
         assert_eq!(string.type_id, PointerType::Blob);
         assert_eq!(string.payload, "言霊".as_bytes());
 
-        let wide_tlv = vm.memory.validate_tlv(words[2]).expect("u128 TLV");
-        assert_eq!(wide_tlv.type_id, PointerType::NoritoBytes);
-        let decoded_wide: Numeric =
-            decode_from_bytes(wide_tlv.payload).expect("decode scale-zero Numeric");
-        assert_eq!(decoded_wide.to_string(), wide.to_string());
+        assert_eq!(
+            crate::numeric_tlv::decode_int_metered(&mut vm, words[2])
+                .expect("decode canonical Int"),
+            BigInt::from(wide),
+        );
 
         let account_tlv = vm.memory.validate_tlv(words[3]).expect("AccountId TLV");
         assert_eq!(account_tlv.type_id, PointerType::AccountId);
@@ -2854,16 +2861,16 @@ mod tests {
             }],
         };
         let payload = Json::from(norito::json!({
-            "pairs": [[7, true], [9, false]],
+            "pairs": [["7", true], ["9", false]],
         }));
         let record = argument_record_from_json(&schema, &payload).expect("encode flat list tape");
         assert_eq!(
             record.atoms,
             vec![
                 EntrypointValueAtomV1::List(2),
-                EntrypointValueAtomV1::Int(7),
+                int_atom(7),
                 EntrypointValueAtomV1::Bool(true),
-                EntrypointValueAtomV1::Int(9),
+                int_atom(9),
                 EntrypointValueAtomV1::Bool(false),
             ],
             "list items must live inline in the record's single preorder atom tape",
@@ -2872,14 +2879,24 @@ mod tests {
         decode_argument_record(&mut vm).expect("decode flat list element subtree");
         let table = decoded_words(&vm);
         assert_eq!(table.len(), 1, "the list itself is one ABI word");
+        let pairs = crate::list::read_words(
+            &vm,
+            table[0],
+            ListLayoutV1::try_new(2, 2).expect("pair-list layout"),
+        )
+        .expect("read contiguous pair list");
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0][1], 1);
+        assert_eq!(pairs[1][1], 0);
         assert_eq!(
-            crate::list::read_words(
-                &vm,
-                table[0],
-                ListLayoutV1::try_new(2, 2).expect("pair-list layout"),
-            )
-            .expect("read contiguous pair list"),
-            vec![vec![7, 1], vec![9, 0]],
+            crate::numeric_tlv::decode_int_metered(&mut vm, pairs[0][0])
+                .expect("decode first list Int"),
+            BigInt::from_i128(7),
+        );
+        assert_eq!(
+            crate::numeric_tlv::decode_int_metered(&mut vm, pairs[1][0])
+                .expect("decode second list Int"),
+            BigInt::from_i128(9),
         );
 
         let schema_bytes = to_bytes(&schema).expect("encode pair-list schema");
@@ -2889,17 +2906,14 @@ mod tests {
                 "trailing atom",
                 vec![
                     EntrypointValueAtomV1::List(1),
-                    EntrypointValueAtomV1::Int(7),
+                    int_atom(7),
                     EntrypointValueAtomV1::Bool(true),
-                    EntrypointValueAtomV1::Int(99),
+                    int_atom(99),
                 ],
             ),
             (
                 "missing atom",
-                vec![
-                    EntrypointValueAtomV1::List(1),
-                    EntrypointValueAtomV1::Int(7),
-                ],
+                vec![EntrypointValueAtomV1::List(1), int_atom(7)],
             ),
             (
                 "wrong atom kind",
@@ -2913,11 +2927,11 @@ mod tests {
                 "capacity overflow",
                 vec![
                     EntrypointValueAtomV1::List(3),
-                    EntrypointValueAtomV1::Int(1),
+                    int_atom(1),
                     EntrypointValueAtomV1::Bool(true),
-                    EntrypointValueAtomV1::Int(2),
+                    int_atom(2),
                     EntrypointValueAtomV1::Bool(true),
-                    EntrypointValueAtomV1::Int(3),
+                    int_atom(3),
                     EntrypointValueAtomV1::Bool(true),
                 ],
             ),
@@ -2925,7 +2939,7 @@ mod tests {
                 "item count exceeds available elements",
                 vec![
                     EntrypointValueAtomV1::List(2),
-                    EntrypointValueAtomV1::Int(1),
+                    int_atom(1),
                     EntrypointValueAtomV1::Bool(true),
                 ],
             ),
@@ -3144,10 +3158,7 @@ mod tests {
         let option_schema_bytes = to_bytes(&option_schema).expect("option schema bytes");
         let hidden = EntrypointArgumentRecordV1 {
             schema_hash: entrypoint_argument_schema_hash_v1(&option_schema_bytes),
-            atoms: vec![
-                EntrypointValueAtomV1::Tag(false),
-                EntrypointValueAtomV1::Int(99),
-            ],
+            atoms: vec![EntrypointValueAtomV1::Tag(false), int_atom(99)],
         };
         let mut vm = install_raw_record(&option_schema, &hidden);
         assert_eq!(decode_argument_record(&mut vm), Err(VMError::DecodeError));
@@ -3230,9 +3241,9 @@ mod tests {
                 njson::Value::String("true".to_owned()),
             ),
             (EntrypointValueKindV1::String, njson::Value::Bool(true)),
-            (EntrypointValueKindV1::U128, njson::Value::from(7_u64)),
+            (EntrypointValueKindV1::Int, njson::Value::from(7_u64)),
             (
-                EntrypointValueKindV1::U128,
+                EntrypointValueKindV1::Int,
                 njson::Value::String("01".to_owned()),
             ),
             (

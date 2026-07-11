@@ -167,16 +167,17 @@ fn prediction_market_demo_compiles() {
 #[test]
 fn tuple_destructure_and_field_access() {
     // Destructure a tuple literal into (a,b) and sum; also exercise direct field access `(1,2).1`
-    let src = "seiyaku TupleDestructure { fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }";
+    let src = "seiyaku TupleDestructure { view fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile tuple destructure");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "sum");
     match vm.run() {
         Ok(_) => {
             eprintln!("tuple_destructure_and_field_access r10={}", vm.register(10));
-            assert_eq!(vm.register(10), 3 + 4 + 2);
+            assert_eq!(common::decode_i64_register(&vm, 10), 3 + 4 + 2);
         }
         Err(e) => {
             panic!("vm run error: {e:?}");
@@ -187,16 +188,17 @@ fn tuple_destructure_and_field_access() {
 #[test]
 fn tuple_var_member_access() {
     // Bind a tuple to a name and use member access on it.
-    let src = "seiyaku TupleMember { fn f() -> int { let t = (5,6); return t.0 + t.1; } }";
+    let src = "seiyaku TupleMember { view fn f() -> int { let t = (5,6); return t.0 + t.1; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile tuple var member");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "f");
     match vm.run() {
         Ok(_) => {
             eprintln!("tuple_var_member_access r10={}", vm.register(10));
-            assert_eq!(vm.register(10), 11);
+            assert_eq!(common::decode_i64_register(&vm, 10), 11);
         }
         Err(e) => panic!("vm run error: {e:?}"),
     }
@@ -207,7 +209,7 @@ fn call_function_with_tuple_return() {
     let src = r#"
         seiyaku TupleCall {
             fn pair(int x) -> (int, int) { return (x, x + 1); }
-            fn main() -> int {
+            view fn main() -> int {
                 let (a, b) = pair(7);
                 return a * b;
             }
@@ -218,8 +220,9 @@ fn call_function_with_tuple_return() {
         .expect("compile tuple-returning call");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).expect("load program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run tuple call");
-    assert_eq!(vm.register(10), 56);
+    assert_eq!(common::decode_i64_register(&vm, 10), 56);
 }
 
 #[test]
@@ -584,7 +587,7 @@ fn compile_zk_verify_batch_emits_syscall_0x68() {
     // Ensure the kotodama intrinsic lowers to SCALL 0x68
     let src = r#"
         seiyaku VerifyBatch {
-            kotoage fn verify(p: bytes) authorize("ZkVerifier") {
+            kotoage fn verify(bytes p) authorize("ZkVerifier") {
                 crypto::zk::verify_batch(p);
             }
         }
@@ -733,7 +736,7 @@ fn semantic_rejects_extended_sysvar_helper_args() {
 fn raw_query_and_authority_sysvar_helpers_are_not_source_apis() {
     let src = r#"
         seiyaku RawQuery {
-          view fn query(payload: bytes) -> bytes {
+          view fn query(bytes payload) -> bytes {
             return query_execute_norito(payload);
           }
         }
@@ -1191,7 +1194,7 @@ fn encode_helpers() {
 
 #[test]
 fn compile_and_run_add() {
-    let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } }";
+    let src = "seiyaku Add { fn add(int a, int b) -> int { return a + b; } view fn main() -> int { return add(a: 4, b: 7); } }";
     let compiler = Compiler::new();
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
@@ -1204,11 +1207,10 @@ fn compile_and_run_add() {
 
     let mut vm = ivm::IVM::new(u64::MAX);
     // Decode trace left disabled by default; first-words dump is printed above.
-    vm.set_register(10, 4);
-    vm.set_register(11, 7);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execution failed");
-    assert_eq!(vm.register(10), 11);
+    assert_eq!(common::decode_i64_register(&vm, 10), 11);
 }
 
 #[test]
@@ -1217,14 +1219,15 @@ fn state_allocations_do_not_clobber_params() {
         seiyaku StateAllocation {
             state StateMap<int, int> values;
             fn id(int x) -> int { return x; }
+            view fn main() -> int { return id(42); }
         }
     "#;
     let code = Compiler::new().compile_source(src).expect("compile failed");
     let mut vm = ivm::IVM::new(u64::MAX);
-    vm.set_register(10, 42);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execution failed");
-    assert_eq!(vm.register(10), 42);
+    assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
 
 #[test]
@@ -1296,15 +1299,15 @@ fn pointer_constructors_accept_string_variables() {
 #[test]
 fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
     for source in [
-        r#"seiyaku C { fn f(value: bytes) { let _x = AccountId::parse(value); } }"#,
-        r#"seiyaku C { fn f(value: bytes) { let _x = Json::parse(value); } }"#,
-        r#"seiyaku C { fn f(value: bytes) { let _x = Name::parse(value); } }"#,
-        r#"seiyaku C { fn f(value: Name) { let _x = Name::parse(value); } }"#,
-        r#"seiyaku C { fn f(value: string) { let _x = value.account_id(); } }"#,
-        r#"seiyaku C { fn f(value: string) { let _x = value.name(); } }"#,
-        r#"seiyaku C { fn f(value: string) { let _x = value.json(); } }"#,
-        r#"seiyaku C { fn f(value: bytes) { let _x = value.blob(); } }"#,
-        r#"seiyaku C { fn f(value: bytes) { let _x = value.norito_bytes(); } }"#,
+        r#"seiyaku C { fn f(bytes value) { let _x = AccountId::parse(value); } }"#,
+        r#"seiyaku C { fn f(bytes value) { let _x = Json::parse(value); } }"#,
+        r#"seiyaku C { fn f(bytes value) { let _x = Name::parse(value); } }"#,
+        r#"seiyaku C { fn f(Name value) { let _x = Name::parse(value); } }"#,
+        r#"seiyaku C { fn f(string value) { let _x = value.account_id(); } }"#,
+        r#"seiyaku C { fn f(string value) { let _x = value.name(); } }"#,
+        r#"seiyaku C { fn f(string value) { let _x = value.json(); } }"#,
+        r#"seiyaku C { fn f(bytes value) { let _x = value.blob(); } }"#,
+        r#"seiyaku C { fn f(bytes value) { let _x = value.norito_bytes(); } }"#,
         r#"seiyaku C { fn f() { let _x = blob("raw"); } }"#,
         r#"seiyaku C { fn f() { let _x = norito_bytes("raw"); } }"#,
     ] {
@@ -1329,7 +1332,7 @@ fn triple_nested_struct_field_access() {
         struct B { A a }
         struct C { B b }
         struct D { C c }
-        fn f() -> int {
+        view fn f() -> int {
             let a = A { x: 5 };
             let b = B { a };
             let c = C { b };
@@ -1343,8 +1346,9 @@ fn triple_nested_struct_field_access() {
         .expect("compile triple nested access");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "f");
     vm.run().expect("execute");
-    assert_eq!(vm.register(10), 5);
+    assert_eq!(common::decode_i64_register(&vm, 10), 5);
 }
 
 #[test]
@@ -1355,7 +1359,7 @@ fn triple_nested_struct_field_mixed_named_numeric_access() {
         struct A { int x }
         struct B { A a }
         struct D { (B, int) c }
-        fn f() -> int {
+        view fn f() -> int {
             let a = A { x: 7 };
             let b = B { a };
             let d = D { c: (b, 99) };
@@ -1368,8 +1372,9 @@ fn triple_nested_struct_field_mixed_named_numeric_access() {
         .expect("compile mixed named/numeric access");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "f");
     vm.run().expect("execute");
-    assert_eq!(vm.register(10), 7);
+    assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
 
 #[test]
@@ -1484,7 +1489,7 @@ fn method_call_sugar_receiver_and_arg() {
     let src = r#"
         seiyaku MethodCallSugar {
         fn add(int x, int y) -> int { return x + y; }
-        fn main() -> int { return (5).add(7); }
+        view fn main() -> int { return (5).add(7); }
         }
     "#;
     let code = ivm::KotodamaCompiler::new()
@@ -1492,8 +1497,9 @@ fn method_call_sugar_receiver_and_arg() {
         .expect("compile method sugar");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute");
-    assert_eq!(vm.register(10), 12);
+    assert_eq!(common::decode_i64_register(&vm, 10), 12);
 }
 
 #[test]
@@ -1594,14 +1600,13 @@ fn compile_typed_nft_syscalls() {
 #[test]
 fn compile_and_run_modulo() {
     // Return a % b
-    let src = "seiyaku Modulo { fn r(int a, int b) -> int { return a % b; } }";
+    let src = "seiyaku Modulo { view fn main() -> int { return 17 % 5; } }";
     let code = Compiler::new().compile_source(src).expect("compile modulo");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
-    vm.set_register(10, 17); // a
-    vm.set_register(11, 5); // b
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute");
-    assert_eq!(vm.register(10), 17 % 5);
+    assert_eq!(common::decode_i64_register(&vm, 10), 17 % 5);
 }
 
 #[test]
@@ -2091,47 +2096,42 @@ fn compile_poseidon2_and_assert_eq() {
     assert_ne!(meta.mode & 0x01, 0, "poseidon2 should enable ZK mode");
 
     // assert_eq succeeds without enabling ZK mode
-    let src = "seiyaku Assertions { view fn g(int a, int b) { test::assert_eq(actual: a, expected: b); } }";
+    let src = "seiyaku Assertions { view fn pass() { test::assert_eq(actual: 1, expected: 1); } view fn fail() { test::assert_eq(actual: 1, expected: 2); } }";
     let code = test_compiler().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode & 0x01, 0);
 
     let mut vm = ivm::IVM::new(u64::MAX);
-    vm.set_register(10, 1);
-    vm.set_register(11, 1);
     vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "g");
+    common::select_kotodama_entrypoint(&mut vm, &code, "pass");
     vm.run().expect("assert_eq failed");
 
     // failing case
     let mut vm2 = ivm::IVM::new(u64::MAX);
-    vm2.set_register(10, 1);
-    vm2.set_register(11, 2);
     vm2.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm2, &code, "g");
+    common::select_kotodama_entrypoint(&mut vm2, &code, "fail");
     let res = vm2.run();
     assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));
 }
 
 #[test]
 fn compile_pubkgen_and_valcom() {
-    let src = "module Commitments { fn f(int a, int b) -> (int, int) { let p = crypto::pubkgen(a); let c = crypto::valcom(left: a, right: b); return (p, c); } }";
+    let src = "seiyaku Commitments { view fn main() -> (int, int) { let p = crypto::pubkgen(9); let c = crypto::valcom(left: 9, right: 4); return (p, c); } }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert!(meta.mode & 0x01 != 0);
 
     let mut vm = ivm::IVM::new(u64::MAX);
-    vm.set_register(10, 9);
-    vm.set_register(11, 4);
     vm.load_program(&code).unwrap();
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execution failed");
 
     let expected_pubk = ivm::field::mul(9, 2);
-    assert_eq!(vm.register(10), expected_pubk);
+    assert_eq!(common::decode_u64_register(&vm, 10), expected_pubk);
     let expected_commit = ivm::pedersen_commit_truncated(9, 4);
-    assert_eq!(vm.register(11), expected_commit);
+    assert_eq!(common::decode_u64_register(&vm, 11), expected_commit);
 }
 
 #[test]
@@ -2281,8 +2281,8 @@ fn raw_json_codec_aliases_are_rejected() {
 #[test]
 fn compile_and_run_poseidon_register_forms() {
     let src = r#"
-module PoseidonForms {
-    fn main() -> (int, int) {
+seiyaku PoseidonForms {
+    view fn main() -> (int, int) {
         let pair = crypto::poseidon2(left: 123456789, right: 987654321);
         let sextet = crypto::poseidon6(a: 3, b: 5, c: 8, d: 13, e: 21, f: 34);
         return (pair, sextet);
@@ -2305,9 +2305,16 @@ module PoseidonForms {
 
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).expect("load Poseidon program");
+    common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run Poseidon program");
-    assert_eq!(vm.register(10), ivm::poseidon2(123456789, 987654321));
-    assert_eq!(vm.register(11), ivm::poseidon6([3, 5, 8, 13, 21, 34]));
+    assert_eq!(
+        common::decode_u64_register(&vm, 10),
+        ivm::poseidon2(123456789, 987654321)
+    );
+    assert_eq!(
+        common::decode_u64_register(&vm, 11),
+        ivm::poseidon6([3, 5, 8, 13, 21, 34])
+    );
 }
 
 #[test]
@@ -2485,7 +2492,7 @@ fn transfer_batch_requires_entries() {
 
 #[test]
 fn transfer_batch_requires_tuple_entries() {
-    let src = "module InvalidBatch { fn f(a: AccountId) { ledger::asset::transfer_batch(a); } }";
+    let src = "module InvalidBatch { fn f(AccountId a) { ledger::asset::transfer_batch(a); } }";
     let prog = parse(src).expect("parse failed");
     assert!(
         analyze(&prog).is_err(),
@@ -2752,7 +2759,7 @@ fn ir_tuple_pack_and_get_general() {
 fn typed_vrf_syscalls_are_present() {
     let src = r#"
         module VrfVerification {
-            fn main(input: bytes, public_key: bytes, proof: bytes, batch: bytes) {
+            fn main(bytes input, bytes public_key, bytes proof, bytes batch) {
                 let _out = crypto::vrf::verify(message: input, proof: public_key, public_key: proof, variant: 2);
                 let _batch = crypto::vrf::verify_batch(batch);
             }
@@ -2777,7 +2784,7 @@ fn typed_vrf_syscalls_are_present() {
 fn raw_pointer_codec_alias_is_rejected() {
     let src = r#"
         module RemovedPointerCodec {
-            fn main(value: bytes) {
+            fn main(bytes value) {
                 let _encoded = pointer_to_norito(value);
             }
         }

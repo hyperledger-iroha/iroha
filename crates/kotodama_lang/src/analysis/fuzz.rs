@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use iroha_primitives::{bigint::BigInt, numeric_abi::IntValueV1};
+
 use super::{AnalysisCategory, AnalysisFinding};
 use crate::{
     analysis::SimpleRng,
@@ -264,13 +266,21 @@ fn build_samples(param_specs: &[ParamSpec]) -> Option<Vec<Vec<Value>>> {
 fn supported_type_samples(ty: &Type) -> Option<Vec<Value>> {
     match ty {
         Type::Int => Some(vec![
-            Value::Int(-2),
-            Value::Int(-1),
-            Value::Int(0),
-            Value::Int(1),
-            Value::Int(2),
-            Value::Int(i32::MIN as i64),
-            Value::Int(i32::MAX as i64),
+            Value::Int(BigInt::from_i128(-2)),
+            Value::Int(BigInt::from_i128(-1)),
+            Value::Int(BigInt::zero()),
+            Value::Int(BigInt::one()),
+            Value::Int(BigInt::from_i128(2)),
+            Value::Int(
+                "-340282366920938463463374607431768211456"
+                    .parse()
+                    .expect("-2^128 is a V1 int"),
+            ),
+            Value::Int(
+                "340282366920938463463374607431768211456"
+                    .parse()
+                    .expect("2^128 is a V1 int"),
+            ),
         ]),
         Type::Bool => Some(vec![Value::Bool(false), Value::Bool(true)]),
         Type::Unit => Some(vec![Value::Unit]),
@@ -315,16 +325,16 @@ struct ParamSpec {
 
 #[derive(Debug, Clone)]
 enum Value {
-    Int(i64),
+    Int(BigInt),
     Bool(bool),
     Unit,
     Tuple(Vec<Value>),
 }
 
 impl Value {
-    fn as_int(&self) -> Option<i64> {
+    fn as_int(&self) -> Option<&BigInt> {
         match self {
-            Value::Int(v) => Some(*v),
+            Value::Int(value) => Some(value),
             _ => None,
         }
     }
@@ -335,6 +345,11 @@ impl Value {
             _ => None,
         }
     }
+}
+
+fn bounded_int(value: BigInt, operation: &'static str) -> Result<Value, EvalError> {
+    IntValueV1::try_new(value.clone()).map_err(|_| EvalError::ArithmeticOverflow(operation))?;
+    Ok(Value::Int(value))
 }
 
 struct Evaluator<'a> {
@@ -542,10 +557,7 @@ impl<'a> Evaluator<'a> {
         depth: usize,
     ) -> Result<Value, EvalError> {
         match &expr.expr {
-            ExprKind::IntLiteral(n) => n
-                .try_to_i64()
-                .map(Value::Int)
-                .ok_or(EvalError::UnsupportedFeature("wide int literal")),
+            ExprKind::IntLiteral(value) => Ok(Value::Int(value.clone())),
             ExprKind::DecimalLiteral { .. } => {
                 Err(EvalError::UnsupportedFeature("exact decimal literal"))
             }
@@ -567,9 +579,10 @@ impl<'a> Evaluator<'a> {
                         let val = inner.as_int().ok_or_else(|| {
                             EvalError::Runtime("negation expects integer operand".into())
                         })?;
-                        val.checked_neg()
-                            .map(Value::Int)
-                            .ok_or(EvalError::ArithmeticOverflow("negation"))
+                        let value = val
+                            .checked_neg()
+                            .map_err(|_| EvalError::ArithmeticOverflow("negation"))?;
+                        bounded_int(value, "negation")
                     }
                     crate::ast::UnaryOp::Not => {
                         let val = inner.as_bool().ok_or_else(|| {
@@ -590,8 +603,7 @@ impl<'a> Evaluator<'a> {
                 }
             }
             ExprKind::NumericTryCast { .. } => Err(EvalError::Runtime(
-                "recoverable numeric conversions are not interpreted by the bounded fuzzer"
-                    .into(),
+                "recoverable numeric conversions are not interpreted by the bounded fuzzer".into(),
             )),
             ExprKind::Binary { op, left, right } => {
                 let lval = self.eval_expr(left, locals, depth)?;
@@ -681,11 +693,10 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Add => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    let sum = (a as i128) + (b as i128);
-                    if sum < i64::MIN as i128 || sum > i64::MAX as i128 {
-                        return Err(EvalError::ArithmeticOverflow("addition"));
-                    }
-                    Ok(Value::Int(sum as i64))
+                    let value = a
+                        .checked_add(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("addition"))?;
+                    bounded_int(value, "addition")
                 } else {
                     Err(EvalError::Runtime("addition expects integers".into()))
                 }
@@ -693,11 +704,10 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Sub => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    let diff = (a as i128) - (b as i128);
-                    if diff < i64::MIN as i128 || diff > i64::MAX as i128 {
-                        return Err(EvalError::ArithmeticOverflow("subtraction"));
-                    }
-                    Ok(Value::Int(diff as i64))
+                    let value = a
+                        .checked_sub(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("subtraction"))?;
+                    bounded_int(value, "subtraction")
                 } else {
                     Err(EvalError::Runtime("subtraction expects integers".into()))
                 }
@@ -705,11 +715,10 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Mul => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    let prod = (a as i128) * (b as i128);
-                    if prod < i64::MIN as i128 || prod > i64::MAX as i128 {
-                        return Err(EvalError::ArithmeticOverflow("multiplication"));
-                    }
-                    Ok(Value::Int(prod as i64))
+                    let value = a
+                        .checked_mul(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("multiplication"))?;
+                    bounded_int(value, "multiplication")
                 } else {
                     Err(EvalError::Runtime("multiplication expects integers".into()))
                 }
@@ -717,10 +726,13 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Div => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    if b == 0 {
+                    if b.is_zero() {
                         return Err(EvalError::Runtime("division by zero".into()));
                     }
-                    Ok(Value::Int(a / b))
+                    let (quotient, _) = a
+                        .checked_div_rem(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("division"))?;
+                    bounded_int(quotient, "division")
                 } else {
                     Err(EvalError::Runtime("division expects integers".into()))
                 }
@@ -728,10 +740,15 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Mod => {
                 let (l, r) = (left.as_int(), right.as_int());
                 if let (Some(a), Some(b)) = (l, r) {
-                    if b == 0 {
+                    if b.is_zero() {
                         return Err(EvalError::Runtime("modulo by zero".into()));
                     }
-                    Ok(Value::Int(a % b))
+                    let (quotient, remainder) = a
+                        .checked_div_rem(b)
+                        .map_err(|_| EvalError::ArithmeticOverflow("remainder"))?;
+                    IntValueV1::try_new(quotient)
+                        .map_err(|_| EvalError::ArithmeticOverflow("remainder"))?;
+                    Ok(Value::Int(remainder))
                 } else {
                     Err(EvalError::Runtime("modulo expects integers".into()))
                 }
@@ -825,6 +842,22 @@ mod tests {
         "#,
         );
         assert_eq!(report.findings.len(), 0);
+        assert!(report.cases_executed > 0);
+    }
+
+    #[test]
+    fn fuzz_interpreter_executes_ints_wider_than_i64() {
+        let report = fuzz(
+            r#"
+            fn wide(int value) -> int {
+                return value + 340282366920938463463374607431768211456;
+            }
+        "#,
+        );
+        assert!(
+            report.findings.is_empty(),
+            "signed-512 values must not be skipped or narrowed: {report:?}"
+        );
         assert!(report.cases_executed > 0);
     }
 

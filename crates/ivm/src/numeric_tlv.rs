@@ -6,11 +6,12 @@
 
 use iroha_primitives::{
     bigint::BigInt,
-    numeric::{Numeric, Quantity},
+    numeric::{Numeric, NumericWorkStep, Quantity},
     numeric_abi::{
         DecimalValueV1, IntValueV1, MAX_DECIMAL_FRAME_BYTES_V1, MAX_INT_FRAME_BYTES_V1,
         MAX_QUANTITY_FRAME_BYTES_V1, NUMERIC_FRAME_HEADER_BYTES_V1,
-        NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, NumericAbiError, QuantityValueV1,
+        NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, NumericAbiError, NumericAbiWorkStep,
+        ObservedNumericAbiError, QuantityValueV1,
     },
 };
 
@@ -128,10 +129,12 @@ fn snapshot_metered(
     )?;
     vm.ensure_owned_public_tlv_range(pointer, OUTER_HEADER_BYTES as u64)
         .map_err(|_| pointer_fault(PointerAbiFaultV1::InvalidAddress))?;
-    let header = vm
+    let header: [u8; OUTER_HEADER_BYTES] = vm
         .memory
         .load_region(pointer, OUTER_HEADER_BYTES as u64)
-        .map_err(|_| pointer_fault(PointerAbiFaultV1::InvalidAddress))?;
+        .map_err(|_| pointer_fault(PointerAbiFaultV1::InvalidAddress))?
+        .try_into()
+        .expect("fixed header range has the requested length");
 
     let raw_type = u16::from_be_bytes([header[0], header[1]]);
     let pointer_type = PointerType::from_u16(raw_type)
@@ -158,28 +161,43 @@ fn snapshot_metered(
         .ok_or_else(|| pointer_fault(PointerAbiFaultV1::OversizedLength))?;
 
     // Both bounded tail charges happen before the VM checks or reads the tail.
-    // Malformed/truncated inputs therefore cannot perform free range probes.
+    // The frame bytes belong to the envelope-snapshot phase; the fixed digest
+    // bytes belong to payload authentication. Malformed/truncated inputs
+    // therefore cannot perform free range probes or hash work.
     vm.charge_syscall_stage(
         SyscallMeteringPhase::PointerEnvelope,
-        numeric_gas::POINTER_HASH_BYTES,
+        numeric_gas::checked_bytes(frame_len)?,
     )?;
     vm.charge_syscall_stage(
         SyscallMeteringPhase::PayloadHash,
-        numeric_gas::checked_bytes(frame_len)?,
+        numeric_gas::POINTER_HASH_BYTES,
     )?;
-    vm.ensure_owned_public_tlv_range(
-        pointer,
-        u64::try_from(total).map_err(|_| VMError::GasCostOverflow)?,
+    let total_u64 = u64::try_from(total).map_err(|_| VMError::GasCostOverflow)?;
+    vm.ensure_owned_tlv_range(pointer, total_u64)
+        .map_err(|_| pointer_fault(PointerAbiFaultV1::TruncatedEnvelope))?;
+    // Read only the tail here: the authenticated execution snapshot reuses
+    // the already charged/copied header instead of traversing those seven
+    // bytes a second time.
+    let tail_pointer = pointer
+        .checked_add(OUTER_HEADER_BYTES as u64)
+        .ok_or_else(|| pointer_fault(PointerAbiFaultV1::InvalidAddress))?;
+    let tail_len = total - OUTER_HEADER_BYTES;
+    vm.ensure_public_memory(
+        tail_pointer,
+        u64::try_from(tail_len).map_err(|_| VMError::GasCostOverflow)?,
     )
     .map_err(|_| pointer_fault(PointerAbiFaultV1::TruncatedEnvelope))?;
-    let snapshot = vm
+    let tail = vm
         .memory
         .load_region(
-            pointer,
-            u64::try_from(total).map_err(|_| VMError::GasCostOverflow)?,
+            tail_pointer,
+            u64::try_from(tail_len).map_err(|_| VMError::GasCostOverflow)?,
         )
         .map_err(|_| pointer_fault(PointerAbiFaultV1::TruncatedEnvelope))?
         .to_vec();
+    let mut snapshot = Vec::with_capacity(total);
+    snapshot.extend_from_slice(&header);
+    snapshot.extend_from_slice(&tail);
 
     // Authenticate exactly the bytes that subsequent stages decode.
     let frame = &snapshot[OUTER_HEADER_BYTES..OUTER_HEADER_BYTES + frame_len];
@@ -188,25 +206,47 @@ fn snapshot_metered(
         return Err(pointer_fault(PointerAbiFaultV1::PayloadHashMismatch));
     }
 
-    // The normative validation formula charges one logical unit for the first
-    // complete/partial eight-byte word (header/schema/length decoding), then
-    // one unit for each remaining word (minimal mantissa and domain checks).
-    // Both charges precede the single strict decode below, and their sum is
-    // exactly `4 * ceil(frame_len / 8)`.
-    let (decode_work, canonical_work) =
+    // Structural validation scans the complete frame (including its Norito
+    // CRC). Canonical value decoding scans the body. Debit the structural pass
+    // now; after structure succeeds, the typed decoder separately debits the
+    // body scan and any scaled-mantissa canonicality probe immediately before
+    // each begins.
+    let (decode_work, _) =
         numeric_gas::numeric_frame_validation_phase_work(frame_len)?;
     vm.charge_syscall_stage(
         SyscallMeteringPhase::NoritoDecode,
         numeric_gas::work_gas(decode_work)?,
     )?;
-    vm.charge_syscall_stage(
-        SyscallMeteringPhase::CanonicalValidation,
-        numeric_gas::work_gas(canonical_work)?,
-    )?;
     Ok(AuthenticatedFrame {
         envelope: snapshot,
         frame_len,
     })
+}
+
+fn charge_abi_work(vm: &mut IVM, step: NumericAbiWorkStep) -> Result<(), VMError> {
+    let gas = match step {
+        NumericAbiWorkStep::CanonicalBody { body_bytes } => numeric_gas::work_gas(
+            numeric_gas::numeric_frame_body_validation_work(usize::from(body_bytes))?,
+        )?,
+        NumericAbiWorkStep::CanonicalityProbe {
+            mantissa_limbs,
+            scale,
+        } => numeric_gas::work_step_gas(NumericWorkStep::CanonicalityProbe {
+            mantissa_limbs,
+            scale,
+        })?,
+    };
+    vm.charge_syscall_stage(SyscallMeteringPhase::CanonicalValidation, gas)
+}
+
+fn finish_observed_decode<T>(
+    result: Result<T, ObservedNumericAbiError<VMError>>,
+) -> Result<T, VMError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(ObservedNumericAbiError::Abi(error)) => Err(map_frame_error(error)),
+        Err(ObservedNumericAbiError::Observer(error)) => Err(error),
+    }
 }
 
 fn exact_int_frame_len(value: &BigInt) -> Result<usize, VMError> {
@@ -289,9 +329,9 @@ pub fn decode_quantity_bytes(envelope: &[u8]) -> Result<Quantity, VMError> {
 /// Strictly decode a staged integer operand.
 pub fn decode_int_metered(vm: &mut IVM, pointer: u64) -> Result<BigInt, VMError> {
     let snapshot = snapshot_metered(vm, pointer, PointerType::Int, MAX_INT_FRAME_BYTES_V1)?;
-    IntValueV1::decode_frame(snapshot.frame())
-        .map(IntValueV1::into_int)
-        .map_err(map_frame_error)
+    let result =
+        IntValueV1::decode_frame_observed(snapshot.frame(), |step| charge_abi_work(vm, step));
+    finish_observed_decode(result).map(IntValueV1::into_int)
 }
 
 /// Strictly decode a staged decimal operand.
@@ -302,9 +342,9 @@ pub fn decode_decimal_metered(vm: &mut IVM, pointer: u64) -> Result<Numeric, VME
         PointerType::Decimal,
         MAX_DECIMAL_FRAME_BYTES_V1,
     )?;
-    DecimalValueV1::decode_frame(snapshot.frame())
-        .map(DecimalValueV1::into_numeric)
-        .map_err(map_frame_error)
+    let result =
+        DecimalValueV1::decode_frame_observed(snapshot.frame(), |step| charge_abi_work(vm, step));
+    finish_observed_decode(result).map(DecimalValueV1::into_numeric)
 }
 
 /// Strictly decode a staged quantity operand.
@@ -315,9 +355,9 @@ pub fn decode_quantity_metered(vm: &mut IVM, pointer: u64) -> Result<Quantity, V
         PointerType::Quantity,
         MAX_QUANTITY_FRAME_BYTES_V1,
     )?;
-    QuantityValueV1::decode_frame(snapshot.frame())
-        .map(QuantityValueV1::into_quantity)
-        .map_err(map_frame_error)
+    let result =
+        QuantityValueV1::decode_frame_observed(snapshot.frame(), |step| charge_abi_work(vm, step));
+    finish_observed_decode(result).map(QuantityValueV1::into_quantity)
 }
 
 /// Debit, serialize, and allocate a staged integer result.

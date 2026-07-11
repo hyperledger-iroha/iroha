@@ -11018,17 +11018,19 @@ pub(crate) fn peer_consensus_key_gate(
         let expired = record
             .expiry_height
             .is_some_and(|expiry| block_height >= expiry);
-        let candidate = match record.status {
-            ConsensusKeyStatus::Active | ConsensusKeyStatus::Retiring
-                if !not_yet_active && !expired =>
-            {
-                ConsensusKeyGate::Live
-            }
-            ConsensusKeyStatus::Disabled => ConsensusKeyGate::Disabled,
-            _ if expired => ConsensusKeyGate::Expired,
-            _ if not_yet_active => ConsensusKeyGate::NotYetActive,
-            ConsensusKeyStatus::Pending => ConsensusKeyGate::NotYetActive,
-            _ => ConsensusKeyGate::Missing,
+        let candidate = if record.is_live_at(block_height, 0, 0) {
+            // Pending is the durable scheduling state. No background job is
+            // required to rewrite it at activation_height; the canonical
+            // height predicate makes it live exactly then.
+            ConsensusKeyGate::Live
+        } else if matches!(record.status, ConsensusKeyStatus::Disabled) {
+            ConsensusKeyGate::Disabled
+        } else if expired {
+            ConsensusKeyGate::Expired
+        } else if not_yet_active {
+            ConsensusKeyGate::NotYetActive
+        } else {
+            ConsensusKeyGate::Missing
         };
         if candidate == ConsensusKeyGate::Live {
             return ConsensusKeyGate::Live;
@@ -11068,19 +11070,10 @@ pub(crate) fn live_consensus_key_pop_for_peer(
         if record.public_key != *pk {
             continue;
         }
-        let not_yet_active = block_height < record.activation_height;
-        let expired = record
-            .expiry_height
-            .is_some_and(|expiry| block_height >= expiry);
-        match record.status {
-            ConsensusKeyStatus::Active | ConsensusKeyStatus::Retiring
-                if !not_yet_active && !expired =>
-            {
-                if let Some(pop) = record.pop.as_ref() {
-                    return Some(pop.clone());
-                }
-            }
-            _ => {}
+        if record.is_live_at(block_height, 0, 0)
+            && let Some(pop) = record.pop.as_ref()
+        {
+            return Some(pop.clone());
         }
     }
     None
@@ -11209,45 +11202,6 @@ where
     } else {
         BTreeSet::new()
     };
-    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
-        .public_lane_validators()
-        .iter()
-        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
-        .filter(|(_, record)| {
-            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
-        })
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
-        .filter(|(_, record)| {
-            matches!(
-                nexus
-                    .staking
-                    .validator_mode(record.lane_id, &nexus.lane_catalog),
-                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
-            )
-        })
-        .filter_map(|(_, record)| {
-            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                &record.self_stake,
-                nexus.staking.min_validator_stake,
-            ) else {
-                return None;
-            };
-            if !meets_min {
-                return None;
-            }
-            if !present_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
-                return None;
-            }
-            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
-                return None;
-            }
-            Some((record.validator.clone(), record.peer_id.clone()))
-        })
-        .collect();
     if enforce_topology_membership {
         let mut active_candidates: std::collections::BTreeSet<PeerId> =
             std::collections::BTreeSet::new();
@@ -11308,6 +11262,48 @@ where
             }
         }
     }
+    // Build the account lookup only after widening the topology. Otherwise an
+    // eligible explicit account-to-peer binding that triggered widening is
+    // absent here, and the council path silently truncates that member.
+    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
+        .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
+        .filter(|(_, record)| {
+            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
+        })
+        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            matches!(
+                nexus
+                    .staking
+                    .validator_mode(record.lane_id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .filter_map(|(_, record)| {
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                nexus.staking.min_validator_stake,
+            ) else {
+                return None;
+            };
+            if !meets_min {
+                return None;
+            }
+            if !present_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
+                return None;
+            }
+            Some((record.validator.clone(), record.peer_id.clone()))
+        })
+        .collect();
     // Preferred path: council-derived roster for the epoch.
     if let Some(c) = world.council().get(&epoch).cloned() {
         let ids: Vec<PeerId> = c
@@ -11374,7 +11370,25 @@ where
 
     candidates.retain(|(pid, _, _)| peer_has_live_consensus_key(world, pid, block_height));
 
-    if candidates.is_empty() {
+    // One peer may be registered on several active lanes. Canonicalize those
+    // rows before ranking so the peer occupies one roster slot and receives
+    // its maximum eligible stake. Equal-stake rows use the smallest account
+    // identity as a deterministic secondary ranking key.
+    let mut candidates_by_peer: BTreeMap<PeerId, (Numeric, AccountId)> = BTreeMap::new();
+    for (peer, stake, account) in candidates {
+        let should_replace =
+            candidates_by_peer
+                .get(&peer)
+                .is_none_or(|(current_stake, current_account)| {
+                    stake > *current_stake
+                        || (stake == *current_stake && account < *current_account)
+                });
+        if should_replace {
+            candidates_by_peer.insert(peer, (stake, account));
+        }
+    }
+
+    if candidates_by_peer.is_empty() {
         let peers: Vec<PeerId> = world
             .peers()
             .iter()
@@ -11385,13 +11399,16 @@ where
         return if peers.is_empty() { None } else { Some(peers) };
     }
 
+    let mut candidates: Vec<(PeerId, Numeric, AccountId)> = candidates_by_peer
+        .into_iter()
+        .map(|(peer, (stake, account))| (peer, stake, account))
+        .collect();
     candidates.sort_by(|lhs, rhs| {
         rhs.1
             .cmp(&lhs.1)
             .then_with(|| lhs.2.cmp(&rhs.2))
             .then_with(|| lhs.0.cmp(&rhs.0))
     });
-    candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
 
     let max = usize::try_from(nexus.staking.max_validators.get())
         .unwrap_or(usize::MAX)
@@ -12466,6 +12483,84 @@ mod stake_snapshot_tests {
     }
 
     #[test]
+    fn council_explicit_peer_bindings_survive_topology_widening() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.staking.min_validator_stake = 1;
+        }
+
+        let old_account_key = crate::state::checked_keypair();
+        let new_account_key = crate::state::checked_keypair();
+        let old_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let new_peer_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let old_account = DMAccountId::of(old_account_key.public_key().clone());
+        let new_account = DMAccountId::of(new_account_key.public_key().clone());
+        let old_peer = PeerId::from(old_peer_key.public_key().clone());
+        let new_peer = PeerId::from(new_peer_key.public_key().clone());
+        assert_ne!(old_peer.public_key(), old_account.signatory());
+        assert_ne!(new_peer.public_key(), new_account.signatory());
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            let _ = peers.push(old_peer.clone());
+            let _ = peers.push(new_peer.clone());
+        }
+        seed_consensus_key(&mut wb, &old_peer, ConsensusKeyStatus::Active, 0);
+        seed_consensus_key(&mut wb, &new_peer, ConsensusKeyStatus::Active, 0);
+        for (account, peer) in [
+            (old_account.clone(), old_peer.clone()),
+            (new_account.clone(), new_peer.clone()),
+        ] {
+            wb.public_lane_validators.insert(
+                (LaneId::SINGLE, account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: account.clone(),
+                    peer_id: peer,
+                    stake_account: account,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        wb.council.insert(
+            0,
+            CouncilState {
+                epoch: 0,
+                members: vec![old_account, new_account],
+                candidate_count: 2,
+                ..CouncilState::default()
+            },
+        );
+        wb.commit();
+
+        {
+            let mut topo_block = state.commit_topology.block();
+            topo_block.mutate_vec(|peers| *peers = vec![old_peer.clone()]);
+            topo_block.commit();
+        }
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(
+            roster,
+            vec![old_peer, new_peer],
+            "the newly widened explicit peer binding must not be dropped from the council roster"
+        );
+    }
+
+    #[test]
     fn public_lane_snapshot_filters_ineligible_validators() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -12835,6 +12930,134 @@ mod stake_snapshot_tests {
         assert_eq!(
             roster, expected,
             "epoch roster widening must stay inside the commit topology lane"
+        );
+    }
+
+    #[test]
+    fn multi_lane_duplicate_peer_uses_maximum_stake_once() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        let secondary_lane = LaneId::new(1);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: secondary_lane,
+                    alias: "secondary".to_string(),
+                    visibility: LaneVisibility::Public,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.min_validator_stake = 1;
+            nexus.staking.max_validators = NonZeroU32::new(3).expect("nonzero validator limit");
+        }
+
+        let peer_a_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_b_key = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let peer_a = PeerId::from(peer_a_key.public_key().clone());
+        let peer_b = PeerId::from(peer_b_key.public_key().clone());
+        let account_a_high = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
+        let account_a_low = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
+        let account_b = DMAccountId::of(crate::state::checked_keypair().public_key().clone());
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            let _ = peers.push(peer_a.clone());
+            let _ = peers.push(peer_b.clone());
+        }
+        seed_consensus_key(&mut wb, &peer_a, ConsensusKeyStatus::Active, 0);
+        seed_consensus_key(&mut wb, &peer_b, ConsensusKeyStatus::Active, 0);
+        wb.public_lane_validators.insert(
+            (LaneId::SINGLE, account_a_high.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_a_high.clone(),
+                peer_id: peer_a.clone(),
+                stake_account: account_a_high,
+                total_stake: Numeric::new(10, 0),
+                self_stake: Numeric::new(10, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        wb.public_lane_validators.insert(
+            (secondary_lane, account_a_low.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: secondary_lane,
+                validator: account_a_low.clone(),
+                peer_id: peer_a.clone(),
+                stake_account: account_a_low,
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        wb.public_lane_validators.insert(
+            (LaneId::SINGLE, account_b.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_b.clone(),
+                peer_id: peer_b.clone(),
+                stake_account: account_b,
+                total_stake: Numeric::new(5, 0),
+                self_stake: Numeric::new(5, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        wb.commit();
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        assert_eq!(
+            roster,
+            vec![peer_a.clone(), peer_b.clone()],
+            "peer A must rank by its maximum stake and occupy exactly one roster slot"
+        );
+
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE, secondary_lane]);
+        let powers = crate::sumeragi::stake_snapshot::strict_v2_voting_roster(
+            sv.world(),
+            &roster,
+            Some(&active_lane_ids),
+        )
+        .expect("strict voting powers");
+        assert_eq!(powers.len(), 2);
+        assert_eq!(
+            powers
+                .iter()
+                .find(|entry| entry.validator == peer_a)
+                .map(|entry| entry.power),
+            Some(10)
+        );
+        assert_eq!(
+            powers
+                .iter()
+                .find(|entry| entry.validator == peer_b)
+                .map(|entry| entry.power),
+            Some(5)
         );
     }
 
@@ -86480,7 +86703,7 @@ mod tests {
     fn record_lane_relay_rejects_autoscale_elastic_non_live_manifest_binding_without_topology_fallback()
      {
         for (case, status, activation_height, expiry_height, height) in [
-            ("pending", ConsensusKeyStatus::Pending, 0, None, 1_u64),
+            ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64),
             ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64),
             ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64),
             ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64),
@@ -86626,7 +86849,7 @@ mod tests {
     #[test]
     fn record_lane_relay_rejects_autoscale_elastic_non_live_lifecycle_topology_signer() {
         for (case, status, activation_height, expiry_height, height) in [
-            ("pending", ConsensusKeyStatus::Pending, 0, None, 1_u64),
+            ("pending", ConsensusKeyStatus::Pending, 5, None, 1_u64),
             ("future-active", ConsensusKeyStatus::Active, 5, None, 1_u64),
             ("disabled", ConsensusKeyStatus::Disabled, 0, None, 1_u64),
             ("expired", ConsensusKeyStatus::Active, 0, Some(2_u64), 2_u64),
@@ -98746,37 +98969,37 @@ mod tests {
         let trigger_id: TriggerId = "staged_mint_like".parse().unwrap();
         let src = r#"
             seiyaku StagedMintRequest {
-              state MintRequestNextSequence: i64;
-              state MintRequestSequenceById: StateMap<Name, i64>;
-              state MintRequestSequences: StateMap<i64, i64>;
-              state MintRequestRequestIds: StateMap<i64, Name>;
-              state MintRequestFiIds: StateMap<i64, Name>;
-              state MintRequestFiAuthorities: StateMap<i64, AccountId>;
-              state MintRequestToAccounts: StateMap<i64, AccountId>;
-              state MintRequestAmounts: StateMap<i64, i64>;
-              state MintRequestRequestedBy: StateMap<i64, Json>;
-              state MintRequestStates: StateMap<i64, i64>;
-              state MintRequestCreatedAt: StateMap<i64, i64>;
-              state MintRequestExpiresAt: StateMap<i64, i64>;
-              state MintRequestFinalizedAt: StateMap<i64, i64>;
-              state MintRequestCanceledAt: StateMap<i64, i64>;
+              state int MintRequestNextSequence;
+              state StateMap<Name, int> MintRequestSequenceById;
+              state StateMap<int, int> MintRequestSequences;
+              state StateMap<int, Name> MintRequestRequestIds;
+              state StateMap<int, Name> MintRequestFiIds;
+              state StateMap<int, AccountId> MintRequestFiAuthorities;
+              state StateMap<int, AccountId> MintRequestToAccounts;
+              state StateMap<int, int> MintRequestAmounts;
+              state StateMap<int, Json> MintRequestRequestedBy;
+              state StateMap<int, int> MintRequestStates;
+              state StateMap<int, int> MintRequestCreatedAt;
+              state StateMap<int, int> MintRequestExpiresAt;
+              state StateMap<int, int> MintRequestFinalizedAt;
+              state StateMap<int, int> MintRequestCanceledAt;
 
               hajimari() {
                 MintRequestNextSequence = 0;
               }
 
-              fn update_record(sequence: i64,
-                               request_id: Name,
-                               fi_id: Name,
-                               fi_multisig_account_id: AccountId,
-                               to_account_id: AccountId,
-                               amount_i64: i64,
-                               requested_by_actor_id: Json,
-                               state_code: i64,
-                               created_at_ms: i64,
-                               expires_at_ms: i64,
-                               finalized_at_ms: i64,
-                               canceled_at_ms: i64) {
+              fn update_record(int sequence,
+                               Name request_id,
+                               Name fi_id,
+                               AccountId fi_multisig_account_id,
+                               AccountId to_account_id,
+                               int amount_i64,
+                               Json requested_by_actor_id,
+                               int state_code,
+                               int created_at_ms,
+                               int expires_at_ms,
+                               int finalized_at_ms,
+                               int canceled_at_ms) {
                 MintRequestSequences[sequence] = sequence;
                 MintRequestRequestIds[sequence] = request_id;
                 MintRequestFiIds[sequence] = fi_id;
@@ -98791,7 +99014,7 @@ mod tests {
                 MintRequestCanceledAt[sequence] = canceled_at_ms;
               }
 
-              fn main_impl(ev: Json) -> Option<bool> {
+              fn main_impl(Json ev) -> Option<bool> {
                 let action_key = Name::parse("action");
                 let request_id_key = Name::parse("request_id");
                 let fi_id_key = Name::parse("fi_id");
@@ -98836,7 +99059,7 @@ mod tests {
                 Option::none
               }
 
-              kotoage fn main(ev: Json) authorize("staged_mint_request_run") {
+              kotoage fn main(Json ev) authorize("staged_mint_request_run") {
                 assert(main_impl(ev).is_some(), "missing or invalid staged mint field");
               }
             }
@@ -99048,7 +99271,7 @@ mod tests {
             .compile_source(
                 r#"
 seiyaku IdentitylessRawCallback {
-  kotoage fn main(ev: Json) {
+  kotoage fn main(Json ev) {
     let _ev = ev;
   }
 }
@@ -99153,9 +99376,9 @@ seiyaku IdentitylessRawCallback {
 
         let src = r#"
             seiyaku TriggerPayloadProbe {
-              state last_condition: i64;
+              state int last_condition;
 
-              kotoage fn native_by_call_settle(marker: i64) authorize("trigger_payload_probe_run") {
+              kotoage fn native_by_call_settle(int marker) authorize("trigger_payload_probe_run") {
                 let ev = context::trigger_event();
                 if let Option::some(condition_code) = ev.get_int(Name::parse("condition_code")) {
                   assert(condition_code == 7, "condition_code mismatch");

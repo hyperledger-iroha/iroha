@@ -5,8 +5,8 @@ use core::cmp::Ordering;
 use iroha_primitives::{
     bigint::{BigInt, BigIntError},
     numeric::{
-        MAX_MANTISSA_BYTES, Numeric, NumericOperationError, NumericWorkStep,
-        ObservedNumericError, Quantity, RoundingMode,
+        MAX_MANTISSA_BYTES, Numeric, NumericOperationError, NumericWorkStep, ObservedNumericError,
+        Quantity, RoundingMode,
     },
 };
 
@@ -573,20 +573,6 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 decode_quantity_register(vm, 11)?.into_numeric()
             };
             let mode = failure_mode(vm, &[12, 13])?;
-            if number == syscalls::SYSCALL_QUANTITY_SUB {
-                charge_decimal_comparison(vm, lhs.as_numeric(), &rhs)?;
-                if lhs.as_numeric() < &rhs {
-                    if resolve_failure::<()>(
-                        vm,
-                        mode,
-                        Err(NumericOperationError::QuantityUnderflow),
-                    )?
-                    .is_none()
-                    {
-                        return Ok(0);
-                    }
-                }
-            }
             let result = match number {
                 syscalls::SYSCALL_QUANTITY_ADD => lhs
                     .as_numeric()
@@ -599,7 +585,16 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                     .try_decimal_mul_observed(&rhs, &mut |step| observe_work(vm, step)),
             };
             if let Some(result) = resolve_observed(vm, mode, result)? {
-                match Quantity::from_canonical_numeric(result) {
+                let quantity = Quantity::from_canonical_numeric(result).map_err(|error| {
+                    if number == syscalls::SYSCALL_QUANTITY_SUB
+                        && error == NumericOperationError::NegativeQuantity
+                    {
+                        NumericOperationError::QuantityUnderflow
+                    } else {
+                        error
+                    }
+                });
+                match quantity {
                     Ok(quantity) => publish_quantity(vm, &quantity)?,
                     Err(error) => {
                         if resolve_failure::<()>(vm, mode, Err(error))?.is_none() {

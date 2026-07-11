@@ -925,10 +925,7 @@ mod tests {
             ))
             .expect("int TLV");
         let precise_ptr = vm
-            .alloc_input_tlv(&tlv(
-                PointerType::Quantity,
-                &quantity_frame(precise),
-            ))
+            .alloc_input_tlv(&tlv(PointerType::Quantity, &quantity_frame(precise)))
             .expect("quantity TLV");
         let table = vm.alloc_heap(16).expect("word table");
         vm.store_u64(table, maximum_ptr).expect("u128 word");

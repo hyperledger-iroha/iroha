@@ -4,104 +4,80 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-01-08
+source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
+source_last_modified: "2026-07-11T23:16:35+00:00"
+translation_last_reviewed: 2026-07-11
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Bridge finality proofs
+# Bridge finality proof
 
-このドキュメントは Iroha の初期 bridge finality proof サーフェスを説明します。
-目的は、外部チェーンや light client が、オフチェーン計算や信頼されたリレーなしで
-Iroha ブロックが final であることを検証できるようにすることです。
+この文書は初回リリースの bridge finality 形式を定義します。proof は
+Sumeragi v2 が永続化した正確な finality evidence を運びます。proof envelope の
+schema version は `1`、内部の consensus protocol version は `2` です。
+Sumeragi v1 certificate への投影、decoder、fallback はありません。
 
-## Proof 形式
+## 正確な proof 形式
 
-`BridgeFinalityProof` (Norito/JSON) は以下を含みます:
+Norito または Norito JSON の `BridgeFinalityProof` は、次の 3 フィールドだけを
+持ちます。
 
-- `height`: ブロック高。
-- `chain_id`: クロスチェーンリプレイを防ぐための Iroha chain identifier。
-- `block_header`: canonical `BlockHeader`。
-- `block_hash`: header の hash (クライアントが再計算して検証)。
-- `commit_certificate`: ブロックを確定させた validator set + signatures。
-- `validator_set_pops`: validator set の順序に揃えた PoP (BLS 集約検証に必須)。
+```text
+{ version, block_header, finality_artifact }
+```
 
-Proof は自己完結です。外部 manifest や不透明な blob は不要です。
-Retention: Torii は直近の commit-certificate ウィンドウに対して finality proof を提供します
-(設定された history cap により制限。デフォルト 512 件で
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP` で設定)。
-長い期間が必要な場合はクライアント側で proof をキャッシュ/アンカーしてください。
-canonical tuple は `(block_header, block_hash, commit_certificate)` です。header の hash は
-commit certificate 内の hash と一致する必要があり、chain id が proof を単一の ledger に束縛します。
-サーバは certificate が異なる block hash を指している場合 `CommitCertificateHashMismatch` を
-拒否してログに記録します。
+- `version` は `1` でなければなりません。
+- `block_header` は要求された高さの canonical `BlockHeader` です。
+- `finality_artifact` はその block に対して保存された正確な
+  `V2FinalityArtifact` です。height-context roster と同じ順序で、各 validator の
+  BLS-normal PoP (`validator_set_pops`) を永続的に内包します。
 
-## Commitment bundle
+artifact は、完全で不変な `HeightContext`、正確な `BlockSubject`、block hash、
+CommitQC、および roster に対応する PoP を保持します。`HeightContext` は chain、
+epoch、roster、`DualQuorum`、DA layout、leader seed などを固定します。epoch を
+終了する親 block の context には任意の `next_epoch_snapshot` も含まれます。
+snapshot は context id の一部なので、子 roster を許可する前に親 CommitQC によって
+認証されます。finalized snapshot は次 epoch のパラメータに加え、`epoch_end_height` と
+次 roster に対応する `validator_set_pops` も認証します。
 
-`BridgeFinalityBundle` (Norito/JSON) は基本 proof を明示的な commitment と justification で拡張します:
+## 永続化と検証
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: commitment payload に対する authority set の署名
-  (commit certificate の署名を再利用)。
-- `block_header`, `commit_certificate`: 基本 proof と同じ。
+Sumeragi v2 の apply path は artifact を検証し、不変な Kura sidecar として保存します。
+proof builder は canonical block とその sidecar を読み、現在の可変 world state から
+過去の PoP や certificate を再構成しません。sidecar の欠落、破損、競合、検証失敗は
+fail closed です。最近の in-memory history window による保持制限はありません。
 
-現状の placeholder: `mmr_root`/`mmr_peaks` は block-hash MMR をメモリ上で再計算して導出します。
-inclusion proofs はまだ返されません。現時点でも commitment payload で同じ hash を検証できます。
+stateless verifier は version、chain、高さ、header hash、context、subject、CommitQC を
+厳密に対応させ、artifact 内の全 PoP を検証します。signer index は昇順かつ範囲内で、
+CommitQC は人数と voting power の両方の quorum を満たし、正確な Sumeragi v2 vote
+preimage に対する BLS aggregate signature が有効でなければなりません。
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+## Trust anchor と successor
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON)。
+単独の proof は、proof が運ぶ roster の下での自己整合性だけを示します。
+`BridgeFinalityVerifier` は最初の proof より前に、明示的に信頼された
+`HeightContextId` を要求します。その後は直後の高さだけを受け入れ、子 context の
+parent CommitQC を前の固定 roster と PoP で検証します。epoch 内では子 artifact が前の
+artifact の PoP をコピーし、epoch 境界では epoch、roster、quorum、seed、PoP が、認証済み
+`epoch_end_height` を含む前の親 context の `next_epoch_snapshot` と一致しなければなりません。
+古い高さ、飛ばされた高さ、リンクされていない successor は拒否されます。
 
-検証は基本 proof と同様です: header から `block_hash` を再計算し、commit certificate の署名を検証し、
-commitment フィールドが certificate と block hash に一致することを確認します。bundle は bridge
-プロトコルが分離を好む場合の commitment/justification ラッパーを追加します。
+SCCP は同じ `BridgeFinalityProof` を使います。message が提供した roster の署名だけを
+信頼せず、governance で固定した checkpoint context/artifact から message artifact まで
+直後の successor chain を検証する必要があります。
 
-## 検証手順
+## Bundle と API
 
-1. `block_header` から `block_hash` を再計算し、不一致なら拒否。
-2. `commit_certificate.block_hash` が再計算した `block_hash` と一致することを確認。
-   不一致の header/commit certificate ペアは拒否。
-3. `chain_id` が期待する Iroha chain と一致することを確認。
-4. `commit_certificate.validator_set` から `validator_set_hash` を再計算し、記録された hash/version と一致することを確認。
-5. `validator_set_pops` の長さが validator set と一致することを確認し、各 PoP を対応する BLS 公開鍵で検証。
-6. commit certificate の署名を header hash に対して検証。validator 公開鍵と index を使用し、
-   quorum (`n>3` のとき `2f+1`、それ以外は `n`) を適用し、重複/範囲外 index を拒否。
-7. 任意で validator set hash をアンカー値と比較し、trusted checkpoint に結び付ける (weak-subjectivity anchor)。
-8. 任意で epoch anchor を期待値に合わせ、意図的に rotation されるまで古い/新しい epoch の proof を拒否。
+`BridgeFinalityBundle` は正確に `{ commitment, finality_proof }` です。
+commitment は `{ chain_id, height_context_id, block_height, block_hash,
+mmr_root?, mmr_leaf_index?, mmr_peaks? }` です。任意の MMR フィールドは commitment
+にすぎず、finality や inclusion proof ではありません。
 
-`BridgeFinalityVerifier` (`iroha_data_model::bridge` 内) はこれらのチェックを適用し、
-quorum 計数の前に chain-id/height drift、validator-set hash/version の不一致、
-PoP の欠落/無効、重複/範囲外の署名者、無効署名、予期しない epoch を拒否するため、
-light client は単一の verifier を再利用できます。
+- `GET /v1/bridge/finality/{height}` は `BridgeFinalityProof` を返します。
+- `GET /v1/bridge/finality/bundle/{height}` は `BridgeFinalityBundle` を返します。
 
-## Reference verifier
-
-`BridgeFinalityVerifier` は期待する `chain_id` と任意の validator-set/epoch anchors を受け取ります。
-header/block-hash/commit-certificate の tuple を強制し、validator-set hash/version を検証し、
-広告された validator roster に対して署名/quorum を検証し、最新 height を追跡して stale/skip proof を拒否します。
-anchors がある場合は `UnexpectedEpoch`/`UnexpectedValidatorSet` で epoch/roster 間の replay を拒否します。
-anchors がない場合は最初の proof の validator-set hash と epoch を採用し、その後は重複/範囲外/
-不十分な署名に対して決定論的なエラーで拒否を続けます。
-
-## API サーフェス
-
-- `GET /v1/bridge/finality/{height}` - 指定のブロック高に対する `BridgeFinalityProof` を返します。
-  `Accept` による content negotiation で Norito または JSON をサポートします。
-- `GET /v1/bridge/finality/bundle/{height}` - 指定のブロック高に対する `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) を返します。
-
-## Notes and follow-ups
-
-- Proof は現在、保存された commit certificate から導出されます。履歴は commit certificate の retention
-  ウィンドウに従って制限されるため、長期が必要ならクライアント側で anchor proof をキャッシュしてください。
-  ウィンドウ外の要求は `CommitCertificateNotFound(height)` を返すので、エラーを表示してアンカー済み
-  checkpoint にフォールバックしてください。
-- `block_hash` の不一致 (header と certificate) を持つ replay/偽造 proof は `CommitCertificateHashMismatch`
-  で拒否されます。クライアントも署名検証の前に同じ tuple チェックを行い、不一致 payload を破棄すべきです。
-- 将来的には MMR/authority-set の commitment chain を追加して、長い履歴での proof サイズを削減できます。
-  フォーマットは commit certificate をより豊かな commitment envelope に包むことで後方互換を維持します。
+block または正確な永続 v2 artifact が存在しないか無効なら、両 endpoint は fail closed
+になります。未知の field、version、retired proof shape は拒否しなければなりません。

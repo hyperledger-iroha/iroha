@@ -7,6 +7,12 @@
 use crate::error::VMError;
 use iroha_primitives::numeric::NumericWorkStep;
 
+/// Version of the complete consensus numeric-gas formula and staged phase map.
+///
+/// This value is included in the gas-schedule descriptor. Any change to a
+/// logical-work formula, charge-point ordering, or stable staged-phase tag
+/// MUST increment it and regenerate the gas-schedule golden hash.
+pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 1;
 /// Fixed staged-syscall entry charge.
 pub const NUMERIC_ENTRY_GAS: u64 = 16;
 /// Gas charged for each logical 64-bit limb of arithmetic work.
@@ -58,23 +64,37 @@ pub fn envelope_tail_bytes(payload_bytes: usize) -> Result<u64, VMError> {
 
 /// Logical work needed to decode and validate one numeric frame.
 ///
-/// The strict decoder examines every complete or partial eight-byte word of
-/// the bounded frame. The first word covers the Norito header/schema/length
-/// checks; every remaining word covers mantissa minimality and decimal-domain
-/// canonicality. This is the only frame-validation work charge: the frame
-/// bytes themselves are charged once as input-envelope bytes.
+/// Structural Norito validation scans every complete or partial eight-byte
+/// word, including the payload CRC. Canonical value decoding then scans every
+/// complete or partial body word. Counting both passes prevents the nested
+/// checksum traversal from disappearing behind the pointer-envelope byte
+/// charge. Scaled decimal/quantity values additionally charge their observed
+/// quotient/remainder canonicality probe. Frame bytes themselves are still
+/// charged exactly once as transport.
 pub fn numeric_frame_validation_work(frame_bytes: usize) -> Result<u64, VMError> {
-    Ok(checked_bytes(frame_bytes)?
-        .div_ceil(NUMERIC_VALIDATION_WORD_BYTES)
-        .max(1))
+    let (decode, canonical) = numeric_frame_validation_phase_work(frame_bytes)?;
+    checked_add(decode, canonical)
 }
 
 /// Split frame validation into stable decode and canonicality phases.
 ///
 /// The sum of the two values is always [`numeric_frame_validation_work`].
 pub fn numeric_frame_validation_phase_work(frame_bytes: usize) -> Result<(u64, u64), VMError> {
-    let total = numeric_frame_validation_work(frame_bytes)?;
-    Ok((1, total - 1))
+    let decode = checked_bytes(frame_bytes)?
+        .div_ceil(NUMERIC_VALIDATION_WORD_BYTES)
+        .max(1);
+    let body_bytes = frame_bytes
+        .saturating_sub(iroha_primitives::numeric_abi::NUMERIC_FRAME_HEADER_BYTES_V1);
+    let canonical = numeric_frame_body_validation_work(body_bytes)?;
+    Ok((decode, canonical))
+}
+
+/// Logical word work for decoding and validating a canonical numeric body,
+/// excluding the separately observed decimal divide-by-ten probe.
+pub fn numeric_frame_body_validation_work(body_bytes: usize) -> Result<u64, VMError> {
+    Ok(checked_bytes(body_bytes)?
+        .div_ceil(NUMERIC_VALIDATION_WORD_BYTES)
+        .max(1))
 }
 
 /// Logical limb count for a bit width. Zero still occupies one logical limb.
@@ -217,22 +237,6 @@ pub fn division_attempt_work(
     )
 }
 
-/// Logical work reserved for canonical decimal normalization.
-///
-/// The canonical algorithm performs one divisibility-by-ten probe per possible
-/// scale position. Charging the complete scale bound keeps the formula
-/// independent of backend early-exit behavior while still scaling by actual
-/// intermediate width.
-pub fn normalization_work(intermediate_limbs: u64, intermediate_scale: u8) -> Result<u64, VMError> {
-    if intermediate_scale > MAX_PRODUCT_SCALE {
-        return Err(VMError::GasCostOverflow);
-    }
-    checked_mul(
-        quotient_remainder_work(intermediate_limbs.max(1), 1)?,
-        u64::from(intermediate_scale),
-    )
-}
-
 /// Convert logical limb work to gas using checked `u64` arithmetic.
 pub fn work_gas(limb_work: u64) -> Result<u64, VMError> {
     checked_mul(NUMERIC_GAS_PER_LIMB_WORK, limb_work)
@@ -252,7 +256,6 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
         NumericWorkStep::ScaleByPowerOfTen {
             value_limbs,
             exponent,
-            ..
         } => scale_work(u64::from(value_limbs), exponent)?,
         NumericWorkStep::Negate { value_limbs } => u64::from(value_limbs).max(1),
         NumericWorkStep::Add {
@@ -336,12 +339,15 @@ mod tests {
     }
 
     #[test]
-    fn frame_validation_is_one_charge_split_without_byte_double_counting() {
-        assert_eq!(numeric_frame_validation_work(0), Ok(1));
-        assert_eq!(numeric_frame_validation_phase_work(1), Ok((1, 0)));
-        assert_eq!(numeric_frame_validation_phase_work(8), Ok((1, 0)));
-        assert_eq!(numeric_frame_validation_phase_work(9), Ok((1, 1)));
-        assert_eq!(numeric_frame_validation_phase_work(44), Ok((1, 5)));
+    fn frame_validation_accounts_for_structural_and_body_passes_without_transport_double_counting()
+    {
+        assert_eq!(numeric_frame_validation_work(0), Ok(2));
+        assert_eq!(numeric_frame_validation_phase_work(1), Ok((1, 1)));
+        assert_eq!(numeric_frame_validation_phase_work(8), Ok((1, 1)));
+        assert_eq!(numeric_frame_validation_phase_work(9), Ok((2, 1)));
+        assert_eq!(numeric_frame_validation_phase_work(44), Ok((6, 1)));
+        assert_eq!(numeric_frame_validation_work(44), Ok(7));
+        assert_eq!(numeric_frame_validation_phase_work(109), Ok((14, 9)));
         assert_eq!(envelope_tail_bytes(44), Ok(76));
     }
 
@@ -360,8 +366,8 @@ mod tests {
     #[test]
     fn multiplication_and_scale_intermediates_exceed_value_width() {
         assert_eq!(multiplication_work(8, 8), Ok(64));
+        assert_eq!(MAX_PRODUCT_SCALE, 56);
         assert_eq!(MAX_PRODUCT_LIMBS, 16);
-        assert_eq!(normalization_work(16, 56), Ok(3_640));
     }
 
     #[test]
@@ -395,7 +401,6 @@ mod tests {
             work_step_gas(NumericWorkStep::ScaleByPowerOfTen {
                 value_limbs: 8,
                 exponent: 56,
-                result_limbs: 11,
             }),
             Ok(96)
         );
@@ -412,6 +417,14 @@ mod tests {
                 remaining_scale: 28,
             }),
             Ok(28)
+        );
+        assert_eq!(
+            work_step_gas(NumericWorkStep::Normalize {
+                mantissa_limbs: 16,
+                remaining_scale: 56,
+            }),
+            Ok(260),
+            "a maximum-width multiplication intermediate is pinned explicitly"
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::ExactDivisionAttempt {

@@ -29503,7 +29503,6 @@ async fn handler_sumeragi_commit_qcs(
         .into_response())
 }
 
-#[cfg(feature = "telemetry")]
 async fn handler_bridge_finality_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -29543,7 +29542,6 @@ async fn handler_bridge_finality_proof(
     )
 }
 
-#[cfg(feature = "telemetry")]
 async fn handler_bridge_finality_bundle(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -40021,6 +40019,15 @@ impl Torii {
                 );
             let sumeragi = sumeragi.route("/v1/sccp/capabilities", get(handler_sccp_capabilities));
             let sumeragi = sumeragi.route("/v1/sccp/registry", get(handler_sccp_registry));
+            let sumeragi = sumeragi
+                .route(
+                    "/v1/bridge/finality/{height}",
+                    get(handler_bridge_finality_proof),
+                )
+                .route(
+                    "/v1/bridge/finality/bundle/{height}",
+                    get(handler_bridge_finality_bundle),
+                );
 
             #[cfg(feature = "telemetry")]
             let sumeragi = sumeragi
@@ -40038,14 +40045,6 @@ impl Torii {
                 .route(
                     "/v1/sumeragi/commit-certificates",
                     get(handler_sumeragi_commit_qcs),
-                )
-                .route(
-                    "/v1/bridge/finality/{height}",
-                    get(handler_bridge_finality_proof),
-                )
-                .route(
-                    "/v1/bridge/finality/bundle/{height}",
-                    get(handler_bridge_finality_bundle),
                 )
                 .route(
                     iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SETS,

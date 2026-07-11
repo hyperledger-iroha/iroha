@@ -36,6 +36,8 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+#[cfg(test)]
+use iroha_data_model::proof::ProofAttachment;
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::{
     account::prelude::FindAccounts,
@@ -78,7 +80,7 @@ use iroha_data_model::{
     parameter::{Parameters, system::ivm_metadata},
     permission::Permissions,
     prelude::{AccountId, *},
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
     query::{
         QueryBox, QueryOutputBatchBox, QueryRequest, QueryResponse, QueryWithFilter,
         QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
@@ -475,11 +477,7 @@ impl std::io::Write for BoundedCountingWriter {
     }
 }
 
-/// Core host adapter used by Iroha to run IVM bytecode.
-///
-/// Stateful operations must be translated into ISIs and executed via the
-/// executor. Durable-state syscalls are only forwarded to an in-memory
-/// overlay when access logging is enabled for prepass execution.
+/// Prepared verifier metadata cached alongside a canonical registry record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedVerifyingKey {
     record: Arc<VerifyingKeyRecord>,
@@ -487,6 +485,11 @@ struct PreparedVerifyingKey {
     ipa_k: Option<u32>,
 }
 
+/// Core host adapter used by Iroha to run IVM bytecode.
+///
+/// Stateful operations must be translated into ISIs and executed via the
+/// executor. Durable-state syscalls are only forwarded to an in-memory
+/// overlay when access logging is enabled for prepass execution.
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
@@ -3802,7 +3805,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            if !Self::verifying_key_record_metadata_is_portable(rec) {
+            if !Self::verifying_key_record_metadata_is_portable(&rec) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
             if rec.backend.is_pending_production_backend() {
@@ -13469,6 +13472,22 @@ mod pointer_abi_tests {
             );
             assert!(host.queued.is_empty());
         }
+
+        let mut vm = ivm::IVM::new(1_000);
+        let mut code = ivm::encoding::wide::encode_halt().to_le_bytes().to_vec();
+        let pointer = u64::try_from(code.len()).expect("code offset fits u64");
+        code.extend_from_slice(&tlv);
+        vm.load_code(&code).expect("load arbitrary code bytes");
+        vm.set_register(10, pointer);
+        let mut host = CoreHost::new(authority);
+        assert!(matches!(
+            host.syscall(
+                ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                &mut vm,
+            ),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert!(host.queued.is_empty());
     }
 
     #[test]
@@ -14634,7 +14653,7 @@ mod pointer_abi_tests {
     }
 
     #[test]
-    fn amount_decoder_requires_quantity_pointer_and_nominal_canonical_payloads() {
+    fn quantity_decoder_requires_nominal_canonical_payloads() {
         let mut vm = IVM::new(10_000);
         let canonical = Numeric::new(125_u32, 2);
         let canonical_ptr = store_quantity(&mut vm, &canonical);
@@ -14642,16 +14661,6 @@ mod pointer_abi_tests {
             CoreHost::decode_amount(&vm, canonical_ptr).expect("decode canonical amount"),
             canonical
         );
-
-        let retired_ptr = store_tlv(
-            &mut vm,
-            PointerType::RetiredAmount,
-            &quantity_frame(&canonical),
-        );
-        assert!(matches!(
-            CoreHost::decode_amount(&vm, retired_ptr),
-            Err(ivm::VMError::NoritoInvalid)
-        ));
 
         let wrong_type_ptr = store_tlv(
             &mut vm,
@@ -19940,9 +19949,15 @@ seiyaku Callee {
                 &schema_bytes
             )
         );
+        let [
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1::Pointer(envelope),
+        ] = record.atoms.as_slice()
+        else {
+            panic!("exact Int return must contain one canonical pointer atom");
+        };
         assert_eq!(
-            record.atoms,
-            vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueAtomV1::Int(42)]
+            ivm::numeric_tlv::decode_int_bytes(envelope).expect("decode returned Int"),
+            iroha_primitives::bigint::BigInt::from_i128(42),
         );
     }
 

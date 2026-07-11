@@ -4671,7 +4671,8 @@ mod tests {
         let mut paths = Vec::new();
         for index in 0..syscalls::STATE_KEYS_MAX_ITEMS {
             let mut key = vec![0xa5; syscalls::STATE_MAP_MAX_KEY_BYTES];
-            key[key.len() - 1] = u8::try_from(index).expect("bounded index");
+            let last = key.len() - 1;
+            key[last] = u8::try_from(index).expect("bounded index");
             if index + 1 == syscalls::STATE_KEYS_MAX_ITEMS {
                 expected_last = key.clone();
             }

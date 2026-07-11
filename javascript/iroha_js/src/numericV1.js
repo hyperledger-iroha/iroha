@@ -27,7 +27,7 @@ const SCHEMAS = Object.freeze({
   quantity: Object.freeze({
     name: "iroha.numeric.QuantityValueV1",
     hash: "e4769984c81ce0e8b678f2eb06274ee3",
-    pointerType: 0x0013,
+    pointerType: 0x0010,
     scaled: true,
   }),
 });
@@ -416,11 +416,7 @@ function decodeEnvelope(kind, input) {
   const envelope = asBytes(input, "numeric pointer envelope");
   if (envelope.length < ENVELOPE_HEADER_BYTES) fail("truncated_envelope", "numeric envelope is truncated");
   const pointerType = (envelope[0] << 8) | envelope[1];
-  if (pointerType === 0x0010) {
-    fail("type_not_allowed", "retired Amount pointer type is permanently reserved");
-  }
-  const knownAllowedType = (pointerType >= 0x0001 && pointerType <= 0x000f)
-    || (pointerType >= 0x0011 && pointerType <= 0x0013);
+  const knownAllowedType = pointerType >= 0x0001 && pointerType <= 0x0012;
   if (!knownAllowedType) {
     fail("unknown_type", "numeric envelope has an unknown pointer type");
   }

@@ -25734,9 +25734,9 @@ mod tests {
 
         let source = r#"
 seiyaku GuardedOverlay {
-  state Values: StateMap<i64, i64>;
+  state StateMap<int, int> Values;
 
-  kotoage fn write(value: i64) authorize("CanWriteGuardedOverlay") {
+  kotoage fn write(int value) authorize("CanWriteGuardedOverlay") {
     Values[0] = value;
   }
 }

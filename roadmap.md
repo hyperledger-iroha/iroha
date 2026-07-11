@@ -15,9 +15,10 @@ instead of accepting the local TAIRA/TRON diagnostic proof.
 
 IVM ABI-v1 hardening now uses one provenance-aware TLV decoder across ledger
 and codec hosts, canonical `QuantityValueV1` frames for every asset mutation
-caller, HEAP-capable JSON getter quotes, and optional runtime artifacts for pure
-Kotodama unit-test suites. Remaining ABI work stays limited to release
-validation and the outstanding items tracked in the engineering backlog.
+caller with authenticated indexed fixture literals, HEAP-capable JSON getter
+input/output quotes, and optional runtime artifacts for pure Kotodama unit-test
+suites. Remaining ABI work stays limited to release validation and the
+outstanding items tracked in the engineering backlog.
 
 ## SORA Economic Constitution
 
@@ -812,9 +813,9 @@ signals, twelve IC points including the constant, and a canonical 38-ABI-word
 verifying-key preimage; ten-signal, eleven-IC-point, 36-word, and policy-less
 representations are invalid. A production circuit must prove canonical transfer
 encoding, message-leaf derivation, Merkle inclusion, Taira block commitment,
-commit-QC validity, and continuity from the governed checkpoint. The checked-in
-labeled-signal circuit is explicitly non-production and cannot be promoted by
-metadata.
+the complete Sumeragi-v2 finality artifact and dual quorum, and continuity from
+the governed checkpoint. The checked-in labeled-signal circuit is explicitly
+non-production and cannot be promoted by metadata.
 
 The production evidence gate is implemented and fail closed. Each profile must
 provide the closed seven-role semantic artifact set, two independently signed
@@ -844,10 +845,11 @@ the direct detached-signature shortcut. The unified response uses
 The remaining SCCP release work is final integrated validation plus external
 evidence:
 
-- complete the clean-build Rust/Core/Torii/CLI, production-validator, contract,
-  consolidated cross-SDK, and four-peer admission matrix; Swift, Python,
-  JavaScript, Kotlin/JVM, and Android Java exact-schema/padding suites are
-  green, while Windows .NET execution still requires its host runtime;
+- complete the clean-build Core/Torii/CLI, production-validator, consolidated
+  cross-SDK, and four-peer admission matrix; the full SCCP library suite and
+  pinned EVM/Ethereum/BSC/TRON contract corridor are green, as are the Swift,
+  Python, JavaScript, Kotlin/JVM, and Android Java exact-schema/padding suites,
+  while Windows .NET execution still requires its host runtime;
 - obtain independently audited, reproducible semantic circuit, witness
   generator, proving key, verifying key, toolchain, and audit-report artifacts
   for all three production profiles;

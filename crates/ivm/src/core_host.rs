@@ -17,8 +17,6 @@ use iroha_crypto::{
         digest::{Update as Blake2Update, VariableOutput},
     },
 };
-#[cfg(test)]
-use iroha_data_model::prelude::{AssetDefinitionId, NftId};
 use iroha_data_model::{
     account::AccountId,
     isi::transfer::TransferAssetBatch,
@@ -1061,6 +1059,22 @@ impl CoreHost {
         expected: PointerType,
         nullable: bool,
     ) -> Result<usize, VMError> {
+        Self::quote_codec_tlv_payload_len_with_limit(
+            vm,
+            register,
+            expected,
+            nullable,
+            gas::HOST_CODEC_MAX_INPUT_BYTES,
+        )
+    }
+
+    fn quote_codec_tlv_payload_len_with_limit(
+        vm: &IVM,
+        register: usize,
+        expected: PointerType,
+        nullable: bool,
+        maximum_payload_len: usize,
+    ) -> Result<usize, VMError> {
         let pointer = vm.register(register);
         if pointer == 0 {
             return if nullable {
@@ -1080,7 +1094,7 @@ impl CoreHost {
                 }
             }
         };
-        if payload_len > gas::HOST_CODEC_MAX_INPUT_BYTES {
+        if payload_len > maximum_payload_len {
             return Err(VMError::NoritoInvalid);
         }
         Ok(payload_len)
@@ -1187,13 +1201,23 @@ impl CoreHost {
             | syscalls::SYSCALL_JSON_GET_INT
             | syscalls::SYSCALL_JSON_GET_DECIMAL
             | syscalls::SYSCALL_JSON_GET_QUANTITY => {
-                let json = Self::quote_codec_tlv_payload_len(vm, 10, PointerType::Json, false)?;
-                let key = Self::quote_codec_tlv_payload_len(vm, 11, PointerType::Name, false)?;
                 let output_bound = if canonical == syscalls::SYSCALL_JSON_GET_JSON {
                     Self::maximum_host_pointer_output_payload()
                 } else {
                     maximum_output
                 };
+                let json = Self::quote_codec_tlv_payload_len_with_limit(
+                    vm,
+                    10,
+                    PointerType::Json,
+                    false,
+                    if canonical == syscalls::SYSCALL_JSON_GET_JSON {
+                        output_bound
+                    } else {
+                        gas::HOST_CODEC_MAX_INPUT_BYTES
+                    },
+                )?;
+                let key = Self::quote_codec_tlv_payload_len(vm, 11, PointerType::Name, false)?;
                 Self::json_gas(json.saturating_add(key), output_bound.saturating_add(16))
             }
             syscalls::SYSCALL_NAME_DECODE => {
@@ -3420,12 +3444,13 @@ mod tests {
     fn json_get_json_quote_reserves_heap_sized_pointer_output() {
         let host = CoreHost::new();
         let mut vm = IVM::new(u64::MAX);
-        let json = Json::from_str_norito(r#"{"field":{"nested":true}}"#).expect("JSON");
+        let large_field = "x".repeat((Memory::INPUT_SIZE as usize) * 2);
+        let json = Json::from(norito::json!({ "field": large_field }));
         let json_payload = norito::to_bytes(&json).expect("encode JSON");
         let key: Name = "field".parse().expect("key");
         let key_payload = norito::to_bytes(&key).expect("encode key");
         let json_pointer = vm
-            .alloc_input_tlv(&make_pointer_tlv(PointerType::Json, &json_payload))
+            .alloc_host_tlv(&make_pointer_tlv(PointerType::Json, &json_payload))
             .expect("allocate JSON TLV");
         let key_pointer = vm
             .alloc_input_tlv(&make_pointer_tlv(PointerType::Name, &key_payload))
@@ -3450,6 +3475,26 @@ mod tests {
                 ),
             "JSON_GET_JSON must reserve beyond the fixed INPUT arena"
         );
+
+        let mut host = host;
+        let actual = host
+            .syscall(syscalls::SYSCALL_JSON_GET_JSON, &mut vm)
+            .expect("execute heap-sized JSON getter");
+        assert!(actual <= quote, "actual gas must fit the prepared quote");
+        let (some, words) = crate::sum::read_words(
+            &vm,
+            vm.register(10),
+            crate::sum::SumLayoutV1::option(1).expect("JSON option layout"),
+        )
+        .expect("read JSON option");
+        assert!(some);
+        let output_pointer = words[0];
+        assert!((Memory::HEAP_START..Memory::INPUT_START).contains(&output_pointer));
+        let output = vm
+            .validate_tlv(output_pointer)
+            .expect("heap-backed JSON result");
+        assert_eq!(output.type_id, PointerType::Json);
+        assert!(output.payload.len() > Memory::INPUT_SIZE as usize);
     }
 
     fn configure_oversized_codec_case(vm: &mut IVM, number: u32, oversized_pointer: u64) {

@@ -15057,7 +15057,7 @@ export const NumericV1: {
     readonly quantity: {
       readonly name: "iroha.numeric.QuantityValueV1";
       readonly hash: string;
-      readonly pointerType: 0x0013;
+      readonly pointerType: 0x0010;
       readonly scaled: true;
     };
   };

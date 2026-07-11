@@ -6555,7 +6555,7 @@ fn bridge_finality_bundle_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns an MMR commitment bound to the block hash and immutable height-context id, \
+            "Returns a compact commitment bound to the chain, block hash, height, and immutable height-context id, \
              together with the canonical block header and exact durable Sumeragi-v2 finality \
              artifact, including its roster-aligned BLS proofs of possession. The response contains no \
              legacy authority-set or detached-justification projection."
@@ -11388,10 +11388,17 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "SumeragiV2FinalizedNextEpochSnapshot".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["epoch", "mode", "roster", "quorum", "leader_seed"],
+            "required": [
+                "epoch", "epoch_end_height", "mode", "roster", "validator_set_pops",
+                "quorum", "leader_seed"
+            ],
             "additionalProperties": false,
             "properties": {
                 "epoch": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "epoch_end_height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
                 },
@@ -11401,9 +11408,15 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" }
                 },
+                "validator_set_pops": {
+                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
+                    "description": "Parent-authenticated BLS proofs of possession aligned one-for-one with the next roster."
+                },
                 "quorum": { "$ref": "#/components/schemas/SumeragiV2DualQuorum" },
                 "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
-            }
+            },
+            "description": "Complete parent-CommitQC-authenticated transition into the next epoch, including its end height and immutable validator PoPs."
         }),
     );
     schemas.insert(
@@ -11494,10 +11507,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "BridgeCommitment".to_owned(),
         norito::json!({
             "type": "object",
-            "required": [
-                "chain_id", "height_context_id", "block_height", "block_hash", "mmr_root",
-                "mmr_leaf_index", "mmr_peaks"
-            ],
+            "required": ["chain_id", "height_context_id", "block_height", "block_hash"],
             "additionalProperties": false,
             "properties": {
                 "chain_id": { "type": "string", "minLength": 1 },
@@ -11508,26 +11518,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
                 },
-                "block_hash": { "$ref": "#/components/schemas/Hash" },
-                "mmr_root": {
-                    "anyOf": [
-                        { "$ref": "#/components/schemas/SumeragiV2Bytes32" },
-                        { "type": "null" }
-                    ]
-                },
-                "mmr_leaf_index": {
-                    "type": ["integer", "null"], "format": "uint64", "minimum": 0,
-                    "maximum": 18446744073709551615_u64
-                },
-                "mmr_peaks": {
-                    "anyOf": [
-                        {
-                            "type": "array", "minItems": 1, "maxItems": 64,
-                            "items": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
-                        },
-                        { "type": "null" }
-                    ]
-                }
+                "block_hash": { "$ref": "#/components/schemas/Hash" }
             }
         }),
     );
@@ -19216,30 +19207,30 @@ mod tests {
         assert_closed_shape(
             &schemas,
             "SumeragiV2FinalizedNextEpochSnapshot",
-            &["epoch", "mode", "roster", "quorum", "leader_seed"],
-            &["epoch", "mode", "roster", "quorum", "leader_seed"],
+            &[
+                "epoch",
+                "epoch_end_height",
+                "mode",
+                "roster",
+                "validator_set_pops",
+                "quorum",
+                "leader_seed",
+            ],
+            &[
+                "epoch",
+                "epoch_end_height",
+                "mode",
+                "roster",
+                "validator_set_pops",
+                "quorum",
+                "leader_seed",
+            ],
         );
         assert_closed_shape(
             &schemas,
             "BridgeCommitment",
-            &[
-                "chain_id",
-                "height_context_id",
-                "block_height",
-                "block_hash",
-                "mmr_root",
-                "mmr_leaf_index",
-                "mmr_peaks",
-            ],
-            &[
-                "chain_id",
-                "height_context_id",
-                "block_height",
-                "block_hash",
-                "mmr_root",
-                "mmr_leaf_index",
-                "mmr_peaks",
-            ],
+            &["chain_id", "height_context_id", "block_height", "block_hash"],
+            &["chain_id", "height_context_id", "block_height", "block_hash"],
         );
         assert_closed_shape(
             &schemas,
@@ -19336,16 +19327,21 @@ mod tests {
             Some("^ea0130[0-9A-F]{96}$")
         );
 
-        let pops = property(&schemas, "SumeragiV2FinalityArtifact", "validator_set_pops");
-        assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
-        assert_eq!(pops.get("maxItems").and_then(Value::as_u64), Some(4096));
-        assert_eq!(
-            pops.get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/SumeragiV2BlsProof")
-        );
+        for owner in [
+            "SumeragiV2FinalityArtifact",
+            "SumeragiV2FinalizedNextEpochSnapshot",
+        ] {
+            let pops = property(&schemas, owner, "validator_set_pops");
+            assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
+            assert_eq!(pops.get("maxItems").and_then(Value::as_u64), Some(4096));
+            assert_eq!(
+                pops.get("items")
+                    .and_then(Value::as_object)
+                    .and_then(|items| items.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SumeragiV2BlsProof")
+            );
+        }
         let bls_proof = schema(&schemas, "SumeragiV2BlsProof");
         assert_eq!(bls_proof.get("minItems").and_then(Value::as_u64), Some(96));
         assert_eq!(bls_proof.get("maxItems").and_then(Value::as_u64), Some(96));

@@ -12,6 +12,14 @@
 //! discovery. Additional concurrency primitives may be added in future core
 //! releases without changing the fixed ABI v1 surface in this release.
 
+use iroha_data_model::prelude::{
+    DECIMAL_SCHEMA_HASH_V1, DECIMAL_SCHEMA_NAME_V1, INT_SCHEMA_HASH_V1, INT_SCHEMA_NAME_V1,
+    MAX_DECIMAL_ENVELOPE_BYTES_V1, MAX_DECIMAL_FRAME_BYTES_V1, MAX_INT_ENVELOPE_BYTES_V1,
+    MAX_INT_FRAME_BYTES_V1, MAX_QUANTITY_ENVELOPE_BYTES_V1, MAX_QUANTITY_FRAME_BYTES_V1,
+    NUMERIC_FRAME_HEADER_BYTES_V1, NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1, QUANTITY_SCHEMA_HASH_V1,
+    QUANTITY_SCHEMA_NAME_V1,
+};
+
 /// Debug helper for development; part of the ABI v1 surface.
 pub const SYSCALL_DEBUG_PRINT: u32 = 0;
 
@@ -1640,9 +1648,14 @@ pub fn render_abi_hashes_markdown_table() -> String {
 }
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
-const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 1;
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 2;
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
+const NUMERIC_WIRE_FORMAT_VERSION_V1: u8 = 1;
+const NUMERIC_FRAME_LAYOUT_V1: &str = "canonical-norito-v1-header=40;uncompressed;layout-flags=0;int-body=u32le-length+minimal-le-twos-complement;decimal-and-quantity-body=int-body+u8-scale;zero=empty-mantissa";
+const NUMERIC_POINTER_ENVELOPE_LAYOUT_V1: &str =
+    "u16be-type+u8-version(1)+u32be-frame-length+frame+iroha-hash32(frame);exact-length";
+const NUMERIC_ERROR_PRECEDENCE_V1: &str = "operands-in-register-order:pointer-provenance,type-policy,expected-type,version,capped-length,range,snapshot,hash,frame,schema,canonical;then-scale-pointer;then-required-zero-registers-and-rounding-and-failure-tags-in-syscall-contract-order;then-divisor-zero;then-arithmetic;result-domain=scale-before-mantissa-before-quantity-sign;quantity-sub-negative=underflow";
 
 // This is the base for invalid-surface sentinels. They cannot be emitted by
 // `iroha_crypto::Hash::new`: every valid Iroha hash has the low bit of its final
@@ -1714,6 +1727,7 @@ struct AbiNumericFaultSurface {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericSurface {
+    retired_amount_pointer_type_id: u16,
     int_pointer_type_id: u16,
     decimal_pointer_type_id: u16,
     quantity_pointer_type_id: u16,
@@ -1725,8 +1739,28 @@ struct AbiNumericSurface {
     canonicalization: &'static str,
     integer_division: &'static str,
     wrapping_modulus: &'static str,
+    wire_format_version: u8,
+    int_schema_name: &'static str,
+    int_schema_hash: [u8; 16],
+    decimal_schema_name: &'static str,
+    decimal_schema_hash: [u8; 16],
+    quantity_schema_name: &'static str,
+    quantity_schema_hash: [u8; 16],
+    frame_header_bytes: u64,
+    int_max_frame_bytes: u64,
+    decimal_max_frame_bytes: u64,
+    quantity_max_frame_bytes: u64,
+    pointer_envelope_overhead_bytes: u64,
+    int_max_envelope_bytes: u64,
+    decimal_max_envelope_bytes: u64,
+    quantity_max_envelope_bytes: u64,
+    frame_layout: &'static str,
+    pointer_envelope_layout: &'static str,
+    error_precedence: &'static str,
     rounding_modes: Vec<AbiNumericRoundingSurface>,
+    failure_modes: Vec<AbiNumericRoundingSurface>,
     faults: Vec<AbiNumericFaultSurface>,
+    pointer_faults: Vec<AbiNumericFaultSurface>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2063,6 +2097,7 @@ fn semantic_abi_surface_v1() -> Result<
             max_schema_depth,
         },
         AbiNumericSurface {
+            retired_amount_pointer_type_id: PointerType::RetiredAmount as u16,
             int_pointer_type_id,
             decimal_pointer_type_id,
             quantity_pointer_type_id,
@@ -2074,6 +2109,32 @@ fn semantic_abi_surface_v1() -> Result<
             canonicalization: "minimal-signed-little-endian;zero-empty;strip-fractional-trailing-zeroes;zero-scale-is-zero",
             integer_division: "quotient-truncates-toward-zero;remainder-sign-is-dividend",
             wrapping_modulus: "2^512;reinterpret-as-signed-domain",
+            wire_format_version: NUMERIC_WIRE_FORMAT_VERSION_V1,
+            int_schema_name: INT_SCHEMA_NAME_V1,
+            int_schema_hash: INT_SCHEMA_HASH_V1,
+            decimal_schema_name: DECIMAL_SCHEMA_NAME_V1,
+            decimal_schema_hash: DECIMAL_SCHEMA_HASH_V1,
+            quantity_schema_name: QUANTITY_SCHEMA_NAME_V1,
+            quantity_schema_hash: QUANTITY_SCHEMA_HASH_V1,
+            frame_header_bytes: u64::try_from(NUMERIC_FRAME_HEADER_BYTES_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            int_max_frame_bytes: u64::try_from(MAX_INT_FRAME_BYTES_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            decimal_max_frame_bytes: u64::try_from(MAX_DECIMAL_FRAME_BYTES_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            quantity_max_frame_bytes: u64::try_from(MAX_QUANTITY_FRAME_BYTES_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            pointer_envelope_overhead_bytes: u64::try_from(NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            int_max_envelope_bytes: u64::try_from(MAX_INT_ENVELOPE_BYTES_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            decimal_max_envelope_bytes: u64::try_from(MAX_DECIMAL_ENVELOPE_BYTES_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            quantity_max_envelope_bytes: u64::try_from(MAX_QUANTITY_ENVELOPE_BYTES_V1)
+                .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+            frame_layout: NUMERIC_FRAME_LAYOUT_V1,
+            pointer_envelope_layout: NUMERIC_POINTER_ENVELOPE_LAYOUT_V1,
+            error_precedence: NUMERIC_ERROR_PRECEDENCE_V1,
             rounding_modes: vec![
                 AbiNumericRoundingSurface {
                     name: "toward_zero",
@@ -2102,6 +2163,16 @@ fn semantic_abi_surface_v1() -> Result<
                 AbiNumericRoundingSurface {
                     name: "nearest_toward_zero",
                     tag: crate::numeric::RoundingModeV1::NearestTowardZero.tag(),
+                },
+            ],
+            failure_modes: vec![
+                AbiNumericRoundingSurface {
+                    name: "trap",
+                    tag: crate::numeric::NUMERIC_FAILURE_TRAP,
+                },
+                AbiNumericRoundingSurface {
+                    name: "status",
+                    tag: crate::numeric::NUMERIC_FAILURE_STATUS,
                 },
             ],
             faults: vec![
@@ -2152,6 +2223,52 @@ fn semantic_abi_surface_v1() -> Result<
                 AbiNumericFaultSurface {
                     name: "reserved_register_nonzero",
                     tag: crate::numeric::NumericFaultV1::ReservedRegisterNonZero.tag(),
+                },
+            ],
+            pointer_faults: vec![
+                AbiNumericFaultSurface {
+                    name: "invalid_address",
+                    tag: crate::numeric::PointerAbiFaultV1::InvalidAddress.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "unknown_type",
+                    tag: crate::numeric::PointerAbiFaultV1::UnknownType.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "type_not_allowed",
+                    tag: crate::numeric::PointerAbiFaultV1::TypeNotAllowed.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "wrong_type",
+                    tag: crate::numeric::PointerAbiFaultV1::WrongType.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "invalid_envelope_version",
+                    tag: crate::numeric::PointerAbiFaultV1::InvalidEnvelopeVersion.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "oversized_length",
+                    tag: crate::numeric::PointerAbiFaultV1::OversizedLength.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "truncated_envelope",
+                    tag: crate::numeric::PointerAbiFaultV1::TruncatedEnvelope.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "payload_hash_mismatch",
+                    tag: crate::numeric::PointerAbiFaultV1::PayloadHashMismatch.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "malformed_frame",
+                    tag: crate::numeric::PointerAbiFaultV1::MalformedFrame.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "schema_mismatch",
+                    tag: crate::numeric::PointerAbiFaultV1::SchemaMismatch.tag(),
+                },
+                AbiNumericFaultSurface {
+                    name: "noncanonical",
+                    tag: crate::numeric::PointerAbiFaultV1::NonCanonical.tag(),
                 },
             ],
         },
@@ -2359,6 +2476,10 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         entrypoint.u64("max_schema_depth", surface.entrypoint.max_schema_depth)
     })?;
     descriptor.record("numeric", |numeric| {
+        numeric.u16(
+            "retired_amount_pointer_type_id",
+            surface.numeric.retired_amount_pointer_type_id,
+        )?;
         numeric.u16("int_pointer_type_id", surface.numeric.int_pointer_type_id)?;
         numeric.u16(
             "decimal_pointer_type_id",
@@ -2376,6 +2497,45 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         numeric.text("canonicalization", surface.numeric.canonicalization)?;
         numeric.text("integer_division", surface.numeric.integer_division)?;
         numeric.text("wrapping_modulus", surface.numeric.wrapping_modulus)?;
+        numeric.u8("wire_format_version", surface.numeric.wire_format_version)?;
+        numeric.text("int_schema_name", surface.numeric.int_schema_name)?;
+        numeric.field("int_schema_hash", &surface.numeric.int_schema_hash)?;
+        numeric.text("decimal_schema_name", surface.numeric.decimal_schema_name)?;
+        numeric.field("decimal_schema_hash", &surface.numeric.decimal_schema_hash)?;
+        numeric.text("quantity_schema_name", surface.numeric.quantity_schema_name)?;
+        numeric.field("quantity_schema_hash", &surface.numeric.quantity_schema_hash)?;
+        numeric.u64("frame_header_bytes", surface.numeric.frame_header_bytes)?;
+        numeric.u64("int_max_frame_bytes", surface.numeric.int_max_frame_bytes)?;
+        numeric.u64(
+            "decimal_max_frame_bytes",
+            surface.numeric.decimal_max_frame_bytes,
+        )?;
+        numeric.u64(
+            "quantity_max_frame_bytes",
+            surface.numeric.quantity_max_frame_bytes,
+        )?;
+        numeric.u64(
+            "pointer_envelope_overhead_bytes",
+            surface.numeric.pointer_envelope_overhead_bytes,
+        )?;
+        numeric.u64(
+            "int_max_envelope_bytes",
+            surface.numeric.int_max_envelope_bytes,
+        )?;
+        numeric.u64(
+            "decimal_max_envelope_bytes",
+            surface.numeric.decimal_max_envelope_bytes,
+        )?;
+        numeric.u64(
+            "quantity_max_envelope_bytes",
+            surface.numeric.quantity_max_envelope_bytes,
+        )?;
+        numeric.text("frame_layout", surface.numeric.frame_layout)?;
+        numeric.text(
+            "pointer_envelope_layout",
+            surface.numeric.pointer_envelope_layout,
+        )?;
+        numeric.text("error_precedence", surface.numeric.error_precedence)?;
         numeric.sequence(
             "rounding_modes",
             &surface.numeric.rounding_modes,
@@ -2384,10 +2544,26 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
                 rounding.u64("tag", mode.tag)
             },
         )?;
+        numeric.sequence(
+            "failure_modes",
+            &surface.numeric.failure_modes,
+            |failure, mode| {
+                failure.text("name", mode.name)?;
+                failure.u64("tag", mode.tag)
+            },
+        )?;
         numeric.sequence("faults", &surface.numeric.faults, |fault, value| {
             fault.text("name", value.name)?;
             fault.u64("tag", value.tag)
-        })
+        })?;
+        numeric.sequence(
+            "pointer_faults",
+            &surface.numeric.pointer_faults,
+            |fault, value| {
+                fault.text("name", value.name)?;
+                fault.u64("tag", value.tag)
+            },
+        )
     })?;
     Ok(descriptor.finish())
 }
@@ -2477,8 +2653,9 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
 /// type; durable-state caps, ordering, storage, paging, and path derivation;
 /// typed core-query entity tags, projections, and page semantics; recursive
 /// entrypoint `List`, `Int`, `Decimal`, and `Quantity` kinds; and canonical
-/// numeric-domain, division, wrapping, encoding, and rounding rules. Gas prices remain bound
-/// independently by the gas-schedule hash. A malformed compiled registry
+/// numeric-domain, division, wrapping, frame schema/layout, error-precedence,
+/// and rounding rules. Gas prices remain bound independently by the
+/// gas-schedule hash. A malformed compiled registry
 /// returns a diagnostic sentinel with an invalid Iroha-hash marker; release
 /// tests require that path to be unreachable, and a valid Iroha hash can never
 /// equal such a sentinel.
@@ -3004,7 +3181,20 @@ mod tests {
                 1
             );
         }
-        assert!(!surface.pointer_type_ids.contains(&0x0013));
+        assert_eq!(
+            PointerType::from_u16(0x0010),
+            Some(PointerType::RetiredAmount)
+        );
+        assert!(!surface.pointer_type_ids.contains(&0x0010));
+        assert_eq!(
+            PointerType::from_u16(0x0013),
+            Some(PointerType::Quantity)
+        );
+        assert!(surface.pointer_type_ids.contains(&0x0013));
+        assert_eq!(
+            surface.numeric.retired_amount_pointer_type_id,
+            PointerType::RetiredAmount as u16
+        );
         assert_eq!(surface.numeric.int_pointer_type_id, PointerType::Int as u16);
         assert_eq!(
             surface.numeric.decimal_pointer_type_id,
@@ -3016,6 +3206,39 @@ mod tests {
         );
         assert_eq!(surface.numeric.mantissa_bits, 512);
         assert_eq!(surface.numeric.max_scale, 28);
+        assert_eq!(surface.numeric.wire_format_version, 1);
+        assert_eq!(surface.numeric.int_schema_name, INT_SCHEMA_NAME_V1);
+        assert_eq!(surface.numeric.int_schema_hash, INT_SCHEMA_HASH_V1);
+        assert_eq!(surface.numeric.decimal_schema_name, DECIMAL_SCHEMA_NAME_V1);
+        assert_eq!(
+            surface.numeric.decimal_schema_hash,
+            DECIMAL_SCHEMA_HASH_V1
+        );
+        assert_eq!(
+            surface.numeric.quantity_schema_name,
+            QUANTITY_SCHEMA_NAME_V1
+        );
+        assert_eq!(
+            surface.numeric.quantity_schema_hash,
+            QUANTITY_SCHEMA_HASH_V1
+        );
+        assert_eq!(surface.numeric.frame_header_bytes, 40);
+        assert_eq!(surface.numeric.int_max_frame_bytes, 108);
+        assert_eq!(surface.numeric.decimal_max_frame_bytes, 109);
+        assert_eq!(surface.numeric.quantity_max_frame_bytes, 109);
+        assert_eq!(surface.numeric.pointer_envelope_overhead_bytes, 39);
+        assert_eq!(surface.numeric.int_max_envelope_bytes, 147);
+        assert_eq!(surface.numeric.decimal_max_envelope_bytes, 148);
+        assert_eq!(surface.numeric.quantity_max_envelope_bytes, 148);
+        assert_eq!(surface.numeric.frame_layout, NUMERIC_FRAME_LAYOUT_V1);
+        assert_eq!(
+            surface.numeric.pointer_envelope_layout,
+            NUMERIC_POINTER_ENVELOPE_LAYOUT_V1
+        );
+        assert_eq!(
+            surface.numeric.error_precedence,
+            NUMERIC_ERROR_PRECEDENCE_V1
+        );
         assert_eq!(
             surface
                 .numeric
@@ -3032,6 +3255,15 @@ mod tests {
                 ("nearest_away", 5),
                 ("nearest_toward_zero", 6),
             ]
+        );
+        assert_eq!(
+            surface
+                .numeric
+                .failure_modes
+                .iter()
+                .map(|mode| (mode.name, mode.tag))
+                .collect::<Vec<_>>(),
+            vec![("trap", 0), ("status", 1)]
         );
         assert_eq!(
             surface
@@ -3055,6 +3287,27 @@ mod tests {
                 ("reserved_register_nonzero", 12),
             ]
         );
+        assert_eq!(
+            surface
+                .numeric
+                .pointer_faults
+                .iter()
+                .map(|fault| (fault.name, fault.tag))
+                .collect::<Vec<_>>(),
+            vec![
+                ("invalid_address", 1),
+                ("unknown_type", 2),
+                ("type_not_allowed", 3),
+                ("wrong_type", 4),
+                ("invalid_envelope_version", 5),
+                ("oversized_length", 6),
+                ("truncated_envelope", 7),
+                ("payload_hash_mismatch", 8),
+                ("malformed_frame", 9),
+                ("schema_mismatch", 10),
+                ("noncanonical", 11),
+            ]
+        );
 
         assert_surface_mutation_changes_hash(|changed| {
             let numeric_id = changed
@@ -3063,6 +3316,9 @@ mod tests {
                 .find(|type_id| **type_id == PointerType::Decimal as u16)
                 .expect("Decimal pointer type is allowed");
             *numeric_id += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.retired_amount_pointer_type_id += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.numeric.int_pointer_type_id += 1;
@@ -3097,6 +3353,60 @@ mod tests {
         assert_surface_mutation_changes_hash(|changed| {
             changed.numeric.wrapping_modulus = "2^64";
         });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.wire_format_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.int_schema_name = "wrong.Int";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.int_schema_hash[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.decimal_schema_name = "wrong.Decimal";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.decimal_schema_hash[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.quantity_schema_name = "wrong.Quantity";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.quantity_schema_hash[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.frame_header_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.int_max_frame_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.decimal_max_frame_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.quantity_max_frame_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.pointer_envelope_overhead_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.int_max_envelope_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.decimal_max_envelope_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.quantity_max_envelope_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.frame_layout = "host-dependent";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.pointer_envelope_layout = "unframed";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.numeric.error_precedence = "unspecified";
+        });
         for mode_index in 0..surface.numeric.rounding_modes.len() {
             assert_surface_mutation_changes_hash(|changed| {
                 changed.numeric.rounding_modes[mode_index].name = "mutated_mode";
@@ -3105,12 +3415,28 @@ mod tests {
                 changed.numeric.rounding_modes[mode_index].tag += 10;
             });
         }
+        for mode_index in 0..surface.numeric.failure_modes.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.failure_modes[mode_index].name = "mutated_failure_mode";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.failure_modes[mode_index].tag += 10;
+            });
+        }
         for fault_index in 0..surface.numeric.faults.len() {
             assert_surface_mutation_changes_hash(|changed| {
                 changed.numeric.faults[fault_index].name = "mutated_fault";
             });
             assert_surface_mutation_changes_hash(|changed| {
                 changed.numeric.faults[fault_index].tag += 20;
+            });
+        }
+        for fault_index in 0..surface.numeric.pointer_faults.len() {
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.pointer_faults[fault_index].name = "mutated_pointer_fault";
+            });
+            assert_surface_mutation_changes_hash(|changed| {
+                changed.numeric.pointer_faults[fault_index].tag += 30;
             });
         }
     }
@@ -3227,7 +3553,11 @@ mod tests {
         for &pointer_type in crate::pointer_abi::PointerType::all() {
             assert_eq!(
                 allowed.contains(&pointer_type),
-                !matches!(pointer_type, crate::pointer_abi::PointerType::TestOnly),
+                !matches!(
+                    pointer_type,
+                    crate::pointer_abi::PointerType::RetiredAmount
+                        | crate::pointer_abi::PointerType::TestOnly
+                ),
                 "pointer policy completeness for {pointer_type:?}"
             );
         }

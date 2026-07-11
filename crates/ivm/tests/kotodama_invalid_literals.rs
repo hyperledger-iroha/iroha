@@ -61,7 +61,7 @@ fn invalid_json_literal_reports_error() {
 fn build_submit_ballot_inline_rejects_runtime_bytes() {
     let src = r#"
         seiyaku RuntimeBallotBytes {
-          kotoage fn main(cipher: bytes, nullifier: bytes, proof: bytes, vk: bytes)
+          kotoage fn main(bytes cipher, bytes nullifier, bytes proof, bytes vk)
             authorize("SubmitBallot") {
             ledger::governance::build_submit_ballot(election_id: "election", ciphertext: cipher, nullifier: nullifier, backend: "ipa", proof: proof, verification_key: vk);
           }

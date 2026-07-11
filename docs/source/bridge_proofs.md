@@ -457,14 +457,16 @@ profile:
 - the complete ordered semantics
   `sccp-canonical-transfer-v1`, `sccp-message-leaf-v1`,
   `sccp-merkle-inclusion-v1`, `sora-taira-block-commitment-v1`,
-  `sora-taira-commit-qc-v1`, and
+  `sora-taira-v2-finality-artifact-v1`,
+  `sora-taira-v2-dual-quorum-v1`, and
   `sora-taira-anchor-continuity-v1`;
 - the exact compiled circuit/proving-key artifact SHA-256;
 - the exact reproducible witness-generator SHA-256;
 - the fixed ordered eleven-public-signal schema hash;
 - the domain-separated semantic-profile hash derived from those three roles;
-- a typed Taira checkpoint, validator-set epoch/hash, and hash version, plus
-  the independently derived finality-anchor hash;
+- a typed protocol-2 Taira checkpoint containing the chain id, height, block
+  hash, context id, and finality-artifact hash, plus the independently derived
+  finality-anchor hash;
 - the exact verifier-key hash;
 - the nonzero route revision and SHA-256 of the canonical full typed key;
 - the prover build and toolchain-lock SHA-256 digests;
@@ -486,9 +488,10 @@ Taira finality-anchor hash; there are twelve IC points including the constant
 point, and the canonical verifying-key preimage is exactly 38 ABI words.
 Ten-signal, eleven-IC-point, and 36-word representations are invalid. The policy
 therefore establishes that the deployed key proves canonical transfer
-semantics, message inclusion, Taira commit-QC finality, and continuity from the
-governed checkpoint rather than merely checking a syntactically valid Groth16
-equation. The bundle commits the complete policy hash.
+semantics, message inclusion, the complete Sumeragi-v2 finality artifact and
+dual quorum, and continuity from the governed checkpoint rather than merely
+checking a syntactically valid Groth16 equation. The bundle commits the
+complete policy hash.
 
 Production evidence must also carry the actual content-addressed bytes, not
 only their policy digests. For every profile, both auditors independently sign

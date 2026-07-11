@@ -1338,6 +1338,7 @@ class SccpClientExactTest {
                 "payload_amount_scale" to 9,
             ),
         )
+        assertEquals(DEFAULT_ROUTE_CONFIG_HASH, fixtureRouteConfigurationHash(route))
         return linkedMapOf(
             "version" to 1,
             "lanes" to mutableListOf<Any?>(
@@ -1368,6 +1369,10 @@ class SccpClientExactTest {
         val destination = route["destination"] as MutableMap<String, Any?>
         destination["family"] = "tron"
         sourceIdentity(route)["route_config_hash"] = TRON_ROUTE_CONFIG_HASH
+        assertEquals(
+            TRON_ROUTE_CONFIG_HASH,
+            fixtureRouteConfigurationHash(route, SccpNetworkV1.TRON_MAINNET),
+        )
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -1437,28 +1442,62 @@ class SccpClientExactTest {
     }
 
     @Suppress("UNCHECKED_CAST")
-    private fun fixtureRouteConfigurationHash(route: MutableMap<String, Any?>): String {
+    private fun fixtureRouteConfigurationHash(
+        route: MutableMap<String, Any?>,
+        sourceNetwork: SccpNetworkV1 = SccpNetworkV1.BSC_MAINNET,
+    ): String {
+        require(
+            sourceNetwork == SccpNetworkV1.BSC_MAINNET ||
+                sourceNetwork == SccpNetworkV1.TRON_MAINNET,
+        ) { "fixture route hash supports only its BSC and TRON mainnet routes" }
         val destination = route["destination"] as MutableMap<String, Any?>
         val deployment = destination["deployment"] as MutableMap<String, Any?>
         val sourceLaneHash = SccpV1.laneHash(
-            SccpLaneIdV1(SccpNetworkV1.BSC_MAINNET, SccpNetworkV1.SORA_TAIRA),
+            SccpLaneIdV1(sourceNetwork, SccpNetworkV1.SORA_TAIRA),
         )
         val destinationLaneHash = SccpV1.laneHash(
-            SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, SccpNetworkV1.BSC_MAINNET),
+            SccpLaneIdV1(SccpNetworkV1.SORA_TAIRA, sourceNetwork),
         )
-        val deploymentConfigurationHash = keccak(
-            concatenate(
-                listOf(
-                    abiAddress(deployment["token_address"] as String),
-                    (deployment["token_code_hash"] as String).hexToBytes(),
-                    abiAddress(deployment["verifier_address"] as String),
-                    (deployment["verifier_code_hash"] as String).hexToBytes(),
-                    (deployment["verifier_key_hash"] as String).hexToBytes(),
-                    semanticProfileHash().hexToBytes(),
-                    finalityAnchorHash().hexToBytes(),
+        val isTron = sourceNetwork == SccpNetworkV1.TRON_MAINNET
+        val networkValue = if (isTron) 0x2b66_53dcL else 56L
+        val semanticHash = semanticProfileHash().hexToBytes()
+        val anchorHash = finalityAnchorHash().hexToBytes()
+        val verifierAddress = deployment["verifier_address"] as String
+        val routeAddress = deployment["route_address"] as String
+        val verifierCodeHash = (deployment["verifier_code_hash"] as String).hexToBytes()
+        val verifierKeyHash = (deployment["verifier_key_hash"] as String).hexToBytes()
+        val destinationBindingHash = if (isTron) {
+            keccak(
+                concatenate(
+                    listOf(
+                        keccak("iroha:sccp:tron-destination-binding:v1".toByteArray(Charsets.UTF_8)),
+                        keccak("tron-groth16-bn254-v1".toByteArray(Charsets.UTF_8)),
+                        abiWord(networkValue),
+                        abiWord(0),
+                        abiWord(sourceNetwork.domainId.toLong()),
+                        abiTronAddress(verifierAddress),
+                        abiTronAddress(routeAddress),
+                        verifierCodeHash,
+                        verifierKeyHash,
+                        semanticHash,
+                        anchorHash,
+                    ),
                 ),
-            ),
+            )
+        } else {
+            null
+        }
+        val deploymentWords = mutableListOf(
+            abiAddress(deployment["token_address"] as String),
+            (deployment["token_code_hash"] as String).hexToBytes(),
+            abiAddress(verifierAddress),
+            verifierCodeHash,
+            verifierKeyHash,
+            semanticHash,
+            anchorHash,
         )
+        destinationBindingHash?.let(deploymentWords::add)
+        val deploymentConfigurationHash = keccak(concatenate(deploymentWords))
         val routeId = route["route_id"] as String
         val revision = (route["revision"] as Number).toLong()
         val multiplier = (deployment["taira_to_token_multiplier"] as Number).toLong()
@@ -1476,9 +1515,9 @@ class SccpClientExactTest {
             concatenate(
                 listOf(
                     keccak("sccp:concrete-route-config:v1".toByteArray(Charsets.UTF_8)),
-                    abiWord(2),
-                    abiWord(4),
-                    abiWord(56),
+                    abiWord(sourceNetwork.domainId.toLong()),
+                    abiWord(sourceNetwork.tag.toLong()),
+                    abiWord(networkValue),
                     sourceLaneHash,
                     destinationLaneHash,
                     deploymentConfigurationHash,
@@ -1735,6 +1774,9 @@ class SccpClientExactTest {
 
     private fun abiAddress(value: String): ByteArray = ByteArray(12) + value.hexToBytes()
 
+    private fun abiTronAddress(value: String): ByteArray =
+        ByteArray(11) + byteArrayOf(0x41) + value.hexToBytes()
+
     private fun String.hexToBytes(): ByteArray = ByteArray(length / 2) { index ->
         substring(index * 2, index * 2 + 2).toInt(16).toByte()
     }
@@ -1744,10 +1786,11 @@ class SccpClientExactTest {
     }
 
     private companion object {
+        // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
-            "0FC9AACAB4FDA553FFF88AC434294FA879B4205E723C377A82754BDC2DB152C6"
+            "553B2E9D6165A499853AC061D91678A2C41DE8F660EA0E8DBA0BFF19618D5DAD"
         const val TRON_ROUTE_CONFIG_HASH =
-            "0D8A9CFD7501B39865633FAAC108852E9D045A9D1643799F84D920913BB60EB7"
+            "C09C131C9C76D46A5A49F21C1BD8128D2958E46528EDC9FBBDA10B8ABCF97BD6"
         val MESSAGE_ID: String = "11".repeat(32)
     }
 }

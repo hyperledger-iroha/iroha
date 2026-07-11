@@ -19,6 +19,7 @@
 //!   exact envelope in the read-only literal data.
 //! - `version` currently must be 1.
 //! - `type_id` must be known in the table below.
+//! - Permanently retired type IDs are known for diagnostics but never validate.
 //! - Hash must match `iroha_crypto::Hash::new(payload)`.
 
 use std::{cell::Cell, collections::HashSet, sync::OnceLock};
@@ -177,6 +178,9 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
     }
 
     let tlv_type = PointerType::from_u16(type_id).ok_or(VMError::NoritoInvalid)?;
+    if tlv_type == PointerType::RetiredAmount {
+        return Err(VMError::NoritoInvalid);
+    }
 
     Ok(Tlv {
         type_id: tlv_type,

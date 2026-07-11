@@ -220,8 +220,6 @@ pub enum NumericWorkStep {
         value_limbs: u16,
         /// Decimal exponent.
         exponent: u8,
-        /// Conservative logical bound for the scaled result width.
-        result_limbs: u16,
     },
     /// Negate one conceptual integer.
     Negate {
@@ -1142,12 +1140,16 @@ impl Quantity {
         Self::from_canonical_numeric(value)
     }
 
-    /// Validate an already canonical decimal as a non-negative quantity.
+    /// Wrap an already canonical decimal as a non-negative quantity.
+    ///
+    /// Every publicly constructible [`Numeric`] already carries the canonical
+    /// representation invariant. Strict wire decoders validate that invariant
+    /// before constructing `Numeric`, so this boundary only needs to enforce
+    /// the additional nominal sign rule and performs no hidden bigint pass.
     ///
     /// # Errors
-    /// Rejects noncanonical or negative input.
+    /// Rejects a negative input.
     pub fn from_canonical_numeric(value: Numeric) -> Result<Self, NumericOperationError> {
-        value.validate_decimal()?;
         if value.mantissa.is_negative() {
             return Err(NumericOperationError::NegativeQuantity);
         }
@@ -1206,10 +1208,11 @@ impl Quantity {
     /// Returns [`NumericOperationError::QuantityUnderflow`] when `other` is
     /// greater than `self`, or another result-domain failure.
     pub fn try_sub(&self, other: &Self) -> Result<Self, NumericOperationError> {
-        if self < other {
+        let result = self.0.try_decimal_sub(&other.0)?;
+        if result.mantissa().is_negative() {
             return Err(NumericOperationError::QuantityUnderflow);
         }
-        Self::from_canonical_numeric(self.0.try_decimal_sub(&other.0)?)
+        Self::from_canonical_numeric(result)
     }
 
     /// Alias for [`Self::try_sub`] emphasizing checked domain arithmetic.
@@ -1431,6 +1434,11 @@ where
     F: FnMut(NumericWorkStep) -> Result<(), E>,
 {
     let ten = UnboundedBigInt::from(10_u8);
+    if mantissa.is_zero() {
+        // Zero has a dedicated canonicalization rule and needs no
+        // divide-by-ten probe: `(0, s)` becomes `(0, 0)` directly.
+        scale = 0;
+    }
     while scale > 0 {
         observer(NumericWorkStep::Normalize {
             mantissa_limbs: logical_limbs(&mantissa),
@@ -1639,16 +1647,9 @@ where
     if decimal_places == 0 || value.is_zero() {
         return Ok(value.clone());
     }
-    // `10^e < 2^(4e)`. This pre-computable bound deliberately avoids doing
-    // the multiplication merely to discover its result width before debit.
-    let result_bits_bound = value
-        .bits()
-        .saturating_add(u64::from(decimal_places).saturating_mul(4));
-    let result_limbs = u16::try_from(result_bits_bound.max(1).div_ceil(64)).unwrap_or(u16::MAX);
     observer(NumericWorkStep::ScaleByPowerOfTen {
         value_limbs: logical_limbs(value),
         exponent: u8::try_from(decimal_places).unwrap_or(u8::MAX),
-        result_limbs,
     })
     .map_err(ObservedNumericError::Observer)?;
     Ok(value * UnboundedBigInt::from(10_u8).pow(decimal_places))
@@ -2344,12 +2345,17 @@ mod tests {
             decimal("0.0000000000000000000000000002").try_decimal_mul(&decimal("0.5")),
             Ok(decimal("0.0000000000000000000000000001"))
         );
+        assert_eq!(
+            maximum.try_decimal_mul(&maximum),
+            Err(NumericOperationError::ScaleOverflow),
+            "after normalization, scale failure precedes simultaneous mantissa overflow"
+        );
     }
 
     #[test]
     fn legacy_checked_multiplication_normalizes_before_enforcing_width() {
-        let lhs_mantissa = BigInt::from_inner(UnboundedBigInt::one() << 256)
-            .expect("257-bit left mantissa");
+        let lhs_mantissa =
+            BigInt::from_inner(UnboundedBigInt::one() << 256).expect("257-bit left mantissa");
         let rhs_mantissa = BigInt::from_inner(
             UnboundedBigInt::from(5_u8) * ((UnboundedBigInt::one() << 255) - 1_u8),
         )
@@ -2503,6 +2509,20 @@ mod tests {
                 .all(|step| matches!(step, NumericWorkStep::Normalize { .. }))
         );
 
+        let mut zero_steps = Vec::new();
+        let zero = Numeric::try_new_raw(0, MAX_DECIMAL_SCALE)
+            .expect("raw scaled zero")
+            .canonicalize_decimal_observed(&mut |step| {
+                zero_steps.push(step);
+                Ok::<_, ()>(())
+            })
+            .expect("canonicalize zero");
+        assert_eq!(zero, Numeric::zero());
+        assert!(
+            zero_steps.is_empty(),
+            "zero canonicalization performs no bigint division"
+        );
+
         let mut validation_steps = Vec::new();
         decimal("1.2")
             .validate_decimal_observed(&mut |step| {
@@ -2628,7 +2648,6 @@ mod tests {
             NumericWorkStep::ScaleByPowerOfTen {
                 value_limbs: 1,
                 exponent: 1,
-                result_limbs: 1,
             }
         );
         assert!(matches!(add_steps[2], NumericWorkStep::Add { .. }));
@@ -2709,7 +2728,7 @@ mod tests {
 
         let raw = Numeric::try_new_raw(10, 1).expect("representable noncanonical decimal");
         assert_eq!(
-            Quantity::from_canonical_numeric(raw.clone()),
+            raw.validate_decimal(),
             Err(NumericOperationError::NonCanonical)
         );
         assert_eq!(
@@ -2773,6 +2792,11 @@ mod tests {
         assert_eq!(
             maximum.try_mul_decimal(&Numeric::from(2_u32)),
             Err(NumericOperationError::MantissaOverflow)
+        );
+        assert_eq!(
+            maximum.try_mul_decimal(&decimal("-2")),
+            Err(NumericOperationError::MantissaOverflow),
+            "result-domain overflow precedes the nominal negative-quantity check"
         );
     }
 

@@ -6099,7 +6099,10 @@ fn lower_surface_builtin_call(
         Builtin::BuildUnshieldInline => {
             let asset = lower_expr(ctx, &args[0], vars);
             let to = lower_expr(ctx, &args[1], vars);
-            let amount = lower_expr_as_u64(ctx, &args[2], vars);
+            // The protocol field is `u128`, so retain the canonical source
+            // `int` pointer here. Code generation requires a literal and
+            // performs the explicit non-negative u128 conversion.
+            let amount = lower_expr(ctx, &args[2], vars);
             let inputs = lower_expr(ctx, &args[3], vars);
             let (outputs, backend_idx) = if args.len() == 8 {
                 (Some(lower_expr(ctx, &args[4], vars)), 5)

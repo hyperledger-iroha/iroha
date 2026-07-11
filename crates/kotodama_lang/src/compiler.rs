@@ -1750,7 +1750,7 @@ mod tests {
     }
 
     fn canonical_numeric_state_key(base: &str, kind: ir::DataRefKind, value: &str) -> String {
-        let encoded = encode_pointer_tlv_bytes(kind, value)
+        let encoded = super::encode_pointer_tlv_bytes(kind, value)
             .expect("encode canonical pointer-backed numeric state key");
         format!("state:{base}/{}", hex::encode(encoded))
     }
@@ -3431,6 +3431,10 @@ kotoage fn main() authorize("CompilerFixture") {{
   ledger::account::set_quorum(account, 3);
 }}
 
+kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {{
+  ledger::account::set_quorum(account, quorum);
+}}
+
 }}
 "#
         );
@@ -3462,6 +3466,13 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
+        let int_to_u64 = encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_INT_TRY_TO_U64)
+            .to_le_bytes();
+        assert!(
+            code.windows(int_to_u64.len())
+                .any(|window| window == int_to_u64),
+            "dynamic quorum must use checked int-to-u64 conversion"
+        );
 
         let hints = manifest
             .access_set_hints
@@ -3497,7 +3508,39 @@ fn main(AccountId account) {
 
 }
 "#,
-                "ledger::account::set_quorum expects (AccountId, quantity)",
+                "ledger::account::set_quorum expects (AccountId, int)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, -1); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, 0); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, 65536); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, 18446744073709551616); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
             ),
         ] {
             let parsed = parse(src).expect("parse source");
@@ -5765,12 +5808,11 @@ fn main() {{
         string_map.insert((func_idx, backend), "halo2/ipa".to_string());
         string_map.insert((func_idx, proof), "0xab".to_string());
         string_map.insert((func_idx, vk), "vk_unshield_outputs".to_string());
-        let mut int_const_map = HashMap::new();
-        int_const_map.insert((func_idx, amount), 7);
+        let public_amount = u128::try_from(i64::MAX).expect("i64::MAX is non-negative") + 1;
+        string_map.insert((func_idx, amount), public_amount.to_string());
 
         let raw = super::unshield_inline_instruction_literal(
             &string_map,
-            &int_const_map,
             func_idx,
             asset,
             to,
@@ -5789,9 +5831,54 @@ fn main() {{
             .as_any()
             .downcast_ref::<iroha_data_model::isi::zk::Unshield>()
             .expect("Unshield instruction");
-        assert_eq!(unshield.public_amount(), &7u128);
+        assert_eq!(unshield.public_amount(), &public_amount);
         assert_eq!(unshield.inputs().as_slice(), &[[0x11u8; 32], [0x12u8; 32]]);
         assert_eq!(unshield.outputs().as_slice(), &[[0x21u8; 32], [0x22u8; 32]]);
+    }
+
+    #[test]
+    fn unshield_inline_amount_uses_the_explicit_u128_protocol_domain() {
+        let account = sample_account_literal();
+        let inputs = "\\x00".repeat(32);
+        let source = |amount: &str| {
+            format!(
+                r#"
+seiyaku UnshieldAmount {{
+  view fn build() -> bytes {{
+    return crypto::zk::build_unshield(
+      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+      destination: AccountId::parse("{account}"),
+      amount: {amount},
+      inputs: b"{inputs}",
+      backend: "halo2",
+      proof: b"proof",
+      verification_key: b"vk",
+    );
+  }}
+}}
+"#
+            )
+        };
+
+        Compiler::new()
+            .compile_source(&source("9223372036854775808"))
+            .expect("a literal above i64 but inside u128 must compile");
+
+        for (amount, expected) in [
+            ("-1", "requires non-negative amount"),
+            (
+                "340282366920938463463374607431768211456",
+                "amount exceeds the u128 protocol range",
+            ),
+        ] {
+            let error = Compiler::new()
+                .compile_source(&source(amount))
+                .expect_err("amount outside the protocol u128 domain must fail");
+            assert!(
+                error.contains(expected),
+                "amount={amount}: expected `{expected}` in {error}"
+            );
+        }
     }
 
     #[test]
@@ -9714,7 +9801,7 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        let literal_key = canonical_i64_state_key("Foo", 1);
+        let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Int, "1");
         assert!(
             hints.read_keys.contains(&"state:Foo".to_string()),
             "{hints:?}"
@@ -11537,7 +11624,6 @@ impl Compiler {
                     } = instr
                         && let Some(raw) = unshield_inline_instruction_literal(
                             &string_map,
-                            &int_const_map,
                             func_idx,
                             *asset,
                             *to,
@@ -13704,25 +13790,13 @@ impl Compiler {
                                         format!("build_unshield_inline requires literal {label}");
                                     Err(i18n::translate(self.lang, Message::SemanticError(&err)))
                                 };
-                            let require_amount = |temp: &ir::Temp| -> Result<i64, String> {
-                                if let Some(value) = int_const_map.get(&(func_idx, *temp)) {
-                                    return Ok(*value);
-                                }
-                                let err =
-                                    "build_unshield_inline requires literal amount".to_string();
-                                Err(i18n::translate(self.lang, Message::SemanticError(&err)))
-                            };
                             let asset_id_str = require_literal("asset", asset)?;
                             let to_str = require_literal("to", to)?;
-                            let amt = require_amount(amount)?;
-                            if amt < 0 {
-                                let err = "build_unshield_inline requires non-negative amount"
-                                    .to_string();
-                                return Err(i18n::translate(
-                                    self.lang,
-                                    Message::SemanticError(&err),
-                                ));
-                            }
+                            let amount_literal = require_literal("amount", amount)?;
+                            let amt =
+                                parse_unshield_public_amount(&amount_literal).map_err(|err| {
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
                             let ad = AssetDefinitionId::parse_address_literal(&asset_id_str)
                                 .map_err(|e| {
                                 let err = format!(
@@ -13771,7 +13845,7 @@ impl Compiler {
                             let uz = DMZk::Unshield {
                                 asset: ad,
                                 to: acct,
-                                public_amount: amt as u128,
+                                public_amount: amt,
                                 inputs: ins,
                                 outputs: outs,
                                 proof: pa,
@@ -20257,10 +20331,22 @@ fn submit_ballot_inline_instruction_literal(
     Some(format!("0x{}", hex::encode(bytes)))
 }
 
+fn parse_unshield_public_amount(raw: &str) -> Result<u128, String> {
+    let value = raw
+        .parse::<iroha_primitives::bigint::BigInt>()
+        .map_err(|_| "build_unshield_inline requires a canonical int literal amount".to_owned())?;
+    if value.is_negative() {
+        return Err("build_unshield_inline requires non-negative amount".to_owned());
+    }
+    value
+        .to_string()
+        .parse::<u128>()
+        .map_err(|_| "build_unshield_inline amount exceeds the u128 protocol range".to_owned())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn unshield_inline_instruction_literal(
     string_map: &HashMap<(usize, ir::Temp), String>,
-    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     func_idx: usize,
     asset: ir::Temp,
     to: ir::Temp,
@@ -20281,7 +20367,7 @@ fn unshield_inline_instruction_literal(
     let account = AccountId::parse_encoded(&literal(to)?)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .ok()?;
-    let public_amount = u128::try_from(*int_const_map.get(&(func_idx, amount))?).ok()?;
+    let public_amount = parse_unshield_public_amount(&literal(amount)?).ok()?;
     let inputs = decode_fixed32_chunks(&literal(inputs)?, "inputs", false).ok()?;
     let outputs = if let Some(outputs) = outputs {
         decode_fixed32_chunks(&literal(outputs)?, "outputs", true).ok()?

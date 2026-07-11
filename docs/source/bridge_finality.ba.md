@@ -4,121 +4,84 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
+source_last_modified: "2026-07-11T23:16:35+00:00"
+translation_last_reviewed: 2026-07-11
 translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
---> X
+-->
 
-# Күпер финалында дәлилдәр
+# Күпер финаллылығы дәлилдәре
 
-Был документта Iroha өсөн күперҙең финалына ҡаршы сығыу өҫтөн һүрәтләнә.
-Маҡсат-тышҡы сылбыр йәки еңел клиенттар рөхсәт итеү, тип раҫлай Iroha блок .
-сылбырлы иҫәпләүҙәрһеҙ йәки ышаныслы эстафетаһыҙ тамамлана.
+Был документ тәүге сығарылыш өсөн күпер финаллылығы форматын билдәләй. Дәлил Sumeragi
+v2 булдырған һәм даими һаҡлаған теүәл финаллылыҡ мәғлүмәтен ташый. Дәлил тышлығының
+schema version-ы `1`, ә эсендәге consensus protocol version-ы `2`. Sumeragi v1
+certificate-ына projection, decoder йәки fallback юл юҡ.
 
-## Дәғүә форматында
+## Дәлилдең теүәл форматы
 
-`BridgeFinalityProof` (Norito/JSON) составында:
+Norito йәки Norito JSON менән кодланған `BridgeFinalityProof` өс кенә яландан тора:
 
-- `height`: блок бейеклеге.
-- `chain_id`: Iroha сылбырлы идентификаторы, сылбырлы реплейҙы булдырмау өсөн.
-- `block_header`: канонлы `BlockHeader`.
-- `block_hash`: башлыҡ хеш (клиенттар раҫлау өсөн яңынан иҫәпләнә).
-- `commit_certificate`: валитатор ҡуйыу + ҡултамғалар, улар блокты тамамлай.
-- `validator_set_pops`: Валитатор йыйылмаһы менән тура килтерелгән проф-поссессия байттары
-  бойороҡ (BLS агрегат тикшерелеүе өсөн кәрәк).
+```text
+{ version, block_header, finality_artifact }
+```
 
-Дәлил үҙ-үҙенә эйә; тышҡы манифест йәки асыҡ булмаған таптар кәрәкмәй.
-Һаҡлау: Torii хеҙмәтләндерә, һуңғы дәлилдәр өсөн һуңғы ваҡытта коммит-сертификат тәҙрә
-(конфигурацияланған тарих ҡапҡасы менән сикләнгән; 512 яҙмаға тиклем ғәҙәттәгесә.
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP` X). Клиенттар
-тейеш кэш йәки якорь дәлилдәре, әгәр улар оҙонораҡ офоҡтар кәрәк.
-Канон кортежы `(block_header, block_hash, commit_certificate)`: .
-хеш башлыҡ тура килергә тейеш хеш эсендә ҡылған сертификат, һәм
-сылбыр идентификацияһы бер баш китапҡа дәлил бәйләй. Серверҙар кире ҡаға һәм журнал а
-`CommitCertificateHashMismatch` ҡасан сертификат икенсе блокҡа күрһәтә
-хеш.
+- `version` мотлаҡ `1` булырға тейеш;
+- `block_header` — һоралған бейеклектең каноник `BlockHeader`-ы;
+- `finality_artifact` — ошо блок өсөн һаҡланған теүәл `V2FinalityArtifact`. Ул
+  height-context roster тәртибендә һәр validator-ҙың BLS-normal PoP-ын
+  (`validator_set_pops`) даими эсендә һаҡлай.
 
-## йөкләмәһе өйөмө
+Artifact тулы һәм үҙгәрмәҫ `HeightContext`, теүәл `BlockSubject`, block hash, CommitQC һәм
+roster-ға тура килгән PoP-тарҙы үҙ эсенә ала. Height context chain, epoch, roster,
+`DualQuorum`, DA layout, leader seed һәм башҡа consensus мәғлүмәтен нығыта. Epoch-ты
+тамамлаған parent block context-е optional `next_epoch_snapshot`-ты ла үҙ эсенә ала;
+был яландар context id өлөшө булғанға, child roster-ға рөхсәт бирер алдынан parent
+CommitQC уны аутентификациялай. Finalized snapshot киләһе epoch parameters менән бергә
+`epoch_end_height` һәм киләһе roster-ға тура килгән `validator_set_pops`-ты ла нығыта.
 
-`BridgeFinalityBundle` (Norito/JSON) асыҡтан-асыҡ төп дәлилде оҙайта.
-йөкләмә һәм аҡлау:
+## Даими һаҡлау һәм тикшереү
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: йөкләмә буйынса билдәләнгән вәкәләттән ҡултамғалар
-  файҙалы йөк (ҡабаттан ҡулланыла коммит-сертификат ҡултамғалары).
-- `block_header`, `commit_certificate`: төп дәлилдәр менән бер үк.
+Sumeragi v2 apply path artifact-ты тикшерә һәм үҙгәрмәҫ Kura sidecar итеп һаҡлай. Proof
+builder каноник block менән уның sidecar-ын уҡый, ә тарихи PoP йәки certificate-ты
+үҙгәреүсән ағымдағы world state-тән яңынан төҙөмәй. Юғалған, боҙолған, ҡапма-ҡаршы йәки
+тикшерелмәгән sidecar fail-closed рәүештә кире ҡағыла; ҡулланыу мөмкинлеге һуңғы
+in-memory history window менән сикләнмәй.
 
-Ағымдағы урын: `mmr_root`/`mmr_peaks` X-ты ҡабаттан иҫәпләү юлы менән сығарыла.
-блок-хэш ММР хәтерҙә; инклюзия дәлилдәре әлегә ҡайтарылмаған. Клиенттар ала
-һаман да раҫлау аша шул уҡ хеш аша йөкләмә файҙалы йөк бөгөн.
+Stateless verifier version, chain, height, header hash, context, subject һәм CommitQC-ны
+теүәл сағыштыра һәм artifact эсендәге бөтә PoP-ты тикшерә. Signer index-тар ҡәтғи үҫеүсе
+һәм сик эсендә булырға тейеш. CommitQC validator count һәм voting power буйынса ике
+quorum-ды ла үтәп, теүәл Sumeragi v2 vote preimage өсөн BLS aggregate signature дөрөҫ
+булырға тейеш.
 
-ММР түбәләренә һулдан уңға заказ бирелә. Ҡабаттан `mmr_root` ҡапҡасы пиктары ярҙамында
-уңдан һулға: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+## Ышаныс anchor-ы һәм successor тикшереүе
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+Айырым дәлил үҙе килтергән roster аҫтындағы эске ярашлылыҡты ғына күрһәтә.
+`BridgeFinalityVerifier` тәүге дәлилгә тиклем асыҡтан-асыҡ ышаныслы `HeightContextId`
+талап итә. Артабан ул тик шунда уҡ киләһе бейеклекте ҡабул итә һәм child context-тың
+parent CommitQC-ын алдағы нығытылған roster һәм PoP менән тикшерә. Epoch эсендә child
+artifact алдағы artifact PoP-тарын күсерә; сиктә epoch, roster, quorum, seed һәм PoP
+parent CommitQC аутентификациялаған `next_epoch_snapshot`-ҡа, шул иҫәптән
+`epoch_end_height`-ҡа, тура килергә тейеш. Иҫке, үткәреп ебәрелгән һәм бәйләнмәгән
+бейеклектәр кире ҡағыла.
 
-Тикшеренеүҙең төп дәлиле менән аналоглы: `block_hash` ҡабаттан иҫәпләү.
-баш, раҫлау өсөн коммит-сертификат ҡултамғалар, һәм тикшерергә йөкләмә
-баҫыуҙары сертификат һәм блок хешҡа тап килә. Ҡапҡа өҫтәй йөкләмә/
-айырыуҙы өҫтөн күргән күпер протоколдары өсөн аҡлау уратып.
+SCCP шул уҡ `BridgeFinalityProof`-ты ҡуллана. Message биргән roster аҫтындағы ҡултамғаға
+ғына ышаныу етмәй; governance нығытҡан checkpoint context/artifact-ынан message
+artifact-ына тиклем һәр тура successor тикшерелергә тейеш.
 
-## Тикшереү аҙымдары1. `block_hash` ҡабаттан иҫәпләү `block_header`; тап килмәү тураһында кире ҡағыу.
-2. Тикшерергә `commit_certificate.block_hash` матчтар ҡабаттан иҫәпләнгән `block_hash`;
-   тура килмәгән башлыҡ/коммит сертификат парҙарын кире ҡағыу.
-3. Тикшерергә `chain_id` матчтар көтөлгән Iroha сылбыр.
-4. `validator_set_hash` ҡабаттан иҫәпләү `commit_certificate.validator_set` һәм
-   тикшерергә, ул тура килә яҙылған хеш/версия.
-5. `validator_set_pops` оҙонлоғо валидатор йыйылмаһы һәм раҫлауын тәьмин итеү
-   һәр PoP ҡаршы уның BLS асыҡ асҡыс.
-6. Ҡултамғаларҙы раҫлау өсөн йөкләмә сертификаты ҡаршы баш хеш ҡулланыу .
-   һылтанмалы валитатор асыҡ асҡыстар һәм индекстар; кворумды үтәү
-   (`2f+1` ҡасан `n>3`, башҡа `n`) һәм дубликаты/сығарылған индекстарҙы кире ҡаға.
-7. Ышаныслы тикшерелгән пунктҡа бәйләнә, валидатор комплекты хеш сағыштырыу,
-   якорь ҡиммәтенә тиклем (көсһөҙ‐субъективлыҡ якорь).
-8. Опциональ рәүештә көтөлгән эпоха якорь менән бәйләй, шулай иҫбатлауҙар оло/яңыраҡ .
-   эпохалар якорь аңлы рәүештә әйләндерелгәнсе кире ҡағыла.
+## Bundle һәм API
 
-`BridgeFinalityVerifier` (`iroha_data_model::bridge`-та) был чектарҙы ҡуллана,
-сылбырлы-ид/бейеклек дрейфын кире ҡағыу, валидатор-комплект хеш/версия тап килмәүе, юҡ
-йәки дөрөҫ булмаған PoPs, дубликаты/диапазондан тыш ҡул ҡуйыусылар, дөрөҫ булмаған ҡултамғалар, һәм
-көтөлмәгән эпохалар кворумды иҫәпләү алдынан, шулай итеп, еңел клиенттар бер тапҡыр ҡабаттан ҡуллана ала
-тикшерелгән.
+`BridgeFinalityBundle` теүәл `{ commitment, finality_proof }` формаһында. Commitment:
+`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
+mmr_leaf_index?, mmr_peaks? }`. Optional MMR яландар тик commitments булып тора;
+улар finality йәки inclusion proof түгел.
 
-## Һылтанма тикшерергә
+- `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` ҡайтара;
+- `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` ҡайтара.
 
-`BridgeFinalityVerifier` ҡабул итә көтөлгән `chain_id` плюс опциональ ышаныслы
-валидатор-комплект һәм эпоха якорь. Ул башлыҡты үтәй/блок-хэш/
-коммит-сертификатлы кортеж, раҫлаусы валидатор-комплект хеш/версия, чек
-ҡултамғалар/кворум ҡаршы рекламаланған валитатор исемлеге, һәм һуңғы күҙәтә
-бейеклеге иҫке/үткәрелгән дәлилдәрҙе кире ҡағыу өсөн. Ҡасан якорь менән тәьмин ителә, ул кире ҡаға
-реплей аша эпоха/ростерҙар менән асыҡ `UnexpectedEpoch`/
-`UnexpectedValidatorSet` хаталары; якорьһыҙ ул беренсе дәлилде ҡабул итә.
-валидатор-комплект хеш һәм эпоха дауам итеү алдынан үтәү дубликаты/out-of-
-диапазоны/етерлек ҡултамғалар менән детерминистик хаталар.
-
-## API өҫтө
-
-- `GET /v1/bridge/finality/{height}` – ҡайтарыу `BridgeFinalityProof` өсөн .
-  тип һораған блок бейеклеге. Йөкмәтке һөйләшеүҙәр аша `Accept` ярҙам итә Norito йәки .
-  ЙСОН.
-- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` ҡайтарыуҙар
-  (эшләү + аҡлау + баш/сертификат) өсөн һоралған бейеклек.
-
-## Иҫкәрмәләр һәм эйәреп.
-
-- Әлегә дәлилдәр һаҡланған ҡылған сертификаттарҙан алынған. Сикләнгән
-  тарих үтәй йөкләмә сертификат һаҡлау тәҙрәһе; клиенттар кэш тейеш
-  якорь дәлилдәре, әгәр улар оҙонораҡ офоҡтар кәрәк. Тәҙрә ҡайтарыуҙан тыш үтенестәр
-  `CommitCertificateNotFound(height)` X; хаталарҙы өҫтө һәм кире төшөү
-  якорь тикшерелгән пункт.
-- `block_hash` менән тап килмәгән реплей йәки ялған дәлил (башы ҡаршы.
-  сертификат) `CommitCertificateHashMismatch` менән кире ҡағыла; клиенттар тейеш
-  бер үк кортеж тикшерергә алдынан ҡултамға тикшерелгән һәм ташлау
-  тап килмәгән файҙалы йөктәр.
-- Киләсәктә эш өҫтәй ала ММР/власть‐сетчиктар йөкләмә сылбырҙары кәметергә күләме иҫбатлау күләме .
-  коммит сертификаты эсендә байыраҡ йөкләмә конверттары.
+Block йәки теүәл даими v2 artifact юҡ йә яраҡһыҙ булһа, ике endpoint та fail closed
+була. Билдәһеҙ яландар, хупланмаған version-дар һәм иҫкергән proof shape-тар кире
+ҡағылырға тейеш.

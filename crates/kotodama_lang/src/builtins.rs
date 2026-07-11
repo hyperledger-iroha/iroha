@@ -2423,9 +2423,10 @@ impl Builtin {
             Self::SetExecutionDepth => S::new(&["int"], "()"),
             Self::TransferV1BatchBegin | Self::TransferV1BatchEnd => S::new(&[], "()"),
             Self::TransferV1BatchApply => S::new(&["bytes"], "()"),
-            Self::TransferBatch => {
-                S::new(&["(AccountId,AccountId,AssetDefinitionId,quantity)..."], "()")
-            }
+            Self::TransferBatch => S::new(
+                &["(AccountId,AccountId,AssetDefinitionId,quantity)..."],
+                "()",
+            ),
             Self::AxtBegin => S::new(&["AxtDescriptor"], "()"),
             Self::AxtTouch => S::new(&["DataSpaceId", "bytes"], "AssetHandle"),
             Self::VerifyDsProof => S::new(&["DataSpaceId", "ProofBlob"], "bool"),
@@ -2477,7 +2478,7 @@ impl Builtin {
                 S::new(&["SoracloudRequest"], "SoracloudResponse")
             }
             Self::AddSignatory | Self::RemoveSignatory => S::new(&["AccountId", "Json"], "()"),
-            Self::SetAccountQuorum => S::new(&["AccountId", "quantity"], "()"),
+            Self::SetAccountQuorum => S::new(&["AccountId", "int"], "()"),
             Self::Path => S::new(&["Name", "int|bytes"], "Name"),
             Self::NameDecode => S::new(&["bytes"], "Name"),
             Self::TlvEq => S::new(&["pointer-ABI", "pointer-ABI"], "bool"),
@@ -3137,7 +3138,11 @@ mod tests {
     fn typed_json_getter_registry_returns_active_only_options() {
         for (getter, direct, payload) in [
             (Builtin::GetInt, Builtin::JsonGetIntDirect, "int"),
-            (Builtin::GetQuantity, Builtin::JsonGetQuantityDirect, "quantity"),
+            (
+                Builtin::GetQuantity,
+                Builtin::JsonGetQuantityDirect,
+                "quantity",
+            ),
             (Builtin::GetJson, Builtin::JsonGetJsonDirect, "Json"),
             (Builtin::GetName, Builtin::JsonGetNameDirect, "Name"),
             (

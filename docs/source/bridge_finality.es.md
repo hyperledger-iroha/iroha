@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4fba587c1baea74a2af3829c89a9aea82699ebf8837e2ed397d32e54b792ac72
-source_last_modified: "2026-07-11T18:13:35+00:00"
+source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
+source_last_modified: "2026-07-11T23:16:35+00:00"
 translation_last_reviewed: 2026-07-11
 ---
 
@@ -22,26 +22,30 @@ proyección, decodificador ni ruta alternativa para Sumeragi v1.
 
 ## Formato exacto
 
-`BridgeFinalityProof` (Norito o Norito JSON) contiene exactamente:
+`BridgeFinalityProof` (Norito o Norito JSON) contiene exactamente tres campos:
 
 ```text
-{ version, block_header, finality_artifact, validator_set_pops }
+{ version, block_header, finality_artifact }
 ```
 
 - `version` debe ser `1`;
 - `block_header` es el `BlockHeader` canónico;
 - `finality_artifact` es el `V2FinalityArtifact` exacto e inmutable que persiste
-  la ruta de aplicación de Sumeragi v2;
-- `validator_set_pops` contiene un PoP BLS-normal por entrada, en el orden de
-  `finality_artifact.height_context.roster`.
+  la ruta de aplicación de Sumeragi v2; incluye de forma duradera un PoP
+  BLS-normal por entrada, en el orden de su roster.
 
 El artefacto es la única fuente de datos de consenso. Incluye versiones de
 formato y protocolo, altura, el `HeightContext` inmutable completo, el
-`BlockSubject` exacto, hash del bloque, CommitQC y, solo al final de una época,
-el snapshot autenticado de la época siguiente. El contexto fija chain id,
+`BlockSubject` exacto, hash del bloque, CommitQC y los PoP alineados al roster.
+El contexto fija chain id,
 límites de época, modo, CommitQC padre, roster ordenado de `ValidatorPower`,
 `DualQuorum`, compromiso Nexus/AMX, disposición DA y semilla del líder. El
-sujeto liga `parent_block_hash`, `block_hash` y `payload_hash`. La prueba no
+contexto del padre que termina una época también incluye el
+`next_epoch_snapshot` opcional; como forma parte del context id, el CommitQC
+del padre lo autentica antes de que pueda autorizar el roster hijo. El snapshot
+finalizado también vincula `epoch_end_height` y los `validator_set_pops`
+alineados del roster siguiente, además de sus parámetros. El sujeto liga
+`parent_block_hash`, `block_hash` y `payload_hash`. La prueba no
 admite copias duplicadas de altura, cadena, hash, roster o certificado.
 
 ## Fuente duradera y verificación
@@ -50,9 +54,9 @@ Después de aplicar el bloque, Sumeragi v2 valida y guarda el artefacto como
 sidecar inmutable de Kura. La escritura es idempotente y Kura rechaza un
 artefacto conflictivo a la misma altura. La recuperación puede completar un
 sidecar ausente sin volver a ejecutar el bloque. El constructor lee el bloque y
-el sidecar por altura, verifica su asociación, obtiene los PoP del estado
-confirmado y ejecuta el verificador canónico. Nunca reconstruye evidencia desde
-estado mutable ni usa una ventana reciente de certificados.
+el sidecar por altura, verifica su asociación y ejecuta el verificador
+canónico. Los PoP históricos se leen del sidecar; nunca se sustituyen por el
+estado mundial mutable ni se usa una ventana reciente de certificados.
 
 `verify_bridge_finality_proof` exige:
 
@@ -61,7 +65,7 @@ estado mutable ni usa una ventana reciente de certificados.
 3. coincidencia exacta de altura, context id, sujeto, hash repetido y CommitQC,
    siempre en fase `Commit`;
 4. chain id esperado y altura/hash recalculados del header;
-5. un PoP BLS-normal válido para cada miembro del roster;
+5. un PoP BLS-normal duradero y válido en el artefacto para cada miembro del roster;
 6. índices de firmantes estrictamente crecientes y dentro de rango;
 7. a la vez `floor(2n/3) + 1` firmantes distintos como mínimo y potencia
    firmada estrictamente mayor que dos tercios del total;
@@ -80,10 +84,11 @@ pero no que ese roster sea canónico. Por ello `BridgeFinalityVerifier` requiere
 un `HeightContextId` confiable explícito antes de la primera prueba y nunca
 aprende confianza de ella. Después solo acepta la altura inmediata siguiente,
 verifica el CommitQC padre con el contexto y los PoP anteriores y aplica las
-reglas de transición v2. Fuera de un límite de época se conservan época,
-roster, quorum y semilla; en el límite deben coincidir con el
-`next_epoch_snapshot` autenticado. Se rechazan alturas antiguas, saltadas o no
-enlazadas.
+reglas de transición v2. Dentro de una época, el hijo copia los PoP alineados
+del artefacto anterior; en el límite, época, roster, quorum, semilla y PoP deben
+coincidir con el `next_epoch_snapshot` del contexto padre, incluido su
+`epoch_end_height`, todo autenticado por el CommitQC padre. Se rechazan alturas
+antiguas, saltadas o no enlazadas.
 
 ## Límite de confianza de SCCP
 
@@ -103,12 +108,11 @@ el mensaje no prueba finalidad de Taira.
 
 ## Bundle y API
 
-`BridgeFinalityBundle` contiene la prueba exacta, un compromiso
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }` y una lista separada de firmas históricas,
-actualmente vacía. El MMR opcional ayuda a fijar una raíz; no sustituye la
-finalidad ni incluye un camino de pertenencia. SCCP usa su rama Merkle tipada y
-su ancla gobernada.
+`BridgeFinalityBundle` contiene exactamente `{ commitment, finality_proof }`.
+El compromiso es `{ chain_id, height_context_id, block_height, block_hash,
+mmr_root?, mmr_leaf_index?, mmr_peaks? }`. Los campos MMR opcionales son solo
+compromisos: ayudan a fijar una raíz, pero no sustituyen la finalidad ni son
+una prueba de inclusión. SCCP usa su rama Merkle tipada y su ancla gobernada.
 
 - `GET /v1/bridge/finality/{height}` devuelve `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` devuelve `BridgeFinalityBundle`.

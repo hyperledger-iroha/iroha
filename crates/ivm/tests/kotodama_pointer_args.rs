@@ -18,7 +18,10 @@ fn account_from_public_key(public_key: &str) -> AccountId {
 }
 
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
-    let key = norito::to_bytes(&key).expect("encode canonical StateMap key");
+    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
+        i128::from(key),
+    ))
+    .expect("encode canonical pointer-backed StateMap key");
     let expected_path = format!("{}/{}", base.as_ref(), hex::encode(key));
     if let Some(bytes) = host.wsv.sc_get(&expected_path) {
         return Some(bytes.to_vec());
@@ -64,8 +67,7 @@ fn pointer_map_default_roundtrip() {
 
     // Durable storage contains the raw schema-bound record payload. The active
     // pointer atom contains the original validated AccountId envelope.
-    let inner_envelope =
-        common::decode_pointer_state_value(&stored, StateValueKindV1::AccountId);
+    let inner_envelope = common::decode_pointer_state_value(&stored, StateValueKindV1::AccountId);
     let inner = validate_tlv_bytes(&inner_envelope).expect("inner TLV");
     assert_eq!(inner.type_id, PointerType::AccountId);
 

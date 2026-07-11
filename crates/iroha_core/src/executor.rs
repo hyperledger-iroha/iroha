@@ -12727,7 +12727,7 @@ mod tests {
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
         let source = r#"
 seiyaku TriggerArguments {
-  kotoage fn run(val: Amount) authorize("Admin") {
+  kotoage fn run(Quantity val) authorize("Admin") {
     let _val = val;
   }
 }
@@ -12746,9 +12746,9 @@ seiyaku TriggerArguments {
             .compile_source_with_manifest(
                 r#"
 seiyaku GuardedValue {
-  state guarded_value: i64;
+  state int guarded_value;
 
-  kotoage fn write(value: i64) authorize("CanWriteGuardedValue") {
+  kotoage fn write(int value) authorize("CanWriteGuardedValue") {
     guarded_value = value;
   }
 }
@@ -12941,7 +12941,7 @@ seiyaku GuardedValue {
             .compile_source(
                 r#"
 seiyaku IdentityRequired {
-  kotoage fn write(value: i64) {
+  kotoage fn write(int value) {
     let _value = value;
   }
 }

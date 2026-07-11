@@ -1922,8 +1922,8 @@ mod tests {
 
     fn input_quantity(vm: &mut IVM, value: &str) -> u64 {
         let quantity: Quantity = value.parse().expect("canonical quantity");
-        let envelope = ivm::numeric_tlv::encode_quantity(&quantity)
-            .expect("encode V1 quantity envelope");
+        let envelope =
+            ivm::numeric_tlv::encode_quantity(&quantity).expect("encode V1 quantity envelope");
         vm.alloc_input_tlv(&envelope)
             .expect("allocate V1 quantity TLV")
     }
@@ -2061,10 +2061,7 @@ mod tests {
                 .iter()
                 .all(|atom| atom == &EntrypointValueAtomV1::List(1))
         );
-        assert_eq!(
-            list_record.atoms.last(),
-            Some(&int_atom(9))
-        );
+        assert_eq!(list_record.atoms.last(), Some(&int_atom(9)));
 
         let option_schema = nested_option_schema(levels);
         assert!(option_schema.validate());
@@ -2087,10 +2084,7 @@ mod tests {
                 .iter()
                 .all(|atom| atom == &EntrypointValueAtomV1::Tag(true))
         );
-        assert_eq!(
-            option_record.atoms.last(),
-            Some(&int_atom(11))
-        );
+        assert_eq!(option_record.atoms.last(), Some(&int_atom(11)));
     }
 
     #[test]
@@ -2235,10 +2229,7 @@ mod tests {
         let legacy_bytes = norito::to_bytes(&legacy).expect("encode retired recursive shape");
         let canonical_bytes = norito::to_bytes(&EntrypointReturnRecordV1 {
             schema_hash,
-            atoms: vec![
-                EntrypointValueAtomV1::List(1),
-                int_atom(7),
-            ],
+            atoms: vec![EntrypointValueAtomV1::List(1), int_atom(7)],
         })
         .expect("encode canonical flat shape");
         assert_ne!(legacy_bytes, canonical_bytes);
@@ -2446,11 +2437,7 @@ mod tests {
         let schema = list(2, leaf(EntrypointValueKindV1::Int));
         let valid = EntrypointReturnRecordV1 {
             schema_hash: schema_hash(&schema).expect("List schema hash"),
-            atoms: vec![
-                EntrypointValueAtomV1::List(2),
-                int_atom(1),
-                int_atom(2),
-            ],
+            atoms: vec![EntrypointValueAtomV1::List(2), int_atom(1), int_atom(2)],
         };
         assert_eq!(
             render_entrypoint_return_record(&schema, &valid).expect("canonical flat list tape"),
@@ -2462,20 +2449,10 @@ mod tests {
                 EntrypointValueAtomV1::List(1),
                 EntrypointValueAtomV1::Bool(true),
             ],
-            vec![
-                EntrypointValueAtomV1::List(1),
-                int_atom(1),
-                int_atom(2),
-            ],
+            vec![EntrypointValueAtomV1::List(1), int_atom(1), int_atom(2)],
             vec![EntrypointValueAtomV1::List(1)],
-            vec![
-                EntrypointValueAtomV1::List(2),
-                int_atom(1),
-            ],
-            vec![
-                EntrypointValueAtomV1::List(0),
-                int_atom(1),
-            ],
+            vec![EntrypointValueAtomV1::List(2), int_atom(1)],
+            vec![EntrypointValueAtomV1::List(0), int_atom(1)],
             vec![
                 EntrypointValueAtomV1::List(3),
                 int_atom(1),

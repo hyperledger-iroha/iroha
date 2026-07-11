@@ -335,7 +335,7 @@ The V1 type vocabulary is:
   `DomainView`, `NftView`, and `QueryPage<View>` query projections
 - `Secret<T>` inside ZK contracts, subject to the information-flow rules below
 
-`i64`, `u128`, `Amount`, `float`, `num`, `number`, `Opaque`, `fixed_u128`,
+`i64`, `u128`, `Amount`, `float`, `num`, `number`, `money`, `Opaque`, `fixed_u128`,
 `String`, `Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
 Unit is an internal function-return state, not a source type: `()` and `(T)` are
 errors in type position. Omit the return type for a Unit-returning function;
@@ -491,11 +491,15 @@ arithmetic computes the exact mathematical result with conceptual unbounded
 intermediates, normalizes it, and then checks the final bounds. Plain decimal
 division succeeds only for a canonical exact result representable through
 scale 28; repeating results and terminating results needing more precision are
-distinct failures. Rounded operations require an output scale and one of the
-seven stable modes documented in
-[`kotodama_numeric_v1.md`](./kotodama_numeric_v1.md). They never round
-implicitly. Invalid constant arithmetic is diagnosed during compilation;
-runtime failures use the same stable numeric faults.
+distinct failures. Rounded operations require an output scale and exactly one
+of `Rounding::toward_zero`, `Rounding::away_from_zero`, `Rounding::floor`,
+`Rounding::ceil`, `Rounding::nearest_even`, `Rounding::nearest_away`, or
+`Rounding::nearest_toward_zero`, as documented in
+[`kotodama_numeric_v1.md`](./kotodama_numeric_v1.md). Other rounding spellings
+are rejected rather than treated as compatibility aliases.
+Rounded operations never round implicitly. Invalid constant arithmetic is
+diagnosed during compilation; runtime failures use the same stable numeric
+faults.
 
 ## Bounded lists
 

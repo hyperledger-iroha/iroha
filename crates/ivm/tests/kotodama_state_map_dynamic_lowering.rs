@@ -42,8 +42,9 @@ fn dynamic_map_set_uses_durable_state() {
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run");
 
-    // Verify durable state via the reversible canonical-Norito key path.
-    let key = norito::to_bytes(&2_i64).expect("encode canonical key");
+    // Verify durable state via the reversible canonical pointer-ABI key path.
+    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(2))
+        .expect("encode canonical int key");
     let path = Name::from_str(&format!("M/{}", hex::encode(key))).expect("valid path");
     let path_tlv = make_tlv(PointerType::Name, path.as_ref().as_bytes());
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
@@ -63,5 +64,5 @@ fn dynamic_map_set_uses_durable_state() {
     let p_out = vm.register(10);
     let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(common::decode_i64_state_value(tlv.payload), 5);
+    assert_eq!(common::decode_int_state_value(tlv.payload), 5);
 }

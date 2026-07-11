@@ -309,7 +309,11 @@ impl fmt::Display for VMError {
                 write!(f, "numeric operation failed with ABI fault {}", fault.tag())
             }
             VMError::PointerAbiFault(fault) => {
-                write!(f, "numeric pointer validation failed with ABI fault {}", fault.tag())
+                write!(
+                    f,
+                    "numeric pointer validation failed with ABI fault {}",
+                    fault.tag()
+                )
             }
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),

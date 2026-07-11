@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4fba587c1baea74a2af3829c89a9aea82699ebf8837e2ed397d32e54b792ac72
-source_last_modified: "2026-07-11T18:13:35+00:00"
+source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
+source_last_modified: "2026-07-11T23:16:35+00:00"
 translation_last_reviewed: 2026-07-11
 ---
 
@@ -22,25 +22,30 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Точный формат
 
-`BridgeFinalityProof` (Norito или Norito JSON) содержит ровно четыре поля:
+`BridgeFinalityProof` (Norito или Norito JSON) содержит ровно три поля:
 
 ```text
-{ version, block_header, finality_artifact, validator_set_pops }
+{ version, block_header, finality_artifact }
 ```
 
 - `version` должна быть равна `1`;
 - `block_header` — канонический `BlockHeader`;
 - `finality_artifact` — точный неизменяемый `V2FinalityArtifact`, сохранённый
-  путём применения Sumeragi v2;
-- `validator_set_pops` содержит по одному BLS-normal PoP на запись в порядке
-  `finality_artifact.height_context.roster`.
+  путём применения Sumeragi v2; он долговечно содержит по одному BLS-normal PoP
+  на запись в порядке своего реестра.
 
 Артефакт — единственный источник сведений о консенсусе. Он включает версии
 формата и протокола, высоту, полный неизменяемый `HeightContext`, точный
-`BlockSubject`, хеш блока, CommitQC и только на границе эпохи — заверенный
-снимок следующей эпохи. Контекст фиксирует chain id, границы эпохи, режим,
-родительский CommitQC, упорядоченный реестр `ValidatorPower`, `DualQuorum`,
-обязательство Nexus/AMX, параметры DA и seed лидера. Subject связывает
+`BlockSubject`, хеш блока, CommitQC и PoP, выровненные по реестру. Контекст
+фиксирует chain id, границы эпохи, режим, родительский CommitQC, упорядоченный
+реестр `ValidatorPower`, `DualQuorum`,
+обязательство Nexus/AMX, параметры DA и seed лидера. Контекст родительского
+блока, завершающего эпоху, также содержит необязательный
+`next_epoch_snapshot`; поскольку он входит в context id, родительский CommitQC
+заверяет его до того, как снимок сможет разрешить дочерний реестр.
+Финализированный снимок также связывает `epoch_end_height` и выровненные
+`validator_set_pops` следующего реестра вместе с параметрами эпохи. Subject
+связывает
 `parent_block_hash`, `block_hash` и `payload_hash`. Дублирующие поля высоты,
 цепочки, хеша, реестра или сертификата в доказательстве не допускаются.
 
@@ -50,9 +55,10 @@ SPDX-License-Identifier: Apache-2.0
 неизменяемый sidecar Kura. Запись идемпотентна, а конфликтующий артефакт на той
 же высоте отклоняется. Восстановление может дописать отсутствующий sidecar без
 повторного исполнения блока. Построитель читает блок и sidecar по высоте,
-проверяет их связь, получает PoP из зафиксированного состояния и запускает
-канонический верификатор. Исторические данные не восстанавливаются из
-изменяемого состояния и не ограничены недавним окном сертификатов.
+проверяет их связь и запускает канонический верификатор. Исторические PoP
+читаются из sidecar и никогда не заменяются данными изменяемого текущего
+состояния. Исторические данные консенсуса не восстанавливаются из изменяемого
+состояния и не ограничены недавним окном сертификатов.
 
 `verify_bridge_finality_proof` требует:
 
@@ -61,7 +67,8 @@ SPDX-License-Identifier: Apache-2.0
 3. точное совпадение высоты, context id, subject, повторного хеша и CommitQC в
    фазе `Commit`;
 4. ожидаемый chain id и пересчитанные из header высоту и хеш;
-5. действительный BLS-normal PoP для каждого участника реестра;
+5. долговечно встроенный в артефакт действительный BLS-normal PoP для каждого
+   участника реестра;
 6. строго возрастающие индексы подписантов в допустимом диапазоне;
 7. одновременно не менее `floor(2n/3) + 1` разных подписантов и подписанную
    мощность строго больше двух третей общей мощности;
@@ -81,8 +88,10 @@ subject: { parent_block_hash, block_hash, payload_hash } }`. Индекс и о�
 `HeightContextId` и никогда не получает доверие из самой первой proof. Затем он
 принимает только непосредственную следующую высоту, проверяет родительский
 CommitQC по предыдущему контексту и PoP и применяет правила перехода v2. Внутри
-эпохи epoch, roster, quorum и seed остаются фиксированными; на границе они
-должны совпасть с заверенным `next_epoch_snapshot`. Старые, пропущенные и не
+эпохи дочерний артефакт копирует выровненные PoP предыдущего артефакта; на
+границе epoch, roster, quorum, seed и PoP должны совпасть с
+`next_epoch_snapshot` родительского контекста, включая его
+`epoch_end_height`, — всё заверено родительским CommitQC. Старые, пропущенные и не
 связанные высоты отклоняются.
 
 ## Граница доверия SCCP
@@ -103,12 +112,12 @@ Merkle заверяют сообщение. Сырое доказательст�
 
 ## Bundle и API
 
-`BridgeFinalityBundle` содержит точное доказательство, обязательство
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }` и отдельный список исторических подписей, пока
-пустой. Необязательный MMR помогает закрепить корень, но не заменяет финальность
-и не содержит путь включения. SCCP использует типизированную ветвь Merkle и
-управляемый якорь.
+`BridgeFinalityBundle` содержит ровно `{ commitment, finality_proof }`.
+Обязательство имеет вид `{ chain_id, height_context_id, block_height,
+block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks? }`. Необязательные поля MMR —
+только обязательства: они помогают закрепить корень, но не заменяют финальность
+и не являются доказательством включения. SCCP использует типизированную ветвь
+Merkle и управляемый якорь.
 
 - `GET /v1/bridge/finality/{height}` возвращает `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` возвращает `BridgeFinalityBundle`.

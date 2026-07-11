@@ -442,9 +442,9 @@ fn render_contract_documentation(
             .iter()
             .map(|parameter| {
                 format!(
-                    "{}: {}",
-                    markdown_inline(&parameter.name),
-                    markdown_inline(&parameter.type_name)
+                    "{} {}",
+                    markdown_inline(&parameter.type_name),
+                    markdown_inline(&parameter.name)
                 )
             })
             .collect::<Vec<_>>()
@@ -524,9 +524,9 @@ fn render_contract_documentation(
         for state in states {
             let _ = writeln!(
                 output,
-                "\n- `{}`: `{}`",
-                markdown_inline(&state.name),
-                markdown_inline(&state.type_name)
+                "\n- `{}` `{}`",
+                markdown_inline(&state.type_name),
+                markdown_inline(&state.name)
             );
         }
     }
@@ -1283,7 +1283,7 @@ mod tests {
             "Kind: `kotoage`/`言挙げ`",
             "Authorization: `CanDeposit`",
             "## Durable state",
-            "`balance`: `int`",
+            "`int` `balance`",
             "## Seiyaku errors",
             "`VaultError::Empty` = `7`",
         ] {

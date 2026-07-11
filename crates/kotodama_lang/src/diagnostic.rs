@@ -366,6 +366,18 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Use decimal when the value may be negative, or prove the value non-negative before an explicit quantity conversion."
     ),
     explanation!(
+        "E_UNSHIELD_AMOUNT_RANGE",
+        Semantic,
+        "an unshield public amount is outside its protocol field domain",
+        "Use a non-negative int no greater than 2^128 - 1. Kotodama int remains signed-512; this narrower bound belongs only to the unshield protocol field."
+    ),
+    explanation!(
+        "E_QUORUM_RANGE",
+        Semantic,
+        "an account quorum is outside the protocol's nonzero 16-bit domain",
+        "Use an int from 1 through 65535. This is a protocol-field bound, not the range of Kotodama int."
+    ),
+    explanation!(
         "E_DECIMAL_SCALE_OVERFLOW",
         Semantic,
         "an exact decimal value exceeds the 28-digit canonical scale limit",
@@ -1499,6 +1511,8 @@ mod tests {
             "E_QUANTITY_UNDERFLOW",
             "E_QUANTITY_REMAINDER",
             "E_QUANTITY_NEGATION",
+            "E_UNSHIELD_AMOUNT_RANGE",
+            "E_QUORUM_RANGE",
             "E_NUMERIC_ROUND_ARITY",
             "E_NUMERIC_ROUND_RECEIVER",
             "E_INVALID_SCALE",

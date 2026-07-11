@@ -4020,7 +4020,7 @@ mod tests_overlay_manifest {
             .compile_source(
                 r#"
 seiyaku RebuildArguments {
-  view fn inspect(value: i64) -> i64 { return value; }
+  view fn inspect(int value) -> int { return value; }
 }
 "#,
             )
@@ -4095,7 +4095,7 @@ seiyaku RebuildArguments {
             .compile_source(
                 r#"
 seiyaku ProtectedStateFreeOverlay {
-  kotoage fn write(value: i64) authorize("CanWriteStateFreeOverlay") {
+  kotoage fn write(int value) authorize("CanWriteStateFreeOverlay") {
     let _value = value;
   }
 }
@@ -4143,7 +4143,7 @@ seiyaku ProtectedStateFreeOverlay {
             .compile_source(
                 r#"
 seiyaku PermissionlessStateFreeOverlay {
-  kotoage fn write(value: i64) {
+  kotoage fn write(int value) {
     let _value = value;
   }
 }
@@ -4199,7 +4199,7 @@ seiyaku PermissionlessStateFreeOverlay {
             .compile_source(
                 r#"
 seiyaku ProtectedParameterizedOverlay {
-  kotoage fn write(value: i64) authorize("CanWriteParameterizedOverlay") {
+  kotoage fn write(int value) authorize("CanWriteParameterizedOverlay") {
     let _value = value;
   }
 }
@@ -4355,7 +4355,7 @@ seiyaku ProtectedParameterizedOverlay {
         assert!(
             matches!(
                 denied,
-                OverlayBuildError::ContractCall(message)
+                OverlayBuildError::ContractCall(ref message)
                     if message.contains(REQUIRED_PERMISSION) && message.contains("main")
             ),
             "unexpected authorization error: {denied:?}"
@@ -5257,6 +5257,7 @@ mod tests {
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
+    use nonzero_ext::nonzero;
 
     use super::*;
     use crate::state::State;
@@ -5584,7 +5585,7 @@ mod tests {
             .compile_source_with_manifest(
                 r#"
 seiyaku ProtectedProvedOverlay {
-  kotoage fn open() -> i64 authorize("CanBuildProvedOverlay") {
+  kotoage fn open() -> int authorize("CanBuildProvedOverlay") {
     set_account_detail(
       authority(),
       name("proved_overlay_applied"),
@@ -7158,12 +7159,12 @@ seiyaku ProtectedProvedOverlay {
             .compile_source_with_manifest(
                 r#"
 seiyaku DeriveDispatch {
-  kotoage fn main() -> i64 authorize("DeriveDispatch") {
+  kotoage fn main() -> int authorize("DeriveDispatch") {
     assert(false);
     return 0;
   }
 
-  kotoage fn open(amount: i64) -> i64 authorize("DeriveDispatch") {
+  kotoage fn open(int amount) -> int authorize("DeriveDispatch") {
     assert(amount == 7);
     return 0;
   }
@@ -7296,11 +7297,11 @@ seiyaku DeriveDispatch {
 seiyaku ReplayOuter {
   state bytes CalleeContract;
 
-  kotoage fn bind(callee_contract: bytes) {
+  kotoage fn bind(bytes callee_contract) {
     CalleeContract = callee_contract;
   }
 
-  kotoage fn run(value: int) -> int permission(AssetOps) {
+  kotoage fn run(int value) -> int permission(AssetOps) {
     let payload = json_object();
     let payload = json_set_int(payload, name("value"), value);
     return decode_int(call_contract(CalleeContract, "write", payload));
@@ -7324,7 +7325,7 @@ seiyaku ReplayOuter {
             .compile_source_with_manifest(
                 r#"
 seiyaku ReplayCallee {
-  kotoage fn write(value: int) -> int permission(AssetOps) {
+  kotoage fn write(int value) -> int permission(AssetOps) {
     set_account_detail(
       authority(),
       name("proof_replay"),
@@ -7530,7 +7531,7 @@ seiyaku ReplayCallee {
             .compile_source_with_manifest(
                 r#"
 seiyaku ProtectedProved {
-  kotoage fn write(value: i64) authorize("CanWriteProved") {
+  kotoage fn write(int value) authorize("CanWriteProved") {
     let _value = value;
   }
 }
@@ -9428,6 +9429,7 @@ where
     })
 }
 
+#[derive(Debug)]
 pub(crate) struct IvmProvedReplay {
     pub(crate) queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
     pub(crate) completed_axt: Vec<ivm::axt::HostAxtState>,

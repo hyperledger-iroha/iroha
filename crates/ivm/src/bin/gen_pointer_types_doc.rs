@@ -17,7 +17,11 @@ fn normalized_generated_block(
     while text.as_bytes().get(replace_end) == Some(&b'\n') {
         replace_end += 1;
     }
-    let separator = if replace_end == text.len() { "\n" } else { "\n\n" };
+    let separator = if replace_end == text.len() {
+        "\n"
+    } else {
+        "\n\n"
+    };
     (replace_end, format!("{expected_block}{separator}"))
 }
 
@@ -100,14 +104,12 @@ mod tests {
         assert_eq!(normalized, format!("{expected}\n\nNotes\n"));
 
         let marker_end = normalized.find(marker).expect("end marker") + marker.len();
-        let (replace_end, second) =
-            normalized_generated_block(&normalized, marker_end, expected);
+        let (replace_end, second) = normalized_generated_block(&normalized, marker_end, expected);
         assert_eq!(&normalized[..replace_end], second);
 
         let at_eof = format!("{expected}\n\n");
         let marker_end = at_eof.find(marker).expect("end marker") + marker.len();
-        let (replace_end, replacement) =
-            normalized_generated_block(&at_eof, marker_end, expected);
+        let (replace_end, replacement) = normalized_generated_block(&at_eof, marker_end, expected);
         assert_eq!(replace_end, at_eof.len());
         assert_eq!(replacement, format!("{expected}\n"));
     }

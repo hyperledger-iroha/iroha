@@ -11,15 +11,14 @@ There is no Sumeragi-v1 certificate projection, decoder, or fallback path.
 
 ## Exact proof format
 
-`BridgeFinalityProof` is encoded with Norito or Norito JSON and has exactly four
+`BridgeFinalityProof` is encoded with Norito or Norito JSON and has exactly three
 fields:
 
 ```text
 {
   version,
   block_header,
-  finality_artifact,
-  validator_set_pops
+  finality_artifact
 }
 ```
 
@@ -27,18 +26,21 @@ fields:
 - `block_header` is the canonical `BlockHeader` selected by the requested
   height.
 - `finality_artifact` is the exact `V2FinalityArtifact` persisted by the
-  Sumeragi-v2 apply path for that block.
-- `validator_set_pops` contains BLS-normal proofs of possession in the exact
-  order of `finality_artifact.height_context.roster`.
+  Sumeragi-v2 apply path for that block. It embeds one durable BLS-normal proof
+  of possession for every entry in its height-context roster, in roster order.
 
 The durable artifact is the single source of consensus truth in the proof. It
 contains its format and protocol versions, height, complete immutable
 `HeightContext`, exact `BlockSubject`, block hash, Commit quorum certificate,
-and the finalized next-epoch snapshot when the block ends an epoch. The height
-context freezes the chain id, epoch bounds, consensus mode, parent CommitQC,
-ordered `ValidatorPower` roster, canonical `DualQuorum`, Nexus/AMX context
-commitment, data-availability layout, and leader seed. The subject binds the
-parent block hash, block hash, and canonical payload hash.
+and roster-aligned validator PoPs. The height context freezes the chain id,
+epoch bounds, consensus mode, parent CommitQC, ordered `ValidatorPower` roster,
+canonical `DualQuorum`, Nexus/AMX context commitment, data-availability layout,
+and leader seed. At an epoch-ending boundary parent it also embeds the optional
+`next_epoch_snapshot`; because that field is part of the context id, the
+parent's CommitQC authenticates the snapshot before it can authorize a child
+roster. The `FinalizedNextEpochSnapshot` binds its `epoch_end_height` and the
+next roster's aligned `validator_set_pops` as well as the next epoch parameters.
+The subject binds the parent block hash, block hash, and canonical payload hash.
 
 There are deliberately no duplicate proof-level height, chain, block hash,
 roster hash, or certificate fields. A malformed sidecar therefore cannot ask a
@@ -53,12 +55,13 @@ Kura rejects a conflicting artifact at the same height. Restart recovery can
 finish a missing sidecar without re-executing an already applied block.
 
 `build_finality_proof` reads the canonical block and its sidecar by height,
-checks their height/hash/chain association, obtains roster-aligned PoPs from
-committed state, and runs the same cryptographic verifier used by consumers.
-It never reconstructs historical consensus evidence from mutable world state
-or projects a retired certificate format. Proof availability follows the
-durable block and sidecar; it is not a recent in-memory certificate window.
-Missing, corrupt, conflicting, or unverifiable sidecars fail closed.
+checks their height/hash/chain association, and runs the same cryptographic
+verifier used by consumers. Historical verification reads the PoPs embedded in
+the sidecar; it never substitutes keys or PoPs from mutable current world state,
+reconstructs historical consensus evidence, or projects a retired certificate
+format. Proof availability follows the durable block and sidecar; it is not a
+recent in-memory certificate window. Missing, corrupt, conflicting, or
+unverifiable sidecars fail closed.
 
 ## Canonical verification
 
@@ -70,13 +73,14 @@ structural and cryptographic checks:
 2. Validate the height context, its ordered powered roster, canonical dual
    quorum, parent certificate rules, DA layout, and epoch bounds.
 3. Require the artifact height, context id, block subject, repeated block hash,
-   CommitQC round, and Commit phase to agree exactly. A next-epoch snapshot is
-   mandatory at an epoch boundary and forbidden elsewhere.
+   CommitQC round, and Commit phase to agree exactly. A `next_epoch_snapshot`
+   in the height context is mandatory for an epoch-ending boundary parent and
+   forbidden elsewhere.
 4. Require the artifact chain id to equal the caller's expected chain id.
 5. Recompute the block-header height and hash and require both to match the
    artifact.
-6. Require one BLS-normal PoP per roster entry and verify every PoP against the
-   corresponding public key.
+6. Require the artifact to embed one BLS-normal PoP per roster entry and verify
+   every PoP against the corresponding public key.
 7. Require strictly increasing, in-range signer indices. The certificate must
    satisfy both quorum thresholds: at least `floor(2n/3) + 1` distinct roster
    members and signed voting power strictly greater than two thirds of total
@@ -117,8 +121,10 @@ first proof it accepts only the immediate next height and verifies that:
   committed decision;
 - that parent certificate verifies under the previous frozen roster and PoPs;
 - chain, consensus mode, and DA layout obey the v2 transition rules; and
-- epoch, roster, dual quorum, and leader seed either remain frozen or match the
-  previous artifact's authenticated `next_epoch_snapshot` at an epoch boundary.
+- within an epoch, the child copies the previous artifact's roster-aligned PoPs;
+  at an epoch boundary, its epoch, roster, dual quorum, leader seed, and PoPs
+  match the previous height context's CommitQC-authenticated
+  `next_epoch_snapshot`, including its authenticated `epoch_end_height`.
 
 Stale and skipped heights, unlinked parents, and unauthorized context
 transitions are rejected. Applications that start from a later checkpoint must
@@ -149,15 +155,14 @@ roster supplied by the message would not establish Taira finality.
 
 ## Commitment bundle and MMR
 
-`BridgeFinalityBundle` wraps the exact proof with:
+`BridgeFinalityBundle` has exactly two fields:
 
 - `commitment`: `{ chain_id, height_context_id, block_height, block_hash,
   mmr_root?, mmr_leaf_index?, mmr_peaks? }`;
-- `justification`: the separate historical block-signature list, currently
-  empty because finality is authenticated by the embedded v2 CommitQC; and
 - `finality_proof`: the complete proof described above.
 
-The optional MMR fields are a root-checkpoint aid, not a finality substitute.
+The optional MMR fields are commitments only: they are a root-checkpoint aid,
+not a finality substitute or an inclusion proof.
 The endpoint recomputes the block-hash MMR and returns its peaks but does not
 return a membership path. Peaks are ordered left to right and bagged from right
 to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`. SCCP uses its own typed

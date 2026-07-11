@@ -245,12 +245,13 @@ fn runtime_durable_ensure_state_map() {
     vm.set_host(host);
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("exec");
-    assert_eq!(vm.register(10), 0);
+    assert_eq!(common::decode_i64_register(&vm, 10), 0);
 
     let host_ref = vm.host_mut_any().unwrap();
     let host = host_ref.downcast_ref::<WsvHost>().unwrap();
     let base = iroha_data_model::prelude::Name::from_str("S").expect("valid Name literal");
-    let key = norito::to_bytes(&7_i64).expect("encode canonical StateMap key");
+    let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+        .expect("encode canonical pointer-backed StateMap key");
     let expected_path = format!("{}/{}", base.as_ref(), hex::encode(key));
     let mut val = host.wsv.sc_get(&expected_path);
     if val.is_none() {
@@ -258,5 +259,5 @@ fn runtime_durable_ensure_state_map() {
         val = host.wsv.sc_get(&namespaced_path);
     }
     let val = val.expect("durable state entry should exist");
-    assert_eq!(common::decode_i64_state_value(&val), 0);
+    assert_eq!(common::decode_int_state_value(&val), 0);
 }

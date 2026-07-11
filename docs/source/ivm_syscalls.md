@@ -64,7 +64,8 @@ Notes
   Their unconditional syscall blocks are `0x010100..=0x010113`,
   `0x010120..=0x01012F`, and `0x010140..=0x01014F`. Exact division distinguishes
   repeating results from terminating results needing scale above 28; rounded
-  operations require an explicit scale and one of seven stable rounding modes.
+  operations require an explicit scale and one of `floor` (tag 0), `ceil`
+  (tag 1), or `nearest_even` (tag 2).
   Arithmetic and gas depend only on canonical bytes and deterministic 64-bit
   logical-limb work.
 - `JSON_BUILD` (`0x01004E`) consumes one compiler-emitted construction schema

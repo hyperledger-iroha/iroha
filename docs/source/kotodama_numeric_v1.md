@@ -10,7 +10,7 @@ below.
 
 Kotodama uses type-first declarations consistently:
 
-```text
+```kotodama
 seiyaku Counter {
     const int initial = 1;
     const int step = 2;
@@ -38,8 +38,8 @@ let int count = 0;
 fn add(int lhs, int rhs) -> int { return lhs + rhs; }
 ```
 
-The old `name: Type` declaration form is invalid. The source names `i64`,
-`u128`, `Amount`, `num`, and `float`, and suffixed numeric literals such as
+The old `name: Type` declaration form is invalid. The source type names `i64`,
+`u128`, `Amount`, `num`, `number`, `float`, and `money`, and suffixed numeric literals such as
 `1i64`, `1u128`, and `1amt`, are invalid. Diagnostics MUST identify the retired
 surface and show the type-first replacement.
 
@@ -59,6 +59,11 @@ It may be checked contextually as `decimal` or `quantity`; a contextual
 `quantity` literal MUST be non-negative. A literal containing a decimal point
 or decimal exponent has type `decimal` unless a `quantity` is expected.
 Literal conversion is exact and occurs at compile time.
+The expected numeric domain propagates into exact literal arithmetic and into
+tuple, struct, list, return, argument, and constant-initializer positions.
+This rule changes only exact literal expressions: it never implicitly converts
+an existing runtime `int`, `decimal`, or `quantity` value to another nominal
+domain.
 Literal mantissa and scale are normalized before the canonical scale bound is
 checked. Thus a spelling with more than 28 fractional places is accepted only
 when removing trailing decimal zeroes reduces its canonical scale to at most
@@ -117,6 +122,13 @@ unbounded intermediates, canonicalizes the result, and only then checks the
 final V1 domain. An implementation's host bigint width, allocation strategy,
 or temporary representation MUST NOT affect success, failure, or output.
 
+After canonicalization, result-domain failures are checked in this stable
+order: canonical scale, signed mantissa width, then the nominal non-negative
+`quantity` invariant. Thus simultaneous scale and mantissa failure reports
+`ScaleOverflow`, and a negative result whose magnitude is also out of range
+reports `MantissaOverflow`. `quantity - quantity` maps a representable negative
+mathematical result to `QuantityUnderflow`.
+
 The ordinary operator matrix is:
 
 | Left | Operator | Right | Result | Semantics |
@@ -131,6 +143,20 @@ The ordinary operator matrix is:
 | `quantity` | `/` | `quantity` | `decimal` | dimensionless exact ratio |
 
 Other mixed arithmetic is invalid without an explicit named conversion.
+
+Compound assignment applies the same operator matrix and then requires the
+result to remain assignable to the target's declared type. In particular,
+`decimal += int` promotes the right operand exactly and is valid, while
+`int += decimal` is rejected because it would narrow a decimal result back to
+`int` implicitly. `quantity` retains its nominal operator rows.
+
+For `quantity / <whole-number literal>`, the expected result resolves the two
+valid rows without adding a runtime conversion. An expected `quantity` (or no
+expected type) checks the divisor as `decimal`; an expected `decimal` checks it
+as `quantity`, producing a dimensionless ratio. For example,
+`fn half(quantity q) -> quantity { q / 2 }` and
+`fn ratio(quantity q) -> decimal { q / 2 }` are both exact and have the stated
+result types. A non-literal divisor is never retagged this way.
 
 For integer division, with nonzero `b`:
 
@@ -161,13 +187,17 @@ Rounded division requires an output scale and one of these stable modes:
 
 | Tag | Mode | Meaning |
 | ---: | --- | --- |
-| 0 | `toward_zero` | toward zero |
-| 1 | `away_from_zero` | away from zero |
-| 2 | `floor` | toward negative infinity |
-| 3 | `ceil` | toward positive infinity |
-| 4 | `nearest_even` | nearest, ties to an even mantissa |
-| 5 | `nearest_away` | nearest, ties away from zero |
-| 6 | `nearest_toward_zero` | nearest, ties toward zero |
+| 0 | `Rounding::toward_zero` | toward zero |
+| 1 | `Rounding::away_from_zero` | away from zero |
+| 2 | `Rounding::floor` | toward negative infinity |
+| 3 | `Rounding::ceil` | toward positive infinity |
+| 4 | `Rounding::nearest_even` | nearest, ties to an even mantissa |
+| 5 | `Rounding::nearest_away` | nearest, ties away from zero |
+| 6 | `Rounding::nearest_toward_zero` | nearest, ties toward zero |
+
+The tag is the stable numeric ABI tag emitted by the compiler; source does not
+expose raw numeric rounding tags. Any spelling outside this table is rejected
+with `E_NUMERIC_ROUNDING_MODE`.
 
 The source conversion surface is explicit:
 
@@ -214,6 +244,11 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
+The ABI V1 surface descriptor binds wire-format version 1, all three schema
+names and hashes, the complete frame and pointer-envelope layout strings, and
+the numeric error-precedence rule. Changing any of them changes the ABI hash;
+an implementation MUST NOT mutate the layout while retaining the old hash.
+
 The numeric body begins with a four-byte little-endian unsigned mantissa byte
 length, followed by the minimal little-endian two's-complement bytes. Decimal
 and quantity bodies append one scale byte. Integer bodies do not carry a scale.
@@ -223,10 +258,11 @@ only zero encoding. Redundant `0x00` or `0xff` sign extension is invalid. A
 positive value needing a sign-preserving leading byte is valid only when the
 complete minimal encoding remains at most 64 bytes.
 
-With the fixed 40-byte Norito header, maximum frame sizes are 108 bytes for
+With the fixed 40-byte canonical Norito V1 header, maximum frame sizes are 108 bytes for
 `int` and 109 bytes for `decimal` and `quantity`. The pointer envelope adds a
-seven-byte type/version/length header and a 32-byte payload hash, for maxima of
-147, 148, and 148 bytes respectively.
+seven-byte type/version/length header and a 32-byte `iroha_crypto::Hash::new`
+digest of the complete frame, for maxima of 147, 148, and 148 bytes
+respectively.
 
 Pointer type IDs are:
 
@@ -286,6 +322,24 @@ Stable numeric fault tags are:
 12 ReservedRegisterNonZero
 ```
 
+Stable numeric pointer-validation fault tags are:
+
+```text
+1 InvalidAddress
+2 UnknownType
+3 TypeNotAllowed
+4 WrongType
+5 InvalidEnvelopeVersion
+6 OversizedLength
+7 TruncatedEnvelope
+8 PayloadHashMismatch
+9 MalformedFrame
+10 SchemaMismatch
+11 NonCanonical
+```
+
+Both fault tables, including names and tags, are inputs to the ABI V1 hash.
+
 Fallible arithmetic accepts failure mode `0` (trap) or `1` (return the fault in
 the status register). Conversions documented as recoverable always return a
 status. Invalid pointer envelopes, versions, lengths, hashes, schemas, flags,
@@ -298,6 +352,17 @@ Numeric syscalls use staged metering. They never reserve a worst-case quote and
 never refund. Each phase is debited immediately before its bounded work begins;
 an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
+
+The complete formula and stable OOG phase-tag map have gas-formula version 1.
+That version is an input to the canonical gas-schedule hash. Changing any
+logical-work formula, charge-point ordering, or phase tag MUST increment the
+version and regenerate the gas-schedule hash golden.
+
+The version-1 phase tags are `0 Entry`, `1 PointerHeader`,
+`2 PointerEnvelope`, `3 PayloadHash`, `4 NoritoDecode`,
+`5 CanonicalValidation`, `6 Arithmetic`, `7 Normalization`, and
+`8 OutputSerialization`. Every tag names work that a production numeric path
+can actually reach; V1 has no reserved or quote-only staged phases.
 
 The successful aggregate identity is:
 
@@ -341,11 +406,25 @@ on the slowest supported tier.
 The fixed entry charge includes bounded register-contract checks (required-zero
 registers, failure mode, and rounding tag). It is not followed by hidden fixed
 decode, divisor, or control surcharges. Strict numeric-frame validation adds
-`ceil(frame_bytes / 8)` logical work units: the first unit covers the fixed
-Norito header/schema/length checks, and the remaining units cover minimal
-mantissa and decimal-domain canonicality. The frame bytes are still counted
-exactly once as input-envelope bytes; checksum traversal is not charged a
-second time.
+these explicit logical work units, where `H = 40` is the fixed header size:
+
+```text
+decode_work(frame_bytes) = max(1, ceil(frame_bytes / 8))
+canonical_work(frame_bytes) = max(1, ceil(max(frame_bytes - H, 0) / 8))
+canonicality_probe_work(m, s) = 0, if s = 0
+canonicality_probe_work(m, s) = quotient_remainder_work(limbs(m), 1), if s > 0
+frame_validation_work = decode_work + canonical_work + canonicality_probe_work
+```
+
+`decode_work` covers the complete structural Norito pass, including its CRC
+traversal. `canonical_work` covers body decoding, minimal signed encoding, and
+decimal/quantity domain checks. A canonical nonzero scaled decimal or quantity
+then performs one divisibility-by-ten probe; it is charged with the same
+logical quotient/remainder formula used everywhere else immediately before the
+probe. Scale-zero values and canonical zero perform no such probe. The frame
+bytes are still counted exactly once as input-envelope transport bytes; these
+work units account for the real algorithmic passes rather than charging the
+bytes twice.
 
 Logical limbs are 64 bits, so an input has at most eight limbs. Arithmetic
 width uses the bit length of the unsigned magnitude, with zero assigned one
@@ -364,9 +443,13 @@ A(b, d) = L(b) * P(d), for d > 0
 ```
 
 `B(d)` is pinned as an integer table for `d` in `0..=56`; gas computation never
-uses floating-point logarithms. Addition, subtraction, and comparison charge
-alignment multiplication plus the largest aligned width. Multiplication
-charges the product of input limb widths.
+uses floating-point logarithms. Comparison charges both alignment
+multiplications using `A` plus the largest conservative aligned width from `S`,
+all before it materializes aligned operands. Addition and subtraction debit
+each alignment multiplication first; once those exact aligned operands exist,
+they debit the largest *actual* aligned limb width immediately before the add
+or subtract. This actual width is deterministic and no greater than `S`.
+Multiplication charges the product of input limb widths.
 
 The apparently tighter `L(b + B(d) - 1)` is not a valid consensus bound. For
 example, a 61-bit value multiplied by ten can require 65 bits. The deliberately
@@ -383,7 +466,9 @@ Exact division first charges the Euclidean reduction and denominator
 classification steps actually begun. Once classification proves a terminating
 result, it charges the single division at the proven minimum output scale
 immediately before that division. Decimal normalization charges each
-divide-by-ten probe immediately before the probe. Conceptual scales through
+divide-by-ten probe immediately before the probe. The dedicated zero rule
+`(0, s) -> (0, 0)` performs no bigint division and therefore emits and charges
+zero normalization probes. Conceptual scales through
 56, aligned or scale-adjusted widths through ten limbs, and multiplication
 intermediates through sixteen limbs are included in golden vectors.
 
@@ -393,11 +478,13 @@ Pointer processing is ordered and charged as follows:
 2. debit the seven-byte header charge, then validate readable provenance and
    read the header;
 3. validate the hard length cap with checked arithmetic;
-4. debit the 32 digest bytes and declared frame bytes, each exactly once;
+4. debit the declared frame bytes for the envelope-snapshot phase and the 32
+   digest bytes for the payload-authentication phase, each exactly once;
 5. snapshot exactly that range and validate its payload hash;
-6. debit `4 * ceil(frame_bytes / 8)`, split into the frame-decode and
-   canonical-validation phases, then validate the Norito frame, schema, flags,
-   and canonical value;
+6. debit `4 * decode_work`, then validate the Norito header, schema, flags,
+   length, and CRC; only if that succeeds, debit `4 * canonical_work`, then
+   decode the numeric body; for a nonzero scaled decimal/quantity, debit
+   `4 * canonicality_probe_work` immediately before its canonicality probe;
 7. debit each arithmetic/normalization phase before it begins;
 8. determine the exact output envelope length and debit it;
 9. allocate and write the output, then publish result registers.

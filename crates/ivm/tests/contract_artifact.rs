@@ -10,6 +10,7 @@ use iroha_data_model::{
     },
     trigger::{TriggerId, action::Repeats},
 };
+mod common;
 
 fn time_trigger(id: &str, namespace: Option<&str>, entrypoint: &str) -> TriggerDescriptor {
     TriggerDescriptor {
@@ -223,9 +224,7 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
         }],
     });
     let argument_code = [
-        ivm::encoding::wide::encode_syscallx(
-            ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD,
-        ),
+        ivm::encoding::wide::encode_syscallx(ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD),
         ivm::encoding::wide::encode_halt(),
     ];
     let artifact = contract_artifact_with_code(1, vec![argument_mismatch], None, &argument_code);
@@ -704,7 +703,7 @@ fn public_entrypoint_descriptor_targets_halting_wrapper() {
     vm.set_program_counter(parsed.prefix_len() as u64 + run.entry_pc)
         .expect("seek run wrapper");
     vm.run().expect("run entrypoint wrapper");
-    assert_eq!(vm.register(10), 42);
+    assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
 
 #[test]
@@ -748,7 +747,7 @@ seiyaku ContractArtifactFixture {
     vm.set_program_counter(parsed.prefix_len() as u64 + main.entry_pc)
         .expect("seek CNTR main wrapper");
     vm.run().expect("run selected main entrypoint");
-    assert_eq!(vm.register(10), 7);
+    assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
 
 #[test]

@@ -78,17 +78,12 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
             &limbs,
             |b, _| {
                 b.iter(|| {
-                    std::hint::black_box(
-                        lhs.checked_add(&rhs).expect("calibration addition fits"),
-                    )
+                    std::hint::black_box(lhs.checked_add(&rhs).expect("calibration addition fits"))
                 });
             },
         );
         group.bench_with_input(
-            BenchmarkId::new(
-                "multiply",
-                format!("limbs={limbs};work={}", limbs * limbs),
-            ),
+            BenchmarkId::new("multiply", format!("limbs={limbs};work={}", limbs * limbs)),
             &limbs,
             |b, _| {
                 b.iter(|| {
@@ -113,7 +108,8 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     std::hint::black_box(
-                        lhs.checked_div_rem(&rhs).expect("nonzero calibration divisor"),
+                        lhs.checked_div_rem(&rhs)
+                            .expect("nonzero calibration divisor"),
                     )
                 });
             },

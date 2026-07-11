@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4fba587c1baea74a2af3829c89a9aea82699ebf8837e2ed397d32e54b792ac72
-source_last_modified: "2026-07-11T18:13:35+00:00"
+source_hash: 93505cbda553c6d73c4850776545a87723b03a0d922610e6e7786a3f379b8fae
+source_last_modified: "2026-07-11T23:16:35+00:00"
 translation_last_reviewed: 2026-07-11
 ---
 
@@ -22,26 +22,30 @@ Il n'existe ni projection, ni décodeur, ni solution de repli Sumeragi v1.
 
 ## Format exact
 
-`BridgeFinalityProof` (Norito ou Norito JSON) contient exactement :
+`BridgeFinalityProof` (Norito ou Norito JSON) contient exactement trois champs :
 
 ```text
-{ version, block_header, finality_artifact, validator_set_pops }
+{ version, block_header, finality_artifact }
 ```
 
 - `version` vaut `1` ;
 - `block_header` est le `BlockHeader` canonique ;
 - `finality_artifact` est le `V2FinalityArtifact` exact et immuable stocké par
-  le chemin d'application Sumeragi v2 ;
-- `validator_set_pops` contient un PoP BLS-normal par entrée, dans l'ordre de
-  `finality_artifact.height_context.roster`.
+  le chemin d'application Sumeragi v2 ; il incorpore durablement un PoP
+  BLS-normal par entrée, dans l'ordre de son roster.
 
 L'artéfact est l'unique source des faits de consensus. Il contient les versions
 de format et de protocole, la hauteur, le `HeightContext` immuable complet, le
-`BlockSubject` exact, le hash du bloc, le CommitQC et, uniquement à une fin
-d'époque, le snapshot authentifié de l'époque suivante. Le contexte fige le
-chain id, les bornes d'époque, le mode, le CommitQC parent, le roster ordonné de
+`BlockSubject` exact, le hash du bloc, le CommitQC et les PoP alignés au roster.
+Le contexte fige le chain id, les bornes d'époque, le mode, le CommitQC parent,
+le roster ordonné de
 `ValidatorPower`, le `DualQuorum`, l'engagement Nexus/AMX, les paramètres DA et
-la graine de leader. Le sujet lie `parent_block_hash`, `block_hash` et
+la graine de leader. Le contexte du parent qui termine une époque incorpore
+aussi le `next_epoch_snapshot` optionnel ; puisqu'il participe au context id,
+le CommitQC du parent l'authentifie avant qu'il puisse autoriser le roster
+enfant. Le snapshot finalisé lie aussi son `epoch_end_height` et les
+`validator_set_pops` alignés du prochain roster, en plus de ses paramètres.
+Le sujet lie `parent_block_hash`, `block_hash` et
 `payload_hash`. Aucun champ dupliqué de hauteur, chaîne, hash, roster ou
 certificat n'est accepté au niveau de la preuve.
 
@@ -51,9 +55,10 @@ Après application du bloc, Sumeragi v2 valide puis écrit l'artéfact comme
 sidecar Kura immuable. L'écriture est idempotente et Kura refuse un artéfact
 conflictuel à la même hauteur. La reprise peut compléter un sidecar absent sans
 réexécuter le bloc. Le constructeur lit le bloc et ce sidecar par hauteur,
-vérifie leur association, récupère les PoP depuis l'état commité et exécute le
-vérificateur canonique. Il ne reconstruit pas l'historique depuis un état
-mutable et ne dépend pas d'une fenêtre récente de certificats.
+vérifie leur association et exécute le vérificateur canonique. Les PoP
+historiques viennent du sidecar ; ils ne sont jamais remplacés par ceux de
+l'état mondial mutable. La preuve ne dépend pas d'une fenêtre récente de
+certificats.
 
 `verify_bridge_finality_proof` impose :
 
@@ -63,7 +68,7 @@ mutable et ne dépend pas d'une fenêtre récente de certificats.
 3. l'égalité exacte entre hauteur, context id, sujet, hash répété et CommitQC,
    avec phase `Commit` ;
 4. le chain id attendu et la hauteur/hash recalculés du header ;
-5. un PoP BLS-normal valide pour chaque membre du roster ;
+5. un PoP BLS-normal durable et valide dans l'artéfact pour chaque membre du roster ;
 6. des indices de signataires strictement croissants et dans les limites ;
 7. simultanément au moins `floor(2n/3) + 1` signataires distincts et une
    puissance signée strictement supérieure aux deux tiers du total ;
@@ -83,8 +88,10 @@ transporte, mais ne prouve pas que ce roster est canonique. Le
 avant la première preuve ; il ne déduit jamais la confiance de cette preuve.
 Il n'accepte ensuite que la hauteur immédiatement suivante, vérifie le CommitQC
 parent sous le contexte et les PoP précédents, puis impose les règles v2 de
-transition. Hors fin d'époque, époque, roster, quorum et graine restent figés ;
-à la frontière, ils doivent correspondre au `next_epoch_snapshot` authentifié.
+transition. Dans une époque, l'enfant copie les PoP alignés de l'artéfact
+précédent ; à la frontière, époque, roster, quorum, graine et PoP doivent
+correspondre au `next_epoch_snapshot` du contexte parent, y compris son
+`epoch_end_height`, le tout authentifié par le CommitQC parent.
 Les hauteurs anciennes, sautées ou non liées sont rejetées.
 
 ## Frontière de confiance SCCP
@@ -105,12 +112,12 @@ message ne suffit pas à établir la finalité Taira.
 
 ## Bundle et API
 
-`BridgeFinalityBundle` contient le proof exact, un engagement
-`{ chain_id, height_context_id, block_height, block_hash, mmr_root?,
-mmr_leaf_index?, mmr_peaks? }` et une liste séparée de signatures historiques,
-actuellement vide. Le MMR optionnel est une aide de checkpoint racine, pas une
-preuve de finalité ni un chemin d'inclusion. SCCP utilise sa propre branche
-Merkle typée et son ancre gouvernée.
+`BridgeFinalityBundle` contient exactement `{ commitment, finality_proof }`.
+L'engagement est `{ chain_id, height_context_id, block_height, block_hash,
+mmr_root?, mmr_leaf_index?, mmr_peaks? }`. Les champs MMR optionnels ne sont que
+des engagements : ils aident à fixer une racine, mais ne remplacent pas la
+finalité et ne constituent pas une preuve d'inclusion. SCCP utilise sa propre
+branche Merkle typée et son ancre gouvernée.
 
 - `GET /v1/bridge/finality/{height}` renvoie `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` renvoie `BridgeFinalityBundle`.

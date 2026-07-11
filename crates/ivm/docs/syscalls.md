@@ -90,8 +90,9 @@ Gas enforcement (CoreHost)
 - Syscall quotes are reserved before host effects. The reserved amount remains visible to host
   budget checks, but nested contract bytecode can spend only the unreserved parent gas. Unused
   reserve is refunded after the host reports the actual deterministic cost.
-- `JSON_GET_JSON` reserves against the HEAP-capable pointer payload bound plus its sum handle, so
-  a valid result that spills beyond the fixed INPUT arena cannot exceed its pre-dispatch quote.
+- `JSON_GET_JSON` quotes heap-backed JSON input against the owned HEAP/INPUT payload bound and
+  reserves that same HEAP-capable result bound plus its sum handle, so a valid field beyond the
+  fixed INPUT arena cannot be rejected during preparation or exceed its pre-dispatch quote.
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
 - FASTPQ transfer batch scope syscalls charge the fixed gas. Gas: `G_fastpq_batch`; batch
   entries are charged separately with the transfer gas family when applied.
@@ -159,7 +160,7 @@ Exact numeric helpers
 - The domain is `-2^511..=2^511-1`; decimal and quantity scale is `0..=28`.
   Exact division distinguishes division by zero, repeating expansion, and a
   terminating result whose minimum scale exceeds 28. Rounded operations name
-  one of all seven signed rounding modes.
+  exactly one of `floor` (tag 0), `ceil` (tag 1), or `nearest_even` (tag 2).
 - Numeric syscalls use quote-free staged gas:
   `16 + input_envelope_bytes + output_envelope_bytes + 4 * logical_limb_work`.
   The entry weight covers dispatch, staged bookkeeping, and at most four
