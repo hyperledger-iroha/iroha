@@ -44,8 +44,8 @@ use iroha_data_model::{
     musubi::{MusubiNamespace, MusubiPackageId},
     name::Name,
     nexus::{
-        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-        LaneCatalog, LaneId,
+        AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
+        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
     },
     permission::Permission,
     smart_contract::ContractAddress,
@@ -4422,6 +4422,8 @@ fn is_canonical_dataspace_lane(
 fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
     lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
         || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+        || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
+        || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
 }
 
 fn reject_autoscale_owned_rule_lane(
@@ -4497,6 +4499,10 @@ impl AutoscaleElasticRange {
         self.contains_lane(lane.id)
             && is_autoscale_managed_elastic_lane(lane)
             && self.lane_created_height_active(lane)
+            && crate::state::autoscale_lane_accepts_proposal_height(
+                lane,
+                self.current_height.unwrap_or(u64::MAX),
+            )
     }
 }
 
@@ -6262,12 +6268,15 @@ mod tests {
             smart_contract_code::RegisterSmartContractBytes,
             zk::{AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, Shield, Unshield, ZkTransfer},
         },
+        merge::{LaneDrainIntentV1, LaneDrainStateV1},
         metadata::Metadata,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
-            LaneConfig, LaneVisibility, ManifestVersion, UniversalAccountId,
+            AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
+            AUTOSCALE_META_MANAGED, AssetPermissionManifest, LaneConfig, LaneVisibility,
+            ManifestVersion, UniversalAccountId,
         },
         offline::OfflineNoteKeyCertificate,
+        peer::PeerId,
         permission::Permission,
         prelude::*,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
@@ -6458,13 +6467,15 @@ mod tests {
             AUTOSCALE_META_CREATED_HEIGHT.to_string(),
             created_height.to_string(),
         );
-        LaneConfig {
+        let mut lane = LaneConfig {
             id: lane_id,
             dataspace_id,
             alias: format!("elastic-lane-{}", lane_id.as_u32()),
             metadata,
             ..LaneConfig::default()
-        }
+        };
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
+        lane
     }
 
     fn role_registration_instruction(authority: &AccountId, name: &str) -> InstructionBox {
@@ -6747,6 +6758,39 @@ mod tests {
         }
     }
 
+    fn attach_valid_drain_state(lane: &mut LaneConfig, close_global_height: u64) {
+        let keypair = KeyPair::try_from_seed(
+            b"queue-router-drain-validator".to_vec(),
+            Algorithm::BlsNormal,
+        )
+        .expect("derive queue-router drain validator");
+        let validator_set = vec![PeerId::new(keypair.public_key().clone())];
+        let state = LaneDrainStateV1 {
+            version: 1,
+            intent: LaneDrainIntentV1 {
+                version: 1,
+                chain_id_digest: Hash::new(b"queue-router-drain-chain"),
+                lane_id: lane.id,
+                dataspace_id: lane.dataspace_id,
+                lane_incarnation: Hash::new(b"queue-router-drain-incarnation"),
+                close_global_height,
+                initial_merged_lane_height: 0,
+                initial_merged_descriptor_hash: None,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                min_quorum: 1,
+            },
+            commitment: None,
+        };
+        lane.metadata.insert(
+            AUTOSCALE_META_DRAIN_STATE.to_owned(),
+            hex::encode(norito::to_bytes(&state).expect("encode valid drain state")),
+        );
+    }
+
     #[test]
     fn sample_offline_certificate_uses_checked_seed_derivation() {
         let (account_id, _) = gen_account_in("wonderland");
@@ -7015,6 +7059,64 @@ mod tests {
                 }),
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn default_route_elastic_candidates_reshard_away_after_drain_close() {
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let mut draining = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7);
+        attach_valid_drain_state(&mut draining, 10);
+        let catalog = lane_catalog_from_configs(vec![default_lane_config(), draining.clone()]);
+
+        assert_eq!(
+            default_route_elastic_candidates(
+                &policy,
+                &catalog,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 1,
+                    max_lanes: 2,
+                    current_height: Some(10),
+                }),
+            ),
+            vec![LaneId::SINGLE, LaneId::new(1)],
+            "pre-close proposal heights remain valid for delayed work"
+        );
+        assert_eq!(
+            default_route_elastic_candidates(
+                &policy,
+                &catalog,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 1,
+                    max_lanes: 2,
+                    current_height: Some(11),
+                }),
+            ),
+            vec![LaneId::SINGLE],
+            "new work must be re-sharded before hashing can select the closed lane"
+        );
+
+        draining.metadata.insert(
+            AUTOSCALE_META_DRAIN_STATE.to_owned(),
+            "not-canonical-hex".to_owned(),
+        );
+        let malformed = lane_catalog_from_configs(vec![default_lane_config(), draining]);
+        assert_eq!(
+            default_route_elastic_candidates(
+                &policy,
+                &malformed,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 1,
+                    max_lanes: 2,
+                    current_height: Some(10),
+                }),
+            ),
+            vec![LaneId::SINGLE],
+            "malformed drain metadata must fail closed before shard selection"
         );
     }
 
@@ -7311,6 +7413,34 @@ mod tests {
                 dataspace_id: DataSpaceId::UNIVERSAL,
             })
         );
+    }
+
+    #[test]
+    fn canonical_dataspace_route_fails_closed_for_every_consensus_autoscale_marker() {
+        for marker in [AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_COMMITTEE] {
+            let mut marker_only = LaneConfig {
+                id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: format!("reserved-{marker}"),
+                ..LaneConfig::default()
+            };
+            marker_only
+                .metadata
+                .insert(marker.to_owned(), "malformed-but-reserved".to_owned());
+            let lane_catalog = lane_catalog_from_configs(vec![marker_only]);
+
+            assert_eq!(
+                canonical_dataspace_route(
+                    DataSpaceId::UNIVERSAL,
+                    &lane_catalog,
+                    &DataSpaceCatalog::default()
+                ),
+                Err(RoutingResolveError::NoLaneForDataspace {
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                }),
+                "presence of reserved marker {marker} must never make a lane look operator-owned"
+            );
+        }
     }
 
     #[test]

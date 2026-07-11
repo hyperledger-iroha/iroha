@@ -266,6 +266,7 @@ bash scripts/formal/sumeragi_apalache.sh commit-pipeline-sample-fast
 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-status-fast
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-fast
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-fast
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-fast
 bash scripts/formal/sumeragi_apalache.sh commit-quorum-signers-fast
 bash scripts/formal/sumeragi_apalache.sh signature-index-recovery-fast
 bash scripts/formal/sumeragi_apalache.sh commit-qc-lookup-fast

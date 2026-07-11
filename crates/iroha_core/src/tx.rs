@@ -3822,8 +3822,7 @@ impl StateBlock<'_> {
                     &self.nexus,
                     &accepted,
                     &self.world,
-                    u64::try_from(self._curr_block.creation_time().as_millis())
-                        .unwrap_or(u64::MAX),
+                    u64::try_from(self._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
                     descriptor.proposal_height,
                 )
                 .map_err(|_| "execution input routing cannot be resolved")?
@@ -11856,6 +11855,7 @@ pub mod tests {
             elastic_lane
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -11979,6 +11979,7 @@ pub mod tests {
             elastic_lane
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -12234,6 +12235,7 @@ pub mod tests {
         elastic_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
         {
             let mut nexus = state.nexus.write();

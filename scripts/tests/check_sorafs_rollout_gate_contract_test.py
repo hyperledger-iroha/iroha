@@ -12452,14 +12452,6 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
             and "archive_route_state must be `active` or `retired`" in read(path)
         )
     ]
-    local_string_in_predicates = [
-        path.name
-        for path in CHECKERS
-        if (
-            path.name in string_in_validation_checkers()
-            and "state not in ALLOWED_MANUAL_TRIGGER_STATES" in read(path)
-        )
-    ]
     local_string_not_equal_errors = [
         path.name
         for path in CHECKERS
@@ -12759,7 +12751,6 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
     assert local_passed_status_errors == []
     assert local_passed_status_predicates == []
     assert local_string_in_errors == []
-    assert local_string_in_predicates == []
     assert local_string_not_equal_errors == []
     assert local_string_not_equal_predicates == []
     assert local_string_value_equal_errors == []
@@ -14916,9 +14907,6 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/storage/peers",
         "/v1/sorafs/storage/state",
         "/v1/sorafs/storage/por-sample",
-        "/v1/sorafs/storage/por-challenge",
-        "/v1/sorafs/storage/por-proof",
-        "/v1/sorafs/storage/por-verdict",
     )
     stale_fragments = (
         "`POST /sorafs/pin`",
@@ -14930,6 +14918,9 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/sorafs/por/sample",
         "/sorafs/telemetry",
         "/v1/sorafs/storage/por/sample",
+        "/v1/sorafs/storage/por-challenge",
+        "/v1/sorafs/storage/por-proof",
+        "/v1/sorafs/storage/por-verdict",
         "--features sorafs-storage",
     )
     docs = (
@@ -15128,14 +15119,14 @@ def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "SFM-4b1 now has local PoP credential payload foundations, but it is not shipped as a complete SoraFS proof-of-personhood credential service.",
-        "It does not yet contain the enrollment portal, credential issuer daemon, credential registry service, juror wallet, privacy-preserving ZK membership proof generator, or deployed SoraFS verifier service described by the original plan.",
-        "This checker is a rollout gate; it does not replace the missing runtime services or privacy proof backend.",
+        "SFM-4b1 now has canonical PoP credential payloads and a production cryptographic membership-proof backend, but it is not yet shipped as a complete SoraFS proof-of-personhood credential service.",
+        "The repository still does not contain the enrollment portal, credential issuer daemon, credential registry service, juror wallet, or deployed SoraFS verifier service described by the original plan.",
+        "This checker is a rollout gate; it does not replace the missing runtime services or deployed verifier integration.",
         "Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped.",
         "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures and a local issued-credential bundle helper are shipped; service is not shipped.",
         "Credential registry | Stores commitment roots, revocation updates, and event digests. | Payload schemas and local bundle validation are shipped; service is not shipped.",
         "Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped.",
-        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local transcript-policy payload verifier, production fail-closed proof verifier, `sorafs-validate pop`, and SDK/bridge reference gate shipped; deployed service and ZK verifier are not shipped.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, `sorafs-validate pop`, and SDK/bridge reference gate shipped; deployed service integration is not shipped.",
         "Build the issuer and registry services, including key management, revocation updates, commitment-root publication, and audit digests.",
         "Build juror client storage, revocation sync, proof generation, and local credential rotation.",
         "Publish operator and juror docs only after the service CLI/API and verifier paths exist.",
@@ -15699,17 +15690,28 @@ def test_unshipped_pop_credentials_service_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_pop_membership_production_verifier_remains_fail_closed() -> None:
+def test_pop_membership_production_verifier_uses_private_halo2_membership() -> None:
     source = read(POP_CREDENTIALS_RS)
     start = source.index("pub fn verify_pop_membership_proof_v1")
-    end = source.index("pub fn verify_pop_membership_transcript_policy_v1", start)
+    end = source.index("/// Errors returned by SFM-4b1", start)
     production_verifier = source[start:end]
 
-    assert "The production verifier is fail-closed" in source
-    assert "PopMembershipProofSystemV1::TranscriptDigestV1" in production_verifier
-    assert "Err(PopCredentialValidationError::PolicyOnlyProofSystem)" in production_verifier
-    assert "verify_pop_membership_transcript_policy_v1(" not in production_verifier
-    assert "Ok(())" not in production_verifier
+    assert "Halo2IpaPastaV1," in source
+    assert "mod zk;" in source
+    assert "zk::verify_v1(proof)" in production_verifier
+    assert "expected_challenge_digest" in production_verifier
+    assert "expected_verifier_context" in production_verifier
+    assert "verify_pop_commitment_root_signature_v1" in production_verifier
+    assert "verify_pop_revocation_list_signature_v1" in production_verifier
+    assert "seen_nullifiers.contains" in production_verifier
+    assert "TranscriptDigestV1" not in source
+    assert "verify_pop_membership_transcript_policy_v1" not in source
+    proof_start = source.index("pub struct PopMembershipProofV1")
+    proof_end = source.index("impl PopMembershipProofV1", proof_start)
+    public_proof = source[proof_start:proof_end]
+    assert "pub credential_id" not in public_proof
+    assert "pub holder_commitment" not in public_proof
+    assert "pub revocation_nonce" not in public_proof
 
 
 UNSHIPPED_SORAFS_OPERATOR_DOC_COMMANDS = (
@@ -18217,8 +18219,9 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
     normalized_validator = re.sub(r"\s+", " ", validator)
 
     required_scheduler_open = (
-        "The former deterministic randomness adapter fabricated bytes labelled as a drand signature and paired them with an empty VRF source. It has been removed from production wiring. `torii.sorafs_por.enabled = true` now fails startup closed until a configured external drand verifier and provider-VRF feed are implemented; `randomness_seed_hex` is never accepted as authenticated drand.",
-        "The local SF-9 state/report integration is implemented. Challenge generation remains release-blocked until verified external drand/VRF feeds are implemented and configured; live deployment evidence and any production governance archive handoff remain required.",
+        "Torii now constructs a verified randomness provider from pinned chain public-key/genesis/period metadata, at least three canonical HTTPS endpoints, a strict-majority quorum, bounded DNS/body/timeouts, freshness limits, and a durable high-water state file.",
+        "`torii.sorafs_por.enabled = true` fails startup when this configuration is missing or internally inconsistent; `randomness_seed_hex` is never accepted as authenticated drand.",
+        "The local SF-9 state/report integration and verified drand/provider-VRF feeds are implemented. Release promotion remains blocked on reviewed live deployment evidence and any production governance archive handoff required by the operator.",
         "Operators should keep SF-9 promotion fail-closed until the payload-free deployment evidence passes the checked-in gate:",
         "The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness, scheduler runtime, validator replay, reporting/archive handoff, observability, and governance approval.",
         "Archive a live drand/VRF/auditor run showing deterministic challenge generation and verdict replay that passes the SF-9 rollout evidence gate",
@@ -18227,7 +18230,7 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
     required_validator_open = (
         "Remaining SF-9b work is live auditor rollout evidence, production archive handoff, and any richer proof-bundle inspection commands required by operators.",
         "The SF-9 validator/reporting release claim is tied to the same fail-closed gate used by the scheduler plan:",
-        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, the exact `archive_backend` value (`sql` or `parquet`), and the explicit `retired` decision for the manual-trigger server route.",
+        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, and the exact `archive_backend` value (`sql` or `parquet`).",
         "Add proof-bundle fetch/show/offline replay commands if operators need them beyond `sorafs-validate por`.",
         "Archive live auditor, drand, VRF, report, and export evidence before treating SF-9 as fully released, and require that evidence to pass the SF-9 gate.",
     )
@@ -18533,6 +18536,106 @@ def test_por_validator_docs_keep_rollout_contract_markers() -> None:
     assert missing_current == {}
 
 
+RETIRED_POR_MUTATION_ROUTES = (
+    "/v1/sorafs/por/trigger",
+    "/v1/sorafs/capacity/por-challenge",
+    "/v1/sorafs/capacity/por",
+    "/v1/sorafs/storage/por-challenge",
+    "/v1/sorafs/storage/por-proof",
+    "/v1/sorafs/storage/por-verdict",
+)
+
+RETIRED_POR_MUTATION_SYMBOLS = (
+    "ManualPorChallengeV1",
+    "ManualPorTriggerRequestV1",
+    "ChallengeAuthTokenV1",
+    "manual_por_trigger_retired",
+    "capacity_por_mutation_retired",
+    "storage_por_mutation_retired",
+    "recordSorafsPorChallenge",
+    "submitSorafsPorObservation",
+    "record_sorafs_por_challenge",
+    "submit_sorafs_por_observation",
+    "sorafs_cli por trigger",
+    "capacity_por_challenge",
+    "manual_trigger_route_decided",
+    "manual_trigger_route_state",
+    "manual challenge",
+)
+
+
+def test_retired_por_mutation_surface_is_absent_from_production_sources_and_docs() -> None:
+    production_paths = (
+        REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "por.rs",
+        REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "lib.rs",
+        REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "bin" / "sorafs_cli.rs",
+        REPO_ROOT / "crates" / "iroha_torii" / "src" / "routing.rs",
+        TORII_SORAFS_API_RS,
+        REPO_ROOT / "javascript" / "iroha_js" / "src" / "toriiClient.js",
+        REPO_ROOT / "javascript" / "iroha_js" / "dist" / "toriiClient.js",
+        REPO_ROOT / "javascript" / "iroha_js" / "index.d.ts",
+        REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "client.py",
+        REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "__init__.py",
+        REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "sorafs.py",
+        SCRIPTS_DIR / "check_sorafs_por_rollout_evidence.py",
+        SCRIPTS_DIR / "build_sorafs_por_canary.py",
+        SCRIPTS_DIR / "examples" / "sorafs_por_scheduler_runtime_canary.args.example",
+        REPO_ROOT / "docs" / "portal" / "static" / "openapi" / "torii.json",
+        REPO_ROOT
+        / "docs"
+        / "portal"
+        / "static"
+        / "openapi"
+        / "versions"
+        / "current"
+        / "torii.json",
+    )
+    documentation_paths = (
+        *sorted(DOCS_SOURCE_DIR.glob("sorafs_cli*.md")),
+        *sorted(DOCS_SOURCE_DIR.glob("sorafs_por_reporting_plan*.md")),
+        *sorted(DOCS_SOURCE_DIR.glob("sorafs_por_plan*.md")),
+        *sorted(DOCS_SOURCE_DIR.glob("sorafs_por_validator_plan*.md")),
+        *sorted((DOCS_SOURCE_DIR / "sorafs").glob("sorafs_node_plan*.md")),
+        *sorted((DOCS_SOURCE_DIR / "sorafs").glob("storage_capacity_marketplace*.md")),
+        *sorted(SORAFS_NODE_PORTAL_DIR.glob("node-plan*.md")),
+        *sorted(SORAFS_NODE_PORTAL_DIR.glob("storage-capacity-marketplace*.md")),
+        REPO_ROOT / "javascript" / "iroha_js" / "README.md",
+        REPO_ROOT / "python" / "iroha_python" / "README.md",
+    )
+    stale: dict[str, list[str]] = {}
+
+    torii_router = read(TORII_LIB_RS)
+    openapi = read(TORII_OPENAPI_RS)
+    for route in RETIRED_POR_MUTATION_ROUTES:
+        assert not re.search(
+            rf"\.route\(\s*\"{re.escape(route)}\"",
+            torii_router,
+        ), f"retired PoR route is still registered: {route}"
+        assert not re.search(
+            rf"paths\.insert\(\s*\"{re.escape(route)}\"\.to_owned\(\)",
+            openapi,
+        ), f"retired PoR route is still in OpenAPI: {route}"
+
+    for path in (*production_paths, *documentation_paths):
+        source = read(path)
+        route_matches = [
+            marker
+            for marker in RETIRED_POR_MUTATION_ROUTES
+            if re.search(
+                rf"{re.escape(marker)}(?=$|[\"`\s?}}])",
+                source,
+            )
+        ]
+        symbol_matches = [
+            marker for marker in RETIRED_POR_MUTATION_SYMBOLS if marker in source
+        ]
+        matches = route_matches + symbol_matches
+        if matches:
+            stale[str(path.relative_to(REPO_ROOT))] = matches
+
+    assert stale == {}
+
+
 UNSHIPPED_POR_LIVE_ROUTE_PATTERNS = (
     "/v1/sorafs/por/live-deployment",
     "/v1/sorafs/por/external-drand",
@@ -18613,14 +18716,9 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/por/export",
         "/v1/sorafs/por/ingestion/{manifest_digest_hex}",
         "/v1/sorafs/por/report/{iso_week}",
-        "/v1/sorafs/por/trigger",
-        "/v1/sorafs/capacity/por-challenge",
         "/v1/sorafs/capacity/por-proof",
         "/v1/sorafs/capacity/por-verdict",
         "/v1/sorafs/storage/por-sample",
-        "/v1/sorafs/storage/por-challenge",
-        "/v1/sorafs/storage/por-proof",
-        "/v1/sorafs/storage/por-verdict",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/por/live-deployment-canary",
@@ -18642,7 +18740,6 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "por status",
         "por export",
         "por report",
-        "por trigger",
         "por rollout",
         "por live-deployment-canary",
         "por external-drand-proof",

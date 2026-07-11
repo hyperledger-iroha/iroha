@@ -60,6 +60,7 @@ const SERVER_REQUEST_GATE_TTL: Duration = Duration::from_secs(10);
 const MAX_CANDIDATE_INBOUND_SESSIONS: usize = 8;
 const MAX_CANDIDATE_OUTBOUND_BODIES: usize = 8;
 const MAX_CANDIDATE_SESSIONS_PER_PEER: usize = 2;
+const MAX_CANDIDATE_ACCEPTED_REQUEST_IDS: usize = 8;
 const MAX_CANDIDATE_BYTES: usize = 32 * 1024 * 1024;
 const CANDIDATE_OUTBOUND_SESSION_TTL: Duration = Duration::from_secs(2 * 60);
 const CANDIDATE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1306,6 +1307,10 @@ struct CandidateInboundAssembly {
     advert: MergeCandidateAdvertV1,
     requester: PeerId,
     request_id: Hash,
+    /// Bounded nonces issued for this exact immutable advert. Delayed chunks
+    /// from an earlier retry remain safe because every nonce was locally
+    /// solicited and the candidate body is bound by `advert.transfer_id`.
+    accepted_request_ids: BTreeSet<Hash>,
     requested_at: Instant,
     attempts: u32,
     chunks: Vec<Option<Vec<u8>>>,
@@ -1539,6 +1544,7 @@ impl MergeCandidateTransport {
         }
         let request_id = self.request_id(&advert, requester);
         let transfer_id = advert.transfer_id;
+        let accepted_request_ids = BTreeSet::from([request_id]);
         self.inbound_rounds.insert(round, transfer_id);
         self.inbound.insert(
             transfer_id,
@@ -1546,6 +1552,7 @@ impl MergeCandidateTransport {
                 advert: advert.clone(),
                 requester: requester.clone(),
                 request_id,
+                accepted_request_ids,
                 requested_at: now,
                 attempts: 1,
                 chunks: Vec::new(),
@@ -1687,11 +1694,14 @@ impl MergeCandidateTransport {
         let Some(snapshot) = self.inbound.get(&chunk.advert.transfer_id) else {
             return Err(MergeSidecarError::UnsolicitedResponse);
         };
-        if snapshot.advert != chunk.advert
-            || snapshot.requester != chunk.requester
-            || snapshot.request_id != chunk.request_id
-        {
+        if snapshot.advert != chunk.advert {
             return Err(MergeSidecarError::MetadataMismatch);
+        }
+        if snapshot.requester != chunk.requester {
+            return Err(MergeSidecarError::PeerIdentityMismatch);
+        }
+        if !snapshot.accepted_request_ids.contains(&chunk.request_id) {
+            return Err(MergeSidecarError::RequestIdMismatch);
         }
         if snapshot.complete_pending_validation {
             return Err(MergeSidecarError::UnsolicitedResponse);
@@ -1769,8 +1779,9 @@ impl MergeCandidateTransport {
         }
         let (advert, requester) = {
             let assembly = self.inbound.get_mut(&transfer_id)?;
-            assembly.chunks.clear();
-            assembly.received_bytes = 0;
+            // Preserve exact-body chunks already received. A retry changes
+            // only the anti-replay nonce; advert, transfer id, boundaries, and
+            // body bytes are immutable for the round.
             assembly.complete_pending_validation = false;
             assembly.attempts = assembly.attempts.saturating_add(1);
             assembly.requested_at = now;
@@ -1782,6 +1793,16 @@ impl MergeCandidateTransport {
             .get_mut(&transfer_id)
             .expect("candidate assembly retained for retry");
         assembly.request_id = request_id;
+        if assembly.accepted_request_ids.len() >= MAX_CANDIDATE_ACCEPTED_REQUEST_IDS
+            && let Some(expired) = assembly
+                .accepted_request_ids
+                .iter()
+                .copied()
+                .find(|candidate| *candidate != request_id)
+        {
+            assembly.accepted_request_ids.remove(&expired);
+        }
+        assembly.accepted_request_ids.insert(request_id);
         Some(MergeCandidatePost {
             peer: advert.proposer.clone(),
             message: MergeCandidateMessage::Request(MergeCandidateRequestV1 {
@@ -1953,12 +1974,14 @@ pub(crate) struct MergeSigningGuard {
 
 impl MergeSigningGuard {
     /// Open the guard under the Kura root and fail closed on malformed records.
+    #[cfg(test)]
     pub(crate) fn open(store_root: &Path) -> Result<Self, MergeSidecarError> {
         Self::open_with_committed_frontier(store_root, 0, 0)
     }
 
     /// Open and reconcile the guard against the exact latest globally ordered
     /// merge epoch recovered from canonical Kura/state.
+    #[cfg(test)]
     pub(crate) fn open_with_committed_epoch(
         store_root: &Path,
         committed_epoch: u64,
@@ -2503,6 +2526,7 @@ mod tests {
             activation_root: Hash::new(b"activations"),
             lane_snapshots: Vec::new(),
             execution_batch: None,
+            lane_drain_certificates: Vec::new(),
             global_state_root: Hash::new(b"global"),
         }
     }
@@ -2808,15 +2832,7 @@ mod tests {
         let original = HashOf::from_untyped_unchecked(Hash::new(b"block"));
         let replacement = HashOf::from_untyped_unchecked(Hash::new(b"replacement-block"));
         transport
-            .defer_block(
-                replacement,
-                2,
-                1,
-                reference.clone(),
-                &requester,
-                1,
-                now,
-            )
+            .defer_block(replacement, 2, 1, reference.clone(), &requester, 1, now)
             .expect("share exact sidecar session");
 
         transport.retain_pending_blocks(&BTreeSet::from([replacement]), 1);
@@ -2827,8 +2843,7 @@ mod tests {
                 .expect("complete retained fetch"),
             ChunkIngestOutcome::Complete(_)
         ));
-        let (deferred, _) =
-            transport.finish_completed(reference.entry_hash, true, &requester, now);
+        let (deferred, _) = transport.finish_completed(reference.entry_hash, true, &requester, now);
         assert_eq!(deferred, vec![(replacement, 2, 1)]);
         assert!(!deferred.iter().any(|(hash, _, _)| *hash == original));
 
@@ -3057,6 +3072,86 @@ mod tests {
     }
 
     #[test]
+    fn candidate_retry_accepts_delayed_chunk_from_any_bounded_solicited_nonce() {
+        let started_at = Instant::now();
+        let leader = peer(b"delayed-leader");
+        let follower = peer(b"delayed-follower");
+        let roster_hash = HashOf::new(&vec![leader.clone(), follower.clone()]);
+        let candidate = candidate(0);
+        let mut leader_transport = MergeCandidateTransport::new();
+        let advert = publish_candidate(
+            &mut leader_transport,
+            &candidate,
+            &leader,
+            roster_hash,
+            started_at,
+        );
+        let mut follower_transport = MergeCandidateTransport::new();
+        let first = follower_transport
+            .accept_advert(
+                &leader,
+                advert,
+                &leader,
+                &follower,
+                1,
+                0,
+                2,
+                candidate.carrier_parent_hash,
+                roster_hash,
+                started_at,
+            )
+            .expect("accept exact leader advert")
+            .expect("initial body request");
+        let MergeCandidateMessage::Request(first_request) = first.message else {
+            panic!("expected initial request")
+        };
+
+        let retry_at = started_at + CANDIDATE_REQUEST_TIMEOUT;
+        let retry = follower_transport
+            .tick(retry_at)
+            .into_iter()
+            .find_map(|post| match post.message {
+                MergeCandidateMessage::Request(request) => Some(request),
+                _ => None,
+            })
+            .expect("timed-out exact request retries");
+        assert_ne!(retry.request_id, first_request.request_id);
+
+        leader_transport
+            .accept_request(&follower, first_request, &leader, retry_at)
+            .expect("leader accepts delayed solicited request");
+        let chunks = leader_transport.drain_outbound(MAX_CERTIFIED_MERGE_CHUNKS, retry_at);
+        assert!(!chunks.is_empty());
+        let MergeCandidateMessage::Chunk(mut unsolicited) = chunks[0].message.clone() else {
+            panic!("expected delayed candidate chunk")
+        };
+        unsolicited.request_id = Hash::new(b"unsolicited-candidate-request");
+        assert_eq!(
+            follower_transport.ingest_chunk(&leader, unsolicited, retry_at),
+            Err(MergeSidecarError::RequestIdMismatch)
+        );
+        let mut completed = false;
+        for post in chunks {
+            let MergeCandidateMessage::Chunk(chunk) = post.message else {
+                panic!("expected delayed candidate chunk")
+            };
+            completed |= matches!(
+                follower_transport
+                    .ingest_chunk(&leader, chunk, retry_at)
+                    .expect("delayed chunk from a bounded solicited nonce remains valid"),
+                CandidateChunkOutcome::Complete(_)
+            );
+        }
+        assert!(completed);
+        let assembly = follower_transport
+            .inbound
+            .get(&retry.advert.transfer_id)
+            .expect("completed assembly awaits chain validation");
+        assert!(assembly.accepted_request_ids.len() <= MAX_CANDIDATE_ACCEPTED_REQUEST_IDS);
+        assert!(assembly.accepted_request_ids.contains(&retry.request_id));
+    }
+
+    #[test]
     fn candidate_retries_exact_round_through_long_partition_and_restart_drops_state() {
         let started_at = Instant::now();
         let leader = peer(b"leader");
@@ -3114,13 +3209,7 @@ mod tests {
         }
         assert!(now.duration_since(started_at) > Duration::from_secs(5 * 60));
 
-        leader_transport.retain_exact_round(
-            1,
-            0,
-            2,
-            candidate.carrier_parent_hash,
-            roster_hash,
-        );
+        leader_transport.retain_exact_round(1, 0, 2, candidate.carrier_parent_hash, roster_hash);
         leader_transport
             .accept_request(&follower, latest, &leader, now)
             .expect("leader returns after the partition");

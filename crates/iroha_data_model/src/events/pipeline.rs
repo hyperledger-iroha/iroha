@@ -526,6 +526,7 @@ mod tests {
                 relay_envelope: None,
             }],
             execution_batch: None,
+            lane_drain_certificates: Vec::new(),
             global_state_root: Hash::new(b"global"),
             merge_qc: MergeQuorumCertificate::new(
                 7,

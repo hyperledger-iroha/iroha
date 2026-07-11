@@ -4,8 +4,8 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 293340dfd228f764033d80f93ed131964515fdd37c8c96b60c859cc11f59a5d6
-source_last_modified: "2025-11-12T16:00:10.415371+00:00"
+source_hash: 8e34d60198b5809cc1a609ccfb27687357b6814acefebbb1f29f328416c16c05
+source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
@@ -54,7 +54,7 @@ SF-3 поставляет первый исполняемый crate `sorafs-node
 | `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
 | `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
 | `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
-| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample` | Report peer/storage state and exercise bounded local PoR sampling. | Reuse chunk-store sampling and update telemetry; challenge creation and proof/verdict lifecycle handling remain outside the direct-storage router. |
 
 
 Рантайм-проводка направляет PoR взаимодействия через `sorafs_node::por`: трекер фиксирует каждый `PorChallengeV1`, `PorProofV1` и `AuditVerdictV1`, чтобы метрики `CapacityMeter` отражали вердикты governance без отдельной логики Torii.【crates/sorafs_node/src/scheduler.rs#L147】

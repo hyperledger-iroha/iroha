@@ -221,19 +221,19 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitPipelineStatus,
-        SumeragiCommitQuorumStatus, SumeragiCommittedLaneBlock, SumeragiConsensusCapsStatus,
-        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
-        SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
-        SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
-        SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-        SumeragiMissingBlockFetchStatus, SumeragiNposRepairCoverageStatus,
-        SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-        SumeragiPendingRbcStatus, SumeragiProposalGateStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
-        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRoundGapStatus,
-        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiV1StatusWire,
-        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        LaneBlockCommitment, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
+        SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiCommittedLaneBlock,
+        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+        SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
+        SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
+        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
+        SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
+        SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
+        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRbcEvictedSession,
+        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
+        SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+        SumeragiV1StatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
         SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
         SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
         SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
@@ -5067,7 +5067,8 @@ pub(crate) async fn execute_verified_query_with_opts(
 ) -> Result<iroha_data_model::query::QueryResponse> {
     use iroha_core::{
         query::snapshot::{
-            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode_arc,
+            CursorMode as LaneCursorMode, SnapshotQueryError,
+            run_on_snapshot_with_mode_arc_and_start_budget,
         },
         smartcontracts::isi::query::{QueryCountMode, QueryLimits},
     };
@@ -5114,7 +5115,8 @@ pub(crate) async fn execute_verified_query_with_opts(
     // Optional gas gating for stored cursor mode (resource bound).
     // If configured (> 0) and the effective mode is Stored, enforce a minimum
     // client-provided budget. For continuations, honor the cursor's gas budget.
-    // This does not actually charge gas; it simply guards resource usage for server-side cursors.
+    // Budget-aware stored queries also enforce this allowance against projection
+    // work; other query types use it as the server-side cursor admission guard.
     {
         let min_gas = pipeline.query_stored_min_gas_units;
         if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
@@ -5143,6 +5145,10 @@ pub(crate) async fn execute_verified_query_with_opts(
         iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
         _ => None,
     };
+    let stored_start_budget = match &request {
+        iroha_data_model::query::QueryRequest::Start(_) => opts.gas_units,
+        _ => None,
+    };
     let count_mode = match opts.count_mode.as_deref() {
         Some("exact") => QueryCountMode::Exact,
         Some("bounded") | None => QueryCountMode::Bounded,
@@ -5153,13 +5159,14 @@ pub(crate) async fn execute_verified_query_with_opts(
     };
     let limits = QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
     let resp = tokio::task::spawn_blocking(move || {
-        run_on_snapshot_with_mode_arc(
+        run_on_snapshot_with_mode_arc_and_start_budget(
             &state_cloned,
             &store_cloned,
             &authority_cloned,
             request,
             mode,
             limits,
+            stored_start_budget,
         )
     })
     .await
@@ -35505,19 +35512,6 @@ pub struct RecordUptimeObservationResponseDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording a PoR challenge issued by governance.
-pub struct RecordPorChallengeDto {
-    /// Base64-encoded Norito `PorChallengeV1`.
-    pub challenge_b64: String,
-}
-
-#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for listing PoR challenge statuses.
 pub struct PorStatusQueryDto {
@@ -35692,34 +35686,6 @@ pub struct RecordPorSubmissionResponseDto {
 pub struct RecordPorVerdictResponseDto {
     /// Result status (`accepted`).
     pub status: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording a proof-of-retrievability probe outcome.
-pub struct RecordPorObservationDto {
-    /// Whether the probe succeeded.
-    pub success: bool,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response payload returned after recording a PoR observation.
-pub struct RecordPorObservationResponseDto {
-    /// Result status (`success` or `failure`).
-    pub status: String,
-    /// Whether the probe succeeded.
-    pub success: bool,
 }
 
 #[cfg(feature = "app_api")]
@@ -37785,59 +37751,6 @@ pub async fn handle_post_sorafs_record_uptime_observation(
 }
 
 #[iroha_futures::telemetry_future]
-#[cfg(all(feature = "app_api", test))]
-pub(crate) async fn handle_post_sorafs_record_por_challenge(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    por_coordinator: Arc<sorafs::PorCoordinator>,
-    challenge: PorChallengeV1,
-) -> Result<impl IntoResponse> {
-    let _pipeline = por_coordinator.lock_pipeline().await;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::PorSubmission, &challenge.provider_id) {
-        return Err(quota_limit_error(err));
-    }
-    por_coordinator
-        .record_challenge(&challenge)
-        .map_err(por_coordinator_error)?;
-    if let Err(node_error) = sorafs_node.record_por_challenge(&challenge) {
-        if let Err(rollback_error) = por_coordinator.rollback_challenge(&challenge) {
-            iroha_logger::error!(
-                ?node_error,
-                ?rollback_error,
-                challenge_id = %hex::encode(challenge.challenge_id),
-                "failed to compensate SoraFS PoR challenge node commit"
-            );
-            return Err(conversion_error(format!(
-                "PoR challenge node commit failed ({node_error}); coordinator rollback also failed ({rollback_error})"
-            )));
-        }
-        return Err(por_tracker_error(node_error));
-    }
-
-    iroha_logger::info!(
-        provider_id = %hex::encode(challenge.provider_id),
-        challenge_id = %hex::encode(challenge.challenge_id),
-        manifest_digest = %hex::encode(challenge.manifest_digest),
-        sample_count = challenge.sample_count,
-        issued_at = challenge.issued_at,
-        deadline_at = challenge.deadline_at,
-        "recorded SoraFS PoR challenge"
-    );
-
-    let response = RecordPorSubmissionResponseDto {
-        status: "accepted".to_owned(),
-    };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_record_por_proof(
     _telemetry: MaybeTelemetry,
@@ -38038,36 +37951,6 @@ pub fn handle_get_sorafs_por_report(
     coordinator
         .weekly_report(cycle)
         .map_err(por_coordinator_error)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(all(feature = "app_api", test))]
-pub(crate) async fn handle_post_sorafs_record_por_observation(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RecordPorObservationDto>,
-) -> Result<impl IntoResponse> {
-    sorafs_node.record_por_observation(req.success);
-    observe_sorafs_metering(&telemetry, &sorafs_node);
-
-    let status = if req.success {
-        "success".to_owned()
-    } else {
-        "failure".to_owned()
-    };
-
-    let response = RecordPorObservationResponseDto {
-        status,
-        success: req.success,
-    };
-
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 
 #[cfg(feature = "app_api")]
@@ -38758,6 +38641,15 @@ fn replication_order_validation_error(err: ReplicationOrderValidationError) -> E
 fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Error {
     use sorafs_node::capacity::CapacityError::*;
     let message = match err {
+        ResourceExhausted { .. } => return capacity_limit_error(),
+        DeclarationReplacementWhileOrdersOutstanding { count } => {
+            return Error::AppConflict {
+                code: "sorafs_capacity_declaration_replace_conflict",
+                message: format!(
+                    "cannot replace capacity declaration while {count} orders remain outstanding"
+                ),
+            };
+        }
         DecodeDeclaration(e) => format!("failed to decode capacity declaration payload: {e}"),
         ValidateDeclaration(e) => format!("capacity declaration validation failed: {e}"),
         ProviderMismatch => "capacity declaration provider id mismatch".to_string(),
@@ -38805,6 +38697,24 @@ fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Erro
         ZeroSlice => "replication assignment must reserve a positive GiB slice".to_string(),
         AllocationOverflow => "capacity allocation overflowed internal counters".to_string(),
         AllocationUnderflow => "capacity allocation underflowed internal counters".to_string(),
+        InvalidCheckpoint(reason) => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_checkpoint_invalid",
+                message: format!("invalid capacity runtime checkpoint: {reason}"),
+            };
+        }
+        Checkpoint(reason) => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_checkpoint_failed",
+                message: format!("capacity runtime checkpoint failed: {reason}"),
+            };
+        }
+        StateLockPoisoned => {
+            return Error::AppServiceUnavailable {
+                code: "sorafs_capacity_state_poisoned",
+                message: "capacity state lock poisoned".to_owned(),
+            };
+        }
     };
     conversion_error(message)
 }
@@ -38829,7 +38739,10 @@ fn por_submission_forbidden(code: &'static str, message: impl Into<String>) -> E
 }
 
 #[cfg(feature = "app_api")]
-fn authenticated_ed25519_payload(signer: &PublicKey, role: &'static str) -> Result<&[u8], Error> {
+fn authenticated_ed25519_payload<'a>(
+    signer: &'a PublicKey,
+    role: &'static str,
+) -> Result<&'a [u8], Error> {
     let (algorithm, payload) = signer.try_to_bytes().map_err(|error| {
         por_submission_forbidden(
             "sorafs_por_request_signer_invalid",
@@ -39263,7 +39176,9 @@ mod repair_query_tests {
             .expect_err("embedded approval summary must fail closed");
 
         assert!(
-            error.to_string().contains("must not embed approval summaries"),
+            error
+                .to_string()
+                .contains("must not embed approval summaries"),
             "unexpected error: {error}"
         );
     }
@@ -39894,6 +39809,15 @@ fn reject_server_side_signing(endpoint: &'static str) -> Error {
 fn deal_engine_error(err: DealEngineError) -> Error {
     use DealEngineError as E;
     match err {
+        E::ZeroDeposit => Error::AppQueryValidation {
+            code: "sorafs_deal_zero_deposit",
+            message: "deal engine deposits must be greater than zero".to_owned(),
+        },
+        E::ResourceExhausted { .. } => capacity_limit_error(),
+        E::BalanceOverflow { resource } => Error::AppConflict {
+            code: "sorafs_deal_balance_overflow",
+            message: format!("deal engine balance overflow for `{resource}`"),
+        },
         E::UnknownProvider(provider) => conversion_error(format!(
             "unknown provider {}",
             hex::encode(provider.as_bytes())
@@ -39947,14 +39871,145 @@ fn deal_engine_error(err: DealEngineError) -> Error {
             hex::encode(deal_id.as_bytes())
         )),
         E::MetadataEncoding(err) => conversion_error(format!("metadata encoding failed: {err}")),
+        E::InvalidCheckpoint(reason) => Error::AppServiceUnavailable {
+            code: "sorafs_deal_checkpoint_invalid",
+            message: format!("invalid deal runtime checkpoint: {reason}"),
+        },
+        E::Checkpoint(reason) => Error::AppServiceUnavailable {
+            code: "sorafs_deal_checkpoint_failed",
+            message: format!("deal runtime checkpoint failed: {reason}"),
+        },
+        E::StateLockPoisoned => Error::AppServiceUnavailable {
+            code: "sorafs_deal_state_poisoned",
+            message: "deal engine state lock poisoned".to_owned(),
+        },
     }
+}
+
+fn capacity_limit_error() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+    ))
 }
 
 fn quota_limit_error(err: QuotaExceeded) -> Error {
     let _ = err;
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-    ))
+    capacity_limit_error()
+}
+
+#[cfg(test)]
+mod sorafs_runtime_error_mapping_tests {
+    use super::*;
+
+    fn assert_service_unavailable_code(error: Error, expected_code: &'static str) {
+        match &error {
+            Error::AppServiceUnavailable { code, .. } => assert_eq!(*code, expected_code),
+            other => panic!("expected service-unavailable error, got {other:?}"),
+        }
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn capacity_resource_and_replacement_errors_preserve_http_semantics() {
+        let exhausted =
+            replication_schedule_error(sorafs_node::capacity::CapacityError::ResourceExhausted {
+                resource: "replication_orders",
+                limit: 8,
+            });
+        assert_eq!(
+            exhausted.into_response().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        let replacement = replication_schedule_error(
+            sorafs_node::capacity::CapacityError::DeclarationReplacementWhileOrdersOutstanding {
+                count: 3,
+            },
+        );
+        match &replacement {
+            Error::AppConflict { code, message } => {
+                assert_eq!(*code, "sorafs_capacity_declaration_replace_conflict");
+                assert!(message.contains('3'));
+            }
+            other => panic!("expected conflict error, got {other:?}"),
+        }
+        assert_eq!(replacement.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn capacity_checkpoint_errors_have_distinct_stable_codes() {
+        for (error, code) in [
+            (
+                sorafs_node::capacity::CapacityError::InvalidCheckpoint("invalid".to_owned()),
+                "sorafs_capacity_checkpoint_invalid",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::Checkpoint("io".to_owned()),
+                "sorafs_capacity_checkpoint_failed",
+            ),
+            (
+                sorafs_node::capacity::CapacityError::StateLockPoisoned,
+                "sorafs_capacity_state_poisoned",
+            ),
+        ] {
+            assert_service_unavailable_code(replication_schedule_error(error), code);
+        }
+    }
+
+    #[test]
+    fn deal_validation_and_capacity_errors_preserve_http_semantics() {
+        let zero = deal_engine_error(DealEngineError::ZeroDeposit);
+        match &zero {
+            Error::AppQueryValidation { code, .. } => {
+                assert_eq!(*code, "sorafs_deal_zero_deposit");
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+        assert_eq!(zero.into_response().status(), StatusCode::BAD_REQUEST);
+
+        let exhausted = deal_engine_error(DealEngineError::ResourceExhausted {
+            resource: "deals",
+            limit: 8,
+        });
+        assert_eq!(
+            exhausted.into_response().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+
+        let overflow = deal_engine_error(DealEngineError::BalanceOverflow {
+            resource: "client_credit",
+        });
+        match &overflow {
+            Error::AppConflict { code, .. } => {
+                assert_eq!(*code, "sorafs_deal_balance_overflow");
+            }
+            other => panic!("expected conflict error, got {other:?}"),
+        }
+        assert_eq!(overflow.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn deal_checkpoint_errors_have_distinct_stable_codes() {
+        for (error, code) in [
+            (
+                DealEngineError::InvalidCheckpoint("invalid".to_owned()),
+                "sorafs_deal_checkpoint_invalid",
+            ),
+            (
+                DealEngineError::Checkpoint("io".to_owned()),
+                "sorafs_deal_checkpoint_failed",
+            ),
+            (
+                DealEngineError::StateLockPoisoned,
+                "sorafs_deal_state_poisoned",
+            ),
+        ] {
+            assert_service_unavailable_code(deal_engine_error(error), code);
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -42018,35 +42073,6 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn por_observation_handler_records_sample() {
-        let (_state, _queue, _chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
-
-        let req = RecordPorObservationDto { success: true };
-
-        let resp =
-            handle_post_sorafs_record_por_observation(telemetry, node.clone(), NoritoJson(req))
-                .await
-                .expect("por handler ok")
-                .into_response();
-
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("success"));
-
-        let snapshot = node.metering_snapshot();
-        assert_eq!(snapshot.por_samples_total, 1);
-        assert_eq!(snapshot.por_samples_success, 1);
-        assert_eq!(snapshot.por_success_bps, 10_000);
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
     async fn por_handlers_record_pipeline() {
         let (_state, _queue, _chain_id, telemetry) = test_state_components();
         let (node, _dir) = sorafs_node_with_temp_storage();
@@ -42064,17 +42090,11 @@ mod sorafs_capacity_tests {
         .expect("auditor signer public key");
         let trusted_auditor_keys = vec![verdict.auditor_signatures[0].public_key.clone()];
 
-        let challenge_resp = handle_post_sorafs_record_por_challenge(
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            por_coordinator.clone(),
-            challenge,
-        )
-        .await
-        .expect("challenge handler ok")
-        .into_response();
-        assert_eq!(challenge_resp.status(), axum::http::StatusCode::OK);
+        por_coordinator
+            .record_challenge(&challenge)
+            .expect("scheduler challenge accepted by coordinator");
+        node.record_por_challenge(&challenge)
+            .expect("scheduler challenge accepted by node");
 
         let proof_resp = handle_post_sorafs_record_por_proof(
             telemetry.clone(),
@@ -47295,7 +47315,8 @@ mod stateful_account_path_parser_tests {
 fn committed_transactions_snapshot(
     state: &CoreState,
 ) -> Result<Vec<iroha_data_model::query::CommittedTransaction>> {
-    iroha_core::smartcontracts::isi::tx::committed_transactions_snapshot(state)
+    let state_view = state.view();
+    iroha_core::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
         .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
 
@@ -62751,6 +62772,9 @@ mod status_tests {
             checked_status_peer(0xA2, "derive native AMX status fixture peer key 2"),
         ];
         let validator_set_hash = HashOf::new(&validators);
+        let validator_count = u32::try_from(validators.len()).expect("fixture validator count");
+        let participant_min_quorum = u32::try_from(validators.len().saturating_mul(2) / 3 + 1)
+            .expect("fixture validator quorum");
         let native_amx_qc = |phase: NativeAmxPhase| NativeAmxAttestationQcV1 {
             body: NativeAmxAttestationBodyV1 {
                 chain_id_hash,
@@ -62764,6 +62788,9 @@ mod status_tests {
                 participant_lane_id,
                 participant_dataspace_id,
                 participant_lane_incarnation,
+                participant_validator_set_hash: validator_set_hash,
+                participant_validator_count: validator_count,
+                participant_min_quorum,
                 authority_context_height: 70,
                 coordinator_lane_block_height: 77,
                 coordinator_lane_block_view: 3,
@@ -62772,6 +62799,7 @@ mod status_tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash,
             validator_set: validators.clone(),
+            validator_set_pops: vec![vec![0x5A; 96]; validators.len()],
             signers_bitmap: vec![0b0000_0011],
             bls_aggregate_signature: vec![0xA5; 96],
         };

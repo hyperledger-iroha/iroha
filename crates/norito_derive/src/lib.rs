@@ -2061,6 +2061,9 @@ fn derive_struct_deserialize(
                                                 match <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>)) {
                                                     Ok(val) => Ok(val),
                                                     Err(err) => {
+                                                        if err.is_decode_resource_limit() {
+                                                            Err(err)
+                                                        } else {
                                                         #[cfg(feature = "compact-len")]
                                                         {
                                                             let fallback = Err(err);
@@ -2088,6 +2091,7 @@ fn derive_struct_deserialize(
                                                         #[cfg(not(feature = "compact-len"))]
                                                         {
                                                             Err(err)
+                                                        }
                                                         }
                                                     }
                                                 }
@@ -2124,6 +2128,9 @@ fn derive_struct_deserialize(
                                             let v_res: ::core::result::Result<#ty, norito::core::Error> = match <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>)) {
                                                 Ok(val) => Ok(val),
                                                 Err(err) => {
+                                                    if err.is_decode_resource_limit() {
+                                                        Err(err)
+                                                    } else {
                                                     #[cfg(feature = "compact-len")]
                                                     {
                                                         let fallback = Err(err);
@@ -2150,6 +2157,7 @@ fn derive_struct_deserialize(
                                                     #[cfg(not(feature = "compact-len"))]
                                                     {
                                                         Err(err)
+                                                    }
                                                     }
                                                 }
                                             };
@@ -3436,7 +3444,10 @@ fn derive_enum_deserialize(
                                                 };
                                                 match norito::core::decode_field_canonical::<#ty>(unsafe { std::slice::from_raw_parts(ptr.add(offset + hdr), field_len) }) {
                                                     Ok((val, used)) => { debug_assert_eq!(used, field_len); offset += hdr + used; val }
-                                                    Err(_e) => {
+                                                    Err(err) => {
+                                                        if err.is_decode_resource_limit() {
+                                                            return Err(err);
+                                                        }
                                                         // Archived fallback
                                                         let data_ptr = unsafe { ptr.add(offset + hdr) };
                                                         let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
@@ -3544,6 +3555,9 @@ fn derive_enum_deserialize(
                                                             }
                                                         }
                                                         Err(err) => {
+                                                            if err.is_decode_resource_limit() {
+                                                                return Err(err);
+                                                            }
                                                             #[cfg(debug_assertions)]
                                                             if norito::debug_trace_enabled() {
                                                                 eprintln!(
@@ -3797,7 +3811,10 @@ fn derive_enum_deserialize(
                                             };
                                             match norito::core::decode_field_canonical::<#ty>(unsafe { std::slice::from_raw_parts(ptr.add(offset + hdr), field_len) }) {
                                                 Ok((value, used)) => { debug_assert_eq!(used, field_len); offset += hdr + used; value }
-                                                Err(_e) => {
+                                                Err(err) => {
+                                                    if err.is_decode_resource_limit() {
+                                                        return Err(err);
+                                                    }
                                                     // Archived fallback
                                                     let data_ptr = unsafe { ptr.add(offset + hdr) };
                                                     let layout = std::alloc::Layout::from_size_align(field_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();

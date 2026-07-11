@@ -1057,6 +1057,7 @@ struct RoutedTransactionObservation {
 struct LaneDomainProgress {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     descriptor_hash: Hash,
@@ -1076,6 +1077,7 @@ struct LaneDomainProgress {
 struct LanePayloadOwnershipProgress {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_view: u64,
     proposal_height: u64,
@@ -1156,6 +1158,7 @@ fn lane_domain_progress_from_block(
     LaneDomainProgress {
         lane_id: block.lane_id,
         dataspace_id: block.dataspace_id,
+        lane_incarnation: block.lane_incarnation,
         lane_block_height: block.lane_block_height,
         lane_block_view: block.lane_block_view,
         descriptor_hash: block.descriptor_hash,
@@ -1342,6 +1345,7 @@ fn lane_domain_progress_matches_candidate(
 ) -> bool {
     observed.lane_id == candidate.lane_id
         && observed.dataspace_id == candidate.dataspace_id
+        && observed.lane_incarnation == candidate.lane_incarnation
         && (observed.lane_block_height > candidate.lane_block_height
             || (observed.lane_block_height == candidate.lane_block_height
                 && (observed.lane_block_view > candidate.lane_block_view
@@ -1360,6 +1364,7 @@ fn lane_domain_progress_same_tip_identity(
 ) -> bool {
     left.lane_id == right.lane_id
         && left.dataspace_id == right.dataspace_id
+        && left.lane_incarnation == right.lane_incarnation
         && left.lane_block_height == right.lane_block_height
         && left.lane_block_view == right.lane_block_view
         && left.descriptor_hash == right.descriptor_hash
@@ -1376,6 +1381,7 @@ fn lane_domain_progress_is_after_baseline(
 ) -> bool {
     progress.lane_id == baseline.lane_id
         && progress.dataspace_id == baseline.dataspace_id
+        && progress.lane_incarnation == baseline.lane_incarnation
         && (progress.lane_block_height, progress.lane_block_view)
             > (baseline.lane_block_height, baseline.lane_block_view)
 }
@@ -1386,6 +1392,7 @@ fn lane_payload_ownership_progress_matches_candidate(
 ) -> bool {
     observed.lane_id == candidate.lane_id
         && observed.dataspace_id == candidate.dataspace_id
+        && observed.lane_incarnation == candidate.lane_incarnation
         && (observed.lane_block_height > candidate.lane_block_height
             || (observed.lane_block_height == candidate.lane_block_height
                 && (observed.lane_block_view > candidate.lane_block_view
@@ -1405,6 +1412,7 @@ fn lane_payload_ownership_progress_same_tip_identity(
 ) -> bool {
     left.lane_id == right.lane_id
         && left.dataspace_id == right.dataspace_id
+        && left.lane_incarnation == right.lane_incarnation
         && left.lane_block_height == right.lane_block_height
         && left.lane_block_view == right.lane_block_view
         && left.proposal_height == right.proposal_height
@@ -5157,6 +5165,7 @@ mod tests {
         LaneDomainProgress {
             lane_id,
             dataspace_id,
+            lane_incarnation: test_hash(0x0E),
             lane_block_height,
             lane_block_view,
             descriptor_hash: test_hash(0xA0),
@@ -5183,6 +5192,7 @@ mod tests {
         LanePayloadOwnershipProgress {
             lane_id,
             dataspace_id,
+            lane_incarnation: test_hash(0x0F),
             lane_block_height,
             lane_block_view,
             proposal_height,
@@ -5209,6 +5219,7 @@ mod tests {
         SumeragiCommittedLaneBlock {
             lane_id,
             dataspace_id,
+            lane_incarnation: test_hash(0x0E),
             lane_block_height,
             lane_block_view: 0,
             descriptor_hash: test_hash(0x01),
@@ -5571,6 +5582,14 @@ mod tests {
             "conflicting same-height committed-lane identities must not combine into quorum progress"
         );
 
+        let incarnation_a = test_lane_domain_progress(lane_id, dataspace_id, 2, 0);
+        let mut incarnation_b = incarnation_a.clone();
+        incarnation_b.lane_incarnation = test_hash(0xE1);
+        assert!(
+            quorum_lane_domain_progress(&[incarnation_a, incarnation_b], 2).is_none(),
+            "different lane incarnations must not combine into quorum progress"
+        );
+
         let quorum_identity_a = test_lane_domain_progress(lane_id, dataspace_id, 4, 0);
         let mut quorum_identity_b = quorum_identity_a.clone();
         quorum_identity_b.proposal_hash = test_hash(0xD2);
@@ -5597,6 +5616,8 @@ mod tests {
         let higher_view = test_lane_domain_progress(lane_id, dataspace_id, 4, 2);
         let higher_height = test_lane_domain_progress(lane_id, dataspace_id, 5, 0);
         let wrong_lane = test_lane_domain_progress(LaneId::new(DS2_LANE_INDEX), dataspace_id, 5, 0);
+        let mut wrong_incarnation = higher_height.clone();
+        wrong_incarnation.lane_incarnation = test_hash(0xEE);
 
         assert!(!lane_domain_progress_is_after_baseline(
             &same_tip, &baseline
@@ -5611,6 +5632,10 @@ mod tests {
         ));
         assert!(!lane_domain_progress_is_after_baseline(
             &wrong_lane,
+            &baseline
+        ));
+        assert!(!lane_domain_progress_is_after_baseline(
+            &wrong_incarnation,
             &baseline
         ));
     }
@@ -5893,6 +5918,14 @@ mod tests {
         assert!(
             quorum_lane_payload_ownership_progress(&conflicting_observations, 2).is_none(),
             "conflicting same-height ownership identities must not combine into quorum progress"
+        );
+
+        let incarnation_a = test_lane_payload_ownership_progress(lane_id, dataspace_id, 2, 0, 11);
+        let mut incarnation_b = incarnation_a.clone();
+        incarnation_b.lane_incarnation = test_hash(0xE2);
+        assert!(
+            quorum_lane_payload_ownership_progress(&[incarnation_a, incarnation_b], 2).is_none(),
+            "different lane incarnations must not combine into ownership quorum progress"
         );
 
         let quorum_identity_a =

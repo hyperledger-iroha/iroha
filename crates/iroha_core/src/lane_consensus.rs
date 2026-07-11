@@ -10,7 +10,10 @@ use iroha_data_model::{
         NativeAmxReceipt, SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    merge::{MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
+    merge::{
+        LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainIntentV1,
+        MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MergeSignerProof,
+    },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
     transaction::signed::TransactionEntrypoint,
@@ -32,18 +35,24 @@ use crate::{
 pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;
 
 /// Maximum lane validators admitted into one vote or certificate.
-pub(crate) const MAX_LANE_BLOCK_VALIDATORS: usize = 128;
+pub(crate) const MAX_LANE_BLOCK_VALIDATORS: usize =
+    iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS;
 /// Canonical compressed BLS-normal signature and proof-of-possession length.
 pub(crate) const LANE_BLS_PROOF_BYTES: usize = 96;
 /// Maximum canonical READY body bytes before signing or hashing.
 pub(crate) const MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES: usize = 4 * 1024;
 /// Maximum self-contained READY QC bytes admitted from wire or storage.
 pub(crate) const MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES: usize = 64 * 1024;
+/// Maximum self-contained lane drain certificate bytes admitted from wire or storage.
+pub(crate) const MAX_LANE_DRAIN_CERTIFICATE_BYTES: usize = 64 * 1024;
+/// Maximum canonical lane drain vote bytes admitted before signature verification.
+pub(crate) const MAX_LANE_DRAIN_VOTE_BYTES: usize = 16 * 1024;
 /// Maximum UTF-8 bytes retained for the READY consensus-domain tag.
 const MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES: usize = 256;
 
 /// Bytes reserved below the default consensus frame cap for the authenticated
 /// view/QC envelope and the later globally certified merge transcript.
+#[cfg(test)]
 pub(crate) const LANE_EXECUTABLE_ENVELOPE_HEADROOM_BYTES: usize =
     16 * 1024 * 1024 - MAX_LANE_EXECUTABLE_PAYLOAD_BYTES;
 /// Maximum canonical Norito body bytes retained for one autonomous lane payload.
@@ -249,6 +258,20 @@ pub struct LaneBlockNewViewVoteV1 {
     pub bls_signature: Vec<u8>,
 }
 
+/// Individual authoritative-lane-committee vote closing an incarnation at an
+/// exact globally merged frontier.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct LaneDrainVoteV1 {
+    /// Common drain body signed by the committee member.
+    pub body: LaneDrainCertificateBodyV1,
+    /// Committee member producing the vote.
+    pub signer: PeerId,
+    /// BLS proof of possession for `signer`, retained for restart-safe aggregation.
+    pub proof_of_possession: Vec<u8>,
+    /// BLS-normal signature over `body.signature_preimage()`.
+    pub bls_signature: Vec<u8>,
+}
+
 /// Individual READY vote for one exact autonomous lane executable payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LanePayloadAvailabilityVoteV1 {
@@ -312,6 +335,56 @@ pub(crate) struct DurableLaneBlockViewCheckpointV1 {
     pub(crate) target_proposal: LaneBlockProposalV1,
     /// Quorum-authenticated transition, including restart-verifiable PoPs.
     pub(crate) certificate: DurableLaneBlockNewViewCertificateV1,
+}
+
+/// Failure while building or validating a lane drain vote or certificate.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub(crate) enum LaneDrainCertificateError {
+    /// The intent or certificate uses an unsupported schema version.
+    #[error("unsupported lane drain certificate version")]
+    UnsupportedVersion,
+    /// Intent coordinates, frontier, or committee shape are malformed.
+    #[error("lane drain intent is malformed")]
+    InvalidIntent,
+    /// The certified final frontier precedes the frontier recorded by the intent.
+    #[error("lane drain certificate regresses the initial merged frontier")]
+    FrontierRegression,
+    /// A zero/non-zero frontier was paired with the wrong optional descriptor hash shape.
+    #[error("lane drain frontier descriptor hash shape is invalid")]
+    FrontierHashMismatch,
+    /// The supplied validator set does not match the intent's exact committee commitment.
+    #[error("lane drain validator set is invalid")]
+    InvalidValidatorSet,
+    /// A vote signer is absent from the exact drain committee.
+    #[error("lane drain vote signer is not in committee")]
+    SignerNotInCommittee,
+    /// The same drain signer appeared more than once.
+    #[error("duplicate lane drain vote signer")]
+    DuplicateSigner,
+    /// Drain votes certify different bodies.
+    #[error("lane drain vote body mismatch")]
+    BodyMismatch,
+    /// An individual drain vote signature is malformed or invalid.
+    #[error("lane drain vote signature is invalid")]
+    InvalidVoteSignature,
+    /// A lane drain vote exceeds its control-plane byte envelope.
+    #[error("lane drain vote exceeds its byte limit")]
+    VoteTooLarge,
+    /// The signer bitmap is malformed, has padding bits, or names an out-of-range signer.
+    #[error("lane drain signer bitmap is invalid")]
+    InvalidBitmap,
+    /// The drain certificate does not contain enough distinct committee signatures.
+    #[error("lane drain certificate quorum is not met")]
+    QuorumNotMet,
+    /// A selected signer's PoP is absent, reordered, malformed, or invalid.
+    #[error("lane drain signer proof of possession is invalid")]
+    InvalidProofOfPossession,
+    /// Aggregate signature construction or verification failed.
+    #[error("lane drain aggregate signature is invalid")]
+    InvalidAggregateSignature,
+    /// The self-contained certificate exceeds its protocol byte limit.
+    #[error("lane drain certificate exceeds its byte limit")]
+    CertificateTooLarge,
 }
 
 /// Failure while building or validating an autonomous lane payload or NewView proof.
@@ -1124,7 +1197,9 @@ fn validate_lane_executable_payload_body(
         .zip(routing_plans)
         .zip(native_amx_receipts)
     {
-        let accepted = AcceptedTransaction::new_unchecked(entrypoint.clone());
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+            entrypoint.clone(),
+        ));
         if key.signed_transaction_hash != accepted.hash()
             || Hash::from(key.entrypoint_hash) != *entrypoint_hash
             || key.lane_id != descriptor.lane_id
@@ -1474,6 +1549,298 @@ impl LaneBlockNewViewVoteV1 {
             .verify(self.signer.public_key(), &self.body.signature_preimage())
             .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewSignature)
     }
+}
+
+fn lane_drain_frontier_hash_shape_is_valid(height: u64, descriptor_hash: Option<Hash>) -> bool {
+    (height == 0) == descriptor_hash.is_none()
+}
+
+/// Validate a canonical drain intent independently of mutable runtime state.
+pub(crate) fn validate_lane_drain_intent(
+    intent: &LaneDrainIntentV1,
+) -> Result<(), LaneDrainCertificateError> {
+    let validator_count = usize::try_from(intent.validator_count)
+        .map_err(|_| LaneDrainCertificateError::InvalidIntent)?;
+    if intent.version != 1 {
+        return Err(LaneDrainCertificateError::UnsupportedVersion);
+    }
+    if intent.close_global_height == 0
+        || intent
+            .lane_incarnation
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        || intent.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+        || validator_count == 0
+        || validator_count > MAX_LANE_BLOCK_VALIDATORS
+        || intent.validator_set.len() != validator_count
+        || intent.validator_set_hash != HashOf::new(&intent.validator_set)
+        || intent
+            .validator_set
+            .iter()
+            .any(|peer| !peer_uses_bls_normal(peer))
+        || intent
+            .validator_set
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || intent.min_quorum == 0
+        || intent.min_quorum > intent.validator_count
+        || usize::try_from(intent.min_quorum).ok()
+            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_count,
+            ))
+    {
+        return Err(LaneDrainCertificateError::InvalidIntent);
+    }
+    if !lane_drain_frontier_hash_shape_is_valid(
+        intent.initial_merged_lane_height,
+        intent.initial_merged_descriptor_hash,
+    ) {
+        return Err(LaneDrainCertificateError::FrontierHashMismatch);
+    }
+    Ok(())
+}
+
+/// Validate a drain certificate body independently of signatures and mutable
+/// lane lifecycle state.
+pub(crate) fn validate_lane_drain_certificate_body(
+    body: &LaneDrainCertificateBodyV1,
+) -> Result<(), LaneDrainCertificateError> {
+    if body.version != 1 {
+        return Err(LaneDrainCertificateError::UnsupportedVersion);
+    }
+    validate_lane_drain_intent(&body.intent)?;
+    if body.final_lane_block_height < body.intent.initial_merged_lane_height {
+        return Err(LaneDrainCertificateError::FrontierRegression);
+    }
+    if !lane_drain_frontier_hash_shape_is_valid(
+        body.final_lane_block_height,
+        body.final_lane_block_descriptor_hash,
+    ) {
+        return Err(LaneDrainCertificateError::FrontierHashMismatch);
+    }
+    Ok(())
+}
+
+impl LaneDrainVoteV1 {
+    /// Sign one exact drain frontier with a lane committee key.
+    pub(crate) fn new_signed(
+        body: LaneDrainCertificateBodyV1,
+        signer: PeerId,
+        private_key: &PrivateKey,
+    ) -> Result<Self, LaneDrainCertificateError> {
+        validate_lane_drain_certificate_body(&body)?;
+        if !peer_uses_bls_normal(&signer) {
+            return Err(LaneDrainCertificateError::InvalidVoteSignature);
+        }
+        if !body.intent.validator_set.contains(&signer) {
+            return Err(LaneDrainCertificateError::SignerNotInCommittee);
+        }
+        let bls_signature = Signature::try_new(private_key, &body.signature_preimage())
+            .map_err(|_| LaneDrainCertificateError::InvalidVoteSignature)?
+            .payload()
+            .to_vec();
+        let proof_of_possession = iroha_crypto::bls_normal_pop_prove(private_key)
+            .map_err(|_| LaneDrainCertificateError::InvalidProofOfPossession)?;
+        let vote = Self {
+            body,
+            signer,
+            proof_of_possession,
+            bls_signature,
+        };
+        vote.validate_ingress()?;
+        Ok(vote)
+    }
+
+    /// Verify shape, signer algorithm, and the individual BLS signature.
+    pub(crate) fn validate_ingress(&self) -> Result<(), LaneDrainCertificateError> {
+        validate_lane_drain_certificate_body(&self.body)?;
+        if !self.body.intent.validator_set.contains(&self.signer) {
+            return Err(LaneDrainCertificateError::SignerNotInCommittee);
+        }
+        if norito::to_bytes(self).map_or(true, |encoded| encoded.len() > MAX_LANE_DRAIN_VOTE_BYTES)
+        {
+            return Err(LaneDrainCertificateError::VoteTooLarge);
+        }
+        if self.bls_signature.len() != LANE_BLS_PROOF_BYTES
+            || self.proof_of_possession.len() != LANE_BLS_PROOF_BYTES
+            || !peer_uses_bls_normal(&self.signer)
+        {
+            return Err(LaneDrainCertificateError::InvalidVoteSignature);
+        }
+        iroha_crypto::bls_normal_pop_verify(self.signer.public_key(), &self.proof_of_possession)
+            .map_err(|_| LaneDrainCertificateError::InvalidProofOfPossession)?;
+        Signature::try_from_bytes(&self.bls_signature)
+            .map_err(|_| LaneDrainCertificateError::InvalidVoteSignature)?
+            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .map_err(|_| LaneDrainCertificateError::InvalidVoteSignature)
+    }
+}
+
+/// Aggregate distinct valid drain votes into a restart-verifiable certificate.
+pub(crate) fn aggregate_lane_drain_votes(
+    body: LaneDrainCertificateBodyV1,
+    validator_set: Vec<PeerId>,
+    votes: &[LaneDrainVoteV1],
+) -> Result<LaneDrainCertificateV1, LaneDrainCertificateError> {
+    validate_lane_drain_certificate_body(&body)?;
+    validate_lane_block_validator_set_fields(
+        body.intent.validator_set_hash_version,
+        body.intent.validator_set_hash,
+        body.intent.validator_count,
+        &validator_set,
+    )
+    .map_err(|_| LaneDrainCertificateError::InvalidValidatorSet)?;
+    if validator_set.as_slice() != body.intent.validator_set.as_slice() {
+        return Err(LaneDrainCertificateError::InvalidValidatorSet);
+    }
+
+    let mut signatures = BTreeMap::<usize, (Vec<u8>, Vec<u8>)>::new();
+    for vote in votes {
+        if vote.body != body {
+            return Err(LaneDrainCertificateError::BodyMismatch);
+        }
+        vote.validate_ingress()?;
+        let index = validator_set
+            .iter()
+            .position(|validator| validator == &vote.signer)
+            .ok_or(LaneDrainCertificateError::SignerNotInCommittee)?;
+        if signatures
+            .insert(
+                index,
+                (vote.bls_signature.clone(), vote.proof_of_possession.clone()),
+            )
+            .is_some()
+        {
+            return Err(LaneDrainCertificateError::DuplicateSigner);
+        }
+    }
+    if signatures.len()
+        < usize::try_from(body.intent.min_quorum)
+            .map_err(|_| LaneDrainCertificateError::InvalidIntent)?
+    {
+        return Err(LaneDrainCertificateError::QuorumNotMet);
+    }
+
+    let mut signers_bitmap = vec![0_u8; validator_set.len().div_ceil(8)];
+    let mut signer_proofs = Vec::with_capacity(signatures.len());
+    let ordered_signatures = signatures
+        .into_iter()
+        .map(|(index, (signature, proof_of_possession))| {
+            signers_bitmap[index / 8] |= 1_u8 << (index % 8);
+            signer_proofs.push(MergeSignerProof {
+                signer: u32::try_from(index)
+                    .map_err(|_| LaneDrainCertificateError::InvalidBitmap)?,
+                proof_of_possession,
+            });
+            Ok(signature)
+        })
+        .collect::<Result<Vec<_>, LaneDrainCertificateError>>()?;
+    let signature_refs = ordered_signatures
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+        .map_err(|_| LaneDrainCertificateError::InvalidAggregateSignature)?;
+    let certificate = LaneDrainCertificateV1 {
+        body,
+        validator_set,
+        signers_bitmap,
+        signer_proofs,
+        aggregate_signature,
+    };
+    validate_lane_drain_certificate(&certificate)?;
+    Ok(certificate)
+}
+
+/// Validate a self-contained drain certificate, including signer PoPs and the
+/// aggregate BLS-normal signature.
+pub(crate) fn validate_lane_drain_certificate(
+    certificate: &LaneDrainCertificateV1,
+) -> Result<(), LaneDrainCertificateError> {
+    let body = &certificate.body;
+    validate_lane_drain_certificate_body(body)?;
+    validate_lane_block_validator_set_fields(
+        body.intent.validator_set_hash_version,
+        body.intent.validator_set_hash,
+        body.intent.validator_count,
+        &certificate.validator_set,
+    )
+    .map_err(|_| LaneDrainCertificateError::InvalidValidatorSet)?;
+    if certificate.validator_set.as_slice() != body.intent.validator_set.as_slice() {
+        return Err(LaneDrainCertificateError::InvalidValidatorSet);
+    }
+    if norito::to_bytes(certificate).map_or(true, |encoded| {
+        encoded.len() > MAX_LANE_DRAIN_CERTIFICATE_BYTES
+    }) {
+        return Err(LaneDrainCertificateError::CertificateTooLarge);
+    }
+    let expected_bitmap_len = certificate.validator_set.len().div_ceil(8);
+    if certificate.signers_bitmap.len() != expected_bitmap_len
+        || certificate.aggregate_signature.len() != LANE_BLS_PROOF_BYTES
+    {
+        return Err(LaneDrainCertificateError::InvalidBitmap);
+    }
+    if let Some(last) = certificate.signers_bitmap.last().copied() {
+        let used_bits = certificate.validator_set.len() % 8;
+        if used_bits != 0 && last & !((1_u8 << used_bits) - 1) != 0 {
+            return Err(LaneDrainCertificateError::InvalidBitmap);
+        }
+    }
+
+    let mut selected_indices = Vec::new();
+    for (byte_index, byte) in certificate.signers_bitmap.iter().copied().enumerate() {
+        for bit in 0..8 {
+            if byte & (1_u8 << bit) == 0 {
+                continue;
+            }
+            let index = byte_index * 8 + bit;
+            if index >= certificate.validator_set.len() {
+                return Err(LaneDrainCertificateError::InvalidBitmap);
+            }
+            selected_indices.push(index);
+        }
+    }
+    if selected_indices.len()
+        < usize::try_from(body.intent.min_quorum)
+            .map_err(|_| LaneDrainCertificateError::InvalidIntent)?
+        || certificate.signer_proofs.len() != selected_indices.len()
+    {
+        return Err(LaneDrainCertificateError::QuorumNotMet);
+    }
+
+    let mut public_keys = Vec::with_capacity(selected_indices.len());
+    let mut pop_refs = Vec::with_capacity(selected_indices.len());
+    for (index, proof) in selected_indices.iter().zip(&certificate.signer_proofs) {
+        let expected_index =
+            u32::try_from(*index).map_err(|_| LaneDrainCertificateError::InvalidBitmap)?;
+        if proof.signer != expected_index || proof.proof_of_possession.len() != LANE_BLS_PROOF_BYTES
+        {
+            return Err(LaneDrainCertificateError::InvalidProofOfPossession);
+        }
+        let validator = certificate
+            .validator_set
+            .get(*index)
+            .ok_or(LaneDrainCertificateError::InvalidBitmap)?;
+        if !peer_uses_bls_normal(validator)
+            || iroha_crypto::bls_normal_pop_verify(
+                validator.public_key(),
+                &proof.proof_of_possession,
+            )
+            .is_err()
+        {
+            return Err(LaneDrainCertificateError::InvalidProofOfPossession);
+        }
+        public_keys.push(validator.public_key());
+        pop_refs.push(proof.proof_of_possession.as_slice());
+    }
+    iroha_crypto::bls_normal_verify_preaggregated_same_message(
+        &body.signature_preimage(),
+        &certificate.aggregate_signature,
+        &public_keys,
+        &pop_refs,
+    )
+    .map_err(|_| LaneDrainCertificateError::InvalidAggregateSignature)
 }
 
 /// Aggregate distinct, individually valid NewView votes in canonical committee order.
@@ -4202,6 +4569,267 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn lane_drain_fixture(keypairs: &[KeyPair]) -> (LaneDrainCertificateBodyV1, Vec<PeerId>) {
+        let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let validator_count = u32::try_from(validator_set.len()).expect("fixture count fits");
+        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+            validator_set.len(),
+        ))
+        .expect("fixture quorum fits");
+        (
+            LaneDrainCertificateBodyV1 {
+                version: 1,
+                intent: LaneDrainIntentV1 {
+                    version: 1,
+                    chain_id_digest: Hash::new(b"lane-drain-chain"),
+                    lane_id: LaneId::new(7),
+                    dataspace_id: DataSpaceId::new(9),
+                    lane_incarnation: Hash::new(b"lane-drain-incarnation"),
+                    close_global_height: 41,
+                    initial_merged_lane_height: 3,
+                    initial_merged_descriptor_hash: Some(Hash::new(b"lane-drain-initial-tip")),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set: validator_set.clone(),
+                    validator_count,
+                    min_quorum,
+                },
+                final_lane_block_height: 5,
+                final_lane_block_descriptor_hash: Some(Hash::new(b"lane-drain-final-tip")),
+            },
+            validator_set,
+        )
+    }
+
+    #[test]
+    fn lane_drain_certificate_aggregates_exact_quorum_and_verifies_after_restart() {
+        let keys = [
+            checked_bls_keypair(101),
+            checked_bls_keypair(102),
+            checked_bls_keypair(103),
+            checked_bls_keypair(104),
+        ];
+        let (body, validator_set) = lane_drain_fixture(&keys);
+        let votes = keys[..3]
+            .iter()
+            .map(|keypair| {
+                LaneDrainVoteV1::new_signed(body.clone(), peer(keypair), keypair.private_key())
+                    .expect("valid drain vote")
+            })
+            .collect::<Vec<_>>();
+        let certificate = aggregate_lane_drain_votes(body.clone(), validator_set.clone(), &votes)
+            .expect("valid drain certificate");
+
+        validate_lane_drain_certificate(&certificate)
+            .expect("self-contained certificate verifies after restart");
+        assert_eq!(certificate.body, body);
+        assert_eq!(certificate.validator_set, validator_set);
+        assert_eq!(certificate.signer_proofs.len(), 3);
+        assert_eq!(
+            certificate
+                .signers_bitmap
+                .iter()
+                .map(|byte| byte.count_ones())
+                .sum::<u32>(),
+            3
+        );
+
+        let encoded = certificate.encode();
+        let decoded = LaneDrainCertificateV1::decode(&mut encoded.as_slice())
+            .expect("drain certificate round-trips");
+        validate_lane_drain_certificate(&decoded)
+            .expect("round-tripped drain certificate verifies");
+    }
+
+    #[test]
+    fn lane_drain_vote_maximum_committee_fits_control_plane_envelope() {
+        let keys = (0..MAX_LANE_BLOCK_VALIDATORS)
+            .map(|index| {
+                checked_bls_keypair(
+                    u8::try_from(index + 1).expect("one-based validator index fits"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (body, _) = lane_drain_fixture(&keys);
+        let vote = LaneDrainVoteV1::new_signed(body, peer(&keys[0]), keys[0].private_key())
+            .expect("maximum-committee drain vote is valid");
+        let encoded = norito::to_bytes(&vote).expect("drain vote encodes");
+        assert!(
+            encoded.len() <= MAX_LANE_DRAIN_VOTE_BYTES,
+            "maximum-committee drain vote uses {} bytes, above its {}-byte envelope",
+            encoded.len(),
+            MAX_LANE_DRAIN_VOTE_BYTES
+        );
+    }
+
+    #[test]
+    fn lane_drain_certificate_maximum_committee_fits_persisted_envelope() {
+        let keys = (0..MAX_LANE_BLOCK_VALIDATORS)
+            .map(|index| {
+                checked_bls_keypair(
+                    u8::try_from(index + 1).expect("one-based validator index fits"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (body, validator_set) = lane_drain_fixture(&keys);
+        let quorum = usize::try_from(body.intent.min_quorum).expect("fixture quorum fits");
+        let votes = keys
+            .iter()
+            .take(quorum)
+            .map(|keypair| {
+                LaneDrainVoteV1::new_signed(body.clone(), peer(keypair), keypair.private_key())
+                    .expect("maximum-committee drain vote is valid")
+            })
+            .collect::<Vec<_>>();
+        let certificate = aggregate_lane_drain_votes(body, validator_set, &votes)
+            .expect("maximum-committee drain certificate is valid");
+        let encoded = norito::to_bytes(&certificate).expect("drain certificate encodes");
+
+        assert!(
+            encoded.len() <= MAX_LANE_DRAIN_CERTIFICATE_BYTES,
+            "maximum-committee drain certificate uses {} bytes, above its {}-byte envelope",
+            encoded.len(),
+            MAX_LANE_DRAIN_CERTIFICATE_BYTES
+        );
+        validate_lane_drain_certificate(&certificate)
+            .expect("maximum-committee certificate verifies from its own evidence");
+    }
+
+    #[test]
+    fn lane_drain_certificate_rejects_forgery_downgrade_and_conflicting_votes() {
+        let keys = [
+            checked_bls_keypair(111),
+            checked_bls_keypair(112),
+            checked_bls_keypair(113),
+            checked_bls_keypair(114),
+        ];
+        let (body, validator_set) = lane_drain_fixture(&keys);
+        let votes = keys[..3]
+            .iter()
+            .map(|keypair| {
+                LaneDrainVoteV1::new_signed(body.clone(), peer(keypair), keypair.private_key())
+                    .expect("valid drain vote")
+            })
+            .collect::<Vec<_>>();
+        let certificate = aggregate_lane_drain_votes(body.clone(), validator_set.clone(), &votes)
+            .expect("valid drain certificate");
+
+        let mut forged_bodies = Vec::new();
+        let mut forged = certificate.clone();
+        forged.body.intent.chain_id_digest = Hash::new(b"wrong-chain");
+        forged_bodies.push(forged);
+        let mut forged = certificate.clone();
+        forged.body.intent.lane_id = LaneId::new(8);
+        forged_bodies.push(forged);
+        let mut forged = certificate.clone();
+        forged.body.intent.dataspace_id = DataSpaceId::new(10);
+        forged_bodies.push(forged);
+        let mut forged = certificate.clone();
+        forged.body.intent.lane_incarnation = Hash::new(b"wrong-incarnation");
+        forged_bodies.push(forged);
+        let mut forged = certificate.clone();
+        forged.body.intent.close_global_height = 42;
+        forged_bodies.push(forged);
+        let mut forged = certificate.clone();
+        forged.body.final_lane_block_descriptor_hash = Some(Hash::new(b"wrong-final-tip"));
+        forged_bodies.push(forged);
+        for forged in forged_bodies {
+            assert_eq!(
+                validate_lane_drain_certificate(&forged),
+                Err(LaneDrainCertificateError::InvalidAggregateSignature),
+                "every consensus-field mutation must invalidate the aggregate signature"
+            );
+        }
+
+        let mut wrong_committee = certificate.clone();
+        wrong_committee
+            .validator_set
+            .pop()
+            .expect("certificate carries the four-validator committee");
+        assert_eq!(
+            validate_lane_drain_certificate(&wrong_committee),
+            Err(LaneDrainCertificateError::InvalidValidatorSet)
+        );
+
+        let mut under_quorum = certificate.clone();
+        let removed_index = usize::try_from(
+            under_quorum
+                .signer_proofs
+                .pop()
+                .expect("three signer proofs")
+                .signer,
+        )
+        .expect("signer index fits");
+        under_quorum.signers_bitmap[removed_index / 8] &= !(1_u8 << (removed_index % 8));
+        assert_eq!(
+            validate_lane_drain_certificate(&under_quorum),
+            Err(LaneDrainCertificateError::QuorumNotMet)
+        );
+
+        let mut padded = certificate.clone();
+        padded.signers_bitmap[0] |= 1_u8 << 7;
+        assert_eq!(
+            validate_lane_drain_certificate(&padded),
+            Err(LaneDrainCertificateError::InvalidBitmap)
+        );
+
+        let mut oversized_vote = votes[0].clone();
+        oversized_vote.bls_signature = vec![0_u8; MAX_LANE_DRAIN_VOTE_BYTES];
+        assert_eq!(
+            oversized_vote.validate_ingress(),
+            Err(LaneDrainCertificateError::VoteTooLarge)
+        );
+        let mut forged_pop = votes[0].clone();
+        forged_pop.proof_of_possession[0] ^= 0x80;
+        assert_eq!(
+            forged_pop.validate_ingress(),
+            Err(LaneDrainCertificateError::InvalidProofOfPossession)
+        );
+
+        assert_eq!(
+            aggregate_lane_drain_votes(
+                body.clone(),
+                validator_set.clone(),
+                &[votes[0].clone(), votes[0].clone(), votes[1].clone()],
+            ),
+            Err(LaneDrainCertificateError::DuplicateSigner)
+        );
+        let mut conflicting_vote = votes[2].clone();
+        conflicting_vote.body.final_lane_block_height = 6;
+        conflicting_vote.body.final_lane_block_descriptor_hash =
+            Some(Hash::new(b"conflicting-final-tip"));
+        assert_eq!(
+            aggregate_lane_drain_votes(
+                body,
+                validator_set,
+                &[votes[0].clone(), votes[1].clone(), conflicting_vote],
+            ),
+            Err(LaneDrainCertificateError::BodyMismatch)
+        );
+
+        let (mut malformed, _) = lane_drain_fixture(&keys);
+        malformed.final_lane_block_height = 0;
+        assert_eq!(
+            validate_lane_drain_certificate_body(&malformed),
+            Err(LaneDrainCertificateError::FrontierRegression)
+        );
+        malformed.final_lane_block_height = 5;
+        malformed.final_lane_block_descriptor_hash = None;
+        assert_eq!(
+            validate_lane_drain_certificate_body(&malformed),
+            Err(LaneDrainCertificateError::FrontierHashMismatch)
+        );
+        let (mut noncanonical_committee, _) = lane_drain_fixture(&keys);
+        noncanonical_committee.intent.validator_set.swap(0, 1);
+        noncanonical_committee.intent.validator_set_hash =
+            HashOf::new(&noncanonical_committee.intent.validator_set);
+        assert_eq!(
+            validate_lane_drain_certificate_body(&noncanonical_committee),
+            Err(LaneDrainCertificateError::InvalidIntent)
+        );
     }
 
     fn aligned_validator_pops(validator_set: &[PeerId], keypairs: &[KeyPair]) -> Vec<Vec<u8>> {
@@ -7232,7 +7860,7 @@ mod tests {
 
         assert_eq!(
             cache.retain_sessions_for_admissible_lanes(
-                |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+                |lane_id, dataspace_id, _lane_incarnation, lane_block_height, _proposal_height| {
                     lane_id == active_lane
                         && dataspace_id == active_dataspace
                         && lane_block_height > 12
@@ -7324,12 +7952,14 @@ mod tests {
         );
 
         let admissible_pending = cache.pending_lane_ids_for_admissible_lanes(
-            |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+            |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
             },
         );
@@ -7342,14 +7972,17 @@ mod tests {
         let admissible_inflight_before_drain = cache.inflight_lane_ids_for_admissible_lanes(
             |lane_id,
              dataspace_id,
+             lane_incarnation,
              lane_block_height,
              _proposal_height,
              _has_consensus_evidence| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
             },
         );
@@ -7361,15 +7994,18 @@ mod tests {
 
         assert_eq!(cache.drain_committed_sessions().len(), 1);
         let admissible_after_drain = cache.pending_lane_ids_for_admissible_lanes(
-            |lane_id, dataspace_id, lane_block_height, _proposal_height| {
+            |lane_id, dataspace_id, lane_incarnation, lane_block_height, _proposal_height| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
                     || (lane_id == inactive_lane
                         && dataspace_id == inactive_dataspace
+                        && lane_incarnation == inactive_proposal.descriptor.lane_incarnation
                         && lane_block_height == inactive_proposal.descriptor.lane_block_height)
             },
         );
@@ -7382,17 +8018,21 @@ mod tests {
         let admissible_inflight_after_drain = cache.inflight_lane_ids_for_admissible_lanes(
             |lane_id,
              dataspace_id,
+             lane_incarnation,
              lane_block_height,
              _proposal_height,
              _has_consensus_evidence| {
                 (lane_id == pending_lane
                     && dataspace_id == pending_dataspace
+                    && lane_incarnation == pending_proposal.descriptor.lane_incarnation
                     && lane_block_height == pending_proposal.descriptor.lane_block_height)
                     || (lane_id == drained_lane
                         && dataspace_id == drained_dataspace
+                        && lane_incarnation == drained_proposal.descriptor.lane_incarnation
                         && lane_block_height == drained_proposal.descriptor.lane_block_height)
                     || (lane_id == inactive_lane
                         && dataspace_id == inactive_dataspace
+                        && lane_incarnation == inactive_proposal.descriptor.lane_incarnation
                         && lane_block_height == inactive_proposal.descriptor.lane_block_height)
             },
         );

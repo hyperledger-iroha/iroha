@@ -24,6 +24,11 @@ use crate::prelude::*;
 
 /// Hash-version constant for validator set checkpoints.
 pub const VALIDATOR_SET_HASH_VERSION_V1: u16 = 1;
+/// Hard upper bound for one autonomous lane consensus committee.
+///
+/// This bounds proposal, vote, quorum-certificate, drain, and persisted proof
+/// envelopes across configuration, runtime admission, and restart recovery.
+pub const MAX_LANE_CONSENSUS_VALIDATORS: usize = 128;
 
 // QC types are defined in `block::consensus` and re-exported above.
 

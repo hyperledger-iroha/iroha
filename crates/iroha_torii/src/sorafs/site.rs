@@ -223,8 +223,7 @@ fn validate_binding_file_metadata(path: &Path, metadata: &fs::Metadata) -> Resul
                 path.display()
             ));
         }
-        // SAFETY: `geteuid` has no preconditions and does not dereference memory.
-        let effective_uid = unsafe { libc::geteuid() };
+        let effective_uid = rustix::process::geteuid().as_raw();
         if metadata.uid() != effective_uid && metadata.uid() != 0 {
             return Err(format!(
                 "SoraFS site binding file `{}` must be owned by the Torii user or root",

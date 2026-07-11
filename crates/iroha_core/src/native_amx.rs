@@ -209,7 +209,7 @@ impl NativeAmxAttestationRequestV1 {
         match (body.phase, self.prepare_qc.as_ref()) {
             (NativeAmxPhase::Prepare, None) => {}
             (NativeAmxPhase::Commit, Some(prepare_qc)) => {
-                let mut expected_prepare_body = body;
+                let mut expected_prepare_body = body.clone();
                 expected_prepare_body.phase = NativeAmxPhase::Prepare;
                 if prepare_qc.body != expected_prepare_body
                     || prepare_qc.validator_set_hash != body.participant_validator_set_hash

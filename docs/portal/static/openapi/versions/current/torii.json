@@ -16747,102 +16747,6 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/sorafs/capacity/por": {
-      "post": {
-        "description": "Submit PoR capacity report.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit PoR capacity report.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/capacity/por-challenge": {
-      "post": {
-        "description": "Submit proof-of-replication challenge.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit PoR challenge.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/capacity/por-proof": {
-      "post": {
-        "description": "Submit proof-of-replication proof.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit PoR proof.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/capacity/por-verdict": {
       "post": {
         "description": "Submit proof-of-replication verdict.",
@@ -18318,38 +18222,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sorafs/por/trigger": {
-      "post": {
-        "description": "Return a fail-closed retirement response for the legacy manual PoR trigger route. Submit governed PorChallengeV1 payloads through `/v1/sorafs/capacity/por-challenge` or the scheduler runtime instead.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Manual PoR trigger retired.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/proof/stream": {
       "post": {
         "description": "Request a PoR or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
@@ -19183,70 +19055,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/sorafs/storage/por-challenge": {
-      "post": {
-        "description": "Submit a storage PoR challenge.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit storage PoR challenge.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/storage/por-proof": {
-      "post": {
-        "description": "Submit a storage PoR proof.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit storage PoR proof.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/sorafs/storage/por-sample": {
       "post": {
         "description": "Request a proof-of-replication sample. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
@@ -19273,38 +19081,6 @@
           }
         },
         "summary": "Request a PoR sample.",
-        "tags": [
-          "SoraFS"
-        ],
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/sorafs/storage/por-verdict": {
-      "post": {
-        "description": "Submit a storage PoR verdict.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Submit storage PoR verdict.",
         "tags": [
           "SoraFS"
         ],

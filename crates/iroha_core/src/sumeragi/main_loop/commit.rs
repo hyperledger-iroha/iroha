@@ -794,7 +794,7 @@ pub(super) fn execute_commit_work(
     match result {
         Ok((committed_block, mut state_block, exec_witness, fastpq_witness_context)) => {
             let persist_start = Instant::now();
-            let pipeline_events = pipeline_events;
+            let mut pipeline_events = pipeline_events;
             let staged_merge_entry = state_block.staged_merge_entry().cloned();
             let validated_commit_artifact_for_manifest = validated_commit_artifact.or_else(|| {
                 exec_witness
@@ -878,13 +878,19 @@ pub(super) fn execute_commit_work(
             timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
             if let Some(entry) = staged_merge_entry.as_ref() {
-                state
-                    .record_globally_committed_merge_entry(entry)
+                let (_, merge_event) = state
+                    .record_globally_committed_merge_entry(
+                        entry,
+                        crate::state::MergeLedgerPublicationMode::LiveCommit,
+                    )
                     .unwrap_or_else(|err| {
                         panic!(
                             "canonical merge carrier {block_hash} at height {block_height} committed its WSV but could not publish the verified merge cache: {err}; restart recovery is required"
                         )
                     });
+                if let Some(event) = merge_event {
+                    pipeline_events.push(event);
+                }
             }
             let mut post_commit_persistence_error = None;
             if let Some(entry) = staged_merge_entry.as_ref()
@@ -6654,9 +6660,7 @@ impl Actor {
             || conflicting_vote.height != height
             || conflicting_vote.view <= view
             || height != self.committed_height_snapshot().saturating_add(1)
-            || self
-                .locked_qc
-                .is_some_and(|locked| locked.height >= height)
+            || self.locked_qc.is_some_and(|locked| locked.height >= height)
             || !pending_extends_tip(
                 height,
                 candidate_parent_hash,
@@ -10729,6 +10733,7 @@ mod tests {
         autoscale_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
 
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.enabled = true;

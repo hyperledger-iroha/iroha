@@ -97,8 +97,8 @@ AcceptCandidate(n, sender, digest, exactContext, validBody) ==
                /\ ~exactContext /\ validBody)
            \/ (Bug = "accept_invalid_body" /\ sender = Leader
                /\ exactContext /\ ~validBody)
-     IN /\ valid \/ injected
-        /\ badCandidateAccepted' = badCandidateAccepted \/ ~valid
+     IN /\ (valid \/ injected)
+        /\ badCandidateAccepted' = (badCandidateAccepted \/ ~valid)
   /\ accepted' = [accepted EXCEPT ![n] = @ \cup {digest}]
   /\ UNCHANGED <<durableLock, signatures, qcs, proposedCarrier,
                  committedCarrier, badCarrier, sidecars,
@@ -154,8 +154,8 @@ StageCarrier(digest, exactContext) ==
                /\ exactContext)
            \/ (Bug = "carrier_wrong_context" /\ digest \in qcs
                /\ ~exactContext)
-     IN /\ valid \/ injected
-        /\ badCarrier' = badCarrier \/ ~valid
+     IN /\ (valid \/ injected)
+        /\ badCarrier' = (badCarrier \/ ~valid)
   /\ proposedCarrier' = digest
   /\ UNCHANGED <<accepted, badCandidateAccepted, durableLock, signatures,
                  qcs, committedCarrier, sidecars, badSidecarAccepted,
@@ -176,8 +176,8 @@ ReceiveSidecar(n, digest, exactHash) ==
            Bug = "accept_corrupt_sidecar"
            /\ proposedCarrier = digest
            /\ ~exactHash
-     IN /\ valid \/ injected
-        /\ badSidecarAccepted' = badSidecarAccepted \/ ~valid
+     IN /\ (valid \/ injected)
+        /\ badSidecarAccepted' = (badSidecarAccepted \/ ~valid)
   /\ sidecars' = [sidecars EXCEPT ![n] = @ \cup {digest}]
   /\ UNCHANGED <<accepted, badCandidateAccepted, durableLock, signatures,
                  qcs, proposedCarrier, committedCarrier, badCarrier,
@@ -195,8 +195,8 @@ ApplyCarrier(n, digest) ==
                /\ digest \notin sidecars[n])
            \/ (Bug = "apply_wrong_digest" /\ committedCarrier \in Digests
                /\ digest # committedCarrier)
-     IN /\ valid \/ injected
-        /\ unsafeApply' = unsafeApply \/ ~valid
+     IN /\ (valid \/ injected)
+        /\ unsafeApply' = (unsafeApply \/ ~valid)
   /\ applied' = [applied EXCEPT ![n] = digest]
   /\ UNCHANGED <<accepted, badCandidateAccepted, durableLock, signatures,
                  qcs, proposedCarrier, committedCarrier, badCarrier,
@@ -237,8 +237,8 @@ TypeInvariant ==
 CandidateAdmissionExact == ~badCandidateAccepted
 
 HonestSignaturesDurablyLocked ==
-  \A digest \in Digests, n \in (signatures[digest] \cap Honest):
-    durableLock[n] = digest
+  \A digest \in Digests:
+    \A n \in (signatures[digest] \cap Honest): durableLock[n] = digest
 
 QuorumCertificatesWellFormed ==
   \A digest \in qcs: Cardinality(signatures[digest]) >= Quorum
@@ -264,7 +264,7 @@ AppliedReplicasConverge ==
     (applied[left] # 0 /\ applied[right] # 0) =>
       applied[left] = applied[right]
 
-MergeCarrierSafety ==
+MergeCarrierExactness ==
   /\ CandidateAdmissionExact
   /\ HonestSignaturesDurablyLocked
   /\ QuorumCertificatesWellFormed
@@ -276,7 +276,7 @@ MergeCarrierSafety ==
 
 MergeCarrierCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ MergeCarrierSafety
+  /\ MergeCarrierExactness
 
 SafetyFast == MergeCarrierCorrectnessEnvelope
 

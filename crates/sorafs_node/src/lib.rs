@@ -184,6 +184,18 @@ enum GcEvictionPolicy {
     LruExpired,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GcIntentDisposition {
+    DiscardedPreDomain,
+    FinalizedCommitted,
+}
+
+#[derive(Debug)]
+struct GcEvictionTransactionOutcome {
+    freed_bytes: u64,
+    publish_error: Option<String>,
+}
+
 const GOVERNANCE_PUBLISH_INDEX_FILE: &str = "publish-index.json";
 const GOVERNANCE_PUBLISH_INDEX_SCHEMA: &str = "sorafs.governance_dag.local_publish_index.v1";
 const APPEAL_FINANCE_WEEKLY_ROLLUP_KIND: &str = "appeal_finance_weekly_rollup";
@@ -207,6 +219,22 @@ const AUX_RUNTIME_STATE_SNAPSHOT_FILE: &str = "auxiliary-snapshot.to";
 const RUNTIME_STATE_INITIALIZATION_FILE: &str = "initialized-v1";
 const RUNTIME_STATE_INITIALIZATION_BYTES: &[u8] = b"sorafs.node.runtime-state.initialized.v1\n";
 const AUX_RUNTIME_STATE_VERSION_V1: u8 = 1;
+const GOVERNANCE_OUTBOX_VERSION_V1: u8 = 1;
+const GOVERNANCE_OUTBOX_BINDING_DOMAIN_V1: &[u8] = b"sorafs.node.governance_outbox.binding.v1";
+const REPAIR_MUTATION_INTENT_VERSION_V1: u8 = 1;
+const REPAIR_MUTATION_OPERATION_MAX_BYTES: usize = 64;
+const REPAIR_MUTATION_BINDING_DOMAIN_V1: &[u8] = b"sorafs.node.repair.mutation.binding.v1";
+const REPAIR_SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.node.repair.snapshot.digest.v1";
+const GC_EVICTION_INTENT_VERSION_V1: u8 = 1;
+const GC_EVICTION_AUDIT_LINK_VERSION_V1: u8 = 1;
+const GC_EVICTION_RESERVED_OUTBOX_SLOTS: u8 = 1;
+const GC_EVICTION_INTENT_BINDING_DOMAIN_V1: &[u8] = b"sorafs.node.gc.eviction_intent.binding.v1";
+const GC_EVICTION_AUDIT_LINK_BINDING_DOMAIN_V1: &[u8] =
+    b"sorafs.node.gc.eviction_audit_link.binding.v1";
+const GC_STORAGE_MANIFEST_IDENTITY_DOMAIN_V1: &[u8] =
+    b"sorafs.node.gc.storage_manifest.identity.v1";
+const GC_STORAGE_MANIFEST_SET_DOMAIN_V1: &[u8] = b"sorafs.node.gc.manifest_set.identity.v1";
+const GC_STORAGE_CHUNK_REFCOUNTS_DOMAIN_V1: &[u8] = b"sorafs.node.gc.chunk_refcounts.identity.v1";
 const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
 const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.moderation.evidence_viewer_audit.cycle_id.v1";
@@ -229,7 +257,6 @@ use capacity::{
     ReplicationRelease,
 };
 use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
-use iroha_crypto::Hash;
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -251,13 +278,12 @@ use iroha_telemetry::metrics::{
     MicropaymentCreditSnapshot, MicropaymentTicketCounters, global_or_default,
     global_sorafs_gc_otel, global_sorafs_node_otel, global_sorafs_reconciliation_otel,
 };
-use norito::codec::Encode;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 pub use repair::{
-    RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot,
-    RepairWatchdogReport, RepairWorkerReport,
+    RepairManager, RepairSchedulerError, RepairSlashProposalStage, RepairTaskFilters,
+    RepairTaskSnapshot, RepairWatchdogReport, RepairWorkerReport,
 };
 use reserve::ReserveLifecycleRuntime;
 use sorafs_car::{CarBuildPlan, PorProof};
@@ -278,10 +304,14 @@ use sorafs_manifest::{
     potr::{PotrReceiptV1, PotrReceiptValidationError},
     proof_stream::ProofStreamTier,
     repair::{
-        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1, GcAuditPayloadV1,
-        REPAIR_AUDIT_EVENT_VERSION_V1, RepairAuditEventV1, RepairReportV1, RepairSlashProposalV1,
-        RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
-        SorafsAuditHeaderV1,
+        GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1, GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1,
+        GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1, GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1,
+        GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
+        GC_AUDIT_REASON_RETENTION_EXPIRED_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1, GcAuditPayloadV1,
+        REPAIR_AUDIT_DEFAULT_SIGNER_V1, REPAIR_AUDIT_EVENT_VERSION_V1, RepairAuditEventV1,
+        RepairReportV1, RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1,
+        RepairTaskStateV1, RepairTicketId, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
+        repair_audit_payload_digest_v1,
     },
     score_provider_reputation,
 };
@@ -315,7 +345,10 @@ use crate::{
     potr::PotrTracker,
     reserve::ReserveRuntimeCheckpointV1,
     scheduler::{SchedulerAdmissionError, StorageSchedulerConfig, StorageSchedulersRuntime},
-    store::{ChunkFileRecord, ChunkRoleMetadata, StorageBackend, StorageError, StoredManifest},
+    store::{
+        ChunkFileRecord, ChunkRefcountEntry, ChunkRoleMetadata, StorageBackend, StorageError,
+        StoredManifest,
+    },
     telemetry::{TelemetryAccumulator, TelemetryError},
 };
 
@@ -346,6 +379,26 @@ fn repair_idempotency_key(
     let raw = format!("{action}:{worker_id}:{ticket_id}:{now_unix}");
     let digest_hex = blake3::hash(raw.as_bytes()).to_hex().to_string();
     format!("{action}-{digest_hex}")
+}
+
+fn repair_mutation_operation_digest(
+    operation: &str,
+    ticket_ids: &[RepairTicketId],
+    material: &[u8],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_MUTATION_BINDING_DOMAIN_V1);
+    hash_length_prefixed(&mut hasher, operation.as_bytes());
+    for ticket_id in ticket_ids {
+        hash_length_prefixed(&mut hasher, ticket_id.0.as_bytes());
+    }
+    hash_length_prefixed(&mut hasher, material);
+    *hasher.finalize().as_bytes()
+}
+
+fn hash_length_prefixed_material(material: &mut Vec<u8>, bytes: &[u8]) {
+    material.extend_from_slice(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    material.extend_from_slice(bytes);
 }
 
 fn privacy_aggregate_entry_id(
@@ -1631,6 +1684,10 @@ fn format_appeal_finance_scaled(value: u128, scale: usize) -> String {
 }
 
 /// Interface for emitting settlement artefacts to the governance DAG.
+///
+/// Implementations must be idempotent for identical canonical payload bytes.
+/// The durable node outbox intentionally retries after crashes where external
+/// publication succeeded but the local acknowledgement was not yet durable.
 pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     /// Persist the supplied settlement NORITO payload to the governance pipeline.
     fn publish_deal_settlement(
@@ -1995,10 +2052,19 @@ pub struct NodeHandle {
     storage: Option<Arc<StorageBackend>>,
     deal_engine: DealEngine,
     repair: RepairManager,
+    repair_mutation_lock: Arc<Mutex<()>>,
+    repair_mutation_intents: Arc<RwLock<RepairMutationIntentRuntime>>,
     repair_events: Arc<RwLock<BoundedEventHistory<RepairEvent>>>,
+    repair_event_audit_links: Arc<RwLock<BTreeMap<u64, RepairEventAuditLinkV1>>>,
+    repair_slash_publication_links: Arc<RwLock<BTreeMap<u64, RepairSlashPublicationLinkV1>>>,
+    gc_mutation_lock: Arc<Mutex<()>>,
+    gc_eviction_intents: Arc<RwLock<GcEvictionIntentRuntime>>,
+    gc_eviction_audit_links: Arc<RwLock<BTreeMap<u64, GcEvictionAuditLinkV1>>>,
     repair_event_sender: broadcast::Sender<RepairEvent>,
     repair_orchestrator: Arc<RwLock<Option<Arc<dyn RepairOrchestrator>>>>,
     governance_publisher: Arc<RwLock<Option<Arc<dyn GovernancePublisher>>>>,
+    governance_outbox: Arc<RwLock<GovernanceOutboxRuntime>>,
+    governance_outbox_drain_lock: Arc<Mutex<()>>,
     runtime_mutation_lock: Arc<Mutex<()>>,
     auxiliary_checkpoint_lock: Arc<Mutex<()>>,
     durability_failure: Arc<Mutex<Option<String>>>,
@@ -2058,6 +2124,1249 @@ struct PorHistoryCheckpointEntryV1 {
     last_slash_unix: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum GovernanceOutboxKindV1 {
+    DealSettlement,
+    RepairAudit,
+    RepairSlashDrafted,
+    RepairSlashSubmitted,
+    GcAudit,
+    ReconciliationReport,
+    ReputationSnapshot,
+    ModerationBallotEvent,
+    TransparencyLedgerPublication,
+    ProofTokenIssuance,
+    AppealFinanceReport,
+    AppealFinanceWeeklyRollup,
+    AppealFinanceSettlementReceipt,
+    OrderbookSettlementReceipt,
+}
+
+impl GovernanceOutboxKindV1 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::DealSettlement => 0,
+            Self::RepairAudit => 1,
+            Self::RepairSlashDrafted => 2,
+            Self::RepairSlashSubmitted => 3,
+            Self::GcAudit => 4,
+            Self::ReconciliationReport => 5,
+            Self::ReputationSnapshot => 6,
+            Self::ModerationBallotEvent => 7,
+            Self::TransparencyLedgerPublication => 8,
+            Self::ProofTokenIssuance => 9,
+            Self::AppealFinanceReport => 10,
+            Self::AppealFinanceWeeklyRollup => 11,
+            Self::AppealFinanceSettlementReceipt => 12,
+            Self::OrderbookSettlementReceipt => 13,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct GovernanceOutboxEntryV1 {
+    version: u8,
+    sequence: u64,
+    kind: GovernanceOutboxKindV1,
+    payload_digest: [u8; 32],
+    binding_digest: [u8; 32],
+    payload_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GovernanceOutboxRuntime {
+    next_sequence: u64,
+    entries: BTreeMap<u64, GovernanceOutboxEntryV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GovernanceOutboxReservationUse {
+    None,
+    Repair,
+    GcEviction,
+}
+
+impl Default for GovernanceOutboxRuntime {
+    fn default() -> Self {
+        Self {
+            next_sequence: 1,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RepairMutationCursorV1 {
+    ticket_id: String,
+    snapshot_digest: Option<[u8; 32]>,
+    event_count: u64,
+    slash_proposal_digest: Option<[u8; 32]>,
+    slash_proposal_stage: Option<RepairSlashProposalStage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RepairMutationIntentV1 {
+    version: u8,
+    sequence: u64,
+    operation: String,
+    operation_digest: [u8; 32],
+    reserved_outbox_slots: u8,
+    cursor: RepairMutationCursorV1,
+    binding_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RepairMutationIntentRuntime {
+    next_sequence: u64,
+    entries: BTreeMap<u64, RepairMutationIntentV1>,
+}
+
+impl Default for RepairMutationIntentRuntime {
+    fn default() -> Self {
+        Self {
+            next_sequence: 1,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RepairEventAuditLinkV1 {
+    global_event_sequence: u64,
+    ticket_id: String,
+    task_event_count: u64,
+    event_digest: [u8; 32],
+    audit_outbox_sequence: u64,
+    audit_payload_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct RepairSlashPublicationLinkV1 {
+    ticket_id: String,
+    proposal_digest: [u8; 32],
+    stage: RepairSlashProposalStage,
+    outbox_sequence: u64,
+    payload_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct GcStorageIdentityV1 {
+    total_bytes: u64,
+    manifest_count: u64,
+    gc_freed_bytes_total: u64,
+    gc_evictions_total: u64,
+    manifest_set_digest: [u8; 32],
+    chunk_refcounts_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct GcEvictionIntentV1 {
+    version: u8,
+    sequence: u64,
+    manifest_id: String,
+    manifest_digest: [u8; 32],
+    manifest_identity_digest: [u8; 32],
+    provider_id: [u8; 32],
+    audit_timestamp_unix: u64,
+    reason: String,
+    expected_freed_bytes: u64,
+    storage_before: GcStorageIdentityV1,
+    storage_after: GcStorageIdentityV1,
+    reserved_outbox_slots: u8,
+    binding_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GcEvictionIntentRuntime {
+    next_sequence: u64,
+    entries: BTreeMap<u64, GcEvictionIntentV1>,
+}
+
+impl Default for GcEvictionIntentRuntime {
+    fn default() -> Self {
+        Self {
+            next_sequence: 1,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct GcEvictionAuditLinkV1 {
+    version: u8,
+    intent_sequence: u64,
+    outbox_sequence: u64,
+    manifest_id: String,
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    occurred_at_unix: u64,
+    freed_bytes: u64,
+    reason: String,
+    storage_gc_evictions_total: u64,
+    payload_digest: [u8; 32],
+    outbox_payload_digest: [u8; 32],
+    binding_digest: [u8; 32],
+}
+
+const fn repair_slash_proposal_stage_tag(stage: RepairSlashProposalStage) -> u8 {
+    match stage {
+        RepairSlashProposalStage::Drafted => 0,
+        RepairSlashProposalStage::Submitted => 1,
+    }
+}
+
+fn repair_mutation_binding_digest(
+    version: u8,
+    sequence: u64,
+    operation: &str,
+    operation_digest: [u8; 32],
+    reserved_outbox_slots: u8,
+    cursor: &RepairMutationCursorV1,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_MUTATION_BINDING_DOMAIN_V1);
+    hasher.update(&[version]);
+    hasher.update(&sequence.to_le_bytes());
+    hasher.update(&(operation.len() as u64).to_le_bytes());
+    hasher.update(operation.as_bytes());
+    hasher.update(&operation_digest);
+    hasher.update(&[reserved_outbox_slots]);
+    hasher.update(&(cursor.ticket_id.len() as u64).to_le_bytes());
+    hasher.update(cursor.ticket_id.as_bytes());
+    match cursor.snapshot_digest {
+        Some(digest) => {
+            hasher.update(&[1]);
+            hasher.update(&digest);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.update(&cursor.event_count.to_le_bytes());
+    match cursor.slash_proposal_digest {
+        Some(digest) => {
+            hasher.update(&[1]);
+            hasher.update(&digest);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    match cursor.slash_proposal_stage {
+        Some(stage) => hasher.update(&[1, repair_slash_proposal_stage_tag(stage)]),
+        None => hasher.update(&[0]),
+    };
+    *hasher.finalize().as_bytes()
+}
+
+fn repair_mutation_required_outbox_slots(operation: &str) -> Option<u8> {
+    match operation {
+        "heartbeat_ticket" => Some(0),
+        "enqueue_report" | "mark_in_progress" | "mark_completed" | "claim_ticket"
+        | "complete_ticket" => Some(1),
+        "submit_slash" | "mark_failed" | "fail_ticket" | "run_watchdog" => Some(2),
+        _ => None,
+    }
+}
+
+fn repair_mutation_reserved_outbox_slots(
+    runtime: &RepairMutationIntentRuntime,
+) -> Result<usize, GovernancePublishError> {
+    runtime.entries.values().try_fold(0usize, |total, intent| {
+        validate_repair_mutation_intent(intent)?;
+        total
+            .checked_add(usize::from(intent.reserved_outbox_slots))
+            .ok_or_else(|| {
+                GovernancePublishError::other("repair outbox reservation count overflow")
+            })
+    })
+}
+
+#[derive(Debug)]
+struct GcStorageSnapshot {
+    identity: GcStorageIdentityV1,
+    manifests: Vec<StoredManifest>,
+    chunk_refcounts: Vec<ChunkRefcountEntry>,
+}
+
+fn gc_manifest_identity_digest(manifest: &StoredManifest) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GC_STORAGE_MANIFEST_IDENTITY_DOMAIN_V1);
+    hash_length_prefixed(&mut hasher, manifest.manifest_id().as_bytes());
+    hash_length_prefixed(&mut hasher, manifest.manifest_cid());
+    hasher.update(manifest.manifest_digest());
+    hasher.update(manifest.payload_digest());
+    hasher.update(&manifest.content_length().to_le_bytes());
+    hash_length_prefixed(&mut hasher, manifest.chunk_profile_handle().as_bytes());
+    hasher.update(&manifest.stored_at_unix_secs().to_le_bytes());
+    hasher.update(&manifest.retention_epoch().to_le_bytes());
+    hasher.update(
+        &u64::try_from(manifest.chunk_count())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for index in 0..manifest.chunk_count() {
+        let Some(chunk) = manifest.chunk(index) else {
+            hasher.update(&[0xFF]);
+            continue;
+        };
+        hasher.update(&chunk.offset.to_le_bytes());
+        hasher.update(&chunk.length.to_le_bytes());
+        hasher.update(&chunk.digest);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn gc_manifest_set_digest(manifests: &[StoredManifest]) -> [u8; 32] {
+    let mut identities = manifests
+        .iter()
+        .map(|manifest| {
+            (
+                manifest.manifest_id().to_owned(),
+                gc_manifest_identity_digest(manifest),
+            )
+        })
+        .collect::<Vec<_>>();
+    identities.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GC_STORAGE_MANIFEST_SET_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(identities.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for (manifest_id, digest) in identities {
+        hash_length_prefixed(&mut hasher, manifest_id.as_bytes());
+        hasher.update(&digest);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn gc_chunk_refcounts_digest(refcounts: &[ChunkRefcountEntry]) -> [u8; 32] {
+    let mut refcounts = refcounts.to_vec();
+    refcounts.sort_by_key(|entry| entry.digest);
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GC_STORAGE_CHUNK_REFCOUNTS_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(refcounts.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for entry in refcounts {
+        hasher.update(&entry.digest);
+        hasher.update(&entry.count.to_le_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn gc_storage_identity_from_parts(
+    manifests: &[StoredManifest],
+    chunk_refcounts: &[ChunkRefcountEntry],
+    total_bytes: u64,
+    gc_counters: (u64, u64),
+) -> Result<GcStorageIdentityV1, GovernancePublishError> {
+    Ok(GcStorageIdentityV1 {
+        total_bytes,
+        manifest_count: u64::try_from(manifests.len())
+            .map_err(|_| GovernancePublishError::other("storage manifest count exceeds u64"))?,
+        gc_freed_bytes_total: gc_counters.0,
+        gc_evictions_total: gc_counters.1,
+        manifest_set_digest: gc_manifest_set_digest(manifests),
+        chunk_refcounts_digest: gc_chunk_refcounts_digest(chunk_refcounts),
+    })
+}
+
+fn gc_storage_snapshot_once_unchecked(
+    storage: &StorageBackend,
+) -> Result<GcStorageSnapshot, GovernancePublishError> {
+    let manifests = storage.manifests();
+    let chunk_refcounts = storage.chunk_refcount_snapshot();
+    let total_bytes = storage.total_bytes();
+    let gc_counters = storage.gc_counters();
+    let identity =
+        gc_storage_identity_from_parts(&manifests, &chunk_refcounts, total_bytes, gc_counters)?;
+    Ok(GcStorageSnapshot {
+        identity,
+        manifests,
+        chunk_refcounts,
+    })
+}
+
+fn gc_storage_snapshot_once(
+    storage: &StorageBackend,
+) -> Result<GcStorageSnapshot, GovernancePublishError> {
+    storage
+        .ensure_durability_healthy()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    gc_storage_snapshot_once_unchecked(storage)
+}
+
+fn gc_storage_snapshot(
+    storage: &StorageBackend,
+) -> Result<GcStorageSnapshot, GovernancePublishError> {
+    let first = gc_storage_snapshot_once(storage)?;
+    let second = gc_storage_snapshot_once(storage)?;
+    if first.identity != second.identity {
+        return Err(GovernancePublishError::other(
+            "storage generation changed while capturing a GC eviction intent",
+        ));
+    }
+    Ok(second)
+}
+
+fn gc_storage_snapshot_unchecked(
+    storage: &StorageBackend,
+) -> Result<GcStorageSnapshot, GovernancePublishError> {
+    let first = gc_storage_snapshot_once_unchecked(storage)?;
+    let second = gc_storage_snapshot_once_unchecked(storage)?;
+    if first.identity != second.identity {
+        return Err(GovernancePublishError::other(
+            "storage generation changed while inspecting a failed GC eviction",
+        ));
+    }
+    Ok(second)
+}
+
+fn gc_expected_post_storage_identity(
+    snapshot: &GcStorageSnapshot,
+    target: &StoredManifest,
+) -> Result<GcStorageIdentityV1, GovernancePublishError> {
+    let manifests = snapshot
+        .manifests
+        .iter()
+        .filter(|manifest| manifest.manifest_id() != target.manifest_id())
+        .cloned()
+        .collect::<Vec<_>>();
+    if manifests.len().checked_add(1) != Some(snapshot.manifests.len()) {
+        return Err(GovernancePublishError::other(
+            "GC target is not uniquely present in the storage generation",
+        ));
+    }
+    let mut refcounts = snapshot
+        .chunk_refcounts
+        .iter()
+        .map(|entry| (entry.digest, entry.count))
+        .collect::<BTreeMap<_, _>>();
+    if refcounts.len() != snapshot.chunk_refcounts.len() {
+        return Err(GovernancePublishError::other(
+            "storage chunk refcount snapshot contains duplicate digests",
+        ));
+    }
+    for index in 0..target.chunk_count() {
+        let chunk = target.chunk(index).ok_or_else(|| {
+            GovernancePublishError::other("GC target chunk metadata is incomplete")
+        })?;
+        let count = refcounts.get_mut(&chunk.digest).ok_or_else(|| {
+            GovernancePublishError::other("GC target chunk lacks a storage refcount")
+        })?;
+        *count = count
+            .checked_sub(1)
+            .ok_or_else(|| GovernancePublishError::other("GC target chunk refcount underflow"))?;
+        if *count == 0 {
+            refcounts.remove(&chunk.digest);
+        }
+    }
+    let refcounts = refcounts
+        .into_iter()
+        .map(|(digest, count)| ChunkRefcountEntry { digest, count })
+        .collect::<Vec<_>>();
+    let total_bytes = snapshot
+        .identity
+        .total_bytes
+        .checked_sub(target.content_length())
+        .ok_or_else(|| {
+            GovernancePublishError::other("GC target exceeds accounted storage bytes")
+        })?;
+    let freed_bytes_total = snapshot
+        .identity
+        .gc_freed_bytes_total
+        .checked_add(target.content_length())
+        .ok_or_else(|| GovernancePublishError::other("GC freed-byte counter overflow"))?;
+    let evictions_total = snapshot
+        .identity
+        .gc_evictions_total
+        .checked_add(1)
+        .ok_or_else(|| GovernancePublishError::other("GC eviction counter overflow"))?;
+    gc_storage_identity_from_parts(
+        &manifests,
+        &refcounts,
+        total_bytes,
+        (freed_bytes_total, evictions_total),
+    )
+}
+
+fn gc_eviction_payload(intent: &GcEvictionIntentV1) -> GcAuditPayloadV1 {
+    GcAuditPayloadV1 {
+        version: GC_AUDIT_PAYLOAD_VERSION_V1,
+        manifest_digest: intent.manifest_digest,
+        provider_id: intent.provider_id,
+        evicted_at_unix: intent.audit_timestamp_unix,
+        freed_bytes: intent.expected_freed_bytes,
+        reason: intent.reason.clone(),
+        blocked_reason: None,
+    }
+}
+
+fn gc_eviction_intent_binding_digest(
+    intent: &GcEvictionIntentV1,
+) -> Result<[u8; 32], GovernancePublishError> {
+    let storage_before = norito::to_bytes(&intent.storage_before).map_err(|err| {
+        GovernancePublishError::other(format!("encode GC pre-eviction identity: {err}"))
+    })?;
+    let storage_after = norito::to_bytes(&intent.storage_after).map_err(|err| {
+        GovernancePublishError::other(format!("encode GC post-eviction identity: {err}"))
+    })?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GC_EVICTION_INTENT_BINDING_DOMAIN_V1);
+    hasher.update(&[intent.version]);
+    hasher.update(&intent.sequence.to_le_bytes());
+    hash_length_prefixed(&mut hasher, intent.manifest_id.as_bytes());
+    hasher.update(&intent.manifest_digest);
+    hasher.update(&intent.manifest_identity_digest);
+    hasher.update(&intent.provider_id);
+    hasher.update(&intent.audit_timestamp_unix.to_le_bytes());
+    hash_length_prefixed(&mut hasher, intent.reason.as_bytes());
+    hasher.update(&intent.expected_freed_bytes.to_le_bytes());
+    hash_length_prefixed(&mut hasher, &storage_before);
+    hash_length_prefixed(&mut hasher, &storage_after);
+    hasher.update(&[intent.reserved_outbox_slots]);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn validate_gc_eviction_intent(intent: &GcEvictionIntentV1) -> Result<(), GovernancePublishError> {
+    if intent.version != GC_EVICTION_INTENT_VERSION_V1
+        || intent.sequence == 0
+        || intent.reserved_outbox_slots != GC_EVICTION_RESERVED_OUTBOX_SLOTS
+        || intent.manifest_identity_digest == [0; 32]
+    {
+        return Err(GovernancePublishError::other(
+            "GC eviction intent version, sequence, identity, or reservation is invalid",
+        ));
+    }
+    if intent.manifest_id != hex::encode(intent.manifest_digest) {
+        return Err(GovernancePublishError::other(
+            "GC eviction intent manifest id is not canonical for its digest",
+        ));
+    }
+    gc_eviction_payload(intent)
+        .validate()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    if intent.storage_before.manifest_count
+        != intent
+            .storage_after
+            .manifest_count
+            .checked_add(1)
+            .ok_or_else(|| GovernancePublishError::other("GC manifest generation count overflow"))?
+        || intent.storage_before.total_bytes
+            != intent
+                .storage_after
+                .total_bytes
+                .checked_add(intent.expected_freed_bytes)
+                .ok_or_else(|| GovernancePublishError::other("GC byte generation overflow"))?
+        || intent.storage_after.gc_freed_bytes_total
+            != intent
+                .storage_before
+                .gc_freed_bytes_total
+                .checked_add(intent.expected_freed_bytes)
+                .ok_or_else(|| GovernancePublishError::other("GC freed-byte counter overflow"))?
+        || intent.storage_after.gc_evictions_total
+            != intent
+                .storage_before
+                .gc_evictions_total
+                .checked_add(1)
+                .ok_or_else(|| GovernancePublishError::other("GC counter overflow"))?
+        || intent.storage_before.manifest_set_digest == intent.storage_after.manifest_set_digest
+    {
+        return Err(GovernancePublishError::other(
+            "GC eviction intent storage generations do not encode one exact eviction",
+        ));
+    }
+    if intent.binding_digest != gc_eviction_intent_binding_digest(intent)? {
+        return Err(GovernancePublishError::other(
+            "GC eviction intent binding digest mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn restore_gc_eviction_intents(
+    next_sequence: u64,
+    entries: Vec<GcEvictionIntentV1>,
+) -> Result<GcEvictionIntentRuntime, GovernancePublishError> {
+    if next_sequence == 0 || entries.len() > 1 {
+        return Err(GovernancePublishError::other(
+            "GC eviction intent checkpoint has an invalid sequence or count",
+        ));
+    }
+    let mut restored = BTreeMap::new();
+    for intent in entries {
+        validate_gc_eviction_intent(&intent)?;
+        if intent.sequence >= next_sequence || restored.insert(intent.sequence, intent).is_some() {
+            return Err(GovernancePublishError::other(
+                "GC eviction intent sequence must be unique and below its high-water mark",
+            ));
+        }
+    }
+    Ok(GcEvictionIntentRuntime {
+        next_sequence,
+        entries: restored,
+    })
+}
+
+fn gc_eviction_reserved_outbox_slots(
+    runtime: &GcEvictionIntentRuntime,
+) -> Result<usize, GovernancePublishError> {
+    runtime.entries.values().try_fold(0usize, |total, intent| {
+        validate_gc_eviction_intent(intent)?;
+        total
+            .checked_add(usize::from(intent.reserved_outbox_slots))
+            .ok_or_else(|| GovernancePublishError::other("GC outbox reservation count overflow"))
+    })
+}
+
+fn gc_eviction_audit_link_binding_digest(link: &GcEvictionAuditLinkV1) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GC_EVICTION_AUDIT_LINK_BINDING_DOMAIN_V1);
+    hasher.update(&[link.version]);
+    hasher.update(&link.intent_sequence.to_le_bytes());
+    hasher.update(&link.outbox_sequence.to_le_bytes());
+    hash_length_prefixed(&mut hasher, link.manifest_id.as_bytes());
+    hasher.update(&link.manifest_digest);
+    hasher.update(&link.provider_id);
+    hasher.update(&link.occurred_at_unix.to_le_bytes());
+    hasher.update(&link.freed_bytes.to_le_bytes());
+    hash_length_prefixed(&mut hasher, link.reason.as_bytes());
+    hasher.update(&link.storage_gc_evictions_total.to_le_bytes());
+    hasher.update(&link.payload_digest);
+    hasher.update(&link.outbox_payload_digest);
+    *hasher.finalize().as_bytes()
+}
+
+fn gc_eviction_audit_event_from_link(
+    link: &GcEvictionAuditLinkV1,
+) -> Result<GcAuditEventV1, GovernancePublishError> {
+    let payload = GcAuditPayloadV1 {
+        version: GC_AUDIT_PAYLOAD_VERSION_V1,
+        manifest_digest: link.manifest_digest,
+        provider_id: link.provider_id,
+        evicted_at_unix: link.occurred_at_unix,
+        freed_bytes: link.freed_bytes,
+        reason: link.reason.clone(),
+        blocked_reason: None,
+    };
+    let event = GcAuditEventV1 {
+        version: GC_AUDIT_EVENT_VERSION_V1,
+        header: SorafsAuditHeaderV1 {
+            sequence: link.outbox_sequence,
+            occurred_at_unix: link.occurred_at_unix,
+            signer: GC_AUDIT_SIGNER_V1.to_owned(),
+            payload_digest: gc_audit_payload_digest_v1(&payload)
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?,
+        },
+        payload,
+    };
+    event
+        .validate()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    Ok(event)
+}
+
+fn validate_gc_eviction_audit_link(
+    link: &GcEvictionAuditLinkV1,
+) -> Result<(), GovernancePublishError> {
+    if link.version != GC_EVICTION_AUDIT_LINK_VERSION_V1
+        || link.intent_sequence == 0
+        || link.outbox_sequence == 0
+        || link.storage_gc_evictions_total == 0
+        || link.manifest_id != hex::encode(link.manifest_digest)
+    {
+        return Err(GovernancePublishError::other(
+            "GC eviction audit linkage metadata is invalid",
+        ));
+    }
+    let event = gc_eviction_audit_event_from_link(link)?;
+    let payload_digest = gc_audit_payload_digest_v1(&event.payload)
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    let encoded = norito::to_bytes(&event)
+        .map_err(|err| GovernancePublishError::other(format!("encode GC audit link: {err}")))?;
+    if link.payload_digest != payload_digest
+        || link.outbox_payload_digest != *blake3::hash(&encoded).as_bytes()
+        || link.binding_digest != gc_eviction_audit_link_binding_digest(link)
+    {
+        return Err(GovernancePublishError::other(
+            "GC eviction audit linkage digest mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn hash_length_prefixed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn repair_snapshot_proposal_state(
+    snapshot: &RepairTaskSnapshot,
+) -> Result<
+    (
+        Option<[u8; 32]>,
+        Option<Vec<u8>>,
+        Option<RepairSlashProposalStage>,
+    ),
+    GovernancePublishError,
+> {
+    match (&snapshot.slash_proposal, snapshot.slash_proposal_stage) {
+        (None, None) => {
+            if snapshot.record.slash_proposal_digest.is_some() {
+                return Err(GovernancePublishError::other(format!(
+                    "repair task {} exposes a proposal digest without canonical proposal state",
+                    snapshot.record.ticket_id
+                )));
+            }
+            Ok((None, None, None))
+        }
+        (Some(proposal), Some(stage)) => {
+            proposal
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            if proposal.approval.is_some() {
+                return Err(GovernancePublishError::other(format!(
+                    "repair task {} proposal contains a retired embedded approval summary",
+                    snapshot.record.ticket_id
+                )));
+            }
+            if proposal.ticket_id != snapshot.record.ticket_id
+                || proposal.manifest_digest != snapshot.record.manifest_digest
+                || proposal.provider_id != snapshot.record.provider_id
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "repair task {} proposal does not match its authoritative record",
+                    snapshot.record.ticket_id
+                )));
+            }
+            let bytes = norito::to_bytes(proposal).map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "encode repair task {} slash proposal: {err}",
+                    snapshot.record.ticket_id
+                ))
+            })?;
+            let digest = *blake3::hash(&bytes).as_bytes();
+            if snapshot.record.slash_proposal_digest != Some(digest) {
+                return Err(GovernancePublishError::other(format!(
+                    "repair task {} proposal digest does not match canonical bytes",
+                    snapshot.record.ticket_id
+                )));
+            }
+            Ok((Some(digest), Some(bytes), Some(stage)))
+        }
+        (None, Some(_)) | (Some(_), None) => Err(GovernancePublishError::other(format!(
+            "repair task {} has incomplete slash proposal publication state",
+            snapshot.record.ticket_id
+        ))),
+    }
+}
+
+fn repair_snapshot_event_count(
+    snapshot: &RepairTaskSnapshot,
+) -> Result<u64, GovernancePublishError> {
+    snapshot
+        .events_dropped
+        .checked_add(
+            u64::try_from(snapshot.events.len()).map_err(|_| {
+                GovernancePublishError::other("repair task event count exceeds u64")
+            })?,
+        )
+        .ok_or_else(|| GovernancePublishError::other("repair task event count overflow"))
+}
+
+fn repair_event_link_digest(event: &RepairTaskEventV1) -> Result<[u8; 32], GovernancePublishError> {
+    repair_audit_payload_digest_v1(event)
+        .map_err(|err| GovernancePublishError::other(err.to_string()))
+}
+
+fn repair_task_snapshot_digest(
+    snapshot: &RepairTaskSnapshot,
+) -> Result<[u8; 32], GovernancePublishError> {
+    snapshot
+        .record
+        .validate()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    let record_bytes = norito::to_bytes(&snapshot.record).map_err(|err| {
+        GovernancePublishError::other(format!("encode repair task record: {err}"))
+    })?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_SNAPSHOT_DIGEST_DOMAIN_V1);
+    hash_length_prefixed(&mut hasher, &record_bytes);
+    hasher.update(&snapshot.events_dropped.to_le_bytes());
+    hasher.update(&repair_snapshot_event_count(snapshot)?.to_le_bytes());
+    for event in &snapshot.events {
+        event
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        if event.ticket_id != snapshot.record.ticket_id
+            || event.manifest_digest != snapshot.record.manifest_digest
+            || event.provider_id != snapshot.record.provider_id
+        {
+            return Err(GovernancePublishError::other(format!(
+                "repair task {} retains an event for different task metadata",
+                snapshot.record.ticket_id
+            )));
+        }
+        let event_bytes = norito::to_bytes(event).map_err(|err| {
+            GovernancePublishError::other(format!("encode repair task event: {err}"))
+        })?;
+        hash_length_prefixed(&mut hasher, &event_bytes);
+    }
+    let (_, proposal_bytes, stage) = repair_snapshot_proposal_state(snapshot)?;
+    match proposal_bytes {
+        Some(bytes) => {
+            hasher.update(&[1]);
+            hash_length_prefixed(&mut hasher, &bytes);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    match stage {
+        Some(stage) => hasher.update(&[1, repair_slash_proposal_stage_tag(stage)]),
+        None => hasher.update(&[0]),
+    };
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn repair_mutation_cursor(
+    ticket_id: &RepairTicketId,
+    snapshot: Option<&RepairTaskSnapshot>,
+) -> Result<RepairMutationCursorV1, GovernancePublishError> {
+    ticket_id
+        .validate()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    let Some(snapshot) = snapshot else {
+        return Ok(RepairMutationCursorV1 {
+            ticket_id: ticket_id.to_string(),
+            snapshot_digest: None,
+            event_count: 0,
+            slash_proposal_digest: None,
+            slash_proposal_stage: None,
+        });
+    };
+    if &snapshot.record.ticket_id != ticket_id {
+        return Err(GovernancePublishError::other(format!(
+            "repair snapshot ticket {} does not match requested ticket {ticket_id}",
+            snapshot.record.ticket_id
+        )));
+    }
+    let (proposal_digest, _, proposal_stage) = repair_snapshot_proposal_state(snapshot)?;
+    Ok(RepairMutationCursorV1 {
+        ticket_id: ticket_id.to_string(),
+        snapshot_digest: Some(repair_task_snapshot_digest(snapshot)?),
+        event_count: repair_snapshot_event_count(snapshot)?,
+        slash_proposal_digest: proposal_digest,
+        slash_proposal_stage: proposal_stage,
+    })
+}
+
+fn validate_repair_mutation_intent(
+    intent: &RepairMutationIntentV1,
+) -> Result<(), GovernancePublishError> {
+    if intent.version != REPAIR_MUTATION_INTENT_VERSION_V1 || intent.sequence == 0 {
+        return Err(GovernancePublishError::other(
+            "unsupported or zero-sequence repair mutation intent",
+        ));
+    }
+    if intent.operation.trim().is_empty()
+        || intent.operation.len() > REPAIR_MUTATION_OPERATION_MAX_BYTES
+    {
+        return Err(GovernancePublishError::other(
+            "repair mutation operation label is empty or oversized",
+        ));
+    }
+    let expected_reserved_slots = repair_mutation_required_outbox_slots(&intent.operation)
+        .ok_or_else(|| GovernancePublishError::other("unknown repair mutation operation label"))?;
+    if intent.reserved_outbox_slots != expected_reserved_slots {
+        return Err(GovernancePublishError::other(
+            "repair mutation outbox reservation does not match its operation",
+        ));
+    }
+    RepairTicketId(intent.cursor.ticket_id.clone())
+        .validate()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    if intent.cursor.snapshot_digest.is_none()
+        && (intent.cursor.event_count != 0
+            || intent.cursor.slash_proposal_digest.is_some()
+            || intent.cursor.slash_proposal_stage.is_some())
+    {
+        return Err(GovernancePublishError::other(
+            "absent repair mutation cursor carries retained task state",
+        ));
+    }
+    if intent.cursor.slash_proposal_digest.is_some() != intent.cursor.slash_proposal_stage.is_some()
+    {
+        return Err(GovernancePublishError::other(
+            "repair mutation cursor proposal digest/stage pairing is incomplete",
+        ));
+    }
+    let expected = repair_mutation_binding_digest(
+        intent.version,
+        intent.sequence,
+        &intent.operation,
+        intent.operation_digest,
+        intent.reserved_outbox_slots,
+        &intent.cursor,
+    );
+    if intent.binding_digest != expected {
+        return Err(GovernancePublishError::other(
+            "repair mutation intent binding digest mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn restore_repair_mutation_intents(
+    next_sequence: u64,
+    entries: Vec<RepairMutationIntentV1>,
+    entry_limit: usize,
+) -> Result<RepairMutationIntentRuntime, GovernancePublishError> {
+    if next_sequence == 0 || entries.len() > entry_limit {
+        return Err(GovernancePublishError::other(
+            "repair mutation intent checkpoint has an invalid sequence or count",
+        ));
+    }
+    let mut restored = BTreeMap::new();
+    let mut tickets = BTreeSet::new();
+    let mut previous_sequence = None;
+    for intent in entries {
+        validate_repair_mutation_intent(&intent)?;
+        if intent.sequence >= next_sequence
+            || previous_sequence.is_some_and(|previous| previous >= intent.sequence)
+            || !tickets.insert(intent.cursor.ticket_id.clone())
+        {
+            return Err(GovernancePublishError::other(
+                "repair mutation intents must be ordered, unique by ticket, and below next sequence",
+            ));
+        }
+        previous_sequence = Some(intent.sequence);
+        restored.insert(intent.sequence, intent);
+    }
+    Ok(RepairMutationIntentRuntime {
+        next_sequence,
+        entries: restored,
+    })
+}
+
+fn governance_outbox_binding_digest(
+    version: u8,
+    sequence: u64,
+    kind: GovernanceOutboxKindV1,
+    payload_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(GOVERNANCE_OUTBOX_BINDING_DOMAIN_V1);
+    hasher.update(&[version]);
+    hasher.update(&sequence.to_le_bytes());
+    hasher.update(&[kind.tag()]);
+    hasher.update(&payload_digest);
+    *hasher.finalize().as_bytes()
+}
+
+fn decode_canonical_governance_payload<T>(bytes: &[u8]) -> Result<T, GovernancePublishError>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+    T: norito::NoritoSerialize,
+{
+    let value = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
+        GovernancePublishError::other(format!("decode governance outbox payload: {err}"))
+    })?;
+    let canonical = norito::to_bytes(&value).map_err(|err| {
+        GovernancePublishError::other(format!("re-encode governance outbox payload: {err}"))
+    })?;
+    if canonical != bytes {
+        return Err(GovernancePublishError::other(
+            "governance outbox payload is not canonically encoded",
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_repair_audit_event(
+    entry_sequence: u64,
+    event: &RepairAuditEventV1,
+) -> Result<(), GovernancePublishError> {
+    event
+        .validate()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    if event.header.sequence != entry_sequence {
+        return Err(GovernancePublishError::other(
+            "repair audit header sequence does not match its outbox entry",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_gc_audit_event(
+    entry_sequence: u64,
+    event: &GcAuditEventV1,
+) -> Result<(), GovernancePublishError> {
+    event
+        .validate()
+        .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+    if event.header.sequence != entry_sequence {
+        return Err(GovernancePublishError::other(
+            "GC audit header sequence does not match its outbox entry",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_governance_outbox_entry(
+    entry: &GovernanceOutboxEntryV1,
+) -> Result<(), GovernancePublishError> {
+    if entry.version != GOVERNANCE_OUTBOX_VERSION_V1 {
+        return Err(GovernancePublishError::other(format!(
+            "unsupported governance outbox entry version {}",
+            entry.version
+        )));
+    }
+    if entry.sequence == 0 || entry.payload_bytes.is_empty() {
+        return Err(GovernancePublishError::other(
+            "governance outbox sequence and payload must be non-zero/non-empty",
+        ));
+    }
+    let digest = *blake3::hash(&entry.payload_bytes).as_bytes();
+    if digest != entry.payload_digest {
+        return Err(GovernancePublishError::other(
+            "governance outbox payload digest mismatch",
+        ));
+    }
+    let binding_digest = governance_outbox_binding_digest(
+        entry.version,
+        entry.sequence,
+        entry.kind,
+        entry.payload_digest,
+    );
+    if binding_digest != entry.binding_digest {
+        return Err(GovernancePublishError::other(
+            "governance outbox kind/sequence binding digest mismatch",
+        ));
+    }
+    match entry.kind {
+        GovernanceOutboxKindV1::DealSettlement => {
+            decode_canonical_governance_payload::<DealSettlementV1>(&entry.payload_bytes)?
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::RepairAudit => {
+            let event =
+                decode_canonical_governance_payload::<RepairAuditEventV1>(&entry.payload_bytes)?;
+            validate_repair_audit_event(entry.sequence, &event)?;
+        }
+        GovernanceOutboxKindV1::RepairSlashDrafted
+        | GovernanceOutboxKindV1::RepairSlashSubmitted => {
+            let proposal =
+                decode_canonical_governance_payload::<RepairSlashProposalV1>(&entry.payload_bytes)?;
+            proposal
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            if proposal.approval.is_some() {
+                return Err(GovernancePublishError::other(
+                    "repair slash outbox payload contains a retired embedded approval summary",
+                ));
+            }
+        }
+        GovernanceOutboxKindV1::GcAudit => {
+            let event =
+                decode_canonical_governance_payload::<GcAuditEventV1>(&entry.payload_bytes)?;
+            validate_gc_audit_event(entry.sequence, &event)?;
+        }
+        GovernanceOutboxKindV1::ReconciliationReport => {
+            decode_canonical_governance_payload::<SorafsReconciliationReportV1>(
+                &entry.payload_bytes,
+            )?
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::ReputationSnapshot => {
+            decode_canonical_governance_payload::<ReputationSnapshotV1>(&entry.payload_bytes)?
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::ModerationBallotEvent => {
+            decode_canonical_governance_payload::<SoraFsModerationBallotGovernanceEventV1>(
+                &entry.payload_bytes,
+            )?
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::TransparencyLedgerPublication => {
+            decode_canonical_governance_payload::<ModerationLedgerCyclePublicationV1>(
+                &entry.payload_bytes,
+            )?
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::ProofTokenIssuance => {
+            decode_canonical_governance_payload::<ProofTokenIssuanceV1>(&entry.payload_bytes)?
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::AppealFinanceReport => {
+            decode_canonical_governance_payload::<SoraFsAppealFinanceReportV1>(
+                &entry.payload_bytes,
+            )?
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::AppealFinanceWeeklyRollup => {
+            decode_canonical_governance_payload::<SoraFsAppealFinanceWeeklyRollupV1>(
+                &entry.payload_bytes,
+            )?
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::AppealFinanceSettlementReceipt => {
+            decode_canonical_governance_payload::<SoraFsAppealFinanceSettlementReceiptV1>(
+                &entry.payload_bytes,
+            )?
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+        GovernanceOutboxKindV1::OrderbookSettlementReceipt => {
+            decode_canonical_governance_payload::<SettlementReceiptV1>(&entry.payload_bytes)?
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+fn restore_governance_outbox(
+    next_sequence: u64,
+    entries: Vec<GovernanceOutboxEntryV1>,
+    entry_limit: usize,
+) -> Result<GovernanceOutboxRuntime, GovernancePublishError> {
+    if next_sequence == 0 {
+        return Err(GovernancePublishError::other(
+            "governance outbox next sequence must be non-zero",
+        ));
+    }
+    if entries.len() > entry_limit {
+        return Err(GovernancePublishError::other(format!(
+            "governance outbox checkpoint count {} exceeds configured limit {entry_limit}",
+            entries.len()
+        )));
+    }
+    let mut restored = BTreeMap::new();
+    let mut previous_sequence = None;
+    for entry in entries {
+        validate_governance_outbox_entry(&entry)?;
+        // Gaps are intentional: an acknowledged artifact or a rejected
+        // prepared domain intent can be removed while later entries remain.
+        if entry.sequence >= next_sequence
+            || previous_sequence.is_some_and(|previous| entry.sequence <= previous)
+        {
+            return Err(GovernancePublishError::other(
+                "governance outbox entries must be strictly ordered below the next sequence",
+            ));
+        }
+        previous_sequence = Some(entry.sequence);
+        if restored.insert(entry.sequence, entry).is_some() {
+            return Err(GovernancePublishError::other(
+                "duplicate governance outbox sequence",
+            ));
+        }
+    }
+    Ok(GovernanceOutboxRuntime {
+        next_sequence,
+        entries: restored,
+    })
+}
+
+fn publish_governance_outbox_entry(
+    publisher: &dyn GovernancePublisher,
+    entry: &GovernanceOutboxEntryV1,
+) -> Result<(), GovernancePublishError> {
+    validate_governance_outbox_entry(entry)?;
+    match entry.kind {
+        GovernanceOutboxKindV1::DealSettlement => {
+            let payload =
+                decode_canonical_governance_payload::<DealSettlementV1>(&entry.payload_bytes)?;
+            publisher.publish_deal_settlement(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::RepairAudit => {
+            let payload =
+                decode_canonical_governance_payload::<RepairAuditEventV1>(&entry.payload_bytes)?;
+            publisher.publish_repair_audit_event(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::RepairSlashDrafted
+        | GovernanceOutboxKindV1::RepairSlashSubmitted => {
+            let payload =
+                decode_canonical_governance_payload::<RepairSlashProposalV1>(&entry.payload_bytes)?;
+            let stage = if matches!(entry.kind, GovernanceOutboxKindV1::RepairSlashDrafted) {
+                RepairSlashStage::Drafted
+            } else {
+                RepairSlashStage::Submitted
+            };
+            publisher.publish_repair_slash_proposal(&payload, &entry.payload_bytes, stage)
+        }
+        GovernanceOutboxKindV1::GcAudit => {
+            let payload =
+                decode_canonical_governance_payload::<GcAuditEventV1>(&entry.payload_bytes)?;
+            publisher.publish_gc_audit_event(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::ReconciliationReport => {
+            let payload = decode_canonical_governance_payload::<SorafsReconciliationReportV1>(
+                &entry.payload_bytes,
+            )?;
+            publisher.publish_reconciliation_report(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::ReputationSnapshot => {
+            let payload =
+                decode_canonical_governance_payload::<ReputationSnapshotV1>(&entry.payload_bytes)?;
+            publisher.publish_reputation_snapshot(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::ModerationBallotEvent => {
+            let payload = decode_canonical_governance_payload::<
+                SoraFsModerationBallotGovernanceEventV1,
+            >(&entry.payload_bytes)?;
+            publisher.publish_moderation_ballot_event(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::TransparencyLedgerPublication => {
+            let payload = decode_canonical_governance_payload::<ModerationLedgerCyclePublicationV1>(
+                &entry.payload_bytes,
+            )?;
+            publisher.publish_transparency_ledger_publication(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::ProofTokenIssuance => {
+            let payload =
+                decode_canonical_governance_payload::<ProofTokenIssuanceV1>(&entry.payload_bytes)?;
+            publisher.publish_proof_token_issuance(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::AppealFinanceReport => {
+            let payload = decode_canonical_governance_payload::<SoraFsAppealFinanceReportV1>(
+                &entry.payload_bytes,
+            )?;
+            publisher.publish_appeal_finance_report(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::AppealFinanceWeeklyRollup => {
+            let payload = decode_canonical_governance_payload::<SoraFsAppealFinanceWeeklyRollupV1>(
+                &entry.payload_bytes,
+            )?;
+            publisher.publish_appeal_finance_weekly_rollup(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::AppealFinanceSettlementReceipt => {
+            let payload = decode_canonical_governance_payload::<
+                SoraFsAppealFinanceSettlementReceiptV1,
+            >(&entry.payload_bytes)?;
+            publisher.publish_appeal_finance_settlement_receipt(&payload, &entry.payload_bytes)
+        }
+        GovernanceOutboxKindV1::OrderbookSettlementReceipt => {
+            let payload =
+                decode_canonical_governance_payload::<SettlementReceiptV1>(&entry.payload_bytes)?;
+            publisher.publish_orderbook_settlement_receipt(&payload, &entry.payload_bytes)
+        }
+    }
+}
+
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct AuxiliaryRuntimeCheckpointV1 {
     version: u8,
@@ -2067,6 +3376,13 @@ struct AuxiliaryRuntimeCheckpointV1 {
     por_history: Vec<PorHistoryCheckpointEntryV1>,
     reserve_runtime: ReserveRuntimeCheckpointV1,
     repair_events: Vec<RepairEvent>,
+    repair_mutation_next_sequence: u64,
+    repair_mutation_intents: Vec<RepairMutationIntentV1>,
+    repair_event_audit_links: Vec<RepairEventAuditLinkV1>,
+    repair_slash_publication_links: Vec<RepairSlashPublicationLinkV1>,
+    gc_eviction_intent_next_sequence: u64,
+    gc_eviction_intents: Vec<GcEvictionIntentV1>,
+    gc_eviction_audit_links: Vec<GcEvictionAuditLinkV1>,
     reputation_snapshots: Vec<ReputationSnapshotV1>,
     latest_reputation_snapshot_id: Option<[u8; 16]>,
     reputation_events: Vec<ReputationSnapshotEventV1>,
@@ -2074,6 +3390,8 @@ struct AuxiliaryRuntimeCheckpointV1 {
     privacy_source_events: Vec<PrivacyAggregateSourceEvent>,
     published_privacy_aggregate_cycles: Vec<[u8; 16]>,
     published_evidence_viewer_audit_cycles: Vec<[u8; 16]>,
+    governance_outbox_next_sequence: u64,
+    governance_outbox_entries: Vec<GovernanceOutboxEntryV1>,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -2309,10 +3627,19 @@ impl NodeHandle {
             storage,
             deal_engine,
             repair,
+            repair_mutation_lock: Arc::new(Mutex::new(())),
+            repair_mutation_intents: Arc::new(RwLock::new(RepairMutationIntentRuntime::default())),
             repair_events: Arc::new(RwLock::new(BoundedEventHistory::new(event_history_limit))),
+            repair_event_audit_links: Arc::new(RwLock::new(BTreeMap::new())),
+            repair_slash_publication_links: Arc::new(RwLock::new(BTreeMap::new())),
+            gc_mutation_lock: Arc::new(Mutex::new(())),
+            gc_eviction_intents: Arc::new(RwLock::new(GcEvictionIntentRuntime::default())),
+            gc_eviction_audit_links: Arc::new(RwLock::new(BTreeMap::new())),
             repair_event_sender,
             repair_orchestrator: Arc::new(RwLock::new(None)),
             governance_publisher: Arc::new(RwLock::new(None)),
+            governance_outbox: Arc::new(RwLock::new(GovernanceOutboxRuntime::default())),
+            governance_outbox_drain_lock: Arc::new(Mutex::new(())),
             runtime_mutation_lock: Arc::new(Mutex::new(())),
             auxiliary_checkpoint_lock: Arc::new(Mutex::new(())),
             durability_failure: Arc::new(Mutex::new(None)),
@@ -2380,6 +3707,36 @@ impl NodeHandle {
                 }
                 None => unreachable!("storage-backed node must inspect runtime checkpoints"),
             }
+            node.reconcile_orderbook_settlement_outbox_on_startup()
+                .map_err(|err| {
+                    NodeInitError::checkpoint(
+                        "auxiliary runtime",
+                        node.auxiliary_runtime_checkpoint_path
+                            .as_ref()
+                            .expect("storage-backed node has an auxiliary checkpoint path"),
+                        err,
+                    )
+                })?;
+            node.reconcile_repair_publication_intents_on_startup()
+                .map_err(|err| {
+                    NodeInitError::checkpoint(
+                        "auxiliary runtime",
+                        node.auxiliary_runtime_checkpoint_path
+                            .as_ref()
+                            .expect("storage-backed node has an auxiliary checkpoint path"),
+                        err,
+                    )
+                })?;
+            node.reconcile_gc_eviction_intents_on_startup()
+                .map_err(|err| {
+                    NodeInitError::checkpoint(
+                        "auxiliary runtime",
+                        node.auxiliary_runtime_checkpoint_path
+                            .as_ref()
+                            .expect("storage-backed node has an auxiliary checkpoint path"),
+                        err,
+                    )
+                })?;
             if let Some(dir) = governance_dir.clone() {
                 let publisher = FilesystemGovernancePublisher::try_new(dir.clone())
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
@@ -2404,7 +3761,8 @@ impl NodeHandle {
                         && governance_dag_signing_key_path.is_some(),
                     "SoraFS governance publisher initialised"
                 );
-                node.set_governance_publisher(Arc::new(publisher));
+                node.try_set_governance_publisher(Arc::new(publisher))
+                    .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
             }
         } else if governance_dir.is_some() {
             iroha_logger::warn!(
@@ -2684,9 +4042,28 @@ impl NodeHandle {
 
     /// Register the governance publisher used to surface settlement artefacts.
     pub fn set_governance_publisher(&self, publisher: Arc<dyn GovernancePublisher>) {
-        if let Ok(mut guard) = self.governance_publisher.write() {
-            *guard = Some(publisher);
+        if let Err(err) = self.try_set_governance_publisher(publisher) {
+            iroha_logger::error!(%err, "failed to drain SoraFS governance outbox after publisher registration");
         }
+    }
+
+    /// Register a governance publisher and replay every durable pending artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the publisher lock is poisoned or a pending artifact
+    /// cannot be published and durably acknowledged.
+    pub fn try_set_governance_publisher(
+        &self,
+        publisher: Arc<dyn GovernancePublisher>,
+    ) -> Result<(), GovernancePublishError> {
+        *self
+            .governance_publisher
+            .write()
+            .map_err(|_| GovernancePublishError::other("governance publisher lock poisoned"))? =
+            Some(publisher);
+        self.flush_governance_outbox()?;
+        Ok(())
     }
 
     /// Remove any configured governance publisher.
@@ -2711,17 +4088,661 @@ impl NodeHandle {
             .and_then(|guard| guard.clone())
     }
 
+    fn enqueue_governance_outbox_unlocked(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+    ) -> Result<(u64, bool), GovernancePublishError> {
+        self.enqueue_governance_outbox_unlocked_with_reservation(
+            kind,
+            payload_bytes,
+            GovernanceOutboxReservationUse::None,
+        )
+    }
+
+    fn enqueue_repair_governance_outbox_unlocked(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+    ) -> Result<(u64, bool), GovernancePublishError> {
+        if !matches!(
+            kind,
+            GovernanceOutboxKindV1::RepairAudit
+                | GovernanceOutboxKindV1::RepairSlashDrafted
+                | GovernanceOutboxKindV1::RepairSlashSubmitted
+        ) {
+            return Err(GovernancePublishError::other(
+                "only repair publications may consume reserved repair outbox capacity",
+            ));
+        }
+        self.enqueue_governance_outbox_unlocked_with_reservation(
+            kind,
+            payload_bytes,
+            GovernanceOutboxReservationUse::Repair,
+        )
+    }
+
+    fn enqueue_gc_eviction_governance_outbox_unlocked(
+        &self,
+        payload_bytes: Vec<u8>,
+    ) -> Result<(u64, bool), GovernancePublishError> {
+        self.enqueue_governance_outbox_unlocked_with_reservation(
+            GovernanceOutboxKindV1::GcAudit,
+            payload_bytes,
+            GovernanceOutboxReservationUse::GcEviction,
+        )
+    }
+
+    fn enqueue_governance_outbox_unlocked_with_reservation(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+        reservation_use: GovernanceOutboxReservationUse,
+    ) -> Result<(u64, bool), GovernancePublishError> {
+        let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
+        let repair_reserved_slots = {
+            let intents = self.repair_mutation_intents.read().map_err(|_| {
+                GovernancePublishError::other("repair mutation intent lock poisoned")
+            })?;
+            repair_mutation_reserved_outbox_slots(&intents)?
+        };
+        let gc_reserved_slots = {
+            let intents = self
+                .gc_eviction_intents
+                .read()
+                .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?;
+            gc_eviction_reserved_outbox_slots(&intents)?
+        };
+        let reserved_slots = match reservation_use {
+            GovernanceOutboxReservationUse::None => repair_reserved_slots
+                .checked_add(gc_reserved_slots)
+                .ok_or_else(|| {
+                    GovernancePublishError::other("governance outbox reservation count overflow")
+                })?,
+            GovernanceOutboxReservationUse::Repair => {
+                if repair_reserved_slots == 0 {
+                    return Err(GovernancePublishError::other(
+                        "repair publication has no active outbox reservation",
+                    ));
+                }
+                gc_reserved_slots
+            }
+            GovernanceOutboxReservationUse::GcEviction => {
+                if gc_reserved_slots == 0 {
+                    return Err(GovernancePublishError::other(
+                        "GC eviction publication has no active outbox reservation",
+                    ));
+                }
+                repair_reserved_slots
+            }
+        };
+        let mut outbox = self
+            .governance_outbox
+            .write()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
+        if let Some(existing) = outbox.entries.values().find(|entry| {
+            entry.kind == kind
+                && entry.payload_digest == payload_digest
+                && entry.payload_bytes == payload_bytes
+        }) {
+            return Ok((existing.sequence, false));
+        }
+        let limit = self.config.runtime_retention().state_entry_limit();
+        let unreserved_limit = limit.checked_sub(reserved_slots).ok_or_else(|| {
+            GovernancePublishError::other(format!(
+                "governance outbox reservation {reserved_slots} exceeds retention limit {limit}"
+            ))
+        })?;
+        if outbox.entries.len() >= unreserved_limit {
+            return Err(GovernancePublishError::other(format!(
+                "governance outbox retention exhausted: {reserved_slots} of {limit} slots are reserved for durable domain transactions"
+            )));
+        }
+        let sequence = outbox.next_sequence;
+        let next_sequence = sequence
+            .checked_add(1)
+            .ok_or_else(|| GovernancePublishError::other("governance outbox sequence exhausted"))?;
+        let entry = GovernanceOutboxEntryV1 {
+            version: GOVERNANCE_OUTBOX_VERSION_V1,
+            sequence,
+            kind,
+            payload_digest,
+            binding_digest: governance_outbox_binding_digest(
+                GOVERNANCE_OUTBOX_VERSION_V1,
+                sequence,
+                kind,
+                payload_digest,
+            ),
+            payload_bytes,
+        };
+        validate_governance_outbox_entry(&entry)?;
+        outbox.entries.insert(sequence, entry);
+        outbox.next_sequence = next_sequence;
+        Ok((sequence, true))
+    }
+
+    fn enqueue_governance_outbox(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+    ) -> Result<u64, GovernancePublishError> {
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+        let previous = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+        let (sequence, inserted) = self.enqueue_governance_outbox_unlocked(kind, payload_bytes)?;
+        if inserted && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous;
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        drop(checkpoint_guard);
+        Ok(sequence)
+    }
+
+    fn prepare_orderbook_receipt_governance_intent(
+        &self,
+        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        receipt: &SettlementReceiptV1,
+        payload_bytes: Vec<u8>,
+    ) -> Result<(u64, bool), GovernancePublishError> {
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+        let previous = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+        for entry in previous
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::OrderbookSettlementReceipt)
+        {
+            let pending =
+                decode_canonical_governance_payload::<SettlementReceiptV1>(&entry.payload_bytes)?;
+            if pending.receipt_id == receipt.receipt_id && entry.payload_bytes != payload_bytes {
+                return Err(GovernancePublishError::other(format!(
+                    "orderbook settlement receipt id {} conflicts with a pending governance intent",
+                    hex::encode(receipt.receipt_id)
+                )));
+            }
+        }
+        let (sequence, inserted) = self.enqueue_governance_outbox_unlocked(
+            GovernanceOutboxKindV1::OrderbookSettlementReceipt,
+            payload_bytes,
+        )?;
+        if inserted && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous;
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        drop(checkpoint_guard);
+        Ok((sequence, inserted))
+    }
+
+    fn cancel_new_orderbook_receipt_governance_intent(
+        &self,
+        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        sequence: u64,
+        payload_bytes: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+        let previous = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+        let expected = previous.entries.get(&sequence).ok_or_else(|| {
+            GovernancePublishError::other(format!(
+                "prepared orderbook settlement intent sequence {sequence} disappeared before domain rejection"
+            ))
+        })?;
+        if expected.kind != GovernanceOutboxKindV1::OrderbookSettlementReceipt
+            || expected.payload_bytes != payload_bytes
+        {
+            return Err(GovernancePublishError::other(format!(
+                "prepared orderbook settlement intent sequence {sequence} changed before domain rejection"
+            )));
+        }
+        self.governance_outbox
+            .write()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .entries
+            .remove(&sequence);
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous;
+            self.mark_durability_unhealthy(format!(
+                "rejected orderbook settlement intent could not be removed durably: {err}"
+            ));
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        Ok(())
+    }
+
+    fn verify_orderbook_receipt_governance_intent(
+        &self,
+        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        sequence: u64,
+        payload_bytes: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
+        let entry = outbox.entries.get(&sequence).ok_or_else(|| {
+            GovernancePublishError::other(format!(
+                "prepared orderbook settlement intent sequence {sequence} is absent after domain commit"
+            ))
+        })?;
+        if entry.kind != GovernanceOutboxKindV1::OrderbookSettlementReceipt
+            || entry.payload_bytes != payload_bytes
+        {
+            return Err(GovernancePublishError::other(format!(
+                "prepared orderbook settlement intent sequence {sequence} conflicts after domain commit"
+            )));
+        }
+        Ok(())
+    }
+
+    fn reconcile_orderbook_settlement_outbox_on_startup(
+        &self,
+    ) -> Result<(), GovernancePublishError> {
+        let _drain_guard = self
+            .governance_outbox_drain_lock
+            .lock()
+            .map_err(|_| GovernancePublishError::other("governance outbox drain lock poisoned"))?;
+        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+
+        let orderbook = self
+            .orderbook
+            .read()
+            .map_err(|_| GovernancePublishError::other("orderbook state lock poisoned"))?;
+        let restored_receipts = orderbook.runtime_snapshot(1).settlement_receipts;
+        drop(orderbook);
+        let mut committed_by_id = BTreeMap::new();
+        for receipt in restored_receipts {
+            let encoded = norito::to_bytes(&receipt).map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "encode restored orderbook settlement receipt: {err}"
+                ))
+            })?;
+            if committed_by_id
+                .insert(receipt.receipt_id, encoded)
+                .is_some()
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "restored orderbook contains duplicate settlement receipt id {}",
+                    hex::encode(receipt.receipt_id)
+                )));
+            }
+        }
+
+        let previous = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+        let mut pending_by_id = BTreeMap::<[u8; 32], Vec<u8>>::new();
+        let mut remove_sequences = Vec::new();
+        for entry in previous
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::OrderbookSettlementReceipt)
+        {
+            let receipt =
+                decode_canonical_governance_payload::<SettlementReceiptV1>(&entry.payload_bytes)?;
+            if let Some(existing) = pending_by_id.get(&receipt.receipt_id) {
+                if existing != &entry.payload_bytes {
+                    return Err(GovernancePublishError::other(format!(
+                        "pending orderbook governance intents conflict for settlement receipt id {}",
+                        hex::encode(receipt.receipt_id)
+                    )));
+                }
+            } else {
+                pending_by_id.insert(receipt.receipt_id, entry.payload_bytes.clone());
+            }
+            match committed_by_id.get(&receipt.receipt_id) {
+                Some(committed) if committed == &entry.payload_bytes => {}
+                Some(_) => {
+                    return Err(GovernancePublishError::other(format!(
+                        "pending orderbook governance intent conflicts with committed settlement receipt id {}",
+                        hex::encode(receipt.receipt_id)
+                    )));
+                }
+                None => remove_sequences.push(entry.sequence),
+            }
+        }
+        if remove_sequences.is_empty() {
+            return Ok(());
+        }
+        {
+            let mut outbox = self
+                .governance_outbox
+                .write()
+                .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
+            for sequence in remove_sequences {
+                outbox.entries.remove(&sequence);
+            }
+        }
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous;
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        Ok(())
+    }
+
+    fn reconcile_repair_publication_intents_on_startup(
+        &self,
+    ) -> Result<(), GovernancePublishError> {
+        let mutation_guard = self
+            .repair_mutation_lock
+            .lock()
+            .map_err(|_| GovernancePublishError::other("repair mutation lock poisoned"))?;
+        let drain_guard = self
+            .governance_outbox_drain_lock
+            .lock()
+            .map_err(|_| GovernancePublishError::other("governance outbox drain lock poisoned"))?;
+        let intents = self
+            .repair_mutation_intents
+            .read()
+            .map_err(|_| GovernancePublishError::other("repair mutation intent lock poisoned"))?
+            .entries
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        self.finalize_repair_mutation_intents(&mutation_guard, &drain_guard, &intents, false)
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        self.validate_repair_publication_state_against_store()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))
+    }
+
+    fn reconcile_gc_eviction_intents_on_startup(&self) -> Result<(), GovernancePublishError> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            GovernancePublishError::other("GC eviction reconciliation requires the storage backend")
+        })?;
+        let gc_guard = self
+            .gc_mutation_lock
+            .lock()
+            .map_err(|_| GovernancePublishError::other("GC mutation lock poisoned"))?;
+        let drain_guard = self
+            .governance_outbox_drain_lock
+            .lock()
+            .map_err(|_| GovernancePublishError::other("governance outbox drain lock poisoned"))?;
+        let intents = self
+            .gc_eviction_intents
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?
+            .entries
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for intent in &intents {
+            self.settle_gc_eviction_intent_against_storage(
+                &gc_guard,
+                &drain_guard,
+                storage,
+                intent,
+                false,
+            )?;
+        }
+        self.validate_gc_eviction_links_against_storage(storage)
+    }
+
+    fn enqueue_governance_outbox_with_transparency_entry(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        payload_bytes: Vec<u8>,
+        source_entry: TransparencyLedgerSourceEntry,
+    ) -> Result<u64, GovernancePublishError> {
+        source_entry.validate().map_err(|err| {
+            GovernancePublishError::other(format!(
+                "invalid transparency ledger source entry: {err}"
+            ))
+        })?;
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+        let previous_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+        let previous_sources = self
+            .transparency_ledger_source_entries
+            .read()
+            .map_err(|_| GovernancePublishError::other("transparency source-entry index poisoned"))?
+            .clone();
+
+        let mut sources = self
+            .transparency_ledger_source_entries
+            .write()
+            .map_err(|_| {
+                GovernancePublishError::other("transparency source-entry index poisoned")
+            })?;
+        let source_inserted = match sources.get(&source_entry.event_id) {
+            Some(existing) if existing == &source_entry => false,
+            Some(_) => {
+                return Err(GovernancePublishError::other(format!(
+                    "transparency ledger source entry `{}` conflicts with retained canonical data",
+                    source_entry.event_id
+                )));
+            }
+            None => {
+                let limit = self.config.runtime_retention().state_entry_limit();
+                if sources.len() >= limit {
+                    return Err(GovernancePublishError::other(format!(
+                        "transparency source-entry retention exhausted (limit {limit})"
+                    )));
+                }
+                sources.insert(source_entry.event_id.clone(), source_entry);
+                true
+            }
+        };
+        drop(sources);
+
+        let (sequence, outbox_inserted) =
+            match self.enqueue_governance_outbox_unlocked(kind, payload_bytes) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    if source_inserted {
+                        *self
+                            .transparency_ledger_source_entries
+                            .write()
+                            .map_err(|_| {
+                                GovernancePublishError::other(
+                                    "transparency source-entry rollback lock poisoned",
+                                )
+                            })? = previous_sources;
+                    }
+                    return Err(err);
+                }
+            };
+        if (source_inserted || outbox_inserted)
+            && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked()
+        {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous_outbox;
+            *self
+                .transparency_ledger_source_entries
+                .write()
+                .map_err(|_| {
+                    GovernancePublishError::other(
+                        "transparency source-entry rollback lock poisoned",
+                    )
+                })? = previous_sources;
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        drop(checkpoint_guard);
+        Ok(sequence)
+    }
+
+    fn enqueue_sequenced_governance_outbox(
+        &self,
+        kind: GovernanceOutboxKindV1,
+        build_payload: impl FnOnce(u64) -> Result<Vec<u8>, GovernancePublishError>,
+    ) -> Result<u64, GovernancePublishError> {
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+        let previous = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+        let expected_sequence = previous.next_sequence;
+        let payload_bytes = build_payload(expected_sequence)?;
+        let (sequence, inserted) = self.enqueue_governance_outbox_unlocked(kind, payload_bytes)?;
+        if !inserted || sequence != expected_sequence {
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous;
+            return Err(GovernancePublishError::other(
+                "sequenced governance artifact collided with an existing outbox entry",
+            ));
+        }
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous;
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        drop(checkpoint_guard);
+        Ok(sequence)
+    }
+
+    /// Return the number of durably pending governance publications.
+    #[must_use]
+    pub fn pending_governance_publication_count(&self) -> usize {
+        self.governance_outbox
+            .read()
+            .map_or(0, |outbox| outbox.entries.len())
+    }
+
+    /// Publish and durably acknowledge all queued governance artifacts.
+    ///
+    /// Publication is at-least-once. Publishers must therefore treat identical
+    /// canonical payload bytes idempotently.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if publication fails, the outbox is corrupt, or its
+    /// acknowledgement checkpoint cannot be committed safely.
+    pub fn flush_governance_outbox(&self) -> Result<usize, GovernancePublishError> {
+        let _drain_guard = self
+            .governance_outbox_drain_lock
+            .lock()
+            .map_err(|_| GovernancePublishError::other("governance outbox drain lock poisoned"))?;
+        let Some(publisher) = self.governance_publisher() else {
+            return Ok(0);
+        };
+        let mut published = 0usize;
+        loop {
+            self.ensure_durability_healthy()
+                .map_err(GovernancePublishError::other)?;
+            let Some(entry) = self
+                .governance_outbox
+                .read()
+                .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+                .entries
+                .first_key_value()
+                .map(|(_, entry)| entry.clone())
+            else {
+                return Ok(published);
+            };
+            publish_governance_outbox_entry(publisher.as_ref(), &entry)?;
+
+            let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+                GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+            })?;
+            self.ensure_durability_healthy()
+                .map_err(GovernancePublishError::other)?;
+            let removed = self
+                .governance_outbox
+                .write()
+                .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+                .entries
+                .remove(&entry.sequence);
+            if removed.as_ref() != Some(&entry) {
+                return Err(GovernancePublishError::other(
+                    "governance outbox changed while publication was in flight",
+                ));
+            }
+            if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+                if err.committed {
+                    return Err(GovernancePublishError::other(err.to_string()));
+                }
+                self.governance_outbox
+                    .write()
+                    .map_err(|_| {
+                        GovernancePublishError::other(
+                            "governance outbox acknowledgement rollback lock poisoned",
+                        )
+                    })?
+                    .entries
+                    .insert(entry.sequence, entry);
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            published = published.saturating_add(1);
+        }
+    }
+
     /// Persist and cache the latest SoraFS reputation snapshot.
     ///
-    /// The local snapshot, head linkage, and replay event are committed before
-    /// optional external publication. Retrying the exact same snapshot id is
-    /// idempotent and retries publication; conflicting ids or non-monotonic
-    /// heads are rejected.
+    /// The local snapshot, head linkage, replay event, and publication intent
+    /// are committed together before external delivery. Retrying the exact same
+    /// snapshot id is idempotent and retries publication; conflicting ids or
+    /// non-monotonic heads are rejected.
     pub fn publish_reputation_snapshot(
         &self,
         snapshot: ReputationSnapshotV1,
     ) -> Result<(), GovernancePublishError> {
-        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
         self.ensure_durability_healthy()
@@ -2743,9 +4764,26 @@ impl NodeHandle {
                 )));
             }
             drop(snapshots);
-            if let Some(publisher) = self.governance_publisher() {
-                publisher.publish_reputation_snapshot(&snapshot, &encoded)?;
+            let previous_outbox = self
+                .governance_outbox
+                .read()
+                .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+                .clone();
+            let (_, inserted) = self.enqueue_governance_outbox_unlocked(
+                GovernanceOutboxKindV1::ReputationSnapshot,
+                encoded,
+            )?;
+            if inserted && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+                if err.committed {
+                    return Err(GovernancePublishError::other(err.to_string()));
+                }
+                *self.governance_outbox.write().map_err(|_| {
+                    GovernancePublishError::other("governance outbox rollback lock poisoned")
+                })? = previous_outbox;
+                return Err(GovernancePublishError::other(err.to_string()));
             }
+            drop(checkpoint_guard);
+            self.flush_governance_outbox()?;
             return Ok(());
         }
         let previous_snapshots = snapshots.clone();
@@ -2759,6 +4797,11 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("reputation snapshot cache poisoned"))?;
         let previous_latest = latest.clone();
+        let previous_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
         match latest.as_ref() {
             Some(head) => {
                 if snapshot.previous_snapshot_id != Some(head.snapshot_id) {
@@ -2781,7 +4824,6 @@ impl NodeHandle {
             }
             None => {}
         }
-        snapshots.insert(snapshot.snapshot_id, snapshot.clone());
         let next_sequence = events
             .latest_sequence
             .checked_add(1)
@@ -2792,10 +4834,17 @@ impl NodeHandle {
                     "validated reputation snapshot could not produce an event: {err}"
                 ))
             })?;
-        let event = events.append(|sequence| {
+        snapshots.insert(snapshot.snapshot_id, snapshot.clone());
+        let event = match events.append(|sequence| {
             debug_assert_eq!(sequence, next_sequence);
             event
-        })?;
+        }) {
+            Ok(event) => event,
+            Err(err) => {
+                *snapshots = previous_snapshots;
+                return Err(err);
+            }
+        };
         let retained_snapshot_ids = events
             .events
             .iter()
@@ -2833,6 +4882,20 @@ impl NodeHandle {
         drop(snapshots);
         drop(events);
         drop(latest);
+        if let Err(err) = self
+            .enqueue_governance_outbox_unlocked(GovernanceOutboxKindV1::ReputationSnapshot, encoded)
+        {
+            *self.reputation_snapshots.write().map_err(|_| {
+                GovernancePublishError::other("reputation snapshot rollback lock poisoned")
+            })? = previous_snapshots;
+            *self.reputation_events.write().map_err(|_| {
+                GovernancePublishError::other("reputation event rollback lock poisoned")
+            })? = previous_events;
+            *self.latest_reputation_snapshot.write().map_err(|_| {
+                GovernancePublishError::other("reputation latest rollback lock poisoned")
+            })? = previous_latest;
+            return Err(err);
+        }
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(GovernancePublishError::other(err.to_string()));
@@ -2846,12 +4909,14 @@ impl NodeHandle {
             *self.latest_reputation_snapshot.write().map_err(|_| {
                 GovernancePublishError::other("reputation latest rollback lock poisoned")
             })? = previous_latest;
+            *self.governance_outbox.write().map_err(|_| {
+                GovernancePublishError::other("governance outbox rollback lock poisoned")
+            })? = previous_outbox;
             return Err(GovernancePublishError::other(err.to_string()));
         }
+        drop(checkpoint_guard);
         let _ = self.reputation_event_sender.send(event);
-        if let Some(publisher) = self.governance_publisher() {
-            publisher.publish_reputation_snapshot(&snapshot, &encoded)?;
-        }
+        self.flush_governance_outbox()?;
         Ok(())
     }
 
@@ -2952,14 +5017,18 @@ impl NodeHandle {
         let encoded = norito::to_bytes(&report).map_err(|err| {
             GovernancePublishError::other(format!("encode appeal finance report: {err}"))
         })?;
-        if let Some(publisher) = self.governance_publisher() {
-            publisher.publish_appeal_finance_report(&report, &encoded)?;
-        }
-        self.record_transparency_source_entry_lossy(
-            transparency::appeal_finance_report_source_entry(&report),
-            "appeal_finance_report",
-            &report.case_id,
-        );
+        let source_entry =
+            transparency::appeal_finance_report_source_entry(&report).map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "derive appeal finance report transparency source entry: {err}"
+                ))
+            })?;
+        self.enqueue_governance_outbox_with_transparency_entry(
+            GovernanceOutboxKindV1::AppealFinanceReport,
+            encoded,
+            source_entry,
+        )?;
+        self.flush_governance_outbox()?;
         Ok(())
     }
 
@@ -2974,9 +5043,11 @@ impl NodeHandle {
         let encoded = norito::to_bytes(&publication).map_err(|err| {
             GovernancePublishError::other(format!("encode transparency ledger publication: {err}"))
         })?;
-        if let Some(publisher) = self.governance_publisher() {
-            publisher.publish_transparency_ledger_publication(&publication, &encoded)?;
-        }
+        self.enqueue_governance_outbox(
+            GovernanceOutboxKindV1::TransparencyLedgerPublication,
+            encoded,
+        )?;
+        self.flush_governance_outbox()?;
         Ok(())
     }
 
@@ -2991,9 +5062,8 @@ impl NodeHandle {
         let encoded = norito::to_bytes(&issuance).map_err(|err| {
             GovernancePublishError::other(format!("encode proof-token issuance: {err}"))
         })?;
-        if let Some(publisher) = self.governance_publisher() {
-            publisher.publish_proof_token_issuance(&issuance, &encoded)?;
-        }
+        self.enqueue_governance_outbox(GovernanceOutboxKindV1::ProofTokenIssuance, encoded)?;
+        self.flush_governance_outbox()?;
         Ok(())
     }
 
@@ -3070,9 +5140,12 @@ impl NodeHandle {
             .map_err(|_| {
                 GovernancePublishError::other("transparency ledger source-entry index poisoned")
             })?;
-        if guard.contains_key(&entry.event_id) {
+        if let Some(existing) = guard.get(&entry.event_id) {
+            if existing == &entry {
+                return Ok(());
+            }
             return Err(GovernancePublishError::other(format!(
-                "duplicate transparency ledger source entry `{}`",
+                "transparency ledger source entry `{}` conflicts with retained canonical data",
                 entry.event_id
             )));
         }
@@ -3684,9 +5757,8 @@ impl NodeHandle {
         let encoded = norito::to_bytes(&rollup).map_err(|err| {
             GovernancePublishError::other(format!("encode appeal finance weekly rollup: {err}"))
         })?;
-        if let Some(publisher) = self.governance_publisher() {
-            publisher.publish_appeal_finance_weekly_rollup(&rollup, &encoded)?;
-        }
+        self.enqueue_governance_outbox(GovernanceOutboxKindV1::AppealFinanceWeeklyRollup, encoded)?;
+        self.flush_governance_outbox()?;
         Ok(())
     }
 
@@ -3705,14 +5777,18 @@ impl NodeHandle {
                 "encode appeal finance settlement receipt: {err}"
             ))
         })?;
-        if let Some(publisher) = self.governance_publisher() {
-            publisher.publish_appeal_finance_settlement_receipt(&receipt, &encoded)?;
-        }
-        self.record_transparency_source_entry_lossy(
-            transparency::appeal_finance_settlement_receipt_source_entry(&receipt),
-            "appeal_finance_settlement_receipt",
-            &receipt.case_id,
-        );
+        let source_entry = transparency::appeal_finance_settlement_receipt_source_entry(&receipt)
+            .map_err(|err| {
+            GovernancePublishError::other(format!(
+                "derive appeal finance settlement receipt transparency source entry: {err}"
+            ))
+        })?;
+        self.enqueue_governance_outbox_with_transparency_entry(
+            GovernanceOutboxKindV1::AppealFinanceSettlementReceipt,
+            encoded,
+            source_entry,
+        )?;
+        self.flush_governance_outbox()?;
         Ok(())
     }
 
@@ -5315,8 +7391,7 @@ impl NodeHandle {
     /// # Errors
     ///
     /// Returns an error if report derivation fails, source-entry derivation
-    /// fails, or the transparency source-entry worker rejects the entry for a
-    /// reason other than an idempotent duplicate.
+    /// fails, or the transparency source-entry worker rejects the entry.
     pub fn record_moderation_evidence_viewer_audit_report(
         &self,
         input: ModerationEvidenceViewerAuditReportInput,
@@ -5328,12 +7403,10 @@ impl NodeHandle {
         .map_err(|err| ModerationEvidenceViewerError::TransparencyExport {
             message: err.to_string(),
         })?;
-        if let Err(err) = self.record_transparency_ledger_source_entry(source_entry.clone()) {
-            let message = err.to_string();
-            if !message.contains("duplicate transparency ledger source entry") {
-                return Err(ModerationEvidenceViewerError::TransparencyExport { message });
-            }
-        }
+        self.record_transparency_ledger_source_entry(source_entry.clone())
+            .map_err(|err| ModerationEvidenceViewerError::TransparencyExport {
+                message: err.to_string(),
+            })?;
         Ok(ModerationEvidenceViewerAuditReportOutcome {
             report,
             source_entry,
@@ -6108,7 +8181,31 @@ impl NodeHandle {
         receipt: SettlementReceiptV1,
         now_unix: u64,
     ) -> Result<OrderbookReceiptOutcome, OrderbookRuntimeError> {
-        let (outcome, event) = self.mutate_orderbook_durably(now_unix, |runtime| {
+        receipt.validate()?;
+        let receipt_id = receipt.receipt_id;
+        let encoded = norito::to_bytes(&receipt).map_err(|err| {
+            OrderbookRuntimeError::Checkpoint(format!(
+                "encode orderbook settlement governance intent: {err}"
+            ))
+        })?;
+        let drain_guard = self.governance_outbox_drain_lock.lock().map_err(|_| {
+            OrderbookRuntimeError::Checkpoint("governance outbox drain lock poisoned".to_owned())
+        })?;
+        let mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(OrderbookRuntimeError::Checkpoint)?;
+        let receipt_before = self.canonical_orderbook_receipt_by_id(receipt_id)?;
+        let (intent_sequence, intent_inserted) = self
+            .prepare_orderbook_receipt_governance_intent(&drain_guard, &receipt, encoded.clone())
+            .map_err(|err| {
+                OrderbookRuntimeError::Checkpoint(format!(
+                    "prepare orderbook settlement governance intent: {err}"
+                ))
+            })?;
+        let mutation = self.mutate_orderbook_durably_unlocked(now_unix, |runtime| {
             let outcome = runtime.submit_receipt(receipt)?;
             let input = OrderbookEventInput {
                 kind: OrderbookEventKind::SettlementReceiptAccepted,
@@ -6119,11 +8216,168 @@ impl NodeHandle {
                 expired_order_ids: Vec::new(),
             };
             Ok((outcome, input))
-        })?;
+        });
+        let (outcome, event) = match mutation {
+            Ok(committed) => committed,
+            Err(err) => {
+                let receipt_after = match self.canonical_orderbook_receipt_by_id(receipt_id) {
+                    Ok(receipt_after) => receipt_after,
+                    Err(state_err) => {
+                        let reason = format!(
+                            "cannot prove orderbook settlement state after mutation failure: {state_err}"
+                        );
+                        self.mark_durability_unhealthy(reason.clone());
+                        return Err(OrderbookRuntimeError::Checkpoint(reason));
+                    }
+                };
+                if receipt_after == receipt_before {
+                    if intent_inserted
+                        && let Err(cancel_err) = self
+                            .cancel_new_orderbook_receipt_governance_intent(
+                                &drain_guard,
+                                intent_sequence,
+                                &encoded,
+                            )
+                    {
+                        let reason = format!(
+                            "failed to durably cancel rejected orderbook settlement intent: {cancel_err}"
+                        );
+                        self.mark_durability_unhealthy(reason.clone());
+                        return Err(OrderbookRuntimeError::Checkpoint(reason));
+                    }
+                    if !intent_inserted && receipt_before.as_deref() != Some(encoded.as_slice()) {
+                        let reason = format!(
+                            "pre-existing orderbook settlement intent {} was rejected by authoritative domain state; restart reconciliation is required",
+                            hex::encode(receipt_id)
+                        );
+                        self.mark_durability_unhealthy(reason.clone());
+                        return Err(OrderbookRuntimeError::Checkpoint(reason));
+                    }
+                    return Err(err);
+                }
+                if receipt_after.as_deref() == Some(encoded.as_slice()) {
+                    if let Err(intent_err) = self.verify_orderbook_receipt_governance_intent(
+                        &drain_guard,
+                        intent_sequence,
+                        &encoded,
+                    ) {
+                        let reason = format!(
+                            "orderbook receipt may have committed without a provable governance intent: {intent_err}"
+                        );
+                        self.mark_durability_unhealthy(reason.clone());
+                        return Err(OrderbookRuntimeError::Checkpoint(reason));
+                    }
+                    return Err(err);
+                }
+                let reason = format!(
+                    "orderbook settlement state changed unexpectedly while rejecting receipt {}",
+                    hex::encode(receipt_id)
+                );
+                self.mark_durability_unhealthy(reason.clone());
+                return Err(OrderbookRuntimeError::Checkpoint(reason));
+            }
+        };
+        if let Err(err) =
+            self.verify_orderbook_receipt_governance_intent(&drain_guard, intent_sequence, &encoded)
+        {
+            let reason =
+                format!("orderbook receipt committed without a provable governance intent: {err}");
+            self.mark_durability_unhealthy(reason.clone());
+            return Err(OrderbookRuntimeError::Checkpoint(reason));
+        }
+        drop(mutation_guard);
+        drop(drain_guard);
         self.record_orderbook_snapshot_metrics(now_unix);
-        self.publish_orderbook_settlement_receipt(&outcome.accepted_receipt);
         let _ = self.orderbook_event_sender.send(event);
+        self.flush_governance_outbox().map_err(|err| {
+            OrderbookRuntimeError::Checkpoint(format!(
+                "publish committed orderbook settlement governance intent: {err}"
+            ))
+        })?;
         Ok(outcome)
+    }
+
+    fn canonical_orderbook_receipt_by_id(
+        &self,
+        receipt_id: [u8; 32],
+    ) -> Result<Option<Vec<u8>>, OrderbookRuntimeError> {
+        let orderbook = self
+            .orderbook
+            .read()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        orderbook
+            .runtime_snapshot(1)
+            .settlement_receipts
+            .into_iter()
+            .find(|receipt| receipt.receipt_id == receipt_id)
+            .map(|receipt| {
+                norito::to_bytes(&receipt).map_err(|err| {
+                    OrderbookRuntimeError::Checkpoint(format!(
+                        "encode retained orderbook settlement receipt: {err}"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    fn validate_orderbook_snapshot_against_pending_settlement_intents(
+        &self,
+        snapshot: &OrderbookRuntimeSnapshotV1,
+    ) -> Result<(), OrderbookRuntimeError> {
+        let mut receipts_by_id = BTreeMap::new();
+        for receipt in &snapshot.settlement_receipts {
+            let encoded = norito::to_bytes(receipt).map_err(|err| {
+                OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "encode candidate settlement receipt: {err}"
+                ))
+            })?;
+            if receipts_by_id.insert(receipt.receipt_id, encoded).is_some() {
+                return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                    "candidate orderbook snapshot duplicates settlement receipt id {}",
+                    hex::encode(receipt.receipt_id)
+                )));
+            }
+        }
+        let outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        let mut pending_by_id = BTreeMap::<[u8; 32], Vec<u8>>::new();
+        for entry in outbox
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::OrderbookSettlementReceipt)
+        {
+            let pending =
+                decode_canonical_governance_payload::<SettlementReceiptV1>(&entry.payload_bytes)
+                    .map_err(|err| OrderbookRuntimeError::InvalidSnapshot(err.to_string()))?;
+            if let Some(existing) = pending_by_id.get(&pending.receipt_id) {
+                if existing != &entry.payload_bytes {
+                    return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                        "pending governance intents conflict for settlement receipt id {}",
+                        hex::encode(pending.receipt_id)
+                    )));
+                }
+            } else {
+                pending_by_id.insert(pending.receipt_id, entry.payload_bytes.clone());
+            }
+            match receipts_by_id.get(&pending.receipt_id) {
+                Some(candidate) if candidate == &entry.payload_bytes => {}
+                Some(_) => {
+                    return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                        "candidate orderbook snapshot conflicts with pending settlement receipt id {}",
+                        hex::encode(pending.receipt_id)
+                    )));
+                }
+                None => {
+                    return Err(OrderbookRuntimeError::InvalidSnapshot(format!(
+                        "candidate orderbook snapshot would orphan pending settlement receipt id {}",
+                        hex::encode(pending.receipt_id)
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Return a point-in-time snapshot of the local SoraFS orderbook mirror.
@@ -6170,6 +8424,9 @@ impl NodeHandle {
         snapshot: OrderbookRuntimeSnapshotV1,
     ) -> Result<(), OrderbookRuntimeError> {
         let generated_at_unix = snapshot.generated_at_unix;
+        let _drain_guard = self.governance_outbox_drain_lock.lock().map_err(|_| {
+            OrderbookRuntimeError::Checkpoint("governance outbox drain lock poisoned".to_owned())
+        })?;
         let _mutation_guard = self
             .runtime_mutation_lock
             .lock()
@@ -6179,6 +8436,9 @@ impl NodeHandle {
         let retention = self.config.runtime_retention();
         let mut restored = OrderbookRuntime::with_entry_limit(retention.state_entry_limit());
         restored.restore_runtime_snapshot(snapshot)?;
+        self.validate_orderbook_snapshot_against_pending_settlement_intents(
+            &restored.runtime_snapshot(generated_at_unix),
+        )?;
         let mut orderbook = self
             .orderbook
             .write()
@@ -6213,6 +8473,8 @@ impl NodeHandle {
         }
         drop(events);
         drop(orderbook);
+        drop(_mutation_guard);
+        drop(_drain_guard);
         self.record_orderbook_snapshot_metrics(generated_at_unix);
         Ok(())
     }
@@ -6667,6 +8929,41 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("repair event history lock poisoned"))?
             .retained();
+        let repair_mutation_intents = self
+            .repair_mutation_intents
+            .read()
+            .map_err(|_| GovernancePublishError::other("repair mutation intent lock poisoned"))?;
+        let repair_mutation_next_sequence = repair_mutation_intents.next_sequence;
+        let repair_mutation_intents = repair_mutation_intents.entries.values().cloned().collect();
+        let repair_event_audit_links = self
+            .repair_event_audit_links
+            .read()
+            .map_err(|_| GovernancePublishError::other("repair event audit link lock poisoned"))?
+            .values()
+            .cloned()
+            .collect();
+        let repair_slash_publication_links = self
+            .repair_slash_publication_links
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("repair slash publication link lock poisoned")
+            })?
+            .values()
+            .cloned()
+            .collect();
+        let gc_eviction_intents = self
+            .gc_eviction_intents
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?;
+        let gc_eviction_intent_next_sequence = gc_eviction_intents.next_sequence;
+        let gc_eviction_intents = gc_eviction_intents.entries.values().cloned().collect();
+        let gc_eviction_audit_links = self
+            .gc_eviction_audit_links
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))?
+            .values()
+            .cloned()
+            .collect();
         let reserve_runtime = self
             .reserve_lifecycle
             .read()
@@ -6718,6 +9015,12 @@ impl NodeHandle {
             .iter()
             .copied()
             .collect();
+        let governance_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
+        let governance_outbox_next_sequence = governance_outbox.next_sequence;
+        let governance_outbox_entries = governance_outbox.entries.values().cloned().collect();
         Ok(AuxiliaryRuntimeCheckpointV1 {
             version: AUX_RUNTIME_STATE_VERSION_V1,
             capacity_runtime,
@@ -6726,6 +9029,13 @@ impl NodeHandle {
             por_history,
             reserve_runtime,
             repair_events,
+            repair_mutation_next_sequence,
+            repair_mutation_intents,
+            repair_event_audit_links,
+            repair_slash_publication_links,
+            gc_eviction_intent_next_sequence,
+            gc_eviction_intents,
+            gc_eviction_audit_links,
             reputation_snapshots,
             latest_reputation_snapshot_id,
             reputation_events,
@@ -6733,6 +9043,8 @@ impl NodeHandle {
             privacy_source_events,
             published_privacy_aggregate_cycles,
             published_evidence_viewer_audit_cycles,
+            governance_outbox_next_sequence,
+            governance_outbox_entries,
         })
     }
 
@@ -6873,6 +9185,90 @@ impl NodeHandle {
         Ok(outcome)
     }
 
+    fn mutate_deal_engine_durably_with_governance<T>(
+        &self,
+        mutate: impl FnOnce(&DealEngine) -> Result<(T, bool), DealEngineError>,
+        artifact: impl FnOnce(&T) -> Result<(GovernanceOutboxKindV1, Vec<u8>), GovernancePublishError>,
+    ) -> Result<T, DealEngineError> {
+        let _checkpoint_guard = self
+            .auxiliary_checkpoint_lock
+            .lock()
+            .map_err(|_| DealEngineError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(DealEngineError::Checkpoint)?;
+        let previous_deal = self.deal_engine.checkpoint()?;
+        let previous_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| DealEngineError::StateLockPoisoned)?
+            .clone();
+        let (outcome, changed) = match mutate(&self.deal_engine) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back rejected deal mutation",
+                        restore_err,
+                    );
+                    return Err(DealEngineError::Checkpoint(message));
+                }
+                return Err(err);
+            }
+        };
+        if !changed {
+            return Ok(outcome);
+        }
+        let (kind, payload_bytes) = match artifact(&outcome) {
+            Ok(artifact) => artifact,
+            Err(err) => {
+                if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
+                    let message = self.record_unrecoverable_rollback(
+                        "failed to roll back deal mutation after governance artifact failure",
+                        restore_err,
+                    );
+                    return Err(DealEngineError::Checkpoint(message));
+                }
+                return Err(DealEngineError::Checkpoint(err.to_string()));
+            }
+        };
+        if let Err(err) = self.enqueue_governance_outbox_unlocked(kind, payload_bytes) {
+            if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back deal mutation after governance outbox rejection",
+                    restore_err,
+                );
+                return Err(DealEngineError::Checkpoint(message));
+            }
+            return Err(DealEngineError::Checkpoint(err.to_string()));
+        }
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(DealEngineError::Checkpoint(err.to_string()));
+            }
+            if let Err(restore_err) = self.deal_engine.restore_checkpoint(previous_deal) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back deal checkpoint failure",
+                    restore_err,
+                );
+                return Err(DealEngineError::Checkpoint(message));
+            }
+            if self
+                .governance_outbox
+                .write()
+                .map(|mut outbox| *outbox = previous_outbox)
+                .is_err()
+            {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back governance outbox after deal checkpoint failure",
+                    "state lock poisoned",
+                );
+                return Err(DealEngineError::Checkpoint(message));
+            }
+            return Err(DealEngineError::Checkpoint(err.to_string()));
+        }
+        Ok(outcome)
+    }
+
     fn mutate_capacity_durably<T>(
         &self,
         mutate: impl FnOnce(&CapacityManager) -> Result<(T, bool), CapacityError>,
@@ -6975,6 +9371,36 @@ impl NodeHandle {
                 checkpoint.published_evidence_viewer_audit_cycles.len(),
                 state_limit,
             ),
+            (
+                "governance outbox",
+                checkpoint.governance_outbox_entries.len(),
+                state_limit,
+            ),
+            (
+                "repair mutation intents",
+                checkpoint.repair_mutation_intents.len(),
+                state_limit,
+            ),
+            (
+                "repair event audit links",
+                checkpoint.repair_event_audit_links.len(),
+                state_limit.saturating_mul(2).saturating_add(event_limit),
+            ),
+            (
+                "repair slash publication links",
+                checkpoint.repair_slash_publication_links.len(),
+                state_limit.saturating_mul(2),
+            ),
+            (
+                "GC eviction intents",
+                checkpoint.gc_eviction_intents.len(),
+                1,
+            ),
+            (
+                "GC eviction audit links",
+                checkpoint.gc_eviction_audit_links.len(),
+                state_limit,
+            ),
             ("repair events", checkpoint.repair_events.len(), event_limit),
             (
                 "reputation events",
@@ -7036,8 +9462,83 @@ impl NodeHandle {
                 ));
             }
         };
+        let repair_mutation_intents = restore_repair_mutation_intents(
+            checkpoint.repair_mutation_next_sequence,
+            checkpoint.repair_mutation_intents,
+            state_limit,
+        )?;
+        let mut repair_event_audit_links = BTreeMap::new();
+        let mut previous_link_sequence = None;
+        for link in checkpoint.repair_event_audit_links {
+            RepairTicketId(link.ticket_id.clone())
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            if link.global_event_sequence == 0
+                || link.task_event_count == 0
+                || link.audit_outbox_sequence == 0
+                || link.event_digest == [0; 32]
+                || link.audit_payload_digest == [0; 32]
+                || previous_link_sequence
+                    .is_some_and(|previous| previous >= link.global_event_sequence)
+            {
+                return Err(GovernancePublishError::other(
+                    "repair event audit links must have non-zero increasing sequences",
+                ));
+            }
+            previous_link_sequence = Some(link.global_event_sequence);
+            repair_event_audit_links.insert(link.global_event_sequence, link);
+        }
+        let mut repair_slash_publication_links = BTreeMap::new();
+        let mut previous_slash_sequence = None;
+        for link in checkpoint.repair_slash_publication_links {
+            RepairTicketId(link.ticket_id.clone())
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            if link.outbox_sequence == 0
+                || link.proposal_digest == [0; 32]
+                || link.payload_digest == [0; 32]
+                || previous_slash_sequence.is_some_and(|previous| previous >= link.outbox_sequence)
+            {
+                return Err(GovernancePublishError::other(
+                    "repair slash publication links must have increasing non-zero outbox sequences",
+                ));
+            }
+            previous_slash_sequence = Some(link.outbox_sequence);
+            repair_slash_publication_links.insert(link.outbox_sequence, link);
+        }
+        let gc_eviction_intents = restore_gc_eviction_intents(
+            checkpoint.gc_eviction_intent_next_sequence,
+            checkpoint.gc_eviction_intents,
+        )?;
+        let mut gc_eviction_audit_links = BTreeMap::new();
+        let mut previous_gc_intent_sequence = None;
+        let mut gc_linked_outbox_sequences = BTreeSet::new();
+        for link in checkpoint.gc_eviction_audit_links {
+            validate_gc_eviction_audit_link(&link)?;
+            if link.intent_sequence >= gc_eviction_intents.next_sequence
+                || gc_eviction_intents
+                    .entries
+                    .contains_key(&link.intent_sequence)
+                || previous_gc_intent_sequence
+                    .is_some_and(|previous| previous >= link.intent_sequence)
+                || !gc_linked_outbox_sequences.insert(link.outbox_sequence)
+            {
+                return Err(GovernancePublishError::other(
+                    "GC eviction audit links must reference finalized intents below the high-water mark and be ordered and unique by intent/outbox sequence",
+                ));
+            }
+            previous_gc_intent_sequence = Some(link.intent_sequence);
+            gc_eviction_audit_links.insert(link.intent_sequence, link);
+        }
+        let retained_repair_events = checkpoint.repair_events;
+        for event in &retained_repair_events {
+            event
+                .event
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
         let mut repair_events = BoundedEventHistory::new(event_limit);
-        repair_events.restore(checkpoint.repair_events, |event| event.sequence)?;
+        repair_events.restore(retained_repair_events, |event| event.sequence)?;
         let mut reputation_events = BoundedEventHistory::new(event_limit);
         let mut previous_reputation_event: Option<&ReputationSnapshotEventV1> = None;
         for event in &checkpoint.reputation_events {
@@ -7169,6 +9670,186 @@ impl NodeHandle {
                 "duplicate published cycle ids in auxiliary checkpoint",
             ));
         }
+        let governance_outbox = restore_governance_outbox(
+            checkpoint.governance_outbox_next_sequence,
+            checkpoint.governance_outbox_entries,
+            state_limit,
+        )?;
+        if gc_eviction_audit_links
+            .values()
+            .any(|link| link.outbox_sequence >= governance_outbox.next_sequence)
+        {
+            return Err(GovernancePublishError::other(
+                "GC eviction audit link references an outbox sequence beyond its high-water mark",
+            ));
+        }
+        let reserved_repair_slots =
+            repair_mutation_reserved_outbox_slots(&repair_mutation_intents)?;
+        let reserved_gc_slots = gc_eviction_reserved_outbox_slots(&gc_eviction_intents)?;
+        let reserved_outbox_slots = reserved_repair_slots
+            .checked_add(reserved_gc_slots)
+            .ok_or_else(|| GovernancePublishError::other("outbox reservation count overflow"))?;
+        if governance_outbox
+            .entries
+            .len()
+            .checked_add(reserved_outbox_slots)
+            .is_none_or(|required| required > state_limit)
+        {
+            return Err(GovernancePublishError::other(format!(
+                "auxiliary checkpoint intents reserve {reserved_outbox_slots} outbox slots beyond retention limit {state_limit}"
+            )));
+        }
+
+        let retained_repair_events = repair_events.retained();
+        for event in &retained_repair_events {
+            let link = repair_event_audit_links
+                .get(&event.sequence)
+                .ok_or_else(|| {
+                    GovernancePublishError::other(format!(
+                        "retained global repair event {} is missing its persisted audit linkage",
+                        event.sequence
+                    ))
+                })?;
+            if link.ticket_id != event.event.ticket_id.to_string()
+                || link.event_digest != repair_event_link_digest(&event.event)?
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "retained global repair event {} audit linkage digest mismatch",
+                    event.sequence
+                )));
+            }
+        }
+        let mut linked_audit_sequences = BTreeSet::new();
+        for link in repair_event_audit_links.values() {
+            if !linked_audit_sequences.insert(link.audit_outbox_sequence) {
+                return Err(GovernancePublishError::other(
+                    "duplicate repair audit outbox sequence linkage",
+                ));
+            }
+            if let Some(entry) = governance_outbox.entries.get(&link.audit_outbox_sequence) {
+                if entry.kind != GovernanceOutboxKindV1::RepairAudit
+                    || entry.payload_digest != link.audit_payload_digest
+                {
+                    return Err(GovernancePublishError::other(format!(
+                        "repair audit linkage {} conflicts with its pending outbox entry",
+                        link.global_event_sequence
+                    )));
+                }
+                let audit = decode_canonical_governance_payload::<RepairAuditEventV1>(
+                    &entry.payload_bytes,
+                )?;
+                if repair_event_link_digest(&audit.payload)? != link.event_digest {
+                    return Err(GovernancePublishError::other(format!(
+                        "repair audit linkage {} payload digest mismatch",
+                        link.global_event_sequence
+                    )));
+                }
+            }
+        }
+        for entry in governance_outbox
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairAudit)
+        {
+            if !linked_audit_sequences.contains(&entry.sequence) {
+                return Err(GovernancePublishError::other(format!(
+                    "pending repair audit outbox entry {} has no persisted event linkage",
+                    entry.sequence
+                )));
+            }
+        }
+
+        let mut linked_slash_sequences = BTreeSet::new();
+        for link in repair_slash_publication_links.values() {
+            if !linked_slash_sequences.insert(link.outbox_sequence) {
+                return Err(GovernancePublishError::other(
+                    "duplicate repair slash outbox sequence linkage",
+                ));
+            }
+            if let Some(entry) = governance_outbox.entries.get(&link.outbox_sequence) {
+                let expected_kind = match link.stage {
+                    RepairSlashProposalStage::Drafted => GovernanceOutboxKindV1::RepairSlashDrafted,
+                    RepairSlashProposalStage::Submitted => {
+                        GovernanceOutboxKindV1::RepairSlashSubmitted
+                    }
+                };
+                if entry.kind != expected_kind || entry.payload_digest != link.payload_digest {
+                    return Err(GovernancePublishError::other(format!(
+                        "repair slash linkage for ticket {} conflicts with its pending outbox entry",
+                        link.ticket_id
+                    )));
+                }
+                let proposal = decode_canonical_governance_payload::<RepairSlashProposalV1>(
+                    &entry.payload_bytes,
+                )?;
+                if proposal.ticket_id.to_string() != link.ticket_id
+                    || *blake3::hash(&entry.payload_bytes).as_bytes() != link.proposal_digest
+                    || proposal.approval.is_some()
+                {
+                    return Err(GovernancePublishError::other(format!(
+                        "repair slash linkage for ticket {} does not match canonical proposal state",
+                        link.ticket_id
+                    )));
+                }
+            }
+        }
+        for entry in governance_outbox.entries.values().filter(|entry| {
+            matches!(
+                entry.kind,
+                GovernanceOutboxKindV1::RepairSlashDrafted
+                    | GovernanceOutboxKindV1::RepairSlashSubmitted
+            )
+        }) {
+            if !linked_slash_sequences.contains(&entry.sequence) {
+                return Err(GovernancePublishError::other(format!(
+                    "pending repair slash outbox entry {} has no persisted proposal linkage",
+                    entry.sequence
+                )));
+            }
+        }
+
+        let mut pending_linked_gc_sequences = BTreeSet::new();
+        for link in gc_eviction_audit_links.values() {
+            if let Some(entry) = governance_outbox.entries.get(&link.outbox_sequence) {
+                if entry.kind != GovernanceOutboxKindV1::GcAudit
+                    || entry.payload_digest != link.outbox_payload_digest
+                {
+                    return Err(GovernancePublishError::other(format!(
+                        "GC eviction audit link {} conflicts with its pending outbox entry",
+                        link.intent_sequence
+                    )));
+                }
+                let expected = norito::to_bytes(&gc_eviction_audit_event_from_link(link)?)
+                    .map_err(|err| {
+                        GovernancePublishError::other(format!(
+                            "encode linked GC eviction audit event: {err}"
+                        ))
+                    })?;
+                if entry.payload_bytes != expected {
+                    return Err(GovernancePublishError::other(format!(
+                        "GC eviction audit link {} payload bytes mismatch",
+                        link.intent_sequence
+                    )));
+                }
+                pending_linked_gc_sequences.insert(entry.sequence);
+            }
+        }
+        for entry in governance_outbox
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::GcAudit)
+        {
+            let event =
+                decode_canonical_governance_payload::<GcAuditEventV1>(&entry.payload_bytes)?;
+            if event.payload.blocked_reason.is_none()
+                && !pending_linked_gc_sequences.contains(&entry.sequence)
+            {
+                return Err(GovernancePublishError::other(format!(
+                    "pending successful GC audit entry {} lacks eviction linkage",
+                    entry.sequence
+                )));
+            }
+        }
 
         self.por
             .restore_checkpoint(checkpoint.por_tracker)
@@ -7187,6 +9868,27 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("repair event history lock poisoned"))? =
             repair_events;
+        *self
+            .repair_mutation_intents
+            .write()
+            .map_err(|_| GovernancePublishError::other("repair mutation intent lock poisoned"))? =
+            repair_mutation_intents;
+        *self.repair_event_audit_links.write().map_err(|_| {
+            GovernancePublishError::other("repair event audit link lock poisoned")
+        })? = repair_event_audit_links;
+        *self.repair_slash_publication_links.write().map_err(|_| {
+            GovernancePublishError::other("repair slash publication link lock poisoned")
+        })? = repair_slash_publication_links;
+        *self
+            .gc_eviction_intents
+            .write()
+            .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))? =
+            gc_eviction_intents;
+        *self
+            .gc_eviction_audit_links
+            .write()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))? =
+            gc_eviction_audit_links;
         *self
             .reputation_snapshots
             .write()
@@ -7257,6 +9959,11 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("evidence cycle index poisoned"))? =
             evidence_cycles;
+        *self
+            .governance_outbox
+            .write()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))? =
+            governance_outbox;
         Ok(())
     }
 
@@ -8492,6 +11199,16 @@ impl NodeHandle {
             .runtime_mutation_lock
             .lock()
             .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?;
+        self.mutate_orderbook_durably_unlocked(generated_at_unix, mutate)
+    }
+
+    fn mutate_orderbook_durably_unlocked<T>(
+        &self,
+        generated_at_unix: u64,
+        mutate: impl FnOnce(
+            &mut OrderbookRuntime,
+        ) -> Result<(T, OrderbookEventInput), OrderbookRuntimeError>,
+    ) -> Result<(T, OrderbookEvent), OrderbookRuntimeError> {
         self.ensure_durability_healthy()
             .map_err(OrderbookRuntimeError::Checkpoint)?;
         let mut runtime = self
@@ -8767,42 +11484,22 @@ impl NodeHandle {
             .set_sorafs_orderbook_contract_mirror_divergence(ORDERBOOK_METRIC_CLUSTER_LOCAL, false);
     }
 
-    fn publish_orderbook_settlement_receipt(&self, receipt: &SettlementReceiptV1) {
-        let Some(publisher) = self.governance_publisher() else {
-            return;
-        };
-        let encoded = match norito::to_bytes(receipt) {
-            Ok(encoded) => encoded,
+    fn publish_moderation_ballot_governance_event(&self, event: &ModerationBallotEvent) {
+        let governance_event = event.to_governance_event_v1();
+        let source_entry = match transparency::moderation_ballot_governance_event_source_entry(
+            &governance_event,
+        ) {
+            Ok(entry) => entry,
             Err(err) => {
                 iroha_logger::error!(
                     %err,
-                    receipt_id = %hex::encode(receipt.receipt_id),
-                    channel_id = %hex::encode(receipt.channel_id),
-                    "failed to encode SoraFS orderbook settlement receipt"
+                    case_id = %event.case_id,
+                    round_id = %event.round_id,
+                    sequence = event.sequence,
+                    "failed to derive SoraFS moderation ballot transparency entry"
                 );
                 return;
             }
-        };
-        if let Err(err) = publisher.publish_orderbook_settlement_receipt(receipt, &encoded) {
-            iroha_logger::error!(
-                %err,
-                receipt_id = %hex::encode(receipt.receipt_id),
-                channel_id = %hex::encode(receipt.channel_id),
-                trade_id = %hex::encode(receipt.trade_id),
-                "failed to publish SoraFS orderbook settlement receipt to governance DAG"
-            );
-        }
-    }
-
-    fn publish_moderation_ballot_governance_event(&self, event: &ModerationBallotEvent) {
-        let governance_event = event.to_governance_event_v1();
-        self.record_transparency_source_entry_lossy(
-            transparency::moderation_ballot_governance_event_source_entry(&governance_event),
-            "moderation_ballot_governance_event",
-            &event.case_id,
-        );
-        let Some(publisher) = self.governance_publisher() else {
-            return;
         };
         let encoded = match norito::to_bytes(&governance_event) {
             Ok(encoded) => encoded,
@@ -8817,13 +11514,27 @@ impl NodeHandle {
                 return;
             }
         };
-        if let Err(err) = publisher.publish_moderation_ballot_event(&governance_event, &encoded) {
+        if let Err(err) = self.enqueue_governance_outbox_with_transparency_entry(
+            GovernanceOutboxKindV1::ModerationBallotEvent,
+            encoded,
+            source_entry,
+        ) {
             iroha_logger::error!(
                 %err,
                 case_id = %event.case_id,
                 round_id = %event.round_id,
                 sequence = event.sequence,
-                "failed to publish SoraFS moderation ballot event to governance DAG"
+                "failed to durably queue SoraFS moderation ballot governance event"
+            );
+            return;
+        }
+        if let Err(err) = self.flush_governance_outbox() {
+            iroha_logger::warn!(
+                %err,
+                case_id = %event.case_id,
+                round_id = %event.round_id,
+                sequence = event.sequence,
+                "SoraFS moderation ballot event remains pending in the governance outbox"
             );
         }
     }
@@ -8890,11 +11601,21 @@ impl NodeHandle {
         deal_id: DealId,
         settlement_epoch: u64,
     ) -> Result<DealSettlementOutcome, DealEngineError> {
-        let outcome = self.mutate_deal_engine_durably(|engine| {
-            engine
-                .settle(deal_id, settlement_epoch)
-                .map(|outcome| (outcome, true))
-        })?;
+        let outcome = self.mutate_deal_engine_durably_with_governance(
+            |engine| {
+                engine
+                    .settle(deal_id, settlement_epoch)
+                    .map(|outcome| (outcome, true))
+            },
+            |outcome| {
+                let encoded = norito::to_bytes(&outcome.governance).map_err(|err| {
+                    GovernancePublishError::other(format!(
+                        "encode deal settlement governance artifact: {err}"
+                    ))
+                })?;
+                Ok((GovernanceOutboxKindV1::DealSettlement, encoded))
+            },
+        )?;
         let provider_hex = hex::encode(outcome.record.provider_id.as_bytes());
         let status_label = match outcome.governance.status {
             DealSettlementStatusV1::Completed => "completed",
@@ -8909,24 +11630,20 @@ impl NodeHandle {
             outcome.record.bond_slash_nano,
             outcome.record.outstanding_nano,
         );
-        let publisher = self.governance_publisher();
-        if let Some(publisher) = publisher {
-            let encoded = outcome.governance.encode();
-            match publisher.publish_deal_settlement(&outcome.governance, &encoded) {
-                Ok(()) => {
-                    global_sorafs_node_otel().record_settlement_publish(&provider_hex, "success");
-                }
-                Err(err) => {
-                    global_sorafs_node_otel().record_settlement_publish(&provider_hex, "failure");
-                    let deal_hex = hex::encode(outcome.record.deal_id.as_bytes());
-                    iroha_logger::error!(
-                        %deal_hex,
-                        %provider_hex,
-                        error = %err,
-                        "failed to publish SoraFS settlement artefact to governance DAG"
-                    );
-                }
-            }
+        if let Err(err) = self.flush_governance_outbox() {
+            global_sorafs_node_otel().record_settlement_publish(&provider_hex, "pending");
+            iroha_logger::warn!(
+                %err,
+                %provider_hex,
+                "SoraFS settlement artefact remains pending in the governance outbox"
+            );
+        } else {
+            let status = if self.pending_governance_publication_count() == 0 {
+                "success"
+            } else {
+                "pending"
+            };
+            global_sorafs_node_otel().record_settlement_publish(&provider_hex, status);
         }
         Ok(outcome)
     }
@@ -8940,139 +11657,1452 @@ impl NodeHandle {
             .map_err(Self::repair_durability_error)
     }
 
-    fn record_repair_event(&self, event: RepairTaskEventV1) -> Result<(), RepairSchedulerError> {
+    fn repair_task_snapshot_for_transaction(
+        &self,
+        ticket_id: &RepairTicketId,
+    ) -> Result<Option<RepairTaskSnapshot>, RepairSchedulerError> {
+        self.repair
+            .task_snapshot(ticket_id)
+            .map_err(RepairSchedulerError::Store)
+    }
+
+    fn prepare_repair_mutation_intents(
+        &self,
+        _mutation_guard: &std::sync::MutexGuard<'_, ()>,
+        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        ticket_ids: &[RepairTicketId],
+        operation: &str,
+        operation_digest: [u8; 32],
+    ) -> Result<Vec<RepairMutationIntentV1>, RepairSchedulerError> {
+        if operation.trim().is_empty() || operation.len() > REPAIR_MUTATION_OPERATION_MAX_BYTES {
+            return Err(Self::repair_durability_error(
+                "repair mutation operation label is empty or oversized",
+            ));
+        }
+        let reserved_outbox_slots = repair_mutation_required_outbox_slots(operation)
+            .ok_or_else(|| Self::repair_durability_error("unknown repair mutation operation"))?;
+        let mut tickets = ticket_ids.to_vec();
+        tickets.sort_by(|left, right| left.0.cmp(&right.0));
+        tickets.dedup();
+        let mut cursors = Vec::with_capacity(tickets.len());
+        for ticket_id in &tickets {
+            let snapshot = self.repair_task_snapshot_for_transaction(ticket_id)?;
+            let cursor = repair_mutation_cursor(ticket_id, snapshot.as_ref())
+                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+            cursors.push(cursor);
+        }
+
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             Self::repair_durability_error("auxiliary checkpoint transaction lock poisoned")
         })?;
         self.ensure_repair_durability_healthy()?;
+        let previous = self
+            .repair_mutation_intents
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))?
+            .clone();
+        if !previous.entries.is_empty() {
+            return Err(Self::repair_durability_error(
+                "unreconciled repair mutation intent blocks new task mutations",
+            ));
+        }
+        let limit = self.config.runtime_retention().state_entry_limit();
+        if cursors.len() > limit {
+            return Err(Self::repair_durability_error(format!(
+                "repair mutation intent count {} exceeds configured limit {limit}",
+                cursors.len()
+            )));
+        }
+        let mut runtime = previous.clone();
+        let mut intents = Vec::with_capacity(cursors.len());
+        for cursor in cursors {
+            let sequence = runtime.next_sequence;
+            runtime.next_sequence = sequence.checked_add(1).ok_or_else(|| {
+                Self::repair_durability_error("repair mutation intent sequence exhausted")
+            })?;
+            let mut intent = RepairMutationIntentV1 {
+                version: REPAIR_MUTATION_INTENT_VERSION_V1,
+                sequence,
+                operation: operation.to_owned(),
+                operation_digest,
+                reserved_outbox_slots,
+                cursor,
+                binding_digest: [0; 32],
+            };
+            intent.binding_digest = repair_mutation_binding_digest(
+                intent.version,
+                intent.sequence,
+                &intent.operation,
+                intent.operation_digest,
+                intent.reserved_outbox_slots,
+                &intent.cursor,
+            );
+            validate_repair_mutation_intent(&intent)
+                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+            runtime.entries.insert(sequence, intent.clone());
+            intents.push(intent);
+        }
+        let reserved_slots = repair_mutation_reserved_outbox_slots(&runtime)
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        let gc_reserved_slots = {
+            let gc_intents = self
+                .gc_eviction_intents
+                .read()
+                .map_err(|_| Self::repair_durability_error("GC eviction intent lock poisoned"))?;
+            gc_eviction_reserved_outbox_slots(&gc_intents)
+                .map_err(|err| Self::repair_durability_error(err.to_string()))?
+        };
+        let pending_outbox_entries = self
+            .governance_outbox
+            .read()
+            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
+            .entries
+            .len();
+        if pending_outbox_entries
+            .checked_add(reserved_slots)
+            .and_then(|required| required.checked_add(gc_reserved_slots))
+            .is_none_or(|required| required > limit)
+        {
+            return Err(Self::repair_durability_error(format!(
+                "repair mutation requires {reserved_slots} reserved governance outbox slots, but {pending_outbox_entries} entries and {gc_reserved_slots} GC reservations already consume limit {limit}"
+            )));
+        }
+        *self
+            .repair_mutation_intents
+            .write()
+            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))? =
+            runtime;
+        if !intents.is_empty()
+            && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked()
+        {
+            if err.committed {
+                return Err(Self::repair_durability_error(err.to_string()));
+            }
+            *self.repair_mutation_intents.write().map_err(|_| {
+                Self::repair_durability_error("repair mutation intent rollback lock poisoned")
+            })? = previous;
+            return Err(Self::repair_durability_error(err.to_string()));
+        }
+        Ok(intents)
+    }
+
+    fn append_repair_event_publication_unlocked(
+        &self,
+        event: RepairTaskEventV1,
+        task_event_count: u64,
+    ) -> Result<Option<RepairEvent>, RepairSchedulerError> {
+        let event_digest = repair_event_link_digest(&event)
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        if let Some(existing) = self
+            .repair_event_audit_links
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?
+            .values()
+            .find(|link| link.event_digest == event_digest)
+        {
+            if existing.ticket_id == event.ticket_id.to_string()
+                && existing.task_event_count == task_event_count
+            {
+                return Ok(None);
+            }
+            return Err(Self::repair_durability_error(
+                "repair event stable identity conflicts with persisted audit linkage",
+            ));
+        }
+        if self
+            .repair_events
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?
+            .events
+            .iter()
+            .any(|retained| retained.event == event)
+        {
+            return Err(Self::repair_durability_error(
+                "retained global repair event is missing its stable audit linkage",
+            ));
+        }
+
+        let expected_outbox_sequence = self
+            .governance_outbox
+            .read()
+            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
+            .next_sequence;
+        let payload_digest = repair_audit_payload_digest_v1(&event)
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        let audit = RepairAuditEventV1 {
+            version: REPAIR_AUDIT_EVENT_VERSION_V1,
+            header: SorafsAuditHeaderV1 {
+                sequence: expected_outbox_sequence,
+                occurred_at_unix: event.occurred_at_unix,
+                signer: event
+                    .actor
+                    .clone()
+                    .unwrap_or_else(|| REPAIR_AUDIT_DEFAULT_SIGNER_V1.to_owned()),
+                payload_digest,
+            },
+            payload: event.clone(),
+        };
+        audit
+            .validate()
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        let audit_bytes = norito::to_bytes(&audit).map_err(|err| {
+            Self::repair_durability_error(format!("encode repair audit event: {err}"))
+        })?;
+        let audit_payload_digest = *blake3::hash(&audit_bytes).as_bytes();
+        let (audit_outbox_sequence, inserted) = self
+            .enqueue_repair_governance_outbox_unlocked(
+                GovernanceOutboxKindV1::RepairAudit,
+                audit_bytes,
+            )
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        if !inserted || audit_outbox_sequence != expected_outbox_sequence {
+            return Err(Self::repair_durability_error(
+                "repair audit stable identity collided with an existing outbox entry",
+            ));
+        }
+
         let mut events = self
             .repair_events
             .write()
             .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?;
-        let previous_events = events.clone();
-        let event = events
+        let expected_global_sequence = events
+            .latest_sequence
+            .checked_add(1)
+            .ok_or_else(|| Self::repair_durability_error("repair event sequence exhausted"))?;
+        let global = events
             .append(|sequence| RepairEvent { sequence, event })
             .map_err(|err| Self::repair_durability_error(err.to_string()))?;
-        drop(events);
-        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
-            if err.committed {
-                return Err(Self::repair_durability_error(err.to_string()));
-            }
-            match self.repair_events.write() {
-                Ok(mut events) => *events = previous_events,
-                Err(_) => {
-                    self.mark_durability_unhealthy(
-                        "repair event checkpoint failed and rollback lock was poisoned".to_owned(),
-                    );
-                    return Err(Self::repair_durability_error(
-                        "repair event checkpoint failed and rollback lock was poisoned",
-                    ));
-                }
-            }
-            let message =
-                format!("repair task state committed without its global event checkpoint: {err}");
-            self.mark_durability_unhealthy(message.clone());
-            return Err(Self::repair_durability_error(message));
+        if global.sequence != expected_global_sequence {
+            return Err(Self::repair_durability_error(
+                "repair global event sequence changed during publication transaction",
+            ));
         }
-        let _ = self.repair_event_sender.send(event);
+        let retained_sequences = events
+            .events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<BTreeSet<_>>();
+        drop(events);
+
+        let pending_audit_sequences = self
+            .governance_outbox
+            .read()
+            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
+            .entries
+            .values()
+            .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairAudit)
+            .map(|entry| entry.sequence)
+            .collect::<BTreeSet<_>>();
+        let mut links = self
+            .repair_event_audit_links
+            .write()
+            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?;
+        links.insert(
+            global.sequence,
+            RepairEventAuditLinkV1 {
+                global_event_sequence: global.sequence,
+                ticket_id: global.event.ticket_id.to_string(),
+                task_event_count,
+                event_digest,
+                audit_outbox_sequence,
+                audit_payload_digest,
+            },
+        );
+        let link_limit = self
+            .config
+            .runtime_retention()
+            .state_entry_limit()
+            .saturating_mul(2)
+            .saturating_add(self.config.runtime_retention().event_history_limit());
+        while links.len() > link_limit {
+            let candidate = links.iter().find_map(|(sequence, link)| {
+                let has_newer_for_ticket = links.values().any(|candidate| {
+                    candidate.ticket_id == link.ticket_id
+                        && candidate.task_event_count > link.task_event_count
+                });
+                (!retained_sequences.contains(sequence)
+                    && !pending_audit_sequences.contains(&link.audit_outbox_sequence)
+                    && has_newer_for_ticket)
+                    .then_some(*sequence)
+            });
+            let Some(sequence) = candidate else {
+                return Err(Self::repair_durability_error(format!(
+                    "repair event audit linkage retention exhausted (limit {link_limit})"
+                )));
+            };
+            links.remove(&sequence);
+        }
+        Ok(Some(global))
+    }
+
+    fn append_repair_slash_publication_unlocked(
+        &self,
+        proposal: &RepairSlashProposalV1,
+        stage: RepairSlashProposalStage,
+    ) -> Result<(), RepairSchedulerError> {
+        proposal
+            .validate()
+            .map_err(RepairSchedulerError::InvalidSlashProposal)?;
+        if proposal.approval.is_some() {
+            return Err(Self::repair_durability_error(
+                "repair slash proposal contains a retired embedded approval summary",
+            ));
+        }
+        let bytes = norito::to_bytes(proposal).map_err(|err| {
+            Self::repair_durability_error(format!("encode repair slash proposal: {err}"))
+        })?;
+        let digest = *blake3::hash(&bytes).as_bytes();
+        if self
+            .repair_slash_publication_links
+            .read()
+            .map_err(|_| {
+                Self::repair_durability_error("repair slash publication link lock poisoned")
+            })?
+            .values()
+            .any(|link| {
+                link.ticket_id == proposal.ticket_id.to_string()
+                    && link.proposal_digest == digest
+                    && link.stage == stage
+            })
+        {
+            return Ok(());
+        }
+        let kind = match stage {
+            RepairSlashProposalStage::Drafted => GovernanceOutboxKindV1::RepairSlashDrafted,
+            RepairSlashProposalStage::Submitted => GovernanceOutboxKindV1::RepairSlashSubmitted,
+        };
+        let (outbox_sequence, inserted) = self
+            .enqueue_repair_governance_outbox_unlocked(kind, bytes)
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        if !inserted {
+            return Err(Self::repair_durability_error(
+                "repair slash proposal outbox entry is missing its stable publication linkage",
+            ));
+        }
+        let pending_sequences = self
+            .governance_outbox
+            .read()
+            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
+            .entries
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut links = self.repair_slash_publication_links.write().map_err(|_| {
+            Self::repair_durability_error("repair slash publication link lock poisoned")
+        })?;
+        links.insert(
+            outbox_sequence,
+            RepairSlashPublicationLinkV1 {
+                ticket_id: proposal.ticket_id.to_string(),
+                proposal_digest: digest,
+                stage,
+                outbox_sequence,
+                payload_digest: digest,
+            },
+        );
+        let link_limit = self
+            .config
+            .runtime_retention()
+            .state_entry_limit()
+            .saturating_mul(2);
+        while links.len() > link_limit {
+            let candidate = links.iter().find_map(|(sequence, link)| {
+                let superseded = links.values().any(|candidate| {
+                    candidate.ticket_id == link.ticket_id
+                        && candidate.proposal_digest == link.proposal_digest
+                        && link.stage == RepairSlashProposalStage::Drafted
+                        && candidate.stage == RepairSlashProposalStage::Submitted
+                });
+                (!pending_sequences.contains(sequence) && superseded).then_some(*sequence)
+            });
+            let Some(sequence) = candidate else {
+                return Err(Self::repair_durability_error(format!(
+                    "repair slash publication linkage retention exhausted (limit {link_limit})"
+                )));
+            };
+            links.remove(&sequence);
+        }
         Ok(())
     }
 
-    fn publish_repair_audit_event(&self, event: RepairTaskEventV1) {
-        let Some(publisher) = self.governance_publisher() else {
-            return;
-        };
-        let payload_bytes = event.encode();
-        let payload_digest = Hash::new(payload_bytes);
-        let sequence = match self.repair.next_audit_sequence() {
-            Ok(sequence) => sequence,
-            Err(err) => {
-                iroha_logger::error!(
-                    %err,
-                    ticket = %event.ticket_id,
-                    "failed to durably reserve repair audit event sequence"
-                );
-                return;
+    fn apply_repair_mutation_intent_unlocked(
+        &self,
+        intent: &RepairMutationIntentV1,
+        current: Option<&RepairTaskSnapshot>,
+    ) -> Result<Vec<RepairEvent>, RepairSchedulerError> {
+        validate_repair_mutation_intent(intent)
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        let ticket_id = RepairTicketId(intent.cursor.ticket_id.clone());
+        let current_cursor = repair_mutation_cursor(&ticket_id, current)
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        let mut broadcasts = Vec::new();
+        if current_cursor.snapshot_digest != intent.cursor.snapshot_digest {
+            let current = current.ok_or_else(|| {
+                Self::repair_durability_error(format!(
+                    "repair task {} disappeared during a durable mutation",
+                    intent.cursor.ticket_id
+                ))
+            })?;
+            if current_cursor.event_count < intent.cursor.event_count {
+                return Err(Self::repair_durability_error(format!(
+                    "repair task {} event history rewound during mutation",
+                    intent.cursor.ticket_id
+                )));
             }
-        };
-        let header = SorafsAuditHeaderV1 {
-            sequence,
-            occurred_at_unix: event.occurred_at_unix,
-            signer: event
-                .actor
-                .clone()
-                .unwrap_or_else(|| "sorafs-repair".to_string()),
-            payload_digest: *payload_digest.as_ref(),
-        };
-        let audit_event = RepairAuditEventV1 {
-            version: REPAIR_AUDIT_EVENT_VERSION_V1,
-            header,
-            payload: event,
-        };
-        let encoded = match norito::to_bytes(&audit_event) {
-            Ok(encoded) => encoded,
-            Err(err) => {
-                iroha_logger::error!(
-                    %err,
-                    ticket = %audit_event.payload.ticket_id,
-                    "failed to encode repair audit event"
-                );
-                return;
+            if current_cursor.event_count > intent.cursor.event_count {
+                if intent.cursor.event_count < current.events_dropped {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair task {} dropped an unlinked event during mutation reconciliation",
+                        intent.cursor.ticket_id
+                    )));
+                }
+                let first_retained = current.events_dropped.checked_add(1).ok_or_else(|| {
+                    Self::repair_durability_error("repair task event ordinal exhausted")
+                })?;
+                let mut expected = intent.cursor.event_count.checked_add(1).ok_or_else(|| {
+                    Self::repair_durability_error("repair task event ordinal exhausted")
+                })?;
+                for (index, event) in current.events.iter().enumerate() {
+                    let ordinal = first_retained
+                        .checked_add(u64::try_from(index).map_err(|_| {
+                            Self::repair_durability_error("repair task event index exceeds u64")
+                        })?)
+                        .ok_or_else(|| {
+                            Self::repair_durability_error("repair task event ordinal exhausted")
+                        })?;
+                    if ordinal <= intent.cursor.event_count {
+                        continue;
+                    }
+                    if ordinal != expected {
+                        return Err(Self::repair_durability_error(format!(
+                            "repair task {} new event suffix is not consecutive",
+                            intent.cursor.ticket_id
+                        )));
+                    }
+                    if let Some(global) =
+                        self.append_repair_event_publication_unlocked(event.clone(), ordinal)?
+                    {
+                        broadcasts.push(global);
+                    }
+                    expected = expected.checked_add(1).ok_or_else(|| {
+                        Self::repair_durability_error("repair task event ordinal exhausted")
+                    })?;
+                }
+                if expected.checked_sub(1) != Some(current_cursor.event_count) {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair task {} current event suffix cannot prove every committed transition",
+                        intent.cursor.ticket_id
+                    )));
+                }
             }
-        };
-        if let Err(err) = publisher.publish_repair_audit_event(&audit_event, &encoded) {
-            iroha_logger::error!(
-                %err,
-                ticket = %audit_event.payload.ticket_id,
-                status = ?audit_event.payload.status,
-                "failed to publish repair audit event to governance DAG"
-            );
+
+            let (current_proposal_digest, _, current_stage) =
+                repair_snapshot_proposal_state(current)
+                    .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+            match (
+                intent.cursor.slash_proposal_digest,
+                intent.cursor.slash_proposal_stage,
+                current_proposal_digest,
+                current_stage,
+            ) {
+                (None, None, None, None) => {}
+                (None, None, Some(_), Some(stage)) => {
+                    let proposal = current.slash_proposal.as_ref().ok_or_else(|| {
+                        Self::repair_durability_error(
+                            "repair proposal stage exists without canonical proposal",
+                        )
+                    })?;
+                    self.append_repair_slash_publication_unlocked(proposal, stage)?;
+                }
+                (
+                    Some(before_digest),
+                    Some(before_stage),
+                    Some(after_digest),
+                    Some(after_stage),
+                ) => {
+                    if before_digest != after_digest {
+                        return Err(Self::repair_durability_error(format!(
+                            "repair task {} slash proposal changed canonical identity",
+                            intent.cursor.ticket_id
+                        )));
+                    }
+                    match (before_stage, after_stage) {
+                        (
+                            RepairSlashProposalStage::Drafted,
+                            RepairSlashProposalStage::Submitted,
+                        ) => {
+                            let proposal = current.slash_proposal.as_ref().ok_or_else(|| {
+                                Self::repair_durability_error(
+                                    "submitted repair proposal is missing canonical bytes",
+                                )
+                            })?;
+                            self.append_repair_slash_publication_unlocked(
+                                proposal,
+                                RepairSlashProposalStage::Submitted,
+                            )?;
+                        }
+                        (
+                            RepairSlashProposalStage::Submitted,
+                            RepairSlashProposalStage::Drafted,
+                        ) => {
+                            return Err(Self::repair_durability_error(format!(
+                                "repair task {} slash proposal stage downgraded after submission",
+                                intent.cursor.ticket_id
+                            )));
+                        }
+                        _ => {}
+                    }
+                }
+                (Some(_), Some(_), None, None) => {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair task {} removed its persisted slash proposal",
+                        intent.cursor.ticket_id
+                    )));
+                }
+                _ => {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair task {} has incomplete slash proposal transition state",
+                        intent.cursor.ticket_id
+                    )));
+                }
+            }
         }
+
+        let removed = self
+            .repair_mutation_intents
+            .write()
+            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))?
+            .entries
+            .remove(&intent.sequence);
+        if removed.as_ref() != Some(intent) {
+            return Err(Self::repair_durability_error(format!(
+                "repair mutation intent {} changed during finalization",
+                intent.sequence
+            )));
+        }
+        Ok(broadcasts)
     }
 
-    fn publish_gc_audit_event(&self, payload: GcAuditPayloadV1) {
-        let Some(publisher) = self.governance_publisher() else {
-            return;
-        };
-        let payload_bytes = payload.encode();
-        let payload_digest = Hash::new(payload_bytes);
-        let sequence = match self.repair.next_audit_sequence() {
-            Ok(sequence) => sequence,
-            Err(err) => {
-                iroha_logger::error!(%err, "failed to durably reserve GC audit event sequence");
-                return;
+    fn restore_repair_publication_runtime(
+        &self,
+        intents: RepairMutationIntentRuntime,
+        events: BoundedEventHistory<RepairEvent>,
+        outbox: GovernanceOutboxRuntime,
+        event_links: BTreeMap<u64, RepairEventAuditLinkV1>,
+        slash_links: BTreeMap<u64, RepairSlashPublicationLinkV1>,
+    ) -> Result<(), RepairSchedulerError> {
+        *self.repair_mutation_intents.write().map_err(|_| {
+            Self::repair_durability_error("repair mutation intent rollback lock poisoned")
+        })? = intents;
+        *self.repair_events.write().map_err(|_| {
+            Self::repair_durability_error("repair event history rollback lock poisoned")
+        })? = events;
+        *self.governance_outbox.write().map_err(|_| {
+            Self::repair_durability_error("governance outbox rollback lock poisoned")
+        })? = outbox;
+        *self.repair_event_audit_links.write().map_err(|_| {
+            Self::repair_durability_error("repair event audit link rollback lock poisoned")
+        })? = event_links;
+        *self.repair_slash_publication_links.write().map_err(|_| {
+            Self::repair_durability_error("repair slash publication link rollback lock poisoned")
+        })? = slash_links;
+        Ok(())
+    }
+
+    fn finalize_repair_mutation_intents(
+        &self,
+        _mutation_guard: &std::sync::MutexGuard<'_, ()>,
+        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        intents: &[RepairMutationIntentV1],
+        fail_closed_on_error: bool,
+    ) -> Result<Vec<RepairEvent>, RepairSchedulerError> {
+        let mut current = BTreeMap::new();
+        for intent in intents {
+            let ticket_id = RepairTicketId(intent.cursor.ticket_id.clone());
+            let snapshot = match self.repair_task_snapshot_for_transaction(&ticket_id) {
+                Ok(snapshot) => snapshot,
+                Err(err) => {
+                    if fail_closed_on_error {
+                        self.mark_durability_unhealthy(format!(
+                            "cannot reconcile committed repair task {} with its publication intent: {err}",
+                            intent.cursor.ticket_id
+                        ));
+                    }
+                    return Err(err);
+                }
+            };
+            current.insert(intent.sequence, snapshot);
+        }
+        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            Self::repair_durability_error("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        if fail_closed_on_error {
+            self.ensure_repair_durability_healthy()?;
+        }
+        let previous_intents = self
+            .repair_mutation_intents
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair mutation intent lock poisoned"))?
+            .clone();
+        let previous_events = self
+            .repair_events
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?
+            .clone();
+        let previous_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| Self::repair_durability_error("governance outbox lock poisoned"))?
+            .clone();
+        let previous_event_links = self
+            .repair_event_audit_links
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?
+            .clone();
+        let previous_slash_links = self
+            .repair_slash_publication_links
+            .read()
+            .map_err(|_| {
+                Self::repair_durability_error("repair slash publication link lock poisoned")
+            })?
+            .clone();
+
+        let mut broadcasts = Vec::new();
+        for intent in intents {
+            let result = self.apply_repair_mutation_intent_unlocked(
+                intent,
+                current.get(&intent.sequence).and_then(Option::as_ref),
+            );
+            match result {
+                Ok(mut events) => broadcasts.append(&mut events),
+                Err(err) => {
+                    if let Err(rollback) = self.restore_repair_publication_runtime(
+                        previous_intents,
+                        previous_events,
+                        previous_outbox,
+                        previous_event_links,
+                        previous_slash_links,
+                    ) {
+                        let reason = self.record_unrecoverable_rollback(
+                            "failed to roll back repair publication finalization",
+                            rollback,
+                        );
+                        return Err(Self::repair_durability_error(reason));
+                    }
+                    if fail_closed_on_error {
+                        self.mark_durability_unhealthy(err.to_string());
+                    }
+                    return Err(err);
+                }
             }
-        };
-        let header = SorafsAuditHeaderV1 {
+        }
+        if !intents.is_empty()
+            && let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked()
+        {
+            if err.committed {
+                return Err(Self::repair_durability_error(err.to_string()));
+            }
+            if let Err(rollback) = self.restore_repair_publication_runtime(
+                previous_intents,
+                previous_events,
+                previous_outbox,
+                previous_event_links,
+                previous_slash_links,
+            ) {
+                let reason = self.record_unrecoverable_rollback(
+                    "failed to roll back repair publication checkpoint failure",
+                    rollback,
+                );
+                return Err(Self::repair_durability_error(reason));
+            }
+            let message = format!(
+                "repair task state may have committed without its publication transaction: {err}"
+            );
+            if fail_closed_on_error {
+                self.mark_durability_unhealthy(message.clone());
+            }
+            return Err(Self::repair_durability_error(message));
+        }
+        drop(_checkpoint_guard);
+        for event in &broadcasts {
+            let _ = self.repair_event_sender.send(event.clone());
+        }
+        Ok(broadcasts)
+    }
+
+    fn run_repair_task_mutation<T>(
+        &self,
+        ticket_ids: &[RepairTicketId],
+        operation: &str,
+        material: &[u8],
+        mutate: impl FnOnce(&RepairManager) -> Result<T, RepairSchedulerError>,
+    ) -> Result<T, RepairSchedulerError> {
+        let mutation_guard = self
+            .repair_mutation_lock
+            .lock()
+            .map_err(|_| Self::repair_durability_error("repair mutation lock poisoned"))?;
+        let drain_guard = self
+            .governance_outbox_drain_lock
+            .lock()
+            .map_err(|_| Self::repair_durability_error("governance outbox drain lock poisoned"))?;
+        self.ensure_repair_durability_healthy()?;
+        let operation_digest = repair_mutation_operation_digest(operation, ticket_ids, material);
+        let intents = self.prepare_repair_mutation_intents(
+            &mutation_guard,
+            &drain_guard,
+            ticket_ids,
+            operation,
+            operation_digest,
+        )?;
+        let result = mutate(&self.repair);
+        self.finalize_repair_mutation_intents(&mutation_guard, &drain_guard, &intents, true)?;
+        drop(drain_guard);
+        drop(mutation_guard);
+        self.flush_governance_outbox()
+            .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+        result
+    }
+
+    fn validate_repair_publication_state_against_store(&self) -> Result<(), RepairSchedulerError> {
+        let has_local_publication_state = !self
+            .repair_event_audit_links
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?
+            .is_empty()
+            || !self
+                .repair_slash_publication_links
+                .read()
+                .map_err(|_| {
+                    Self::repair_durability_error("repair slash publication link lock poisoned")
+                })?
+                .is_empty()
+            || !self
+                .repair_events
+                .read()
+                .map_err(|_| Self::repair_durability_error("repair event history lock poisoned"))?
+                .events
+                .is_empty();
+        if !has_local_publication_state && !self.repair_config.enabled() {
+            return Ok(());
+        }
+        let snapshots = self
+            .repair
+            .list_task_snapshots(RepairTaskFilters::default())
+            .map_err(RepairSchedulerError::Store)?;
+        let snapshots_by_ticket = snapshots
+            .iter()
+            .map(|snapshot| (snapshot.record.ticket_id.to_string(), snapshot))
+            .collect::<BTreeMap<_, _>>();
+        let event_links = self
+            .repair_event_audit_links
+            .read()
+            .map_err(|_| Self::repair_durability_error("repair event audit link lock poisoned"))?;
+        for snapshot in &snapshots {
+            let event_count = repair_snapshot_event_count(snapshot)
+                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+            if event_count > 0 {
+                let latest = snapshot.events.last().ok_or_else(|| {
+                    Self::repair_durability_error(format!(
+                        "repair task {} has an event high-water without a retained final event",
+                        snapshot.record.ticket_id
+                    ))
+                })?;
+                let digest = repair_event_link_digest(latest)
+                    .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+                if !event_links.values().any(|link| {
+                    link.ticket_id == snapshot.record.ticket_id.to_string()
+                        && link.task_event_count == event_count
+                        && link.event_digest == digest
+                }) {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair task {} latest event lacks durable global/audit linkage",
+                        snapshot.record.ticket_id
+                    )));
+                }
+            }
+        }
+        for link in event_links.values() {
+            let snapshot = snapshots_by_ticket.get(&link.ticket_id).ok_or_else(|| {
+                Self::repair_durability_error(format!(
+                    "repair event linkage references absent task {}",
+                    link.ticket_id
+                ))
+            })?;
+            let event_count = repair_snapshot_event_count(snapshot)
+                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+            if link.task_event_count > event_count {
+                return Err(Self::repair_durability_error(format!(
+                    "repair event linkage for task {} exceeds authoritative event high-water",
+                    link.ticket_id
+                )));
+            }
+            let first_retained = snapshot.events_dropped.saturating_add(1);
+            if link.task_event_count >= first_retained {
+                let index =
+                    usize::try_from(link.task_event_count - first_retained).map_err(|_| {
+                        Self::repair_durability_error("repair event linkage index exceeds usize")
+                    })?;
+                let event = snapshot.events.get(index).ok_or_else(|| {
+                    Self::repair_durability_error(format!(
+                        "repair event linkage for task {} is outside retained history",
+                        link.ticket_id
+                    ))
+                })?;
+                if repair_event_link_digest(event)
+                    .map_err(|err| Self::repair_durability_error(err.to_string()))?
+                    != link.event_digest
+                {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair event linkage for task {} conflicts with authoritative history",
+                        link.ticket_id
+                    )));
+                }
+            }
+        }
+        drop(event_links);
+
+        let slash_links = self.repair_slash_publication_links.read().map_err(|_| {
+            Self::repair_durability_error("repair slash publication link lock poisoned")
+        })?;
+        for snapshot in &snapshots {
+            let (proposal_digest, _, stage) = repair_snapshot_proposal_state(snapshot)
+                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+            if let (Some(proposal_digest), Some(stage)) = (proposal_digest, stage)
+                && !slash_links.values().any(|link| {
+                    link.ticket_id == snapshot.record.ticket_id.to_string()
+                        && link.proposal_digest == proposal_digest
+                        && link.stage == stage
+                })
+            {
+                return Err(Self::repair_durability_error(format!(
+                    "repair task {} slash proposal stage lacks durable publication linkage",
+                    snapshot.record.ticket_id
+                )));
+            }
+        }
+        for link in slash_links.values() {
+            let snapshot = snapshots_by_ticket.get(&link.ticket_id).ok_or_else(|| {
+                Self::repair_durability_error(format!(
+                    "repair slash linkage references absent task {}",
+                    link.ticket_id
+                ))
+            })?;
+            let (proposal_digest, _, stage) = repair_snapshot_proposal_state(snapshot)
+                .map_err(|err| Self::repair_durability_error(err.to_string()))?;
+            if proposal_digest != Some(link.proposal_digest) {
+                return Err(Self::repair_durability_error(format!(
+                    "repair slash linkage for task {} conflicts with canonical proposal",
+                    link.ticket_id
+                )));
+            }
+            match (link.stage, stage) {
+                (RepairSlashProposalStage::Submitted, Some(RepairSlashProposalStage::Drafted)) => {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair task {} slash proposal publication stage downgraded",
+                        link.ticket_id
+                    )));
+                }
+                (_, Some(_)) => {}
+                (_, None) => {
+                    return Err(Self::repair_durability_error(format!(
+                        "repair slash linkage for task {} has no authoritative stage",
+                        link.ticket_id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_gc_eviction_intent(
+        &self,
+        _gc_guard: &std::sync::MutexGuard<'_, ()>,
+        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        storage: &StorageBackend,
+        target: &StoredManifest,
+        provider_id: [u8; 32],
+        audit_timestamp_unix: u64,
+        reason: &str,
+    ) -> Result<GcEvictionIntentV1, GovernancePublishError> {
+        let snapshot = gc_storage_snapshot(storage)?;
+        let authoritative_target = snapshot
+            .manifests
+            .iter()
+            .find(|manifest| manifest.manifest_id() == target.manifest_id())
+            .ok_or_else(|| {
+                GovernancePublishError::other(format!(
+                    "GC target {} disappeared before intent preparation",
+                    target.manifest_id()
+                ))
+            })?;
+        if gc_manifest_identity_digest(authoritative_target) != gc_manifest_identity_digest(target)
+        {
+            return Err(GovernancePublishError::other(format!(
+                "GC target {} changed canonical storage identity before intent preparation",
+                target.manifest_id()
+            )));
+        }
+        for index in 0..authoritative_target.chunk_count() {
+            let chunk = authoritative_target.chunk(index).ok_or_else(|| {
+                GovernancePublishError::other("GC target chunk metadata is incomplete")
+            })?;
+            let refcount = snapshot
+                .chunk_refcounts
+                .iter()
+                .find(|entry| entry.digest == chunk.digest)
+                .ok_or_else(|| {
+                    GovernancePublishError::other("GC target chunk lacks a storage refcount")
+                })?;
+            if refcount.count > 1 {
+                return Err(GovernancePublishError::other(format!(
+                    "GC target {} acquired shared chunks before intent preparation",
+                    target.manifest_id()
+                )));
+            }
+        }
+        let storage_after = gc_expected_post_storage_identity(&snapshot, authoritative_target)?;
+
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+        let previous_intents = self
+            .gc_eviction_intents
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?
+            .clone();
+        if !previous_intents.entries.is_empty() {
+            return Err(GovernancePublishError::other(
+                "unreconciled GC eviction intent blocks a new eviction",
+            ));
+        }
+        let sequence = previous_intents.next_sequence;
+        let next_sequence = sequence.checked_add(1).ok_or_else(|| {
+            GovernancePublishError::other("GC eviction intent sequence exhausted")
+        })?;
+        let mut intent = GcEvictionIntentV1 {
+            version: GC_EVICTION_INTENT_VERSION_V1,
             sequence,
-            occurred_at_unix: payload.evicted_at_unix,
-            signer: "sorafs-gc".to_string(),
-            payload_digest: *payload_digest.as_ref(),
+            manifest_id: authoritative_target.manifest_id().to_owned(),
+            manifest_digest: *authoritative_target.manifest_digest(),
+            manifest_identity_digest: gc_manifest_identity_digest(authoritative_target),
+            provider_id,
+            audit_timestamp_unix,
+            reason: reason.to_owned(),
+            expected_freed_bytes: authoritative_target.content_length(),
+            storage_before: snapshot.identity,
+            storage_after,
+            reserved_outbox_slots: GC_EVICTION_RESERVED_OUTBOX_SLOTS,
+            binding_digest: [0; 32],
         };
-        let audit_event = GcAuditEventV1 {
+        intent.binding_digest = gc_eviction_intent_binding_digest(&intent)?;
+        validate_gc_eviction_intent(&intent)?;
+
+        let repair_reserved_slots = {
+            let repair = self.repair_mutation_intents.read().map_err(|_| {
+                GovernancePublishError::other("repair mutation intent lock poisoned")
+            })?;
+            repair_mutation_reserved_outbox_slots(&repair)?
+        };
+        let pending_outbox_entries = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .entries
+            .len();
+        let limit = self.config.runtime_retention().state_entry_limit();
+        let required = pending_outbox_entries
+            .checked_add(repair_reserved_slots)
+            .and_then(|count| count.checked_add(usize::from(intent.reserved_outbox_slots)))
+            .ok_or_else(|| GovernancePublishError::other("outbox reservation count overflow"))?;
+        if required > limit {
+            return Err(GovernancePublishError::other(format!(
+                "GC eviction requires one reserved governance outbox slot, but {pending_outbox_entries} entries and {repair_reserved_slots} repair reservations already consume limit {limit}"
+            )));
+        }
+
+        let previous_links = self
+            .gc_eviction_audit_links
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))?
+            .clone();
+        let pending_sequences = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .entries
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut links = previous_links.clone();
+        while links.len() >= limit {
+            let candidate = links
+                .iter()
+                .find_map(|(sequence, link)| {
+                    (!pending_sequences.contains(&link.outbox_sequence)).then_some(*sequence)
+                })
+                .ok_or_else(|| {
+                    GovernancePublishError::other(format!(
+                        "GC eviction audit linkage retention exhausted (limit {limit})"
+                    ))
+                })?;
+            links.remove(&candidate);
+        }
+
+        let mut runtime = previous_intents.clone();
+        runtime.next_sequence = next_sequence;
+        runtime.entries.insert(sequence, intent.clone());
+        let mut intent_runtime = self
+            .gc_eviction_intents
+            .write()
+            .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?;
+        let mut audit_links = self
+            .gc_eviction_audit_links
+            .write()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))?;
+        *intent_runtime = runtime;
+        *audit_links = links;
+        drop(audit_links);
+        drop(intent_runtime);
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            let mut intent_runtime = self.gc_eviction_intents.write().map_err(|_| {
+                GovernancePublishError::other("GC eviction intent rollback lock poisoned")
+            })?;
+            let mut audit_links = self.gc_eviction_audit_links.write().map_err(|_| {
+                GovernancePublishError::other("GC eviction link rollback lock poisoned")
+            })?;
+            *intent_runtime = previous_intents;
+            *audit_links = previous_links;
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        drop(checkpoint_guard);
+        Ok(intent)
+    }
+
+    fn append_gc_eviction_audit_unlocked(
+        &self,
+        intent: &GcEvictionIntentV1,
+    ) -> Result<(), GovernancePublishError> {
+        validate_gc_eviction_intent(intent)?;
+        if self
+            .gc_eviction_audit_links
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))?
+            .contains_key(&intent.sequence)
+        {
+            return Err(GovernancePublishError::other(format!(
+                "GC eviction intent {} already has publication linkage while still pending",
+                intent.sequence
+            )));
+        }
+        let expected_outbox_sequence = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .next_sequence;
+        let payload = gc_eviction_payload(intent);
+        let payload_digest = gc_audit_payload_digest_v1(&payload)
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        let audit = GcAuditEventV1 {
             version: GC_AUDIT_EVENT_VERSION_V1,
-            header,
+            header: SorafsAuditHeaderV1 {
+                sequence: expected_outbox_sequence,
+                occurred_at_unix: intent.audit_timestamp_unix,
+                signer: GC_AUDIT_SIGNER_V1.to_owned(),
+                payload_digest,
+            },
             payload,
         };
-        let encoded = match norito::to_bytes(&audit_event) {
-            Ok(encoded) => encoded,
-            Err(err) => {
-                iroha_logger::error!(%err, "failed to encode GC audit event");
-                return;
+        audit
+            .validate()
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        let encoded = norito::to_bytes(&audit).map_err(|err| {
+            GovernancePublishError::other(format!("encode GC eviction audit event: {err}"))
+        })?;
+        let outbox_payload_digest = *blake3::hash(&encoded).as_bytes();
+        let (outbox_sequence, inserted) =
+            self.enqueue_gc_eviction_governance_outbox_unlocked(encoded)?;
+        if !inserted || outbox_sequence != expected_outbox_sequence {
+            return Err(GovernancePublishError::other(
+                "GC eviction audit collided with an existing outbox entry",
+            ));
+        }
+        let mut link = GcEvictionAuditLinkV1 {
+            version: GC_EVICTION_AUDIT_LINK_VERSION_V1,
+            intent_sequence: intent.sequence,
+            outbox_sequence,
+            manifest_id: intent.manifest_id.clone(),
+            manifest_digest: intent.manifest_digest,
+            provider_id: intent.provider_id,
+            occurred_at_unix: intent.audit_timestamp_unix,
+            freed_bytes: intent.expected_freed_bytes,
+            reason: intent.reason.clone(),
+            storage_gc_evictions_total: intent.storage_after.gc_evictions_total,
+            payload_digest,
+            outbox_payload_digest,
+            binding_digest: [0; 32],
+        };
+        link.binding_digest = gc_eviction_audit_link_binding_digest(&link);
+        validate_gc_eviction_audit_link(&link)?;
+        let replaced = self
+            .gc_eviction_audit_links
+            .write()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))?
+            .insert(intent.sequence, link);
+        if replaced.is_some() {
+            return Err(GovernancePublishError::other(
+                "GC eviction audit link sequence changed during finalization",
+            ));
+        }
+        Ok(())
+    }
+
+    fn restore_gc_publication_runtime(
+        &self,
+        intents: GcEvictionIntentRuntime,
+        links: BTreeMap<u64, GcEvictionAuditLinkV1>,
+        outbox: GovernanceOutboxRuntime,
+    ) -> Result<(), GovernancePublishError> {
+        let mut intent_runtime = self.gc_eviction_intents.write().map_err(|_| {
+            GovernancePublishError::other("GC eviction intent rollback lock poisoned")
+        })?;
+        let mut audit_links = self.gc_eviction_audit_links.write().map_err(|_| {
+            GovernancePublishError::other("GC eviction link rollback lock poisoned")
+        })?;
+        let mut governance_outbox = self.governance_outbox.write().map_err(|_| {
+            GovernancePublishError::other("governance outbox rollback lock poisoned")
+        })?;
+        *intent_runtime = intents;
+        *audit_links = links;
+        *governance_outbox = outbox;
+        Ok(())
+    }
+
+    fn settle_gc_eviction_intent_against_storage(
+        &self,
+        _gc_guard: &std::sync::MutexGuard<'_, ()>,
+        _drain_guard: &std::sync::MutexGuard<'_, ()>,
+        storage: &StorageBackend,
+        intent: &GcEvictionIntentV1,
+        fail_closed_on_error: bool,
+    ) -> Result<GcIntentDisposition, GovernancePublishError> {
+        validate_gc_eviction_intent(intent)?;
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        if fail_closed_on_error {
+            self.ensure_durability_healthy()
+                .map_err(GovernancePublishError::other)?;
+        }
+        let reconciliation_error = |message: String| {
+            if fail_closed_on_error {
+                self.mark_durability_unhealthy(message.clone());
+            }
+            GovernancePublishError::other(message)
+        };
+        let snapshot = gc_storage_snapshot(storage).map_err(|err| {
+            reconciliation_error(format!(
+                "cannot classify storage generation for GC intent {}: {err}",
+                intent.sequence
+            ))
+        })?;
+        let target = snapshot
+            .manifests
+            .iter()
+            .find(|manifest| manifest.manifest_id() == intent.manifest_id);
+        let disposition = if snapshot.identity == intent.storage_before {
+            let target = target.ok_or_else(|| {
+                reconciliation_error(
+                    "pre-domain GC generation is missing its intended manifest".to_owned(),
+                )
+            })?;
+            if gc_manifest_identity_digest(target) != intent.manifest_identity_digest
+                || target.manifest_digest() != &intent.manifest_digest
+            {
+                return Err(reconciliation_error(
+                    "pre-domain GC manifest conflicts with the persisted intent".to_owned(),
+                ));
+            }
+            GcIntentDisposition::DiscardedPreDomain
+        } else if snapshot.identity == intent.storage_after {
+            if target.is_some() {
+                return Err(reconciliation_error(
+                    "post-domain GC generation still contains the evicted manifest".to_owned(),
+                ));
+            }
+            GcIntentDisposition::FinalizedCommitted
+        } else {
+            return Err(reconciliation_error(format!(
+                "storage generation drift prevents deterministic reconciliation of GC intent {}",
+                intent.sequence
+            )));
+        };
+
+        let previous_intents = self
+            .gc_eviction_intents
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?
+            .clone();
+        if previous_intents.entries.get(&intent.sequence) != Some(intent) {
+            return Err(reconciliation_error(format!(
+                "GC eviction intent {} changed before reconciliation",
+                intent.sequence
+            )));
+        }
+        let previous_links = self
+            .gc_eviction_audit_links
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))?
+            .clone();
+        let previous_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+
+        let mutation = (|| {
+            if disposition == GcIntentDisposition::FinalizedCommitted {
+                self.append_gc_eviction_audit_unlocked(intent)?;
+            }
+            let removed = self
+                .gc_eviction_intents
+                .write()
+                .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?
+                .entries
+                .remove(&intent.sequence);
+            if removed.as_ref() != Some(intent) {
+                return Err(GovernancePublishError::other(format!(
+                    "GC eviction intent {} changed during finalization",
+                    intent.sequence
+                )));
+            }
+            Ok(())
+        })();
+        if let Err(err) = mutation {
+            if let Err(rollback) = self.restore_gc_publication_runtime(
+                previous_intents,
+                previous_links,
+                previous_outbox,
+            ) {
+                let reason = self.record_unrecoverable_rollback(
+                    "failed to roll back GC publication finalization",
+                    rollback,
+                );
+                return Err(GovernancePublishError::other(reason));
+            }
+            if fail_closed_on_error && disposition == GcIntentDisposition::FinalizedCommitted {
+                self.mark_durability_unhealthy(err.to_string());
+            }
+            return Err(err);
+        }
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            if let Err(rollback) = self.restore_gc_publication_runtime(
+                previous_intents,
+                previous_links,
+                previous_outbox,
+            ) {
+                let reason = self.record_unrecoverable_rollback(
+                    "failed to roll back GC publication checkpoint failure",
+                    rollback,
+                );
+                return Err(GovernancePublishError::other(reason));
+            }
+            let message =
+                format!("GC storage state may have committed without its audit publication: {err}");
+            if fail_closed_on_error && disposition == GcIntentDisposition::FinalizedCommitted {
+                self.mark_durability_unhealthy(message.clone());
+            }
+            return Err(GovernancePublishError::other(message));
+        }
+        drop(checkpoint_guard);
+        Ok(disposition)
+    }
+
+    fn evict_manifest_with_gc_audit(
+        &self,
+        gc_guard: &std::sync::MutexGuard<'_, ()>,
+        storage: &StorageBackend,
+        target: &StoredManifest,
+        provider_id: [u8; 32],
+        audit_timestamp_unix: u64,
+        reason: &str,
+    ) -> Result<GcEvictionTransactionOutcome, GovernancePublishError> {
+        let drain_guard = self
+            .governance_outbox_drain_lock
+            .lock()
+            .map_err(|_| GovernancePublishError::other("governance outbox drain lock poisoned"))?;
+        let intent = self.prepare_gc_eviction_intent(
+            gc_guard,
+            &drain_guard,
+            storage,
+            target,
+            provider_id,
+            audit_timestamp_unix,
+            reason,
+        )?;
+        let before_eviction = gc_storage_snapshot(storage).map_err(|err| {
+            let message = format!(
+                "cannot revalidate storage generation for GC intent {}: {err}",
+                intent.sequence
+            );
+            self.mark_durability_unhealthy(message.clone());
+            GovernancePublishError::other(message)
+        })?;
+        if before_eviction.identity != intent.storage_before
+            || before_eviction
+                .manifests
+                .iter()
+                .find(|manifest| manifest.manifest_id() == intent.manifest_id)
+                .is_none_or(|manifest| {
+                    gc_manifest_identity_digest(manifest) != intent.manifest_identity_digest
+                })
+        {
+            let message = format!(
+                "storage generation changed after preparing GC intent {}",
+                intent.sequence
+            );
+            self.mark_durability_unhealthy(message.clone());
+            return Err(GovernancePublishError::other(message));
+        }
+
+        let freed_bytes = match storage.evict_manifest(&intent.manifest_id) {
+            Ok(freed_bytes) => freed_bytes,
+            Err(storage_error) => {
+                let current = gc_storage_snapshot_unchecked(storage);
+                if storage.ensure_durability_healthy().is_ok()
+                    && current.as_ref().is_ok_and(|snapshot| {
+                        snapshot.identity == intent.storage_before
+                            && snapshot.manifests.iter().any(|manifest| {
+                                manifest.manifest_id() == intent.manifest_id
+                                    && gc_manifest_identity_digest(manifest)
+                                        == intent.manifest_identity_digest
+                            })
+                    })
+                {
+                    self.settle_gc_eviction_intent_against_storage(
+                        gc_guard,
+                        &drain_guard,
+                        storage,
+                        &intent,
+                        false,
+                    )?;
+                    return Err(GovernancePublishError::other(storage_error.to_string()));
+                }
+                let message = format!(
+                    "GC eviction result for intent {} is ambiguous after storage error: {storage_error}",
+                    intent.sequence
+                );
+                self.mark_durability_unhealthy(message.clone());
+                return Err(GovernancePublishError::other(message));
             }
         };
-        if let Err(err) = publisher.publish_gc_audit_event(&audit_event, &encoded) {
-            iroha_logger::error!(
-                %err,
-                "failed to publish GC audit event to governance DAG"
+        if freed_bytes != intent.expected_freed_bytes {
+            let message = format!(
+                "GC eviction intent {} freed {freed_bytes} bytes, expected {}",
+                intent.sequence, intent.expected_freed_bytes
             );
+            self.mark_durability_unhealthy(message.clone());
+            return Err(GovernancePublishError::other(message));
         }
+        let disposition = self.settle_gc_eviction_intent_against_storage(
+            gc_guard,
+            &drain_guard,
+            storage,
+            &intent,
+            true,
+        )?;
+        if disposition != GcIntentDisposition::FinalizedCommitted {
+            let message = format!(
+                "GC intent {} reverted to a pre-domain generation after eviction",
+                intent.sequence
+            );
+            self.mark_durability_unhealthy(message.clone());
+            return Err(GovernancePublishError::other(message));
+        }
+        drop(drain_guard);
+        let publish_error = self
+            .flush_governance_outbox()
+            .err()
+            .map(|err| err.to_string());
+        Ok(GcEvictionTransactionOutcome {
+            freed_bytes,
+            publish_error,
+        })
+    }
+
+    fn validate_gc_eviction_links_against_storage(
+        &self,
+        storage: &StorageBackend,
+    ) -> Result<(), GovernancePublishError> {
+        let (_, current_evictions_total) = storage.gc_counters();
+        let links = self
+            .gc_eviction_audit_links
+            .read()
+            .map_err(|_| GovernancePublishError::other("GC eviction audit link lock poisoned"))?;
+        let mut previous_counter = None;
+        for link in links.values() {
+            validate_gc_eviction_audit_link(link)?;
+            if link.storage_gc_evictions_total > current_evictions_total
+                || previous_counter
+                    .is_some_and(|previous| previous >= link.storage_gc_evictions_total)
+            {
+                return Err(GovernancePublishError::other(
+                    "GC eviction audit links conflict with storage counter generation",
+                ));
+            }
+            previous_counter = Some(link.storage_gc_evictions_total);
+        }
+        Ok(())
+    }
+
+    fn publish_gc_audit_event(
+        &self,
+        payload: GcAuditPayloadV1,
+    ) -> Result<(), GovernancePublishError> {
+        if payload.blocked_reason.is_none() {
+            return Err(GovernancePublishError::other(
+                "successful GC audits must be committed through an eviction transaction",
+            ));
+        }
+        let manifest_digest = payload.manifest_digest;
+        self.enqueue_sequenced_governance_outbox(GovernanceOutboxKindV1::GcAudit, |sequence| {
+            let payload_digest = gc_audit_payload_digest_v1(&payload)
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            let header = SorafsAuditHeaderV1 {
+                sequence,
+                occurred_at_unix: payload.evicted_at_unix,
+                signer: GC_AUDIT_SIGNER_V1.to_owned(),
+                payload_digest,
+            };
+            let audit_event = GcAuditEventV1 {
+                version: GC_AUDIT_EVENT_VERSION_V1,
+                header,
+                payload,
+            };
+            audit_event
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            norito::to_bytes(&audit_event).map_err(|err| {
+                GovernancePublishError::other(format!("encode GC audit event: {err}"))
+            })
+        })?;
+        self.flush_governance_outbox().map_err(|err| {
+            GovernancePublishError::other(format!(
+                "GC audit for manifest {} remains durably pending: {err}",
+                hex::encode(manifest_digest)
+            ))
+        })?;
+        Ok(())
     }
 
     fn publish_reconciliation_report(&self, report: &SorafsReconciliationReportV1) {
-        let Some(publisher) = self.governance_publisher() else {
-            return;
-        };
         let encoded = match norito::to_bytes(report) {
             Ok(encoded) => encoded,
             Err(err) => {
@@ -9080,64 +13110,21 @@ impl NodeHandle {
                 return;
             }
         };
-        if let Err(err) = publisher.publish_reconciliation_report(report, &encoded) {
+        if let Err(err) =
+            self.enqueue_governance_outbox(GovernanceOutboxKindV1::ReconciliationReport, encoded)
+        {
             iroha_logger::error!(
                 %err,
-                "failed to publish reconciliation report to governance DAG"
+                "failed to durably queue reconciliation report"
             );
-        }
-    }
-
-    fn publish_repair_slash_proposal(
-        &self,
-        proposal: &RepairSlashProposalV1,
-        stage: RepairSlashStage,
-    ) {
-        let Some(publisher) = self.governance_publisher() else {
             return;
-        };
-        let encoded = match norito::to_bytes(proposal) {
-            Ok(encoded) => encoded,
-            Err(err) => {
-                iroha_logger::error!(
-                    %err,
-                    ticket = %proposal.ticket_id,
-                    stage = stage.as_str(),
-                    "failed to encode repair slash proposal"
-                );
-                return;
-            }
-        };
-        if let Err(err) = publisher.publish_repair_slash_proposal(proposal, &encoded, stage) {
-            iroha_logger::error!(
+        }
+        if let Err(err) = self.flush_governance_outbox() {
+            iroha_logger::warn!(
                 %err,
-                ticket = %proposal.ticket_id,
-                stage = stage.as_str(),
-                "failed to publish repair slash proposal to governance DAG"
+                "reconciliation report remains pending in the governance outbox"
             );
         }
-    }
-
-    fn publish_repair_update(
-        &self,
-        update: &repair::RepairTaskUpdate,
-        slash_stage: Option<RepairSlashStage>,
-    ) -> Result<(), RepairSchedulerError> {
-        if let Some(event) = update.event.clone() {
-            self.record_repair_event(event.clone())?;
-            self.publish_repair_audit_event(event);
-        }
-        if let Some(proposal) = update.slash_proposal.as_ref() {
-            if let Some(stage) = slash_stage {
-                self.publish_repair_slash_proposal(proposal, stage);
-            } else {
-                iroha_logger::warn!(
-                    ticket = %proposal.ticket_id,
-                    "repair slash proposal missing publish stage"
-                );
-            }
-        }
-        Ok(())
     }
 
     /// Capture a snapshot of the deal ledger.
@@ -9156,9 +13143,15 @@ impl NodeHandle {
         &self,
         report: &RepairReportV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update = self.repair.enqueue_report_with_event(report.clone())?;
-        self.publish_repair_update(&update, None)?;
+        let material = norito::to_bytes(report).map_err(|err| {
+            Self::repair_durability_error(format!("encode repair report mutation: {err}"))
+        })?;
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(&report.ticket_id),
+            "enqueue_report",
+            &material,
+            |repair| repair.enqueue_report_with_event(report.clone()),
+        )?;
         Ok(update.record)
     }
 
@@ -9259,11 +13252,15 @@ impl NodeHandle {
         &self,
         proposal: &RepairSlashProposalV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update = self
-            .repair
-            .submit_slash_proposal_with_event(proposal.clone())?;
-        self.publish_repair_update(&update, Some(RepairSlashStage::Submitted))?;
+        let material = norito::to_bytes(proposal).map_err(|err| {
+            Self::repair_durability_error(format!("encode repair slash mutation: {err}"))
+        })?;
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(&proposal.ticket_id),
+            "submit_slash",
+            &material,
+            |repair| repair.submit_slash_proposal_with_event(proposal.clone()),
+        )?;
         Ok(update.record)
     }
 
@@ -9274,11 +13271,16 @@ impl NodeHandle {
         started_at_unix: u64,
         repair_agent: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update =
-            self.repair
-                .mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent)?;
-        self.publish_repair_update(&update, None)?;
+        let mut material = started_at_unix.to_le_bytes().to_vec();
+        if let Some(agent) = repair_agent.as_ref() {
+            hash_length_prefixed_material(&mut material, agent.as_bytes());
+        }
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(ticket_id),
+            "mark_in_progress",
+            &material,
+            |repair| repair.mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent),
+        )?;
         Ok(update.record)
     }
 
@@ -9289,13 +13291,18 @@ impl NodeHandle {
         completed_at_unix: u64,
         resolution_notes: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update = self.repair.mark_completed_with_event(
-            ticket_id,
-            completed_at_unix,
-            resolution_notes,
+        let mut material = completed_at_unix.to_le_bytes().to_vec();
+        if let Some(notes) = resolution_notes.as_ref() {
+            hash_length_prefixed_material(&mut material, notes.as_bytes());
+        }
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(ticket_id),
+            "mark_completed",
+            &material,
+            |repair| {
+                repair.mark_completed_with_event(ticket_id, completed_at_unix, resolution_notes)
+            },
         )?;
-        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -9306,11 +13313,14 @@ impl NodeHandle {
         failed_at_unix: u64,
         reason: String,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update = self
-            .repair
-            .mark_failed_with_event(ticket_id, failed_at_unix, reason)?;
-        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted))?;
+        let mut material = failed_at_unix.to_le_bytes().to_vec();
+        hash_length_prefixed_material(&mut material, reason.as_bytes());
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(ticket_id),
+            "mark_failed",
+            &material,
+            |repair| repair.mark_failed_with_event(ticket_id, failed_at_unix, reason),
+        )?;
         Ok(update.record)
     }
 
@@ -9322,14 +13332,22 @@ impl NodeHandle {
         claimed_at_unix: u64,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update = self.repair.claim_ticket_with_event(
-            ticket_id,
-            worker_id,
-            claimed_at_unix,
-            idempotency_key,
+        let mut material = claimed_at_unix.to_le_bytes().to_vec();
+        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
+        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(ticket_id),
+            "claim_ticket",
+            &material,
+            |repair| {
+                repair.claim_ticket_with_event(
+                    ticket_id,
+                    worker_id,
+                    claimed_at_unix,
+                    idempotency_key,
+                )
+            },
         )?;
-        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -9341,9 +13359,17 @@ impl NodeHandle {
         heartbeat_at_unix: u64,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        self.repair
-            .heartbeat_ticket(ticket_id, worker_id, heartbeat_at_unix, idempotency_key)
+        let mut material = heartbeat_at_unix.to_le_bytes().to_vec();
+        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
+        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
+        self.run_repair_task_mutation(
+            std::slice::from_ref(ticket_id),
+            "heartbeat_ticket",
+            &material,
+            |repair| {
+                repair.heartbeat_ticket(ticket_id, worker_id, heartbeat_at_unix, idempotency_key)
+            },
+        )
     }
 
     /// Mark a claimed repair ticket as completed.
@@ -9355,15 +13381,26 @@ impl NodeHandle {
         resolution_notes: Option<String>,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update = self.repair.complete_ticket_with_event(
-            ticket_id,
-            worker_id,
-            completed_at_unix,
-            resolution_notes,
-            idempotency_key,
+        let mut material = completed_at_unix.to_le_bytes().to_vec();
+        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
+        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
+        if let Some(notes) = resolution_notes.as_ref() {
+            hash_length_prefixed_material(&mut material, notes.as_bytes());
+        }
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(ticket_id),
+            "complete_ticket",
+            &material,
+            |repair| {
+                repair.complete_ticket_with_event(
+                    ticket_id,
+                    worker_id,
+                    completed_at_unix,
+                    resolution_notes,
+                    idempotency_key,
+                )
+            },
         )?;
-        self.publish_repair_update(&update, None)?;
         Ok(update.record)
     }
 
@@ -9376,15 +13413,24 @@ impl NodeHandle {
         reason: String,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        self.ensure_repair_durability_healthy()?;
-        let update = self.repair.fail_ticket_with_event(
-            ticket_id,
-            worker_id,
-            failed_at_unix,
-            reason,
-            idempotency_key,
+        let mut material = failed_at_unix.to_le_bytes().to_vec();
+        hash_length_prefixed_material(&mut material, worker_id.as_bytes());
+        hash_length_prefixed_material(&mut material, idempotency_key.as_bytes());
+        hash_length_prefixed_material(&mut material, reason.as_bytes());
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(ticket_id),
+            "fail_ticket",
+            &material,
+            |repair| {
+                repair.fail_ticket_with_event(
+                    ticket_id,
+                    worker_id,
+                    failed_at_unix,
+                    reason,
+                    idempotency_key,
+                )
+            },
         )?;
-        self.publish_repair_update(&update, Some(RepairSlashStage::Drafted))?;
         Ok(update.record)
     }
 
@@ -9397,15 +13443,19 @@ impl NodeHandle {
             return Ok(RepairWatchdogReport::default());
         }
         self.ensure_repair_durability_healthy()?;
-        let report = self.repair.run_watchdog(now_unix)?;
-        for event in &report.events {
-            self.record_repair_event(event.clone())?;
-            self.publish_repair_audit_event(event.clone());
-        }
-        for proposal in &report.escalated {
-            self.publish_repair_slash_proposal(proposal, RepairSlashStage::Drafted);
-        }
-        Ok(report)
+        let ticket_ids = self
+            .repair
+            .list_task_snapshots(RepairTaskFilters::default())
+            .map_err(RepairSchedulerError::Store)?
+            .into_iter()
+            .map(|snapshot| snapshot.record.ticket_id)
+            .collect::<Vec<_>>();
+        self.run_repair_task_mutation(
+            &ticket_ids,
+            "run_watchdog",
+            &now_unix.to_le_bytes(),
+            |repair| repair.run_watchdog(now_unix),
+        )
     }
 
     fn missing_chunk_records(manifest: &StoredManifest) -> Vec<ChunkFileRecord> {
@@ -9700,11 +13750,8 @@ impl NodeHandle {
         for task in candidates {
             let ticket_id = task.ticket_id.clone();
             let claim_key = repair_idempotency_key("claim", worker_id, &ticket_id, now_unix);
-            let update = match self
-                .repair
-                .claim_ticket_with_event(&ticket_id, worker_id, now_unix, &claim_key)
-            {
-                Ok(update) => update,
+            match self.claim_repair_ticket(&ticket_id, worker_id, now_unix, &claim_key) {
+                Ok(_) => {}
                 Err(RepairSchedulerError::LeaseHeld { .. })
                 | Err(RepairSchedulerError::BackoffActive { .. })
                 | Err(RepairSchedulerError::StoreConflict { .. }) => {
@@ -9720,20 +13767,11 @@ impl NodeHandle {
                     );
                     continue;
                 }
-            };
-            report.record_claim();
-            if let Err(err) = self.publish_repair_update(&update, None) {
-                report.record_error();
-                iroha_logger::error!(
-                    %err,
-                    ticket = %ticket_id,
-                    "repair worker fail-stopped after claim event persistence failure"
-                );
-                break;
             }
+            report.record_claim();
 
             let manifest = storage.manifest_by_digest(&task.manifest_digest);
-            let (update, stage) = match manifest {
+            let updated_record = match manifest {
                 Some(manifest) => {
                     let total = manifest.chunk_count();
                     let missing_chunks = match self
@@ -9755,26 +13793,20 @@ impl NodeHandle {
                     if missing == 0 {
                         let complete_key =
                             repair_idempotency_key("complete", worker_id, &ticket_id, now_unix);
-                        let update = self
-                            .repair
-                            .complete_ticket_with_event(
-                                &ticket_id,
-                                worker_id,
-                                now_unix,
-                                Some("verified local chunks".into()),
-                                &complete_key,
-                            )
-                            .map_err(|err| {
+                        match self.complete_repair_ticket(
+                            &ticket_id,
+                            worker_id,
+                            now_unix,
+                            Some("verified local chunks".into()),
+                            &complete_key,
+                        ) {
+                            Ok(record) => record,
+                            Err(err) => {
                                 iroha_logger::warn!(
                                     %err,
                                     ticket = %ticket_id,
                                     "repair completion failed"
                                 );
-                                err
-                            });
-                        match update {
-                            Ok(update) => (update, None),
-                            Err(_) => {
                                 report.record_error();
                                 break;
                             }
@@ -9835,26 +13867,20 @@ impl NodeHandle {
                             }
                             let complete_key =
                                 repair_idempotency_key("complete", worker_id, &ticket_id, now_unix);
-                            let update = self
-                                .repair
-                                .complete_ticket_with_event(
-                                    &ticket_id,
-                                    worker_id,
-                                    now_unix,
-                                    Some(resolution),
-                                    &complete_key,
-                                )
-                                .map_err(|err| {
+                            match self.complete_repair_ticket(
+                                &ticket_id,
+                                worker_id,
+                                now_unix,
+                                Some(resolution),
+                                &complete_key,
+                            ) {
+                                Ok(record) => record,
+                                Err(err) => {
                                     iroha_logger::warn!(
                                         %err,
                                         ticket = %ticket_id,
                                         "repair completion failed"
                                     );
-                                    err
-                                });
-                            match update {
-                                Ok(update) => (update, None),
-                                Err(_) => {
                                     report.record_error();
                                     break;
                                 }
@@ -9866,22 +13892,16 @@ impl NodeHandle {
                             );
                             let fail_key =
                                 repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
-                            let update = self
-                                .repair
-                                .fail_ticket_with_event(
-                                    &ticket_id, worker_id, now_unix, reason, &fail_key,
-                                )
-                                .map_err(|err| {
+                            match self.fail_repair_ticket(
+                                &ticket_id, worker_id, now_unix, reason, &fail_key,
+                            ) {
+                                Ok(record) => record,
+                                Err(err) => {
                                     iroha_logger::warn!(
                                         %err,
                                         ticket = %ticket_id,
                                         "repair failure update rejected"
                                     );
-                                    err
-                                });
-                            match update {
-                                Ok(update) => (update, Some(RepairSlashStage::Drafted)),
-                                Err(_) => {
                                     report.record_error();
                                     break;
                                 }
@@ -9891,26 +13911,20 @@ impl NodeHandle {
                 }
                 None => {
                     let fail_key = repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
-                    let update = self
-                        .repair
-                        .fail_ticket_with_event(
-                            &ticket_id,
-                            worker_id,
-                            now_unix,
-                            "manifest missing from local storage".into(),
-                            &fail_key,
-                        )
-                        .map_err(|err| {
+                    match self.fail_repair_ticket(
+                        &ticket_id,
+                        worker_id,
+                        now_unix,
+                        "manifest missing from local storage".into(),
+                        &fail_key,
+                    ) {
+                        Ok(record) => record,
+                        Err(err) => {
                             iroha_logger::warn!(
                                 %err,
                                 ticket = %ticket_id,
                                 "repair failure update rejected"
                             );
-                            err
-                        });
-                    match update {
-                        Ok(update) => (update, Some(RepairSlashStage::Drafted)),
-                        Err(_) => {
                             report.record_error();
                             break;
                         }
@@ -9918,15 +13932,7 @@ impl NodeHandle {
                 }
             };
 
-            report.record_state(&update.record.state);
-            if let Err(err) = self.publish_repair_update(&update, stage) {
-                report.record_error();
-                iroha_logger::error!(
-                    %err,
-                    ticket = %ticket_id,
-                    "repair worker fail-stopped after update event persistence failure"
-                );
-            }
+            report.record_state(&updated_record.state);
             break;
         }
 
@@ -9944,11 +13950,6 @@ impl NodeHandle {
     }
 
     fn run_gc_with_policy(&self, now_unix: u64, policy: GcEvictionPolicy) -> GcSweepReport {
-        const REASON_RETENTION_EXPIRED: &str = "retention_expired";
-        const REASON_RETENTION_EXPIRED_NO_PROVIDER: &str = "retention_expired_provider_missing";
-        const REASON_REPAIR_ACTIVE: &str = "repair_active";
-        const REASON_DEAL_ACTIVE: &str = "deal_active";
-        const REASON_SHARED_CHUNKS: &str = "shared_chunks";
         const REASON_LIMIT_REACHED: &str = "limit_reached";
         const RESULT_SUCCESS: &str = "success";
         const RESULT_ERROR: &str = "error";
@@ -9971,15 +13972,29 @@ impl NodeHandle {
             global_sorafs_gc_otel().record_run(RESULT_ERROR);
             return report;
         }
-        let repair_tasks = match self.repair.list_tasks(RepairTaskFilters::default()) {
-            Ok(tasks) => tasks,
-            Err(err) => {
+        let gc_guard = match self.gc_mutation_lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
                 report.errors = report.errors.saturating_add(1);
-                iroha_logger::error!(%err, "GC sweep skipped: repair state unavailable");
+                iroha_logger::error!("GC sweep skipped: mutation lock poisoned");
                 global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
                 global_sorafs_gc_otel().record_run(RESULT_ERROR);
                 return report;
             }
+        };
+        let repair_tasks = if self.repair_config.enabled() {
+            match self.repair.list_tasks(RepairTaskFilters::default()) {
+                Ok(tasks) => tasks,
+                Err(err) => {
+                    report.errors = report.errors.saturating_add(1);
+                    iroha_logger::error!(%err, "GC sweep skipped: repair state unavailable");
+                    global_or_default().inc_sorafs_gc_runs(RESULT_ERROR);
+                    global_sorafs_gc_otel().record_run(RESULT_ERROR);
+                    return report;
+                }
+            }
+        } else {
+            Vec::new()
         };
 
         let grace_secs = self.gc_config.retention_grace_secs();
@@ -10049,14 +14064,14 @@ impl NodeHandle {
             {
                 report.skipped.push(GcSkip {
                     manifest_id: manifest.manifest_id().to_owned(),
-                    reason: REASON_REPAIR_ACTIVE.to_string(),
+                    reason: GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1.to_string(),
                 });
                 iroha_logger::warn!(
                     manifest_id = %manifest.manifest_id(),
                     "GC retention blocked by active repair tasks"
                 );
-                global_or_default().inc_sorafs_gc_blocked(REASON_REPAIR_ACTIVE);
-                global_sorafs_gc_otel().record_blocked(REASON_REPAIR_ACTIVE);
+                global_or_default().inc_sorafs_gc_blocked(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1);
+                global_sorafs_gc_otel().record_blocked(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1);
                 let payload = GcAuditPayloadV1 {
                     version: GC_AUDIT_PAYLOAD_VERSION_V1,
                     manifest_digest: digest,
@@ -10064,13 +14079,21 @@ impl NodeHandle {
                     evicted_at_unix: now_unix,
                     freed_bytes: 0,
                     reason: if provider_known {
-                        REASON_RETENTION_EXPIRED.to_string()
+                        GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string()
                     } else {
-                        REASON_RETENTION_EXPIRED_NO_PROVIDER.to_string()
+                        GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.to_string()
                     },
-                    blocked_reason: Some(REASON_REPAIR_ACTIVE.to_string()),
+                    blocked_reason: Some(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1.to_string()),
                 };
-                self.publish_gc_audit_event(payload);
+                if let Err(err) = self.publish_gc_audit_event(payload) {
+                    report.errors = report.errors.saturating_add(1);
+                    iroha_logger::error!(
+                        %err,
+                        manifest_id = %manifest.manifest_id(),
+                        "GC blocked outcome could not be durably audited"
+                    );
+                    break;
+                }
                 continue;
             }
 
@@ -10081,14 +14104,14 @@ impl NodeHandle {
             {
                 report.skipped.push(GcSkip {
                     manifest_id: manifest.manifest_id().to_owned(),
-                    reason: REASON_DEAL_ACTIVE.to_string(),
+                    reason: GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1.to_string(),
                 });
                 iroha_logger::warn!(
                     manifest_id = %manifest.manifest_id(),
                     "GC retention blocked by active deal window"
                 );
-                global_or_default().inc_sorafs_gc_blocked(REASON_DEAL_ACTIVE);
-                global_sorafs_gc_otel().record_blocked(REASON_DEAL_ACTIVE);
+                global_or_default().inc_sorafs_gc_blocked(GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1);
+                global_sorafs_gc_otel().record_blocked(GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1);
                 let payload = GcAuditPayloadV1 {
                     version: GC_AUDIT_PAYLOAD_VERSION_V1,
                     manifest_digest: digest,
@@ -10096,13 +14119,21 @@ impl NodeHandle {
                     evicted_at_unix: now_unix,
                     freed_bytes: 0,
                     reason: if provider_known {
-                        REASON_RETENTION_EXPIRED.to_string()
+                        GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string()
                     } else {
-                        REASON_RETENTION_EXPIRED_NO_PROVIDER.to_string()
+                        GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.to_string()
                     },
-                    blocked_reason: Some(REASON_DEAL_ACTIVE.to_string()),
+                    blocked_reason: Some(GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1.to_string()),
                 };
-                self.publish_gc_audit_event(payload);
+                if let Err(err) = self.publish_gc_audit_event(payload) {
+                    report.errors = report.errors.saturating_add(1);
+                    iroha_logger::error!(
+                        %err,
+                        manifest_id = %manifest.manifest_id(),
+                        "GC blocked outcome could not be durably audited"
+                    );
+                    break;
+                }
                 continue;
             }
 
@@ -10110,14 +14141,14 @@ impl NodeHandle {
                 Ok(true) => {
                     report.skipped.push(GcSkip {
                         manifest_id: manifest.manifest_id().to_owned(),
-                        reason: REASON_SHARED_CHUNKS.to_string(),
+                        reason: GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1.to_string(),
                     });
                     iroha_logger::warn!(
                         manifest_id = %manifest.manifest_id(),
                         "GC retention blocked by shared chunks"
                     );
-                    global_or_default().inc_sorafs_gc_blocked(REASON_SHARED_CHUNKS);
-                    global_sorafs_gc_otel().record_blocked(REASON_SHARED_CHUNKS);
+                    global_or_default().inc_sorafs_gc_blocked(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1);
+                    global_sorafs_gc_otel().record_blocked(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1);
                     let payload = GcAuditPayloadV1 {
                         version: GC_AUDIT_PAYLOAD_VERSION_V1,
                         manifest_digest: digest,
@@ -10125,13 +14156,21 @@ impl NodeHandle {
                         evicted_at_unix: now_unix,
                         freed_bytes: 0,
                         reason: if provider_known {
-                            REASON_RETENTION_EXPIRED.to_string()
+                            GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string()
                         } else {
-                            REASON_RETENTION_EXPIRED_NO_PROVIDER.to_string()
+                            GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.to_string()
                         },
-                        blocked_reason: Some(REASON_SHARED_CHUNKS.to_string()),
+                        blocked_reason: Some(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1.to_string()),
                     };
-                    self.publish_gc_audit_event(payload);
+                    if let Err(err) = self.publish_gc_audit_event(payload) {
+                        report.errors = report.errors.saturating_add(1);
+                        iroha_logger::error!(
+                            %err,
+                            manifest_id = %manifest.manifest_id(),
+                            "GC blocked outcome could not be durably audited"
+                        );
+                        break;
+                    }
                     continue;
                 }
                 Ok(false) => {}
@@ -10146,26 +14185,42 @@ impl NodeHandle {
                 }
             }
 
-            let freed_bytes = match storage.evict_manifest(manifest.manifest_id()) {
-                Ok(bytes) => bytes,
+            let reason = if provider_known {
+                GC_AUDIT_REASON_RETENTION_EXPIRED_V1
+            } else {
+                GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1
+            };
+            let transaction = match self.evict_manifest_with_gc_audit(
+                &gc_guard,
+                storage,
+                &manifest,
+                provider_id,
+                now_unix,
+                reason,
+            ) {
+                Ok(outcome) => outcome,
                 Err(err) => {
                     report.errors = report.errors.saturating_add(1);
                     iroha_logger::warn!(
                         %err,
                         manifest_id = %manifest.manifest_id(),
-                        "GC eviction failed"
+                        "GC eviction transaction failed"
                     );
-                    continue;
+                    break;
                 }
             };
+            let freed_bytes = transaction.freed_bytes;
+            if let Some(err) = transaction.publish_error {
+                report.errors = report.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    error = %err,
+                    manifest_id = %manifest.manifest_id(),
+                    "GC eviction audit remains durably pending"
+                );
+            }
 
             evicted_count += 1;
             report.freed_bytes = report.freed_bytes.saturating_add(freed_bytes);
-            let reason = if provider_known {
-                REASON_RETENTION_EXPIRED
-            } else {
-                REASON_RETENTION_EXPIRED_NO_PROVIDER
-            };
             report.evictions.push(GcEviction {
                 manifest_id: manifest.manifest_id().to_owned(),
                 manifest_digest: digest,
@@ -10174,16 +14229,6 @@ impl NodeHandle {
                 reason: reason.to_string(),
             });
 
-            let payload = GcAuditPayloadV1 {
-                version: GC_AUDIT_PAYLOAD_VERSION_V1,
-                manifest_digest: digest,
-                provider_id,
-                evicted_at_unix: now_unix,
-                freed_bytes,
-                reason: reason.to_string(),
-                blocked_reason: None,
-            };
-            self.publish_gc_audit_event(payload);
             global_or_default().inc_sorafs_gc_evictions(reason);
             global_or_default().add_sorafs_gc_freed_bytes(reason, freed_bytes);
             global_sorafs_gc_otel().record_eviction(reason, freed_bytes);
@@ -11433,7 +15478,7 @@ mod tests {
         },
     };
     use iroha_telemetry::metrics::global_or_default;
-    use norito::{codec::Decode, to_bytes};
+    use norito::to_bytes;
     use sorafs_car::CarBuildPlan;
     use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::{
@@ -11463,11 +15508,11 @@ mod tests {
         repair::{
             CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
             GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1,
-            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1,
-            REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairAuditEventV1,
-            RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1, RepairReportV1,
-            RepairSlashProposalV1,
-            RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
+            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            RepairAuditEventV1, RepairCauseV1, RepairEscalationApprovalV1, RepairEvidenceV1,
+            RepairManualCauseV1, RepairReportV1, RepairSlashProposalV1, RepairTaskStateV1,
+            RepairTaskStatusV1, RepairTicketId,
         },
         settlement_receipt_signature_digest_v1,
     };
@@ -11514,6 +15559,49 @@ mod tests {
         (cfg, temp_dir)
     }
 
+    fn enabled_repair_config(max_attempts: u32) -> RepairConfig {
+        RepairConfig::from(&iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            max_attempts,
+            ..Default::default()
+        })
+    }
+
+    fn enabled_gc_config(max_deletions_per_run: u32) -> GcConfig {
+        GcConfig::from(&iroha_config::parameters::actual::SorafsGc {
+            enabled: true,
+            retention_grace_secs: 0,
+            max_deletions_per_run,
+            ..Default::default()
+        })
+    }
+
+    fn repair_report_fixture(
+        ticket_id: &str,
+        manifest_byte: u8,
+        provider_byte: u8,
+        submitted_at_unix: u64,
+    ) -> RepairReportV1 {
+        RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId(ticket_id.to_owned()),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned(),
+            submitted_at_unix,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: [manifest_byte; 32],
+                provider_id: [provider_byte; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
+                    reason: "adversarial transaction fixture".to_owned(),
+                }),
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        }
+    }
+
     #[test]
     fn bounded_event_history_preserves_monotonic_sequences_and_reports_gaps() {
         let mut history = BoundedEventHistory::new(2);
@@ -11543,7 +15631,8 @@ mod tests {
     #[test]
     fn local_checkpoint_roundtrip_is_bounded_and_atomic() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let path = temp.path().join("runtime").join("checkpoint.to");
+        let root = temp.path().canonicalize().expect("canonical temp dir");
+        let path = root.join("runtime").join("checkpoint.to");
         write_local_checkpoint_atomic_bounded(&path, b"checkpoint", 10)
             .expect("write bounded checkpoint");
         assert_eq!(
@@ -11561,7 +15650,8 @@ mod tests {
         }
 
         let temp = tempfile::tempdir().expect("temp dir");
-        let path = temp.path().join("checkpoint.to");
+        let root = temp.path().canonicalize().expect("canonical temp dir");
+        let path = root.join("checkpoint.to");
         let precommit = write_local_checkpoint_atomic_bounded(&path, b"too-large", 4)
             .expect_err("size limit fails before commit");
         assert!(!precommit.committed);
@@ -11584,7 +15674,8 @@ mod tests {
     #[test]
     fn concurrent_local_checkpoint_writers_never_publish_partial_bytes() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let path = Arc::new(temp.path().join("checkpoint.to"));
+        let root = temp.path().canonicalize().expect("canonical temp dir");
+        let path = Arc::new(root.join("checkpoint.to"));
         let barrier = Arc::new(Barrier::new(8));
         let payloads = (0_u8..8).map(|byte| vec![byte; 4_096]).collect::<Vec<_>>();
         let workers = payloads
@@ -11604,7 +15695,7 @@ mod tests {
         }
         let bytes = fs::read(&*path).expect("read final checkpoint");
         assert!(payloads.contains(&bytes));
-        let leftovers = fs::read_dir(temp.path())
+        let leftovers = fs::read_dir(root)
             .expect("read temp dir")
             .filter_map(Result::ok)
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
@@ -11618,17 +15709,18 @@ mod tests {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
 
         let temp = tempfile::tempdir().expect("temp dir");
-        let victim = temp.path().join("victim");
+        let root = temp.path().canonicalize().expect("canonical temp dir");
+        let victim = root.join("victim");
         fs::write(&victim, b"unchanged").expect("write victim");
-        let target = temp.path().join("checkpoint.to");
+        let target = root.join("checkpoint.to");
         symlink(&victim, &target).expect("symlink target");
         assert!(write_local_checkpoint_atomic(&target, b"replacement").is_err());
         assert!(read_local_checkpoint_bounded(&target, 128).is_err());
         assert_eq!(fs::read(&victim).unwrap(), b"unchanged");
 
-        let real_parent = temp.path().join("real-parent");
+        let real_parent = root.join("real-parent");
         fs::create_dir(&real_parent).expect("create real parent");
-        let linked_parent = temp.path().join("linked-parent");
+        let linked_parent = root.join("linked-parent");
         symlink(&real_parent, &linked_parent).expect("symlink parent");
         assert!(write_local_checkpoint_atomic(&linked_parent.join("state.to"), b"state").is_err());
         assert!(!real_parent.join("state.to").exists());
@@ -11637,14 +15729,14 @@ mod tests {
         assert!(write_local_checkpoint_atomic(&nested_target, b"state").is_err());
         assert!(!real_parent.join("nested").exists());
 
-        let hardlink_target = temp.path().join("hardlink-target.to");
+        let hardlink_target = root.join("hardlink-target.to");
         write_local_checkpoint_atomic(&hardlink_target, b"state").expect("write hardlink target");
-        let hardlink_alias = temp.path().join("hardlink-alias.to");
+        let hardlink_alias = root.join("hardlink-alias.to");
         fs::hard_link(&hardlink_target, &hardlink_alias).expect("create hardlink alias");
         assert!(read_local_checkpoint_bounded(&hardlink_target, 128).is_err());
         assert!(write_local_checkpoint_atomic(&hardlink_target, b"replacement").is_err());
 
-        let permissive_parent = temp.path().join("permissive-parent");
+        let permissive_parent = root.join("permissive-parent");
         fs::create_dir(&permissive_parent).expect("create permissive parent");
         fs::set_permissions(&permissive_parent, fs::Permissions::from_mode(0o777))
             .expect("make parent writable");
@@ -11795,26 +15887,44 @@ mod tests {
     #[test]
     fn auxiliary_runtime_checkpoint_corruption_and_oversize_fail_startup() {
         let (base, _dir) = storage_config_with_temp_dir();
+        let checkpoint_max_bytes = 64 * 1024;
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(base.data_dir().clone())
-            .runtime_retention(RuntimeRetentionPolicy::new(4, 8, 64))
+            .runtime_retention(RuntimeRetentionPolicy::new(4, 8, checkpoint_max_bytes))
             .build();
         drop(NodeHandle::new(cfg.clone()));
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"not-norito").unwrap();
+        let corrupt_error = NodeHandle::try_new(cfg.clone())
+            .err()
+            .expect("corrupt auxiliary checkpoint must fail startup");
         assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| NodeHandle::new(
-                cfg.clone()
-            )))
-            .is_err()
+            matches!(
+                corrupt_error,
+                NodeInitError::Checkpoint {
+                    component: "auxiliary runtime",
+                    ..
+                }
+            ),
+            "unexpected startup error: {corrupt_error}"
         );
 
-        fs::write(&path, vec![0xAA; 65]).unwrap();
+        let oversized_len = usize::try_from(checkpoint_max_bytes)
+            .expect("test checkpoint limit fits usize")
+            .checked_add(1)
+            .expect("test checkpoint oversize length does not overflow");
+        fs::write(&path, vec![0xAA; oversized_len]).unwrap();
         assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| NodeHandle::new(cfg)))
-                .is_err()
+            matches!(
+                NodeHandle::try_new(cfg),
+                Err(NodeInitError::Checkpoint {
+                    component: "auxiliary runtime",
+                    ..
+                })
+            ),
+            "oversized auxiliary checkpoint must fail its own startup boundary"
         );
     }
 
@@ -11829,10 +15939,17 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let victim = cfg.data_dir().join("victim.to");
         fs::write(&victim, b"not-a-checkpoint").unwrap();
+        fs::remove_file(&path).expect("remove initialized auxiliary checkpoint");
         symlink(&victim, &path).unwrap();
         assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| NodeHandle::new(cfg)))
-                .is_err()
+            matches!(
+                NodeHandle::try_new(cfg),
+                Err(NodeInitError::Checkpoint {
+                    component: "auxiliary runtime",
+                    ..
+                })
+            ),
+            "symlinked auxiliary checkpoint must fail its own startup boundary"
         );
     }
 
@@ -12726,6 +16843,7 @@ mod tests {
         );
         assert_eq!(checkpoint.adversarial_corpora, vec![corpus_record.clone()]);
 
+        drop(source);
         let restored = NodeHandle::new(cfg);
         let restored_snapshot = restored
             .export_moderation_model_registry_snapshot()
@@ -12850,6 +16968,7 @@ mod tests {
         assert_eq!(checkpoint.screening_records.len(), 2);
         assert_eq!(checkpoint.quarantine_records.len(), 1);
 
+        drop(source);
         let restored = NodeHandle::new(cfg);
         let restored_snapshot = restored
             .export_moderation_screening_snapshot()
@@ -13151,8 +17270,7 @@ mod tests {
             })
         ));
 
-        write_local_private_checkpoint_atomic(&key_path, &key_bytes)
-            .expect("restore sealing key");
+        write_local_private_checkpoint_atomic(&key_path, &key_bytes).expect("restore sealing key");
         let orphan = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan.to");
         fs::write(&orphan, b"not indexed").expect("write orphan object");
         assert!(matches!(
@@ -13282,6 +17400,7 @@ mod tests {
             checkpoint_path.exists(),
             "evidence viewer checkpoint must persist when storage is enabled"
         );
+        drop(source);
         let restored = NodeHandle::new(cfg);
         let snapshot = restored
             .export_moderation_evidence_viewer_snapshot()
@@ -13596,7 +17715,7 @@ mod tests {
             publication.proofs[0].entry.kind,
             ModerationLedgerEntryKindV1::EvidenceAccess
         );
-        assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
         assert_eq!(publisher.take().len(), 1);
 
         let repeat = handle
@@ -13612,7 +17731,7 @@ mod tests {
             repeat,
             ModerationEvidenceViewerAuditScheduleOutcome::AlreadyPublished { .. }
         ));
-        assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
         assert_eq!(publisher.take().len(), 0);
     }
 
@@ -14064,6 +18183,64 @@ mod tests {
             },
             id.saturating_add(0x60),
         )
+    }
+
+    fn seed_orderbook_settlement_channel(
+        handle: &NodeHandle,
+        ask_id: u8,
+        bid_id: u8,
+        now_unix: u64,
+    ) -> SettlementChannelV1 {
+        handle
+            .submit_orderbook_order(
+                orderbook_order(ask_id, OrderSideV1::Ask, 1_500_000, b"provider"),
+                now_unix,
+            )
+            .expect("accept settlement ask");
+        handle
+            .submit_orderbook_order(
+                orderbook_order(bid_id, OrderSideV1::Bid, 1_600_000, b"buyer"),
+                now_unix,
+            )
+            .expect("match settlement bid");
+        handle.orderbook_snapshot(now_unix).settlement_channels[0].clone()
+    }
+
+    fn simulate_orderbook_receipt_crash_after_domain_commit(
+        handle: &NodeHandle,
+        receipt: SettlementReceiptV1,
+        now_unix: u64,
+    ) {
+        let encoded = norito::to_bytes(&receipt).expect("encode settlement receipt intent");
+        let drain_guard = handle
+            .governance_outbox_drain_lock
+            .lock()
+            .expect("lock governance outbox drain");
+        let _mutation_guard = handle
+            .runtime_mutation_lock
+            .lock()
+            .expect("lock orderbook mutation");
+        let (sequence, inserted) = handle
+            .prepare_orderbook_receipt_governance_intent(&drain_guard, &receipt, encoded.clone())
+            .expect("durably prepare settlement intent");
+        assert!(inserted);
+        handle
+            .mutate_orderbook_durably_unlocked(now_unix, |runtime| {
+                let outcome = runtime.submit_receipt(receipt)?;
+                let input = OrderbookEventInput {
+                    kind: OrderbookEventKind::SettlementReceiptAccepted,
+                    order_id: None,
+                    trade_ids: Vec::new(),
+                    settlement_channel_ids: vec![outcome.updated_channel.channel_id],
+                    receipt_id: Some(outcome.accepted_receipt.receipt_id),
+                    expired_order_ids: Vec::new(),
+                };
+                Ok((outcome, input))
+            })
+            .expect("durably commit settlement domain state");
+        handle
+            .verify_orderbook_receipt_governance_intent(&drain_guard, sequence, &encoded)
+            .expect("prepared intent remains blocked from publication");
     }
 
     fn moderation_jurors() -> Vec<String> {
@@ -14849,6 +19026,505 @@ mod tests {
         assert_eq!(decoded.channel_id, channel.channel_id);
         assert_eq!(decoded.trade_id, channel.trade_id);
         assert_eq!(decoded.bytes_delivered, channel.total_bytes);
+    }
+
+    #[test]
+    fn orderbook_settlement_outbox_discards_crash_before_domain_commit_on_restart() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x31, 0x32, now);
+        let receipt = orderbook_receipt(
+            0x33,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        let encoded = norito::to_bytes(&receipt).expect("encode receipt intent");
+        {
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("lock governance drain");
+            let (_, inserted) = handle
+                .prepare_orderbook_receipt_governance_intent(&drain_guard, &receipt, encoded)
+                .expect("durably prepare receipt intent");
+            assert!(inserted);
+        }
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        assert!(
+            handle
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .is_empty()
+        );
+        drop(handle);
+
+        let restored = NodeHandle::new(cfg.clone());
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        assert!(
+            restored
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .is_empty()
+        );
+        drop(restored);
+
+        let reconciled = NodeHandle::new(cfg);
+        assert_eq!(reconciled.pending_governance_publication_count(), 0);
+    }
+
+    #[test]
+    fn orderbook_settlement_outbox_replays_crash_after_domain_commit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x34, 0x35, now);
+        let receipt = orderbook_receipt(
+            0x36,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        let expected = norito::to_bytes(&receipt).expect("encode expected receipt");
+        simulate_orderbook_receipt_crash_after_domain_commit(&handle, receipt.clone(), now + 10);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        assert_eq!(
+            handle
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .len(),
+            1
+        );
+        drop(handle);
+
+        let restored = NodeHandle::new(cfg.clone());
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert_eq!(
+            restored.orderbook_snapshot(now + 10).settlement_receipts,
+            vec![receipt]
+        );
+        let publisher = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(publisher.clone())
+            .expect("replay committed receipt intent");
+        assert_eq!(publisher.take(), vec![expected]);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        drop(restored);
+
+        let acknowledged = NodeHandle::new(cfg);
+        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
+        assert_eq!(
+            acknowledged
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_orderbook_receipt_retry_does_not_delete_preexisting_pending_intent() {
+        let handle = NodeHandle::new(StorageConfig::builder().enabled(false).build());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x37, 0x38, now);
+        let receipt = orderbook_receipt(
+            0x39,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        handle
+            .submit_orderbook_receipt(receipt.clone(), now + 10)
+            .expect("commit receipt with pending publication");
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+
+        assert!(matches!(
+            handle.submit_orderbook_receipt(receipt, now + 11),
+            Err(OrderbookRuntimeError::DuplicateReceiptId { .. })
+        ));
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        assert!(handle.durability_failure_reason().is_none());
+    }
+
+    #[test]
+    fn rejected_preexisting_orderbook_intent_is_retained_and_forces_reconciliation() {
+        let handle = NodeHandle::new(StorageConfig::builder().enabled(false).build());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x46, 0x47, now);
+        let mut receipt = orderbook_receipt(
+            0x48,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        receipt.channel_id = [0xEF; 32];
+        receipt = sign_orderbook_receipt(receipt, 0x7F);
+        let encoded = norito::to_bytes(&receipt).expect("encode rejected receipt");
+        {
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("lock governance drain");
+            let (_, inserted) = handle
+                .prepare_orderbook_receipt_governance_intent(&drain_guard, &receipt, encoded)
+                .expect("prepare pre-existing receipt intent");
+            assert!(inserted);
+        }
+
+        let err = handle
+            .submit_orderbook_receipt(receipt, now + 10)
+            .expect_err("authoritative domain rejects pre-existing intent");
+        assert!(matches!(&err, OrderbookRuntimeError::Checkpoint(_)));
+        assert!(
+            err.to_string()
+                .contains("restart reconciliation is required")
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        assert!(handle.durability_failure_reason().is_some());
+        assert!(
+            handle
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn cancelled_prepared_orderbook_intent_preserves_later_outbox_sequence_gap() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x49, 0x4A, now);
+        let receipt = orderbook_receipt(
+            0x4B,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        let receipt_bytes = norito::to_bytes(&receipt).expect("encode receipt intent");
+        let issuance = proof_token_issuance_fixture();
+        let issuance_bytes = norito::to_bytes(&issuance).expect("encode proof-token issuance");
+        {
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("lock governance drain");
+            let (receipt_sequence, inserted) = handle
+                .prepare_orderbook_receipt_governance_intent(
+                    &drain_guard,
+                    &receipt,
+                    receipt_bytes.clone(),
+                )
+                .expect("prepare receipt intent");
+            assert!(inserted);
+            let later_sequence = handle
+                .enqueue_governance_outbox(
+                    GovernanceOutboxKindV1::ProofTokenIssuance,
+                    issuance_bytes.clone(),
+                )
+                .expect("append later governance intent");
+            assert!(later_sequence > receipt_sequence);
+            handle
+                .cancel_new_orderbook_receipt_governance_intent(
+                    &drain_guard,
+                    receipt_sequence,
+                    &receipt_bytes,
+                )
+                .expect("cancel only prepared receipt intent");
+        }
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        drop(handle);
+
+        let restored = NodeHandle::new(cfg);
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        let publisher = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(publisher.clone())
+            .expect("restore accepts deliberate outbox sequence gap");
+        assert_eq!(publisher.take(), vec![issuance_bytes]);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+    }
+
+    #[test]
+    fn orderbook_snapshot_restore_cannot_orphan_pending_settlement_intent() {
+        let handle = NodeHandle::new(StorageConfig::builder().enabled(false).build());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x4C, 0x4D, now);
+        let before_receipt = handle
+            .export_orderbook_runtime_snapshot(now + 1)
+            .expect("export pre-receipt snapshot");
+        let receipt = orderbook_receipt(
+            0x4E,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        handle
+            .submit_orderbook_receipt(receipt, now + 10)
+            .expect("commit receipt and retain pending intent");
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+
+        let err = handle
+            .restore_orderbook_runtime_snapshot(before_receipt)
+            .expect_err("snapshot restore must not orphan pending intent");
+        assert!(matches!(&err, OrderbookRuntimeError::InvalidSnapshot(_)));
+        assert!(
+            err.to_string()
+                .contains("would orphan pending settlement receipt")
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        assert_eq!(
+            handle
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn orderbook_settlement_outbox_startup_rejects_conflicting_committed_receipt_id() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x3A, 0x3B, now);
+        let receipt = orderbook_receipt(
+            0x3C,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        simulate_orderbook_receipt_crash_after_domain_commit(&handle, receipt.clone(), now + 10);
+
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let bytes = fs::read(&path).expect("read auxiliary checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
+        let entry = checkpoint
+            .governance_outbox_entries
+            .iter_mut()
+            .find(|entry| entry.kind == GovernanceOutboxKindV1::OrderbookSettlementReceipt)
+            .expect("pending orderbook intent");
+        let mut conflicting = receipt;
+        conflicting.chunk_hash[0] ^= 0x80;
+        conflicting = sign_orderbook_receipt(conflicting, 0x7D);
+        entry.payload_bytes = norito::to_bytes(&conflicting).expect("encode conflicting receipt");
+        entry.payload_digest = *blake3::hash(&entry.payload_bytes).as_bytes();
+        entry.binding_digest = governance_outbox_binding_digest(
+            entry.version,
+            entry.sequence,
+            entry.kind,
+            entry.payload_digest,
+        );
+        write_local_checkpoint_atomic(
+            &path,
+            &norito::to_bytes(&checkpoint).expect("encode conflicting checkpoint"),
+        )
+        .expect("write conflicting checkpoint");
+        drop(handle);
+
+        let err = NodeHandle::try_new(cfg).expect_err("conflicting same-id receipt must fail");
+        assert!(matches!(
+            &err,
+            NodeInitError::Checkpoint {
+                component: "auxiliary runtime",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string()
+                .contains("conflicts with committed settlement receipt id")
+        );
+    }
+
+    #[test]
+    fn orderbook_receipt_outbox_retention_failure_precedes_domain_commit() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(4, 4, 2 * 1024 * 1024))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x3D, 0x3E, now);
+        for index in 0_u8..4 {
+            let mut issuance = proof_token_issuance_fixture();
+            issuance.token_id = [0x80 + index; 16];
+            issuance.token_blake3 = [0x90 + index; 32];
+            handle
+                .publish_proof_token_issuance(issuance)
+                .expect("fill governance outbox retention");
+        }
+        assert_eq!(handle.pending_governance_publication_count(), 4);
+        let receipt = orderbook_receipt(
+            0x3F,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+
+        let err = handle
+            .submit_orderbook_receipt(receipt, now + 10)
+            .expect_err("full outbox must reject before domain commit");
+        assert!(matches!(&err, OrderbookRuntimeError::Checkpoint(_)));
+        assert!(err.to_string().contains("retention exhausted"));
+        assert!(
+            handle
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .is_empty()
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 4);
+        assert_eq!(handle.latest_orderbook_event_sequence(), Some(2));
+    }
+
+    #[test]
+    fn orderbook_receipt_outbox_checkpoint_failure_precedes_domain_commit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x40, 0x41, now);
+        let receipt = orderbook_receipt(
+            0x42,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
+        fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");
+        fs::create_dir(&checkpoint_path).expect("inject auxiliary checkpoint directory");
+
+        let err = handle
+            .submit_orderbook_receipt(receipt, now + 10)
+            .expect_err("intent checkpoint failure must reject receipt");
+        assert!(matches!(err, OrderbookRuntimeError::Checkpoint(_)));
+        assert!(
+            handle
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .is_empty()
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert_eq!(handle.latest_orderbook_event_sequence(), Some(2));
+        assert!(handle.durability_failure_reason().is_none());
+
+        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
+        write_local_checkpoint_atomic(&checkpoint_path, &committed)
+            .expect("restore auxiliary checkpoint");
+        drop(handle);
+        let restored = NodeHandle::try_new(cfg).expect("restart from committed checkpoints");
+        assert!(
+            restored
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .is_empty()
+        );
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+    }
+
+    #[test]
+    fn rejected_orderbook_receipt_cleanup_failure_enters_fail_closed_mode() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        let now = 1_800_000_000;
+        let channel = seed_orderbook_settlement_channel(&handle, 0x43, 0x44, now);
+        let mut receipt = orderbook_receipt(
+            0x45,
+            &channel,
+            0,
+            channel.total_bytes,
+            now + 10,
+            channel.xor_locked.as_micro(),
+        );
+        receipt.channel_id = [0xEE; 32];
+        receipt = sign_orderbook_receipt(receipt, 0x7E);
+        let encoded = norito::to_bytes(&receipt).expect("encode rejected receipt intent");
+        let drain_guard = handle
+            .governance_outbox_drain_lock
+            .lock()
+            .expect("lock governance drain");
+        let _mutation_guard = handle
+            .runtime_mutation_lock
+            .lock()
+            .expect("lock orderbook mutation");
+        let (sequence, inserted) = handle
+            .prepare_orderbook_receipt_governance_intent(&drain_guard, &receipt, encoded.clone())
+            .expect("prepare rejected receipt intent");
+        assert!(inserted);
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let prepared = fs::read(&checkpoint_path).expect("read prepared auxiliary checkpoint");
+        fs::remove_file(&checkpoint_path).expect("remove prepared auxiliary checkpoint");
+        fs::create_dir(&checkpoint_path).expect("inject auxiliary checkpoint directory");
+
+        assert!(matches!(
+            handle.mutate_orderbook_durably_unlocked(now + 10, |runtime| {
+                let outcome = runtime.submit_receipt(receipt)?;
+                let input = OrderbookEventInput {
+                    kind: OrderbookEventKind::SettlementReceiptAccepted,
+                    order_id: None,
+                    trade_ids: Vec::new(),
+                    settlement_channel_ids: vec![outcome.updated_channel.channel_id],
+                    receipt_id: Some(outcome.accepted_receipt.receipt_id),
+                    expired_order_ids: Vec::new(),
+                };
+                Ok((outcome, input))
+            }),
+            Err(OrderbookRuntimeError::SettlementChannelNotFound { .. })
+        ));
+        let cleanup_err = handle
+            .cancel_new_orderbook_receipt_governance_intent(&drain_guard, sequence, &encoded)
+            .expect_err("cleanup checkpoint failure must surface");
+        assert!(
+            cleanup_err
+                .to_string()
+                .contains("persist auxiliary runtime")
+        );
+        assert!(handle.durability_failure_reason().is_some());
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        drop(_mutation_guard);
+        drop(drain_guard);
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        assert!(
+            handle
+                .try_set_governance_publisher(publisher.clone())
+                .is_err()
+        );
+        assert!(publisher.take().is_empty());
+
+        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
+        write_local_checkpoint_atomic(&checkpoint_path, &prepared)
+            .expect("restore prepared auxiliary checkpoint");
+        drop(handle);
+        let restored = NodeHandle::try_new(cfg).expect("startup reconciles rejected intent");
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        assert!(
+            restored
+                .orderbook_snapshot(now + 10)
+                .settlement_receipts
+                .is_empty()
+        );
     }
 
     #[test]
@@ -16299,14 +20975,16 @@ mod tests {
             ModerationBallotEventKind::ChallengeResolved
         );
 
+        let expected_snapshot = source
+            .export_moderation_ballot_snapshot()
+            .expect("export source moderation ballot snapshot");
+        drop(source);
         let restored = NodeHandle::new(cfg);
         assert_eq!(
             restored
                 .export_moderation_ballot_snapshot()
                 .expect("export restored moderation ballot snapshot"),
-            source
-                .export_moderation_ballot_snapshot()
-                .expect("export source moderation ballot snapshot")
+            expected_snapshot
         );
         restored
             .submit_moderation_ballot_reveal(reveal_a, 1_800_000_021_000)
@@ -17325,8 +22003,8 @@ mod tests {
 
         let published = publisher.take();
         assert_eq!(published.len(), 1, "expected one governance publish");
-        let mut cursor = &published[0][..];
-        let decoded = DealSettlementV1::decode(&mut cursor).expect("governance payload decodes");
+        let decoded: DealSettlementV1 =
+            norito::decode_from_bytes(&published[0]).expect("governance payload decodes");
         assert_eq!(decoded.deal_id, *record.deal_id.as_bytes());
         assert_eq!(decoded.ledger.provider_id, *provider_id.as_bytes());
         assert_eq!(decoded.ledger.client_id, *client_id.as_bytes());
@@ -17384,26 +22062,21 @@ mod tests {
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
             .build();
         let handle = NodeHandle::new(cfg);
+        handle.set_governance_publisher(Arc::new(RecordingPublisher::default()));
         let first = reputation_snapshot_fixture();
         handle
             .publish_reputation_snapshot(first.clone())
             .expect("publish first snapshot");
 
-        let conflicting = reputation_snapshot_fixture_with(
-            first.snapshot_id,
-            first.generated_at_unix + 1,
-            None,
-        );
+        let conflicting =
+            reputation_snapshot_fixture_with(first.snapshot_id, first.generated_at_unix + 1, None);
         let conflict_error = handle
             .publish_reputation_snapshot(conflicting)
             .expect_err("conflicting canonical bytes under one id must fail");
         assert!(conflict_error.to_string().contains("conflicts"));
 
-        let broken_head = reputation_snapshot_fixture_with(
-            [0x43; 16],
-            first.generated_at_unix + 1,
-            None,
-        );
+        let broken_head =
+            reputation_snapshot_fixture_with([0x43; 16], first.generated_at_unix + 1, None);
         let head_error = handle
             .publish_reputation_snapshot(broken_head)
             .expect_err("snapshot must extend current head");
@@ -17418,12 +22091,17 @@ mod tests {
             .publish_reputation_snapshot(next)
             .expect("unreferenced predecessor can be safely evicted");
         assert_eq!(
-            handle.latest_reputation_snapshot().map(|snapshot| snapshot.snapshot_id),
+            handle
+                .latest_reputation_snapshot()
+                .map(|snapshot| snapshot.snapshot_id),
             Some([0x44; 16])
         );
         assert!(handle.reputation_snapshot(first.snapshot_id).is_none());
         assert_eq!(handle.reputation_events_since(None, 10).len(), 1);
-        assert_eq!(handle.reputation_events_since(None, 10)[0].snapshot_id, [0x44; 16]);
+        assert_eq!(
+            handle.reputation_events_since(None, 10)[0].snapshot_id,
+            [0x44; 16]
+        );
     }
 
     #[test]
@@ -17438,6 +22116,7 @@ mod tests {
             .publish_reputation_snapshot(snapshot.clone())
             .expect_err("external publisher failure is surfaced");
         assert_eq!(failing.attempts(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
         assert_eq!(
             handle.latest_reputation_snapshot(),
             Some(snapshot.clone()),
@@ -17447,18 +22126,200 @@ mod tests {
         drop(handle);
 
         let restored = NodeHandle::new(cfg);
-        assert_eq!(restored.latest_reputation_snapshot(), Some(snapshot.clone()));
+        assert_eq!(
+            restored.latest_reputation_snapshot(),
+            Some(snapshot.clone())
+        );
         assert_eq!(restored.reputation_events_since(None, 10).len(), 1);
+        assert_eq!(restored.pending_governance_publication_count(), 1);
         let recording = Arc::new(RecordingPublisher::default());
-        restored.set_governance_publisher(recording.clone());
         restored
-            .publish_reputation_snapshot(snapshot.clone())
-            .expect("exact retry publishes without appending another event");
+            .try_set_governance_publisher(recording.clone())
+            .expect("publisher registration replays durable pending snapshot");
         assert_eq!(
             recording.take(),
             vec![to_bytes(&snapshot).expect("encode snapshot")]
         );
+        assert_eq!(restored.pending_governance_publication_count(), 0);
         assert_eq!(restored.reputation_events_since(None, 10).len(), 1);
+    }
+
+    #[test]
+    fn governance_outbox_survives_restart_without_a_publisher_and_replays_on_registration() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let issuance = proof_token_issuance_fixture();
+        let expected = to_bytes(&issuance).expect("encode proof-token issuance");
+        let handle = NodeHandle::new(cfg.clone());
+
+        handle
+            .publish_proof_token_issuance(issuance)
+            .expect("durably queue without a publisher");
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        drop(handle);
+
+        let restored = NodeHandle::new(cfg.clone());
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        let recording = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(recording.clone())
+            .expect("replay pending issuance");
+        assert_eq!(recording.take(), vec![expected]);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        drop(restored);
+
+        let acknowledged = NodeHandle::new(cfg);
+        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
+    }
+
+    #[test]
+    fn governance_outbox_deduplicates_pending_payloads_and_fails_closed_at_retention_limit() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
+            .build();
+        let handle = NodeHandle::new(cfg);
+        let first = proof_token_issuance_fixture();
+
+        handle
+            .publish_proof_token_issuance(first.clone())
+            .expect("queue first issuance");
+        handle
+            .publish_proof_token_issuance(first)
+            .expect("exact pending retry is idempotent");
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+
+        let mut second = proof_token_issuance_fixture();
+        second.token_id = [0x71; 16];
+        second.token_blake3 = [0x72; 32];
+        let err = handle
+            .publish_proof_token_issuance(second)
+            .expect_err("outbox retention exhaustion must fail closed");
+        assert!(err.to_string().contains("retention exhausted"));
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+    }
+
+    #[test]
+    fn governance_outbox_replays_at_least_once_after_publish_before_ack_crash() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let issuance = proof_token_issuance_fixture();
+        let expected = to_bytes(&issuance).expect("encode proof-token issuance");
+        let handle = NodeHandle::new(cfg.clone());
+        handle
+            .publish_proof_token_issuance(issuance)
+            .expect("queue issuance");
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let before_ack = fs::read(&checkpoint_path).expect("read pending checkpoint");
+
+        let recording = Arc::new(RecordingPublisher::default());
+        handle
+            .try_set_governance_publisher(recording.clone())
+            .expect("publish and acknowledge issuance");
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+
+        write_local_checkpoint_atomic(&checkpoint_path, &before_ack)
+            .expect("simulate crash before acknowledgement became durable");
+        drop(handle);
+        let restored = NodeHandle::new(cfg);
+        restored
+            .try_set_governance_publisher(recording.clone())
+            .expect("at-least-once replay succeeds");
+        assert_eq!(recording.take(), vec![expected.clone(), expected]);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+    }
+
+    #[test]
+    fn governance_outbox_checkpoint_rejects_digest_kind_and_sequence_tampering() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        handle
+            .publish_proof_token_issuance(proof_token_issuance_fixture())
+            .expect("queue issuance");
+        drop(handle);
+
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let original = fs::read(&path).expect("read auxiliary checkpoint");
+        for tamper in 0..3 {
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+                norito::decode_from_bytes(&original).expect("decode auxiliary checkpoint");
+            let entry = checkpoint
+                .governance_outbox_entries
+                .first_mut()
+                .expect("pending outbox entry");
+            match tamper {
+                0 => entry.payload_digest[0] ^= 0x80,
+                1 => entry.kind = GovernanceOutboxKindV1::DealSettlement,
+                2 => entry.sequence = checkpoint.governance_outbox_next_sequence,
+                _ => unreachable!(),
+            }
+            write_local_checkpoint_atomic(
+                &path,
+                &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
+            )
+            .expect("write tampered checkpoint");
+            assert!(matches!(
+                NodeHandle::try_new(cfg.clone()),
+                Err(NodeInitError::Checkpoint {
+                    component: "auxiliary runtime",
+                    ..
+                })
+            ));
+        }
+        write_local_checkpoint_atomic(&path, &original).expect("restore original checkpoint");
+        assert!(NodeHandle::try_new(cfg).is_ok());
+    }
+
+    #[test]
+    fn governance_outbox_checkpoint_rejects_semantically_tampered_audit_header() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg.clone());
+        handle
+            .publish_gc_audit_event(GcAuditPayloadV1 {
+                version: GC_AUDIT_PAYLOAD_VERSION_V1,
+                manifest_digest: [0x81; 32],
+                provider_id: [0; 32],
+                evicted_at_unix: 1_800_000_000,
+                freed_bytes: 0,
+                reason: GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1.to_owned(),
+                blocked_reason: Some(GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1.to_owned()),
+            })
+            .expect("queue blocked GC audit");
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        drop(handle);
+
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let bytes = fs::read(&path).expect("read auxiliary checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode auxiliary checkpoint");
+        let entry = checkpoint
+            .governance_outbox_entries
+            .first_mut()
+            .expect("pending audit entry");
+        let mut audit: GcAuditEventV1 =
+            norito::decode_from_bytes(&entry.payload_bytes).expect("decode GC audit event");
+        audit.header.signer = "attacker".to_owned();
+        entry.payload_bytes = norito::to_bytes(&audit).expect("encode tampered audit event");
+        entry.payload_digest = *blake3::hash(&entry.payload_bytes).as_bytes();
+        entry.binding_digest = governance_outbox_binding_digest(
+            entry.version,
+            entry.sequence,
+            entry.kind,
+            entry.payload_digest,
+        );
+        write_local_checkpoint_atomic(
+            &path,
+            &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
+        )
+        .expect("write tampered checkpoint");
+
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::Checkpoint {
+                component: "auxiliary runtime",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -17709,7 +22570,7 @@ mod tests {
     }
 
     #[test]
-    fn record_transparency_ledger_source_entry_rejects_duplicates() {
+    fn record_transparency_ledger_source_entry_is_idempotent_and_rejects_conflicts() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
 
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -17725,13 +22586,19 @@ mod tests {
         handle
             .record_transparency_ledger_source_entry(entry.clone())
             .expect("record source entry");
+        handle
+            .record_transparency_ledger_source_entry(entry.clone())
+            .expect("exact duplicate is idempotent");
+
+        let mut conflicting = entry;
+        conflicting.payload_digest = [0xA5; 32];
         let err = handle
-            .record_transparency_ledger_source_entry(entry)
-            .expect_err("duplicate source entry rejected");
+            .record_transparency_ledger_source_entry(conflicting)
+            .expect_err("conflicting source entry rejected");
 
         assert!(
             err.to_string()
-                .contains("duplicate transparency ledger source entry")
+                .contains("conflicts with retained canonical data")
         );
         assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
     }
@@ -18535,8 +23402,9 @@ mod tests {
             .iter()
             .find(|path| path.extension().map(|ext| ext == "to").unwrap_or(false))
             .expect("encoded artefact present");
-        let mut cursor = &std::fs::read(encoded_path).expect("read encoded artefact")[..];
-        let decoded = DealSettlementV1::decode(&mut cursor).expect("decode artefact");
+        let encoded = std::fs::read(encoded_path).expect("read encoded artefact");
+        let decoded: DealSettlementV1 =
+            norito::decode_from_bytes(&encoded).expect("decode artefact");
         assert_eq!(decoded.deal_id, *record.deal_id.as_bytes());
         assert_eq!(decoded.status, outcome.governance.status);
 
@@ -18614,6 +23482,7 @@ mod tests {
             .settle_deal(record.deal_id, activation_epoch + 7)
             .expect("settlement succeeds despite publish failure");
         assert_eq!(publisher.attempts(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
         assert_eq!(outcome.record.deal_id, record.deal_id);
     }
 
@@ -18958,9 +23827,940 @@ mod tests {
     }
 
     #[test]
+    fn repair_publication_transaction_persists_event_audit_and_acknowledged_linkage() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-001", 0x31, 0x41, 1_701_000_000);
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+
+        handle
+            .enqueue_repair_report(&report)
+            .expect("commit repair report transaction");
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
+        assert_eq!(
+            handle
+                .repair_mutation_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .len(),
+            0
+        );
+        let outbox_entry = handle
+            .governance_outbox
+            .read()
+            .expect("outbox lock")
+            .entries
+            .values()
+            .next()
+            .cloned()
+            .expect("repair audit outbox entry");
+        assert_eq!(outbox_entry.kind, GovernanceOutboxKindV1::RepairAudit);
+        let audit: RepairAuditEventV1 =
+            norito::decode_from_bytes(&outbox_entry.payload_bytes).expect("decode repair audit");
+        audit.validate().expect("canonical repair audit validates");
+        assert_eq!(audit.header.sequence, outbox_entry.sequence);
+        assert_eq!(audit.payload.ticket_id, report.ticket_id);
+        assert_eq!(
+            audit.header.payload_digest,
+            repair_audit_payload_digest_v1(&audit.payload).expect("repair payload digest")
+        );
+        assert_eq!(
+            handle
+                .repair_event_audit_links
+                .read()
+                .expect("link lock")
+                .len(),
+            1
+        );
+        drop(handle);
+
+        let restored = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert_eq!(restored.repair_events_since(None, 10).len(), 1);
+        assert_eq!(
+            restored
+                .repair_event_audit_links
+                .read()
+                .expect("restored link lock")
+                .len(),
+            1
+        );
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(publisher.clone())
+            .expect("acknowledge restored repair audit");
+        assert_eq!(publisher.take(), vec![outbox_entry.payload_bytes]);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        assert_eq!(
+            restored
+                .repair_event_audit_links
+                .read()
+                .expect("acknowledged link lock")
+                .len(),
+            1
+        );
+        drop(restored);
+
+        let acknowledged =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
+        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
+        assert_eq!(acknowledged.repair_events_since(None, 10).len(), 1);
+        assert_eq!(
+            acknowledged
+                .repair_event_audit_links
+                .read()
+                .expect("durable link lock")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn repair_publication_transaction_discards_crash_before_domain_commit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-002", 0x32, 0x42, 1_701_000_100);
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        let material = norito::to_bytes(&report).expect("encode repair report");
+        {
+            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("drain lock");
+            let intents = handle
+                .prepare_repair_mutation_intents(
+                    &mutation_guard,
+                    &drain_guard,
+                    std::slice::from_ref(&report.ticket_id),
+                    "enqueue_report",
+                    repair_mutation_operation_digest(
+                        "enqueue_report",
+                        std::slice::from_ref(&report.ticket_id),
+                        &material,
+                    ),
+                )
+                .expect("persist repair mutation intent");
+            assert_eq!(intents.len(), 1);
+        }
+        assert_eq!(
+            handle
+                .repair_mutation_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .len(),
+            1
+        );
+        assert!(
+            handle
+                .repair_task_record(&report.ticket_id)
+                .expect("repair store")
+                .is_none()
+        );
+        drop(handle);
+
+        let restored =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
+        assert!(
+            restored
+                .repair_task_record(&report.ticket_id)
+                .expect("restored repair store")
+                .is_none()
+        );
+        assert!(restored.repair_events_since(None, 10).is_empty());
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        assert!(
+            restored
+                .repair_mutation_intents
+                .read()
+                .expect("restored intent lock")
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repair_publication_transaction_recovers_crash_after_domain_commit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-003", 0x33, 0x43, 1_701_000_200);
+        let material = norito::to_bytes(&report).expect("encode repair report");
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        {
+            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("drain lock");
+            handle
+                .prepare_repair_mutation_intents(
+                    &mutation_guard,
+                    &drain_guard,
+                    std::slice::from_ref(&report.ticket_id),
+                    "enqueue_report",
+                    repair_mutation_operation_digest(
+                        "enqueue_report",
+                        std::slice::from_ref(&report.ticket_id),
+                        &material,
+                    ),
+                )
+                .expect("persist repair mutation intent");
+            handle
+                .repair
+                .enqueue_report_with_event(report.clone())
+                .expect("commit authoritative repair state");
+        }
+        assert!(
+            handle
+                .repair_task_record(&report.ticket_id)
+                .expect("repair store")
+                .is_some()
+        );
+        assert!(handle.repair_events_since(None, 10).is_empty());
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        drop(handle);
+
+        let restored =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
+        assert!(
+            restored
+                .repair_task_record(&report.ticket_id)
+                .expect("restored repair store")
+                .is_some()
+        );
+        let events = restored.repair_events_since(None, 10);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.ticket_id, report.ticket_id);
+        assert_eq!(events[0].event.status, RepairTaskStatusV1::Queued);
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert_eq!(
+            restored
+                .repair_event_audit_links
+                .read()
+                .expect("restored link lock")
+                .len(),
+            1
+        );
+        assert!(
+            restored
+                .repair_mutation_intents
+                .read()
+                .expect("restored intent lock")
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repair_publication_precommit_failure_rolls_back_and_fail_stops_until_restart() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-004", 0x34, 0x44, 1_701_000_300);
+        let material = norito::to_bytes(&report).expect("encode repair report");
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
+        let drain_guard = handle
+            .governance_outbox_drain_lock
+            .lock()
+            .expect("drain lock");
+        let intents = handle
+            .prepare_repair_mutation_intents(
+                &mutation_guard,
+                &drain_guard,
+                std::slice::from_ref(&report.ticket_id),
+                "enqueue_report",
+                repair_mutation_operation_digest(
+                    "enqueue_report",
+                    std::slice::from_ref(&report.ticket_id),
+                    &material,
+                ),
+            )
+            .expect("persist repair mutation intent");
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let prepared = fs::read(&checkpoint_path).expect("read prepared checkpoint");
+        handle
+            .repair
+            .enqueue_report_with_event(report.clone())
+            .expect("commit authoritative repair state");
+        fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");
+        fs::create_dir(&checkpoint_path).expect("inject checkpoint directory");
+        let mut receiver = handle.subscribe_repair_events();
+
+        let error = handle
+            .finalize_repair_mutation_intents(&mutation_guard, &drain_guard, &intents, true)
+            .expect_err("publication checkpoint failure must surface");
+        assert!(
+            error
+                .to_string()
+                .contains("task state may have committed without its publication transaction")
+        );
+        assert!(handle.durability_failure_reason().is_some());
+        assert!(handle.repair_events_since(None, 10).is_empty());
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert_eq!(
+            handle
+                .repair_mutation_intents
+                .read()
+                .expect("rolled-back intent lock")
+                .entries
+                .len(),
+            1
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        drop(drain_guard);
+        drop(mutation_guard);
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        assert!(
+            handle
+                .try_set_governance_publisher(publisher.clone())
+                .is_err()
+        );
+        assert!(publisher.take().is_empty());
+        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
+        write_local_checkpoint_atomic(&checkpoint_path, &prepared)
+            .expect("restore prepared checkpoint");
+        drop(handle);
+
+        let restored =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
+        assert_eq!(restored.repair_events_since(None, 10).len(), 1);
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert!(
+            restored
+                .repair_mutation_intents
+                .read()
+                .expect("restored intent lock")
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repair_publication_committed_unknown_restart_is_exactly_once() {
+        fn fail_parent_sync(_: &Path) -> io::Result<()> {
+            Err(io::Error::other("injected parent sync failure"))
+        }
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-005", 0x35, 0x45, 1_701_000_400);
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        handle
+            .enqueue_repair_report(&report)
+            .expect("commit repair publication transaction");
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let committed = fs::read(&checkpoint_path).expect("read committed checkpoint");
+        let visible_error = write_local_checkpoint_atomic_with_mode_and_parent_sync(
+            &checkpoint_path,
+            &committed,
+            false,
+            fail_parent_sync,
+        )
+        .expect_err("parent sync failure follows visible rename");
+        assert!(visible_error.committed);
+        let persist_error = handle
+            .finish_local_checkpoint_write(
+                "auxiliary runtime",
+                &checkpoint_path,
+                Err(visible_error),
+            )
+            .expect_err("committed-unknown state must fail stop");
+        assert!(persist_error.committed);
+        assert!(handle.durability_failure_reason().is_some());
+        drop(handle);
+
+        let restored =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
+        assert_eq!(restored.repair_events_since(None, 10).len(), 1);
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert_eq!(
+            restored
+                .repair_event_audit_links
+                .read()
+                .expect("link lock")
+                .len(),
+            1
+        );
+        assert!(
+            restored
+                .repair_mutation_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repair_publication_reservation_rejects_before_domain_commit_when_headroom_is_insufficient() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(4, 4, 2 * 1024 * 1024))
+            .build();
+        let report = repair_report_fixture("REP-TX-010", 0x3A, 0x4A, 1_701_000_900);
+        let handle =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
+        handle
+            .enqueue_repair_report(&report)
+            .expect("enqueue repair report");
+        for index in 0_u8..2 {
+            let mut issuance = proof_token_issuance_fixture();
+            issuance.token_id = [0xA0 + index; 16];
+            issuance.token_blake3 = [0xB0 + index; 32];
+            handle
+                .publish_proof_token_issuance(issuance)
+                .expect("occupy governance outbox slot");
+        }
+        assert_eq!(handle.pending_governance_publication_count(), 3);
+
+        let error = handle
+            .mark_repair_failed(
+                &report.ticket_id,
+                report.submitted_at_unix + 10,
+                "must reserve audit and draft slots".to_owned(),
+            )
+            .expect_err("insufficient headroom must precede the repair store mutation");
+        assert!(error.to_string().contains("requires 2 reserved"));
+        let snapshot = handle
+            .repair_task_snapshot(&report.ticket_id)
+            .expect("repair snapshot")
+            .expect("repair task");
+        assert!(matches!(
+            snapshot.record.state,
+            RepairTaskStateV1::Queued(_)
+        ));
+        assert!(snapshot.slash_proposal.is_none());
+        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 3);
+        assert!(
+            handle
+                .repair_mutation_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn repair_publication_reservation_blocks_competing_enqueue_and_recovers_at_full_limit() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(4, 4, 2 * 1024 * 1024))
+            .build();
+        let report = repair_report_fixture("REP-TX-011", 0x3B, 0x4B, 1_701_001_000);
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(1),
+            GcConfig::default(),
+        );
+        handle
+            .enqueue_repair_report(&report)
+            .expect("enqueue repair report");
+        let mut issuance = proof_token_issuance_fixture();
+        issuance.token_id = [0xC1; 16];
+        issuance.token_blake3 = [0xC2; 32];
+        handle
+            .publish_proof_token_issuance(issuance)
+            .expect("occupy one non-repair outbox slot");
+        assert_eq!(handle.pending_governance_publication_count(), 2);
+
+        let failed_at_unix = report.submitted_at_unix + 10;
+        let reason = "reserve restart finalization headroom".to_owned();
+        let mut material = failed_at_unix.to_le_bytes().to_vec();
+        hash_length_prefixed_material(&mut material, reason.as_bytes());
+        let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
+        let drain_guard = handle
+            .governance_outbox_drain_lock
+            .lock()
+            .expect("drain lock");
+        let intents = handle
+            .prepare_repair_mutation_intents(
+                &mutation_guard,
+                &drain_guard,
+                std::slice::from_ref(&report.ticket_id),
+                "mark_failed",
+                repair_mutation_operation_digest(
+                    "mark_failed",
+                    std::slice::from_ref(&report.ticket_id),
+                    &material,
+                ),
+            )
+            .expect("persist two-slot repair reservation");
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].reserved_outbox_slots, 2);
+
+        let mut competing = proof_token_issuance_fixture();
+        competing.token_id = [0xC3; 16];
+        competing.token_blake3 = [0xC4; 32];
+        let competing_bytes = norito::to_bytes(&competing).expect("encode competing issuance");
+        let error = handle
+            .enqueue_governance_outbox(GovernanceOutboxKindV1::ProofTokenIssuance, competing_bytes)
+            .expect_err("non-repair publication must not consume reserved headroom");
+        assert!(error.to_string().contains("slots are reserved"));
+        assert_eq!(handle.pending_governance_publication_count(), 2);
+
+        let update = handle
+            .repair
+            .mark_failed_with_event(&report.ticket_id, failed_at_unix, reason)
+            .expect("commit authoritative repair escalation");
+        assert!(update.event.is_some());
+        assert!(update.slash_proposal.is_some());
+        assert_eq!(
+            handle
+                .repair
+                .task_snapshot(&report.ticket_id)
+                .expect("repair store")
+                .expect("repair task")
+                .slash_proposal_stage,
+            Some(RepairSlashProposalStage::Drafted)
+        );
+        drop(drain_guard);
+        drop(mutation_guard);
+        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 2);
+        drop(handle);
+
+        let restored = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(1),
+            GcConfig::default(),
+        );
+        assert_eq!(restored.pending_governance_publication_count(), 4);
+        let events = restored.repair_events_since(None, 10);
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events.last().expect("recovered escalation").event.status,
+            RepairTaskStatusV1::Escalated
+        );
+        assert!(
+            restored
+                .repair_mutation_intents
+                .read()
+                .expect("restored intent lock")
+                .entries
+                .is_empty()
+        );
+        assert_eq!(
+            restored
+                .repair_slash_publication_links
+                .read()
+                .expect("slash link lock")
+                .len(),
+            1
+        );
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(publisher.clone())
+            .expect("drain exactly-full recovered outbox");
+        assert_eq!(publisher.take().len(), 4);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        drop(restored);
+
+        let acknowledged =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
+        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
+        assert_eq!(acknowledged.repair_events_since(None, 10).len(), 2);
+    }
+
+    #[test]
+    fn repair_publication_startup_rejects_forged_reservation_budget() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-012", 0x3C, 0x4C, 1_701_001_100);
+        let material = norito::to_bytes(&report).expect("encode repair report");
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        {
+            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("drain lock");
+            handle
+                .prepare_repair_mutation_intents(
+                    &mutation_guard,
+                    &drain_guard,
+                    std::slice::from_ref(&report.ticket_id),
+                    "enqueue_report",
+                    repair_mutation_operation_digest(
+                        "enqueue_report",
+                        std::slice::from_ref(&report.ticket_id),
+                        &material,
+                    ),
+                )
+                .expect("persist repair reservation");
+        }
+
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let bytes = fs::read(&path).expect("read reservation checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode reservation checkpoint");
+        let intent = checkpoint
+            .repair_mutation_intents
+            .first_mut()
+            .expect("repair mutation intent");
+        intent.reserved_outbox_slots = 0;
+        intent.binding_digest = repair_mutation_binding_digest(
+            intent.version,
+            intent.sequence,
+            &intent.operation,
+            intent.operation_digest,
+            intent.reserved_outbox_slots,
+            &intent.cursor,
+        );
+        write_local_checkpoint_atomic(
+            &path,
+            &norito::to_bytes(&checkpoint).expect("encode forged reservation checkpoint"),
+        )
+        .expect("write forged reservation checkpoint");
+        drop(handle);
+
+        let error =
+            NodeHandle::try_new_with_policies(cfg, enabled_repair_config(3), GcConfig::default())
+                .expect_err("operation-specific reservation downgrade must fail startup");
+        assert!(
+            error
+                .to_string()
+                .contains("outbox reservation does not match its operation")
+        );
+    }
+
+    #[test]
+    fn repair_slash_drafted_and_submitted_publications_are_exactly_once() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-006", 0x36, 0x46, 1_701_000_500);
+        let handle =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
+        handle
+            .enqueue_repair_report(&report)
+            .expect("enqueue repair report");
+        handle
+            .claim_repair_ticket(
+                &report.ticket_id,
+                "worker-exact",
+                report.submitted_at_unix + 10,
+                "claim-exact",
+            )
+            .expect("claim repair ticket");
+        let failed_at = report.submitted_at_unix + 20;
+        handle
+            .fail_repair_ticket(
+                &report.ticket_id,
+                "worker-exact",
+                failed_at,
+                "forced escalation".to_owned(),
+                "fail-exact",
+            )
+            .expect("draft slash proposal");
+        let drafted = handle
+            .repair_task_snapshot(&report.ticket_id)
+            .expect("repair snapshot")
+            .expect("repair task");
+        assert_eq!(
+            drafted.slash_proposal_stage,
+            Some(RepairSlashProposalStage::Drafted)
+        );
+        let proposal = drafted.slash_proposal.expect("drafted proposal");
+        let event_count = handle.repair_events_since(None, 10).len();
+        let outbox_count = handle.pending_governance_publication_count();
+        let slash_link_count = handle
+            .repair_slash_publication_links
+            .read()
+            .expect("slash link lock")
+            .len();
+
+        handle
+            .fail_repair_ticket(
+                &report.ticket_id,
+                "worker-exact",
+                failed_at,
+                "forced escalation".to_owned(),
+                "fail-exact",
+            )
+            .expect("exact fail retry");
+        assert_eq!(handle.repair_events_since(None, 10).len(), event_count);
+        assert_eq!(handle.pending_governance_publication_count(), outbox_count);
+        assert_eq!(
+            handle
+                .repair_slash_publication_links
+                .read()
+                .expect("slash link lock")
+                .len(),
+            slash_link_count
+        );
+
+        let mut embedded_approval = proposal.clone();
+        embedded_approval.approval = Some(RepairEscalationApprovalV1 {
+            version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            approve_votes: 1,
+            reject_votes: 0,
+            abstain_votes: 0,
+            approved_at_unix: failed_at + 1,
+            finalized_at_unix: failed_at + 2,
+        });
+        let error = handle
+            .submit_repair_slash_proposal(&embedded_approval)
+            .expect_err("embedded approval is never authoritative");
+        assert!(error.to_string().contains("embedded approval"));
+        assert_eq!(handle.pending_governance_publication_count(), outbox_count);
+        assert_eq!(
+            handle
+                .repair_task_snapshot(&report.ticket_id)
+                .expect("repair snapshot")
+                .expect("repair task")
+                .slash_proposal_stage,
+            Some(RepairSlashProposalStage::Drafted)
+        );
+
+        handle
+            .submit_repair_slash_proposal(&proposal)
+            .expect("submit exact drafted proposal");
+        let submitted_outbox_count = handle.pending_governance_publication_count();
+        let submitted_link_count = handle
+            .repair_slash_publication_links
+            .read()
+            .expect("submitted slash link lock")
+            .len();
+        assert_eq!(submitted_outbox_count, outbox_count + 1);
+        assert_eq!(submitted_link_count, slash_link_count + 1);
+        assert_eq!(
+            handle
+                .repair_task_snapshot(&report.ticket_id)
+                .expect("repair snapshot")
+                .expect("repair task")
+                .slash_proposal_stage,
+            Some(RepairSlashProposalStage::Submitted)
+        );
+        handle
+            .submit_repair_slash_proposal(&proposal)
+            .expect("exact submitted retry");
+        assert_eq!(
+            handle.pending_governance_publication_count(),
+            submitted_outbox_count
+        );
+        assert_eq!(
+            handle
+                .repair_slash_publication_links
+                .read()
+                .expect("submitted slash link lock")
+                .len(),
+            submitted_link_count
+        );
+        assert_eq!(handle.repair_events_since(None, 10).len(), event_count);
+        let outbox = handle.governance_outbox.read().expect("outbox lock");
+        assert_eq!(
+            outbox
+                .entries
+                .values()
+                .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairSlashDrafted)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outbox
+                .entries
+                .values()
+                .filter(|entry| entry.kind == GovernanceOutboxKindV1::RepairSlashSubmitted)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn repair_publication_startup_rejects_tampered_intent_and_acknowledged_event_link() {
+        let (intent_cfg, _intent_dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-007", 0x37, 0x47, 1_701_000_600);
+        let handle = NodeHandle::new_with_policies(
+            intent_cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        let material = norito::to_bytes(&report).expect("encode repair report");
+        {
+            let mutation_guard = handle.repair_mutation_lock.lock().expect("mutation lock");
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("drain lock");
+            handle
+                .prepare_repair_mutation_intents(
+                    &mutation_guard,
+                    &drain_guard,
+                    std::slice::from_ref(&report.ticket_id),
+                    "enqueue_report",
+                    repair_mutation_operation_digest(
+                        "enqueue_report",
+                        std::slice::from_ref(&report.ticket_id),
+                        &material,
+                    ),
+                )
+                .expect("persist repair mutation intent");
+        }
+        let intent_path = auxiliary_runtime_checkpoint_path(intent_cfg.data_dir());
+        let intent_bytes = fs::read(&intent_path).expect("read intent checkpoint");
+        let mut intent_checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&intent_bytes).expect("decode intent checkpoint");
+        intent_checkpoint.repair_mutation_intents[0].operation_digest[0] ^= 0x80;
+        write_local_checkpoint_atomic(
+            &intent_path,
+            &norito::to_bytes(&intent_checkpoint).expect("encode tampered intent checkpoint"),
+        )
+        .expect("write tampered intent checkpoint");
+        drop(handle);
+        let error = NodeHandle::try_new_with_policies(
+            intent_cfg,
+            enabled_repair_config(3),
+            GcConfig::default(),
+        )
+        .expect_err("tampered repair intent must fail startup");
+        assert!(error.to_string().contains("binding digest mismatch"));
+
+        let (link_cfg, _link_dir) = storage_config_with_temp_dir();
+        let link_report = repair_report_fixture("REP-TX-008", 0x38, 0x48, 1_701_000_700);
+        let link_handle = NodeHandle::new_with_policies(
+            link_cfg.clone(),
+            enabled_repair_config(3),
+            GcConfig::default(),
+        );
+        link_handle
+            .enqueue_repair_report(&link_report)
+            .expect("enqueue linked repair report");
+        let publisher = Arc::new(RecordingPublisher::default());
+        link_handle
+            .try_set_governance_publisher(publisher)
+            .expect("acknowledge repair audit");
+        assert_eq!(link_handle.pending_governance_publication_count(), 0);
+        let link_path = auxiliary_runtime_checkpoint_path(link_cfg.data_dir());
+        let link_bytes = fs::read(&link_path).expect("read link checkpoint");
+        let mut link_checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&link_bytes).expect("decode link checkpoint");
+        link_checkpoint.repair_event_audit_links[0].event_digest[0] ^= 0x40;
+        write_local_checkpoint_atomic(
+            &link_path,
+            &norito::to_bytes(&link_checkpoint).expect("encode tampered link checkpoint"),
+        )
+        .expect("write tampered link checkpoint");
+        drop(link_handle);
+        let error = NodeHandle::try_new_with_policies(
+            link_cfg,
+            enabled_repair_config(3),
+            GcConfig::default(),
+        )
+        .expect_err("tampered acknowledged repair link must fail startup");
+        assert!(error.to_string().contains("audit linkage digest mismatch"));
+    }
+
+    #[test]
+    fn repair_publication_startup_rejects_submitted_stage_downgrade() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let report = repair_report_fixture("REP-TX-009", 0x39, 0x49, 1_701_000_800);
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            enabled_repair_config(1),
+            GcConfig::default(),
+        );
+        handle
+            .enqueue_repair_report(&report)
+            .expect("enqueue repair report");
+        handle
+            .claim_repair_ticket(
+                &report.ticket_id,
+                "worker-downgrade",
+                report.submitted_at_unix + 10,
+                "claim-downgrade",
+            )
+            .expect("claim repair ticket");
+        handle
+            .fail_repair_ticket(
+                &report.ticket_id,
+                "worker-downgrade",
+                report.submitted_at_unix + 20,
+                "force escalation".to_owned(),
+                "fail-downgrade",
+            )
+            .expect("draft slash proposal");
+        let proposal = handle
+            .repair_task_snapshot(&report.ticket_id)
+            .expect("repair snapshot")
+            .expect("repair task")
+            .slash_proposal
+            .expect("drafted proposal");
+        handle
+            .submit_repair_slash_proposal(&proposal)
+            .expect("submit slash proposal");
+        let publisher = Arc::new(RecordingPublisher::default());
+        handle
+            .try_set_governance_publisher(publisher)
+            .expect("acknowledge all repair publications");
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let bytes = fs::read(&path).expect("read submitted checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode submitted checkpoint");
+        let submitted = checkpoint
+            .repair_slash_publication_links
+            .iter_mut()
+            .find(|link| link.stage == RepairSlashProposalStage::Submitted)
+            .expect("submitted publication link");
+        submitted.stage = RepairSlashProposalStage::Drafted;
+        write_local_checkpoint_atomic(
+            &path,
+            &norito::to_bytes(&checkpoint).expect("encode downgraded checkpoint"),
+        )
+        .expect("write downgraded checkpoint");
+        drop(handle);
+
+        let error =
+            NodeHandle::try_new_with_policies(cfg, enabled_repair_config(1), GcConfig::default())
+                .expect_err("submitted slash stage downgrade must fail startup");
+        assert!(
+            error
+                .to_string()
+                .contains("slash proposal stage lacks durable publication linkage")
+        );
+    }
+
+    #[test]
     fn node_handle_tracks_repair_worker_actions() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
 
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
@@ -19587,9 +25387,787 @@ mod tests {
     }
 
     #[test]
+    fn gc_eviction_transaction_prepare_checkpoint_failure_prevents_domain_commit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_050;
+        let digest = build_manifest_with_retention(
+            vec![0x70; 8],
+            now_unix - 1,
+            b"gc-prepare-checkpoint-failure",
+            &handle,
+        );
+        let manifest_id = hex::encode(digest);
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
+        fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");
+        fs::create_dir(&checkpoint_path).expect("inject auxiliary checkpoint directory");
+
+        let report = handle.run_gc_once(now_unix);
+        assert!(report.evictions.is_empty());
+        assert_eq!(report.errors, 1);
+        assert!(handle.manifest_metadata(&manifest_id).is_ok());
+        assert_eq!(handle.storage.as_ref().unwrap().gc_counters(), (0, 0));
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert!(
+            handle
+                .gc_eviction_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .is_empty()
+        );
+        assert!(handle.durability_failure_reason().is_none());
+
+        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
+        write_local_checkpoint_atomic(&checkpoint_path, &committed)
+            .expect("restore committed checkpoint");
+        drop(handle);
+        let restored =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        assert!(restored.manifest_metadata(&manifest_id).is_ok());
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+    }
+
+    #[test]
+    fn gc_eviction_transaction_discards_pre_domain_crash_intent() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_100;
+        let digest = build_manifest_with_retention(
+            vec![0x71; 8],
+            now_unix - 1,
+            b"gc-pre-domain-crash",
+            &handle,
+        );
+        let manifest_id = hex::encode(digest);
+        let storage = handle.storage.as_ref().expect("storage backend");
+        let target = storage.manifest(&manifest_id).expect("GC target");
+        {
+            let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("outbox drain lock");
+            let intent = handle
+                .prepare_gc_eviction_intent(
+                    &gc_guard,
+                    &drain_guard,
+                    storage,
+                    &target,
+                    [0; 32],
+                    now_unix,
+                    GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
+                )
+                .expect("persist GC eviction intent");
+            assert_eq!(intent.reserved_outbox_slots, 1);
+        }
+        assert_eq!(
+            handle
+                .gc_eviction_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .len(),
+            1
+        );
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert!(storage.manifest(&manifest_id).is_some());
+        drop(target);
+        drop(handle);
+
+        let restored =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        assert!(restored.manifest_metadata(&manifest_id).is_ok());
+        assert_eq!(restored.storage.as_ref().unwrap().gc_counters(), (0, 0));
+        assert_eq!(restored.pending_governance_publication_count(), 0);
+        assert!(
+            restored
+                .gc_eviction_intents
+                .read()
+                .expect("restored intent lock")
+                .entries
+                .is_empty()
+        );
+        assert!(
+            restored
+                .gc_eviction_audit_links
+                .read()
+                .expect("restored link lock")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn gc_eviction_transaction_fail_closes_storage_generation_drift() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_150;
+        let digest = build_manifest_with_retention(
+            vec![0x7B; 8],
+            now_unix - 1,
+            b"gc-generation-drift-target",
+            &handle,
+        );
+        let manifest_id = hex::encode(digest);
+        let storage = handle.storage.as_ref().expect("storage backend");
+        let target = storage.manifest(&manifest_id).expect("GC target");
+        let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
+        let drain_guard = handle
+            .governance_outbox_drain_lock
+            .lock()
+            .expect("outbox drain lock");
+        let intent = handle
+            .prepare_gc_eviction_intent(
+                &gc_guard,
+                &drain_guard,
+                storage,
+                &target,
+                [0; 32],
+                now_unix,
+                GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
+            )
+            .expect("persist GC eviction intent");
+        build_manifest_with_retention(
+            vec![0x7C; 8],
+            now_unix + 100,
+            b"gc-generation-drift-interloper",
+            &handle,
+        );
+
+        let error = handle
+            .settle_gc_eviction_intent_against_storage(
+                &gc_guard,
+                &drain_guard,
+                storage,
+                &intent,
+                true,
+            )
+            .expect_err("unexpected storage generation must fail closed");
+        assert!(error.to_string().contains("storage generation drift"));
+        assert!(handle.durability_failure_reason().is_some());
+        assert!(storage.manifest(&manifest_id).is_some());
+        assert_eq!(storage.gc_counters(), (0, 0));
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert_eq!(
+            handle
+                .gc_eviction_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .len(),
+            1
+        );
+        drop(drain_guard);
+        drop(gc_guard);
+        drop(target);
+        drop(handle);
+
+        let error =
+            NodeHandle::try_new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1))
+                .expect_err("ambiguous GC generation must also fail startup");
+        assert!(error.to_string().contains("storage generation drift"));
+    }
+
+    #[test]
+    fn gc_eviction_transaction_recovers_post_domain_crash_exactly_once() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_200;
+        let payload = b"gc-post-domain-crash";
+        let digest = build_manifest_with_retention(vec![0x72; 8], now_unix - 1, payload, &handle);
+        let manifest_id = hex::encode(digest);
+        let storage = handle.storage.as_ref().expect("storage backend");
+        let target = storage.manifest(&manifest_id).expect("GC target");
+        {
+            let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("outbox drain lock");
+            handle
+                .prepare_gc_eviction_intent(
+                    &gc_guard,
+                    &drain_guard,
+                    storage,
+                    &target,
+                    [0; 32],
+                    now_unix,
+                    GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
+                )
+                .expect("persist GC eviction intent");
+            assert_eq!(
+                storage
+                    .evict_manifest(&manifest_id)
+                    .expect("commit storage eviction"),
+                u64::try_from(payload.len()).unwrap()
+            );
+        }
+        assert_eq!(storage.gc_counters(), (payload.len() as u64, 1));
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        drop(target);
+        drop(handle);
+
+        let restored = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        assert!(restored.manifest_metadata(&manifest_id).is_err());
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert_eq!(
+            restored
+                .gc_eviction_audit_links
+                .read()
+                .expect("link lock")
+                .len(),
+            1
+        );
+        assert!(
+            restored
+                .gc_eviction_intents
+                .read()
+                .expect("intent lock")
+                .entries
+                .is_empty()
+        );
+        let publisher = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(publisher.clone())
+            .expect("publish recovered GC audit");
+        let published = publisher.take();
+        assert_eq!(published.len(), 1);
+        let audit: GcAuditEventV1 =
+            norito::decode_from_bytes(&published[0]).expect("decode recovered GC audit");
+        audit.validate().expect("recovered audit validates");
+        assert_eq!(audit.payload.manifest_digest, digest);
+        assert_eq!(audit.payload.freed_bytes, payload.len() as u64);
+        drop(restored);
+
+        let acknowledged =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
+        assert_eq!(
+            acknowledged.storage.as_ref().unwrap().gc_counters(),
+            (payload.len() as u64, 1)
+        );
+        assert_eq!(
+            acknowledged
+                .gc_eviction_audit_links
+                .read()
+                .expect("acknowledged link lock")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn gc_eviction_transaction_finalization_checkpoint_failure_fail_stops_and_recovers() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_250;
+        let payload = b"gc-finalization-checkpoint-failure";
+        let digest = build_manifest_with_retention(vec![0x7A; 8], now_unix - 1, payload, &handle);
+        let manifest_id = hex::encode(digest);
+        let storage = handle.storage.as_ref().expect("storage backend");
+        let target = storage.manifest(&manifest_id).expect("GC target");
+        let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
+        let drain_guard = handle
+            .governance_outbox_drain_lock
+            .lock()
+            .expect("outbox drain lock");
+        let intent = handle
+            .prepare_gc_eviction_intent(
+                &gc_guard,
+                &drain_guard,
+                storage,
+                &target,
+                [0; 32],
+                now_unix,
+                GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
+            )
+            .expect("persist GC eviction intent");
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let prepared = fs::read(&checkpoint_path).expect("read prepared GC checkpoint");
+        assert_eq!(
+            storage
+                .evict_manifest(&manifest_id)
+                .expect("commit storage eviction"),
+            payload.len() as u64
+        );
+        fs::remove_file(&checkpoint_path).expect("remove prepared auxiliary checkpoint");
+        fs::create_dir(&checkpoint_path).expect("inject auxiliary checkpoint directory");
+
+        let error = handle
+            .settle_gc_eviction_intent_against_storage(
+                &gc_guard,
+                &drain_guard,
+                storage,
+                &intent,
+                true,
+            )
+            .expect_err("GC publication checkpoint failure must surface");
+        assert!(
+            error
+                .to_string()
+                .contains("storage state may have committed without its audit publication")
+        );
+        assert!(handle.durability_failure_reason().is_some());
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        assert_eq!(
+            handle
+                .gc_eviction_intents
+                .read()
+                .expect("rolled-back intent lock")
+                .entries
+                .len(),
+            1
+        );
+        assert!(
+            handle
+                .gc_eviction_audit_links
+                .read()
+                .expect("rolled-back link lock")
+                .is_empty()
+        );
+        drop(drain_guard);
+        drop(gc_guard);
+        let publisher = Arc::new(RecordingPublisher::default());
+        assert!(
+            handle
+                .try_set_governance_publisher(publisher.clone())
+                .is_err()
+        );
+        assert!(publisher.take().is_empty());
+
+        drop(target);
+        fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
+        write_local_checkpoint_atomic(&checkpoint_path, &prepared)
+            .expect("restore prepared GC checkpoint");
+        drop(handle);
+
+        let restored =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        assert!(restored.manifest_metadata(&manifest_id).is_err());
+        assert_eq!(restored.storage.as_ref().unwrap().gc_counters().1, 1);
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert!(
+            restored
+                .gc_eviction_intents
+                .read()
+                .expect("restored intent lock")
+                .entries
+                .is_empty()
+        );
+        assert_eq!(
+            restored
+                .gc_eviction_audit_links
+                .read()
+                .expect("restored link lock")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn gc_eviction_transaction_reservation_survives_full_outbox_restart() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(1, 2, 2 * 1024 * 1024))
+            .build();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_300;
+        let digest = build_manifest_with_retention(
+            vec![0x73; 8],
+            now_unix - 1,
+            b"gc-full-outbox-restart",
+            &handle,
+        );
+        let manifest_id = hex::encode(digest);
+        let issuance = proof_token_issuance_fixture();
+        handle
+            .publish_proof_token_issuance(issuance)
+            .expect("occupy first outbox slot");
+        let storage = handle.storage.as_ref().expect("storage backend");
+        let target = storage.manifest(&manifest_id).expect("GC target");
+        {
+            let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
+            let drain_guard = handle
+                .governance_outbox_drain_lock
+                .lock()
+                .expect("outbox drain lock");
+            handle
+                .prepare_gc_eviction_intent(
+                    &gc_guard,
+                    &drain_guard,
+                    storage,
+                    &target,
+                    [0; 32],
+                    now_unix,
+                    GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
+                )
+                .expect("reserve final outbox slot");
+
+            let mut competing = proof_token_issuance_fixture();
+            competing.token_id = [0xD1; 16];
+            competing.token_blake3 = [0xD2; 32];
+            let error = handle
+                .enqueue_governance_outbox(
+                    GovernanceOutboxKindV1::ProofTokenIssuance,
+                    norito::to_bytes(&competing).expect("encode competing publication"),
+                )
+                .expect_err("competing publication cannot consume GC reservation");
+            assert!(error.to_string().contains("slots are reserved"));
+            storage
+                .evict_manifest(&manifest_id)
+                .expect("commit storage eviction");
+        }
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        drop(target);
+        drop(handle);
+
+        let restored = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        assert_eq!(restored.pending_governance_publication_count(), 2);
+        assert!(
+            restored
+                .gc_eviction_intents
+                .read()
+                .expect("restored intent lock")
+                .entries
+                .is_empty()
+        );
+        let publisher = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(publisher.clone())
+            .expect("drain full recovered outbox");
+        assert_eq!(publisher.take().len(), 2);
+        drop(restored);
+
+        let acknowledged =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        assert_eq!(acknowledged.pending_governance_publication_count(), 0);
+        assert_eq!(acknowledged.storage.as_ref().unwrap().gc_counters().1, 1);
+    }
+
+    #[test]
+    fn gc_eviction_transaction_rejects_intent_binding_and_counter_tampering() {
+        for tamper_counter in [false, true] {
+            let (cfg, _dir) = storage_config_with_temp_dir();
+            let handle = NodeHandle::new_with_policies(
+                cfg.clone(),
+                RepairConfig::default(),
+                enabled_gc_config(1),
+            );
+            let now_unix = if tamper_counter {
+                1_710_000_401
+            } else {
+                1_710_000_400
+            };
+            let digest = build_manifest_with_retention(
+                vec![if tamper_counter { 0x75 } else { 0x74 }; 8],
+                now_unix - 1,
+                if tamper_counter {
+                    b"gc-counter-tamper".as_slice()
+                } else {
+                    b"gc-binding-tamper".as_slice()
+                },
+                &handle,
+            );
+            let manifest_id = hex::encode(digest);
+            let storage = handle.storage.as_ref().expect("storage backend");
+            let target = storage.manifest(&manifest_id).expect("GC target");
+            {
+                let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
+                let drain_guard = handle
+                    .governance_outbox_drain_lock
+                    .lock()
+                    .expect("outbox drain lock");
+                handle
+                    .prepare_gc_eviction_intent(
+                        &gc_guard,
+                        &drain_guard,
+                        storage,
+                        &target,
+                        [0; 32],
+                        now_unix,
+                        GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
+                    )
+                    .expect("persist GC intent");
+            }
+            let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+            let bytes = fs::read(&path).expect("read GC intent checkpoint");
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+                norito::decode_from_bytes(&bytes).expect("decode GC intent checkpoint");
+            let intent = checkpoint
+                .gc_eviction_intents
+                .first_mut()
+                .expect("GC intent");
+            if tamper_counter {
+                intent.storage_after.gc_evictions_total =
+                    intent.storage_after.gc_evictions_total.saturating_add(1);
+                intent.binding_digest =
+                    gc_eviction_intent_binding_digest(intent).expect("rebind forged intent");
+            } else {
+                intent.binding_digest[0] ^= 0x80;
+            }
+            write_local_checkpoint_atomic(
+                &path,
+                &norito::to_bytes(&checkpoint).expect("encode tampered GC checkpoint"),
+            )
+            .expect("write tampered GC checkpoint");
+            drop(target);
+            drop(handle);
+
+            let error = NodeHandle::try_new_with_policies(
+                cfg,
+                RepairConfig::default(),
+                enabled_gc_config(1),
+            )
+            .expect_err("tampered GC intent must fail startup");
+            let message = error.to_string();
+            assert!(
+                message.contains("binding digest mismatch")
+                    || message.contains("one exact eviction"),
+                "unexpected error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn gc_eviction_transaction_rejects_acknowledged_link_counter_tampering() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_500;
+        build_manifest_with_retention(
+            vec![0x76; 8],
+            now_unix - 1,
+            b"gc-link-counter-tamper",
+            &handle,
+        );
+        let publisher = Arc::new(RecordingPublisher::default());
+        handle
+            .try_set_governance_publisher(publisher)
+            .expect("install publisher");
+        let report = handle.run_gc_once(now_unix);
+        assert_eq!(report.evictions.len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let bytes = fs::read(&path).expect("read linked GC checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode linked GC checkpoint");
+        let link = checkpoint
+            .gc_eviction_audit_links
+            .first_mut()
+            .expect("GC audit link");
+        link.storage_gc_evictions_total = link.storage_gc_evictions_total.saturating_add(1);
+        link.binding_digest = gc_eviction_audit_link_binding_digest(link);
+        write_local_checkpoint_atomic(
+            &path,
+            &norito::to_bytes(&checkpoint).expect("encode forged GC link checkpoint"),
+        )
+        .expect("write forged GC link checkpoint");
+        drop(handle);
+
+        let error =
+            NodeHandle::try_new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1))
+                .expect_err("forged GC storage counter linkage must fail startup");
+        assert!(error.to_string().contains("storage counter generation"));
+    }
+
+    #[test]
+    fn gc_blocks_shared_chunks_with_zero_byte_audit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        let now_unix = 1_710_000_600;
+        let payload = b"gc-shared-chunk-zero-byte-audit";
+        build_manifest_with_retention(vec![0x76; 8], now_unix + 60, payload, &handle);
+        build_manifest_with_retention(vec![0x77; 8], now_unix - 1, payload, &handle);
+
+        let report = handle.run_gc_once(now_unix);
+        assert_eq!(report.errors, 0);
+        assert!(report.evictions.is_empty());
+        assert_eq!(report.freed_bytes, 0);
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|skip| skip.reason == GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1)
+        );
+        assert_eq!(handle.storage.as_ref().unwrap().gc_counters(), (0, 0));
+        let outbox = handle.governance_outbox.read().expect("outbox lock");
+        let entry = outbox.entries.values().next().expect("GC audit entry");
+        let audit: GcAuditEventV1 =
+            norito::decode_from_bytes(&entry.payload_bytes).expect("decode zero-byte audit");
+        audit.validate().expect("zero-byte GC audit validates");
+        assert_eq!(audit.payload.freed_bytes, 0);
+        assert_eq!(
+            audit.payload.blocked_reason.as_deref(),
+            Some(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1)
+        );
+    }
+
+    #[test]
+    fn gc_eviction_transaction_publisher_failure_retries_durable_audit() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            cfg.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        let now_unix = 1_710_000_700;
+        build_manifest_with_retention(vec![0x78; 8], now_unix - 1, b"gc-publisher-retry", &handle);
+        let failing = Arc::new(FailingPublisher::default());
+        handle
+            .try_set_governance_publisher(failing.clone())
+            .expect("install initially idle failing publisher");
+
+        let report = handle.run_gc_once(now_unix);
+        assert_eq!(report.evictions.len(), 1);
+        assert_eq!(report.errors, 1);
+        assert!(failing.attempts() >= 1);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+        handle.clear_governance_publisher();
+        let recording = Arc::new(RecordingPublisher::default());
+        handle
+            .try_set_governance_publisher(recording.clone())
+            .expect("retry durable GC audit");
+        assert_eq!(recording.take().len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 0);
+        drop(handle);
+
+        let restored =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        assert_eq!(restored.storage.as_ref().unwrap().gc_counters().1, 1);
+        assert_eq!(
+            restored
+                .gc_eviction_audit_links
+                .read()
+                .expect("restored link lock")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn gc_eviction_transaction_serializes_concurrent_sweeps() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        let now_unix = 1_710_000_800;
+        for index in 0_u8..4 {
+            let payload = vec![0x80 + index; 32];
+            build_manifest_with_retention(vec![0x80 + index; 8], now_unix - 1, &payload, &handle);
+        }
+        let barrier = Arc::new(Barrier::new(8));
+        let workers = (0..8)
+            .map(|_| {
+                let handle = handle.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    handle.run_gc_once(now_unix)
+                })
+            })
+            .collect::<Vec<_>>();
+        let reports = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("GC worker joins"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reports
+                .iter()
+                .map(|report| report.evictions.len())
+                .sum::<usize>(),
+            4
+        );
+        assert_eq!(reports.iter().map(|report| report.errors).sum::<u32>(), 0);
+        let storage = handle.storage.as_ref().expect("storage backend");
+        assert_eq!(storage.manifest_count(), 0);
+        assert_eq!(storage.gc_counters(), (128, 4));
+        assert_eq!(handle.pending_governance_publication_count(), 4);
+        assert_eq!(
+            handle
+                .gc_eviction_audit_links
+                .read()
+                .expect("link lock")
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn gc_blocked_audit_full_outbox_is_reported_without_eviction() {
+        let (base, _dir) = storage_config_with_temp_dir();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(base.data_dir().clone())
+            .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 2 * 1024 * 1024))
+            .build();
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        handle
+            .publish_proof_token_issuance(proof_token_issuance_fixture())
+            .expect("fill governance outbox");
+        let now_unix = 1_710_000_900;
+        let payload = b"gc-blocked-full-outbox";
+        let first = build_manifest_with_retention(vec![0x91; 8], now_unix - 1, payload, &handle);
+        let second = build_manifest_with_retention(vec![0x92; 8], now_unix - 1, payload, &handle);
+
+        let report = handle.run_gc_once(now_unix);
+        assert!(report.evictions.is_empty());
+        assert_eq!(report.errors, 1);
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|skip| skip.reason == GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1)
+        );
+        assert!(handle.manifest_metadata(&hex::encode(first)).is_ok());
+        assert!(handle.manifest_metadata(&hex::encode(second)).is_ok());
+        assert_eq!(handle.storage.as_ref().unwrap().gc_counters(), (0, 0));
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+    }
+
+    #[test]
     fn node_handle_reconciliation_emits_report() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
 
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
@@ -19730,7 +26308,8 @@ mod tests {
             .data_dir(root.join("storage"))
             .governance_dir(Some(root.join("governance")))
             .build();
-        let handle = NodeHandle::new(cfg);
+        let handle =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
         assert!(handle.has_governance_publisher());
 
         let rollup = appeal_finance_weekly_rollup_fixture();

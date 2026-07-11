@@ -44,8 +44,9 @@ mod model {
         /// Optional gas budget presented by the client when requesting continuation.
         ///
         /// When present, this value is compared against server-configured minimums for
-        /// stored cursors. Servers may also echo the minimum required budget back to
-        /// clients to simplify subsequent continuation requests.
+        /// stored cursors and is enforced as the per-request projection allowance by
+        /// budget-aware continuations. Servers carry the validated `Start` allowance
+        /// into the first returned cursor to simplify subsequent requests.
         #[norito(default)]
         pub gas_budget: Option<u64>,
     }

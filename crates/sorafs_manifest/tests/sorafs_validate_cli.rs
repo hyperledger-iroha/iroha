@@ -555,7 +555,17 @@ fn sorafs_validate_pdp_accepts_committed_fixtures() {
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
     assert_eq!(
         outcome.get("code").and_then(Value::as_str),
-        Some("SFS-OK-000")
+        Some("SFS-PDP-DIAG-000")
+    );
+    assert!(
+        outcome
+            .get("context")
+            .and_then(Value::as_array)
+            .is_some_and(|fields| fields.iter().any(|field| {
+                field.get("key").and_then(Value::as_str) == Some("production_acceptance")
+                    && field.get("value").and_then(Value::as_str) == Some("false")
+            })),
+        "{outcome:?}"
     );
     let inputs = outcome
         .get("inputs")

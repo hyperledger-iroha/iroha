@@ -16,6 +16,12 @@ The embedded SoraFS worker (`sorafs_node::NodeHandle`) now instantiates a
 - produces ledger snapshots and settlement payloads suitable for governance
   publishing.
 
+Settlement validation binds the outer deal identifier to the embedded ledger,
+requires a non-zero ledger capture time and a settlement time at or after that
+capture, and rejects blank or oversized audit notes. Governance publication
+therefore fails before writing any artifact when typed settlement fields drift
+from the canonical ledger snapshot.
+
 Unit tests cover validation, micropayment selection, and settlement flows so
 operators can exercise the APIs with confidence. Settlements now emit
 `DealSettlementV1` governance payloads, wiring directly into the SF-12

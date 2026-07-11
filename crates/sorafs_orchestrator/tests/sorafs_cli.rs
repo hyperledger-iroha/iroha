@@ -5,7 +5,6 @@ use std::{
     convert::TryInto,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
@@ -37,13 +36,13 @@ use sorafs_car::{
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceDagBlockV1,
     GovernanceDagHeadV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
-    ManifestV1, ManualPorChallengeV1, POR_CHALLENGE_STATUS_VERSION_V1,
-    POR_WEEKLY_REPORT_VERSION_V1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
-    PorProviderSummaryV1, PorReportIsoWeek, PorSlashingEventV1, PorWeeklyReportV1,
-    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-    ReputationSnapshotV1, ReputationWeightsV1, StorageClass, StreamTokenBodyV1, StreamTokenV1,
-    XorAmount, build_reputation_snapshot, validate_governance_dag_head_against_chain_v1,
+    ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
+    PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
+    PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
+    StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
+    validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
 
@@ -202,34 +201,6 @@ fn council_signed_governance_proofs() -> GovernanceProofs {
             signature: vec![0x24; 64],
         }],
     }
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct TestChallengeAuthScopeV1 {
-    manifest_digest: [u8; 32],
-    #[norito(default)]
-    providers: Vec<[u8; 32]>,
-    #[norito(default)]
-    max_requests: u16,
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct TestChallengeAuthTokenV1 {
-    version: u8,
-    token_id: String,
-    operator_account: String,
-    expires_at: u64,
-    #[norito(default)]
-    scopes: Vec<TestChallengeAuthScopeV1>,
-    #[norito(default)]
-    justification: Option<String>,
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
-struct TestManualPorTriggerRequestV1 {
-    version: u8,
-    challenge: ManualPorChallengeV1,
-    auth_token: TestChallengeAuthTokenV1,
 }
 
 #[test]
@@ -468,57 +439,35 @@ fn por_status_outputs_json() {
 }
 
 #[test]
-fn por_trigger_posts_manual_challenge() {
+fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
     let server = MockServer::start();
-    let manifest_digest = [0x41; 32];
-    let provider_id = [0x52; 32];
-    let expires_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock ok")
-        .as_secs()
-        + 3_600;
-    let token = TestChallengeAuthTokenV1 {
-        version: 1,
-        token_id: "token-1".to_string(),
-        operator_account: "council@governance.dataspace".to_string(),
-        expires_at,
-        scopes: vec![TestChallengeAuthScopeV1 {
-            manifest_digest,
-            providers: vec![provider_id],
-            max_requests: 1,
-        }],
-        justification: Some("incident probe".to_string()),
-    };
-    let token_bytes = to_bytes(&token).expect("encode token");
-    let tempdir = tempdir().expect("tempdir");
-    let token_path = tempdir.path().join("auth_token.to");
-    fs::write(&token_path, &token_bytes).expect("write token");
-
     let trigger_mock = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/por/trigger")
             .header("content-type", "application/x-norito");
-        then.status(202)
-            .header("content-type", "application/json")
-            .body(r#"{"challenge_id":"cafebabe"}"#);
+        then.status(500);
     });
 
-    let manifest_hex = hex_encode(manifest_digest);
-    let provider_hex = hex_encode(provider_id);
-    sorafs_cli_cmd()
+    let output = sorafs_cli_cmd()
         .arg("por")
         .arg("trigger")
         .arg(format!("--torii-url={}", server.base_url()))
-        .arg(format!("--manifest={manifest_hex}"))
-        .arg(format!("--provider={provider_hex}"))
-        .arg("--reason=incident_probe")
-        .arg(format!("--auth-token={}", token_path.display()))
-        .arg("--samples=48")
-        .arg("--deadline-secs=900")
         .assert()
-        .success();
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
 
-    trigger_mock.assert();
+    let stderr = String::from_utf8(output).expect("CLI stderr is UTF-8");
+    assert!(
+        stderr.contains("sorafs_cli por status"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("sorafs_cli por trigger"),
+        "retired command leaked into usage: {stderr}"
+    );
+    trigger_mock.assert_hits(0);
 }
 
 #[test]

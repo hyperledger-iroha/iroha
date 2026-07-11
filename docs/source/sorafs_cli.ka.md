@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_cli.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3d851bd6de4000a88f81c57dc6a4930fab02afd8f1821986c795cf66f4d879b9
-source_last_modified: "2026-06-25T16:00:00+00:00"
+source_hash: 510a419606560bc3142a032077dd5e4c8eec257a4b6f572707ed1eb468e002da
+source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS CLI
 summary: Developer-facing entry point for packaging payloads and emitting chunk plans.
@@ -644,26 +644,10 @@ filters accept the canonical labels (`pending`, `verified`, `failed`,
 `repaired`, `forced`) and the CLI validates the manifest/provider digests before
 dispatching the request so typos fail fast in CI.
 
-### Trigger manual challenges
-
-```bash
-sorafs_cli por trigger \
-  --torii-url https://torii.local \
-  --manifest 7bb2…9d31 \
-  --provider d09c…73aa \
-  --reason=latency_probe \
-  --samples=48 \
-  --auth-token artifacts/challenge_token.to
-```
-
-The CLI reads a council-signed `ChallengeAuthTokenV1`, confirms the target
-manifest/provider pair is permitted, and submits the legacy Norito
-`ManualPorChallengeV1` request shape to `POST /v1/sorafs/por/trigger`. Torii now
-deliberately retires that route with a fail-closed `410 Gone` JSON response
-containing `route_state = "retired"`; live challenge admission must use governed
-`PorChallengeV1` submission through `/v1/sorafs/capacity/por-challenge` or the
-scheduler runtime. Responses are surfaced verbatim so auditors capture the
-retirement state or any future governance error codes.
+Challenge creation is internal to the verified coordinator scheduler. The
+first-release CLI intentionally exposes no command for injecting challenges or
+manual success/failure observations. Operators use the read-only commands below
+and the authenticated provider-proof and auditor-verdict lifecycle instead.
 
 ### Export GovernanceLog verdicts
 

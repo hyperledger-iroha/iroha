@@ -1,31 +1,35 @@
 use std::{
     fmt,
     fs::{self, File},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> std::os::raw::c_uint;
+}
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::ToHex;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
-use iroha_data_model::sorafs::transparency::{
-    MODERATION_LEDGER_PUBLICATION_VERSION_V1, ModerationLedgerCyclePublicationV1,
-    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
-};
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
-    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceExternalPayloadMetadataV1,
-    GovernanceExternalPayloadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
-    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ReputationSnapshotV1,
-    SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1, SettlementReceiptV1,
-    SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
+    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceExternalPayloadV1,
+    GovernanceExternalRepairSlashStageV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ModerationLedgerCyclePublicationV1,
+    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, ReputationSnapshotV1,
+    SettlementReceiptV1, SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
     SoraFsAppealFinanceWeeklyRollupV1, SoraFsModerationBallotGovernanceEventV1,
     SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
@@ -49,6 +53,9 @@ const GOVERNANCE_RUNTIME_DAG_INDEX_SCHEMA: &str = "sorafs.governance_dag.runtime
 const GOVERNANCE_RUNTIME_DAG_DIR: &str = "runtime-dag";
 const GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR: &str = "blocks";
 const GOVERNANCE_RUNTIME_DAG_HEAD_FILE: &str = "head.to";
+const GOVERNANCE_PUBLISHER_LOCK_FILE: &str = ".governance-publisher.lock";
+const GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES: usize = 64;
+const GOVERNANCE_MUTABLE_INDEX_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 struct PublishIndexEntryForCar {
@@ -65,6 +72,8 @@ struct PublishIndexEntryForCar {
 pub struct FilesystemGovernancePublisher {
     root: PathBuf,
     runtime_dag_signer: Option<GovernanceRuntimeDagSigner>,
+    publication_lock: Mutex<()>,
+    _root_lock: File,
 }
 
 #[derive(Clone)]
@@ -86,10 +95,15 @@ impl fmt::Debug for GovernanceRuntimeDagSigner {
 impl FilesystemGovernancePublisher {
     /// Construct a new publisher rooted at the supplied directory.
     pub fn try_new(root: PathBuf) -> io::Result<Self> {
+        validate_atomic_output_path(&root.join(".governance-root-probe"))?;
         fs::create_dir_all(&root)?;
+        validate_atomic_output_path(&root.join(".governance-root-probe"))?;
+        let root_lock = acquire_governance_publisher_lock(&root)?;
         Ok(Self {
             root,
             runtime_dag_signer: None,
+            publication_lock: Mutex::new(()),
+            _root_lock: root_lock,
         })
     }
 
@@ -99,7 +113,31 @@ impl FilesystemGovernancePublisher {
         publisher_peer_id: impl Into<Vec<u8>>,
         signing_key_path: impl AsRef<Path>,
     ) -> Result<Self, GovernancePublishError> {
-        let private_key = load_runtime_dag_signing_key(signing_key_path.as_ref())?;
+        let signing_key_path = signing_key_path.as_ref();
+        validate_atomic_output_path(signing_key_path).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "invalid governance runtime DAG signing key path {}: {err}",
+                signing_key_path.display()
+            ))
+        })?;
+        let canonical_key_path = fs::canonicalize(signing_key_path).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "failed to resolve governance runtime DAG signing key path {}: {err}",
+                signing_key_path.display()
+            ))
+        })?;
+        let canonical_root = fs::canonicalize(&self.root).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "failed to resolve governance publisher root {}: {err}",
+                self.root.display()
+            ))
+        })?;
+        if canonical_key_path.starts_with(&canonical_root) {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signing key must be stored outside the publisher root",
+            ));
+        }
+        let private_key = load_runtime_dag_signing_key(signing_key_path)?;
         self.runtime_dag_signer = Some(GovernanceRuntimeDagSigner::try_new(
             publisher_peer_id.into(),
             private_key,
@@ -206,6 +244,14 @@ impl FilesystemGovernancePublisher {
             digest_hex,
             encoded_len,
         )
+    }
+
+    fn lock_publication(&self) -> Result<MutexGuard<'_, ()>, GovernancePublishError> {
+        self.publication_lock.lock().map_err(|_| {
+            GovernancePublishError::other(
+                "filesystem governance publisher transaction lock is poisoned",
+            )
+        })
     }
 
     fn base_path(&self, settlement: &DealSettlementV1, digest_hex: &str) -> PathBuf {
@@ -415,6 +461,98 @@ impl FilesystemGovernancePublisher {
     }
 }
 
+fn acquire_governance_publisher_lock(root: &Path) -> io::Result<File> {
+    let lock_path = root.join(GOVERNANCE_PUBLISHER_LOCK_FILE);
+    validate_atomic_output_path(&lock_path)?;
+    let before_open = match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) => {
+            validate_governance_lock_metadata(&lock_path, &metadata)?;
+            Some(metadata)
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    set_no_follow_flag(&mut options);
+    let file = options.open(&lock_path)?;
+    let opened_metadata = file.metadata()?;
+    validate_governance_lock_metadata(&lock_path, &opened_metadata)?;
+    if before_open
+        .as_ref()
+        .is_some_and(|metadata| !metadata_identifies_same_file(metadata, &opened_metadata))
+    {
+        return Err(io::Error::other(format!(
+            "governance publisher lock `{}` changed between inspection and open",
+            lock_path.display()
+        )));
+    }
+    let after_open = fs::symlink_metadata(&lock_path)?;
+    validate_governance_lock_metadata(&lock_path, &after_open)?;
+    if !metadata_identifies_same_file(&opened_metadata, &after_open) {
+        return Err(io::Error::other(format!(
+            "governance publisher lock path `{}` changed while opening",
+            lock_path.display()
+        )));
+    }
+    validate_atomic_output_path(&lock_path)?;
+    match file.try_lock() {
+        Ok(()) => {
+            let locked_path_metadata = fs::symlink_metadata(&lock_path)?;
+            validate_governance_lock_metadata(&lock_path, &locked_path_metadata)?;
+            if !metadata_identifies_same_file(&opened_metadata, &locked_path_metadata) {
+                return Err(io::Error::other(format!(
+                    "governance publisher lock path `{}` changed while locking",
+                    lock_path.display()
+                )));
+            }
+            validate_atomic_output_path(&lock_path)?;
+            Ok(file)
+        }
+        Err(fs::TryLockError::WouldBlock) => Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!(
+                "governance publisher directory is already in use: {}",
+                root.display()
+            ),
+        )),
+        Err(fs::TryLockError::Error(err)) => Err(io::Error::new(
+            err.kind(),
+            format!(
+                "failed to lock governance publisher directory via `{}`: {err}",
+                lock_path.display()
+            ),
+        )),
+    }
+}
+
+fn validate_governance_lock_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "governance publisher lock `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "governance publisher lock `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len()
+}
+
 fn status_label(status: DealSettlementStatusV1) -> &'static str {
     match status {
         DealSettlementStatusV1::Completed => "completed",
@@ -447,6 +585,13 @@ fn sanitize_label(value: &str) -> String {
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    write_atomic_with_directory_sync(path, data, sync_directory)
+}
+
+fn write_atomic_with_directory_sync<F>(path: &Path, data: &[u8], sync_parent: F) -> io::Result<()>
+where
+    F: FnOnce(&Path) -> io::Result<()>,
+{
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("missing parent directory"))?;
@@ -471,6 +616,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         drop(file);
         validate_atomic_output_path(path)?;
         fs::rename(&tmp_path, path)?;
+        sync_parent(parent)?;
         Ok(())
     })();
 
@@ -478,6 +624,18 @@ fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&tmp_path);
     }
     write_result
+}
+
+fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 fn write_digest_sidecar(path: &Path, data: &[u8]) -> io::Result<()> {
@@ -708,37 +866,261 @@ impl GovernanceRuntimeDagSigner {
 }
 
 fn load_runtime_dag_signing_key(path: &Path) -> Result<PrivateKey, GovernancePublishError> {
-    let raw = fs::read(path).map_err(|err| {
+    let mut raw = read_governance_signing_key_file(path).map_err(|err| {
         GovernancePublishError::other(format!(
             "failed to read governance runtime DAG signing key from {}: {err}",
             path.display()
         ))
     })?;
-    let trimmed = String::from_utf8_lossy(&raw).trim().to_owned();
-    let key_bytes = if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        hex::decode(trimmed).map_err(|err| {
+    let parsed_key = if raw.len() == 64
+        && raw
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        hex::decode(&raw).map_err(|err| {
             GovernancePublishError::other(format!(
                 "failed to decode governance runtime DAG hex signing key: {err}"
             ))
-        })?
+        })
+    } else if raw.len() == 32 {
+        Ok(raw.clone())
     } else {
-        raw
+        Err(GovernancePublishError::other(format!(
+            "governance runtime DAG signing key at {} must be exactly 32 raw bytes or 64 lowercase hex bytes without whitespace",
+            path.display()
+        )))
     };
-    if key_bytes.len() != 32 {
-        return Err(GovernancePublishError::other(format!(
-            "governance runtime DAG signing key at {} must be 32 bytes, found {}",
-            path.display(),
-            key_bytes.len()
-        )));
+    raw.fill(0);
+    let mut key_bytes = parsed_key?;
+    if key_bytes.iter().all(|byte| *byte == 0) {
+        key_bytes.fill(0);
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG signing key must not be all zero",
+        ));
     }
 
     let mut array = [0u8; 32];
     array.copy_from_slice(&key_bytes);
-    PrivateKey::from_bytes(Algorithm::Ed25519, &array).map_err(|err| {
+    key_bytes.fill(0);
+    let parsed = PrivateKey::from_bytes(Algorithm::Ed25519, &array);
+    array.fill(0);
+    parsed.map_err(|err| {
         GovernancePublishError::other(format!(
             "failed to parse governance runtime DAG signing key: {err}"
         ))
     })
+}
+
+fn read_governance_signing_key_file(path: &Path) -> io::Result<Vec<u8>> {
+    let max_bytes_u64 = u64::try_from(GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES)
+        .expect("governance signing-key byte limit fits u64");
+    validate_atomic_output_path(path)?;
+    let before_open = fs::symlink_metadata(path)?;
+    validate_governance_signing_key_metadata(path, &before_open)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options.open(path)?;
+    let opened_metadata = file.metadata()?;
+    validate_governance_signing_key_metadata(path, &opened_metadata)?;
+    if !metadata_identifies_same_file(&before_open, &opened_metadata) {
+        return Err(io::Error::other(format!(
+            "governance runtime DAG signing key `{}` changed while opening",
+            path.display()
+        )));
+    }
+    if opened_metadata.len() > max_bytes_u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "governance runtime DAG signing key `{}` exceeds {} bytes",
+                path.display(),
+                GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES
+            ),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(opened_metadata.len()).unwrap_or(GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES),
+    );
+    let read_result = (&mut file)
+        .take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes);
+    if let Err(err) = read_result {
+        bytes.fill(0);
+        return Err(err);
+    }
+    let validation = (|| -> io::Result<()> {
+        if bytes.len() > GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "governance runtime DAG signing key `{}` exceeds {} bytes",
+                    path.display(),
+                    GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES
+                ),
+            ));
+        }
+        let after_read_file = file.metadata()?;
+        if !metadata_stable_during_read(&opened_metadata, &after_read_file) {
+            return Err(io::Error::other(format!(
+                "governance runtime DAG signing key `{}` changed while reading",
+                path.display()
+            )));
+        }
+        let after_read_path = fs::symlink_metadata(path)?;
+        validate_governance_signing_key_metadata(path, &after_read_path)?;
+        if !metadata_identifies_same_file(&opened_metadata, &after_read_path) {
+            return Err(io::Error::other(format!(
+                "governance runtime DAG signing key path `{}` changed while reading",
+                path.display()
+            )));
+        }
+        validate_atomic_output_path(path)
+    })();
+    if let Err(err) = validation {
+        bytes.fill(0);
+        return Err(err);
+    }
+    Ok(bytes)
+}
+
+fn validate_governance_signing_key_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "governance runtime DAG signing key `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.nlink() != 1 {
+            return Err(io::Error::other(format!(
+                "governance runtime DAG signing key `{}` must have exactly one hard link",
+                path.display()
+            )));
+        }
+        if metadata.uid() != effective_user_id() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "governance runtime DAG signing key `{}` must be owned by the effective user",
+                    path.display()
+                ),
+            ));
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "governance runtime DAG signing key `{}` must not be accessible by group or other users",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn effective_user_id() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, owns no resources, and cannot fail.
+    unsafe { geteuid() }
+}
+
+#[cfg(unix)]
+fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    metadata_identifies_same_file(before, after)
+        && before.len() == after.len()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
+        && before.ctime() == after.ctime()
+        && before.ctime_nsec() == after.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn metadata_stable_during_read(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    metadata_identifies_same_file(before, after)
+        && before.len() == after.len()
+        && before.modified().ok() == after.modified().ok()
+}
+
+fn read_bounded_governance_state_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
+    let max_bytes_u64 = u64::try_from(max_bytes)
+        .map_err(|_| io::Error::other("governance state byte limit exceeds u64"))?;
+    validate_atomic_output_path(path)?;
+    let before_open = fs::symlink_metadata(path)?;
+    validate_governance_state_metadata(path, &before_open)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let mut file = options.open(path)?;
+    let opened_metadata = file.metadata()?;
+    validate_governance_state_metadata(path, &opened_metadata)?;
+    if !metadata_identifies_same_file(&before_open, &opened_metadata) {
+        return Err(io::Error::other(format!(
+            "governance state `{}` changed while opening",
+            path.display()
+        )));
+    }
+    if opened_metadata.len() > max_bytes_u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "governance state `{}` exceeds {max_bytes} bytes",
+                path.display()
+            ),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(opened_metadata.len()).unwrap_or(max_bytes));
+    (&mut file)
+        .take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "governance state `{}` exceeds {max_bytes} bytes",
+                path.display()
+            ),
+        ));
+    }
+    let after_read_file = file.metadata()?;
+    if !metadata_stable_during_read(&opened_metadata, &after_read_file) {
+        return Err(io::Error::other(format!(
+            "governance state `{}` changed while reading",
+            path.display()
+        )));
+    }
+    let after_read = fs::symlink_metadata(path)?;
+    validate_governance_state_metadata(path, &after_read)?;
+    if !metadata_identifies_same_file(&opened_metadata, &after_read) {
+        return Err(io::Error::other(format!(
+            "governance state `{}` changed while reading",
+            path.display()
+        )));
+    }
+    validate_atomic_output_path(path)?;
+    Ok(bytes)
+}
+
+fn validate_governance_state_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "governance state `{}` must be a regular file",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "governance state `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn update_publish_index(
@@ -802,7 +1184,7 @@ fn update_publish_index(
 }
 
 fn read_publish_index(root: &Path, index_path: &Path) -> Result<JsonMap, GovernancePublishError> {
-    match fs::read(index_path) {
+    match read_bounded_governance_state_file(index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
         Ok(bytes) => {
             let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
                 GovernancePublishError::other(format!(
@@ -983,7 +1365,7 @@ fn ensure_governance_car_segment(
 }
 
 fn read_car_queue(root: &Path, queue_path: &Path) -> Result<JsonMap, GovernancePublishError> {
-    match fs::read(queue_path) {
+    match read_bounded_governance_state_file(queue_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
         Ok(bytes) => {
             let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
                 GovernancePublishError::other(format!(
@@ -1653,7 +2035,7 @@ fn read_runtime_dag_index(
     signer: &GovernanceRuntimeDagSigner,
     index_path: &Path,
 ) -> Result<JsonMap, GovernancePublishError> {
-    match fs::read(index_path) {
+    match read_bounded_governance_state_file(index_path, GOVERNANCE_MUTABLE_INDEX_MAX_BYTES) {
         Ok(bytes) => {
             let value: JsonValue = json::from_slice(&bytes).map_err(|err| {
                 GovernancePublishError::other(format!(
@@ -1982,6 +2364,24 @@ fn governance_dag_head_age_seconds(generated_at: u64, now: u64) -> u64 {
     now.saturating_sub(generated_at)
 }
 
+fn ensure_canonical_governance_encoding<T: norito::NoritoSerialize>(
+    value: &T,
+    encoded: &[u8],
+    payload_kind: &'static str,
+) -> Result<(), GovernancePublishError> {
+    let canonical = norito::to_bytes(value).map_err(|err| {
+        GovernancePublishError::other(format!(
+            "failed to canonically encode {payload_kind} before publication: {err}"
+        ))
+    })?;
+    if canonical != encoded {
+        return Err(GovernancePublishError::other(format!(
+            "{payload_kind} publication bytes do not match the canonical header-bearing Norito payload"
+        )));
+    }
+    Ok(())
+}
+
 impl GovernancePublisher for FilesystemGovernancePublisher {
     fn publish_deal_settlement(
         &self,
@@ -1989,6 +2389,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(settlement, encoded, "deal settlement")?;
+            settlement.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid deal settlement: {err}"))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.base_path(settlement, &digest_hex);
@@ -2110,6 +2515,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(event, encoded, "repair audit event")?;
+            event.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid repair audit event: {err}"))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.repair_audit_path(event, &digest_hex);
@@ -2188,6 +2598,16 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
+            let external = GovernanceExternalPayloadV1::from_repair_audit(event, encoded)
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            self.record_runtime_signed_payload(
+                "repair_audit",
+                GovernanceLogPayloadV1::ExternalPayload(external),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
 
             Ok(())
         })();
@@ -2202,6 +2622,16 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         stage: RepairSlashStage,
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(proposal, encoded, "repair slash proposal")?;
+            proposal.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid repair slash proposal: {err}"))
+            })?;
+            if proposal.approval.is_some() {
+                return Err(GovernancePublishError::other(
+                    "repair slash proposal must not embed an approval summary",
+                ));
+            }
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.repair_slash_path(proposal, stage, &digest_hex);
@@ -2274,6 +2704,21 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
+            let external_stage = match stage {
+                RepairSlashStage::Drafted => GovernanceExternalRepairSlashStageV1::Drafted,
+                RepairSlashStage::Submitted => GovernanceExternalRepairSlashStageV1::Submitted,
+            };
+            let external =
+                GovernanceExternalPayloadV1::from_repair_slash(proposal, external_stage, encoded)
+                    .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            self.record_runtime_signed_payload(
+                "repair_slash",
+                GovernanceLogPayloadV1::ExternalPayload(external),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
 
             Ok(())
         })();
@@ -2287,6 +2732,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(event, encoded, "GC audit event")?;
+            event.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid GC audit event: {err}"))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.gc_audit_path(event, &digest_hex);
@@ -2352,6 +2802,16 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
+            let external = GovernanceExternalPayloadV1::from_gc_audit(event, encoded)
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            self.record_runtime_signed_payload(
+                "gc_audit",
+                GovernanceLogPayloadV1::ExternalPayload(external),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
 
             Ok(())
         })();
@@ -2365,6 +2825,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(report, encoded, "reconciliation report")?;
+            report.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid reconciliation report: {err}"))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.reconciliation_path(report, &digest_hex);
@@ -2484,6 +2949,16 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
+            let external = GovernanceExternalPayloadV1::from_reconciliation(report, encoded)
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            self.record_runtime_signed_payload(
+                "reconciliation",
+                GovernanceLogPayloadV1::ExternalPayload(external),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
 
             Ok(())
         })();
@@ -2497,6 +2972,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(snapshot, encoded, "reputation snapshot")?;
+            snapshot.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid reputation snapshot: {err}"))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.reputation_snapshot_path(snapshot, &digest_hex);
@@ -2563,6 +3043,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(event, encoded, "moderation ballot event")?;
+            event.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid moderation ballot event: {err}"))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.moderation_ballot_event_path(event, &digest_hex);
@@ -2636,6 +3121,12 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(
+                publication,
+                encoded,
+                "transparency ledger publication",
+            )?;
             publication.validate().map_err(|err| {
                 GovernancePublishError::other(format!(
                     "invalid transparency ledger publication: {err}"
@@ -2704,43 +3195,14 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
-            let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
-                GovernancePublishError::other(
-                    "transparency ledger publication exceeds V1 external payload length limit",
-                )
-            })?;
+            let external = GovernanceExternalPayloadV1::from_transparency_ledger_publication(
+                publication,
+                encoded,
+            )
+            .map_err(|err| GovernancePublishError::other(err.to_string()))?;
             self.record_runtime_signed_payload(
                 "transparency_ledger_publication",
-                GovernanceLogPayloadV1::ExternalPayload(GovernanceExternalPayloadV1 {
-                    version: SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
-                    payload_kind: "transparency_ledger_publication".to_string(),
-                    payload_version: MODERATION_LEDGER_PUBLICATION_VERSION_V1,
-                    encoded_blake3: *digest.as_bytes(),
-                    encoded_len,
-                    encoded_payload: encoded.to_vec(),
-                    metadata: vec![
-                        GovernanceExternalPayloadMetadataV1 {
-                            key: "block_hash_hex".to_string(),
-                            value: hex::encode(block_hash),
-                        },
-                        GovernanceExternalPayloadMetadataV1 {
-                            key: "cycle_id_hex".to_string(),
-                            value: hex::encode(publication.block.cycle_id),
-                        },
-                        GovernanceExternalPayloadMetadataV1 {
-                            key: "entry_count".to_string(),
-                            value: publication.block.entry_count.to_string(),
-                        },
-                        GovernanceExternalPayloadMetadataV1 {
-                            key: "entry_root_hex".to_string(),
-                            value: hex::encode(publication.block.entry_root),
-                        },
-                        GovernanceExternalPayloadMetadataV1 {
-                            key: "publication_hash_hex".to_string(),
-                            value: hex::encode(publication_hash),
-                        },
-                    ],
-                }),
+                GovernanceLogPayloadV1::ExternalPayload(external),
                 &encoded_path,
                 &json_path,
                 &digest_hex,
@@ -2763,6 +3225,8 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(issuance, encoded, "proof-token issuance")?;
             issuance.validate().map_err(|err| {
                 GovernancePublishError::other(format!("invalid proof-token issuance: {err}"))
             })?;
@@ -2837,6 +3301,17 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 encoded.len(),
                 labels,
             )?;
+            let external =
+                GovernanceExternalPayloadV1::from_proof_token_issuance(issuance, encoded)
+                    .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+            self.record_runtime_signed_payload(
+                "proof_token_issuance",
+                GovernanceLogPayloadV1::ExternalPayload(external),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
 
             Ok(())
         })();
@@ -2850,6 +3325,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(report, encoded, "appeal finance report")?;
+            report.validate().map_err(|err| {
+                GovernancePublishError::other(format!("invalid appeal finance report: {err}"))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.appeal_finance_report_path(report, &digest_hex);
@@ -2950,6 +3430,13 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(rollup, encoded, "appeal finance weekly rollup")?;
+            rollup.validate().map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "invalid appeal finance weekly rollup: {err}"
+                ))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.appeal_finance_weekly_rollup_path(rollup, &digest_hex);
@@ -3028,6 +3515,17 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(
+                receipt,
+                encoded,
+                "appeal finance settlement receipt",
+            )?;
+            receipt.validate().map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "invalid appeal finance settlement receipt: {err}"
+                ))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.appeal_finance_settlement_receipt_path(receipt, &digest_hex);
@@ -3145,6 +3643,13 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError> {
         let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(receipt, encoded, "orderbook settlement receipt")?;
+            receipt.validate().map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "invalid orderbook settlement receipt: {err}"
+                ))
+            })?;
             let digest = blake3::hash(encoded);
             let digest_hex = digest.to_hex().to_string();
             let base_path = self.orderbook_settlement_receipt_path(receipt, &digest_hex);
@@ -3876,8 +4381,11 @@ fn orderbook_signature_algorithm_label(
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        fs, io,
+        panic::{AssertUnwindSafe, catch_unwind},
         path::{Path, PathBuf},
+        sync::Arc,
+        thread,
     };
 
     use norito::codec::Encode;
@@ -3885,18 +4393,20 @@ mod tests {
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
     };
     use sorafs_manifest::repair::{
-        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1, GcAuditPayloadV1,
-        REPAIR_AUDIT_EVENT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-        REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1, RepairTaskEventV1, RepairTaskStatusV1,
-        RepairTicketId, SorafsAuditHeaderV1,
+        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
+        GcAuditPayloadV1, REPAIR_AUDIT_EVENT_VERSION_V1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+        REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1,
+        RepairEscalationApprovalV1, RepairTaskEventV1, RepairTaskStatusV1, RepairTicketId,
+        SorafsAuditHeaderV1, gc_audit_payload_digest_v1, repair_audit_payload_digest_v1,
     };
     use sorafs_manifest::{BYTES_PER_GIB, PorReportIsoWeek};
     use sorafs_manifest::{
         ByteRangeV1, GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
-        OrderbookSignatureV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-        REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1,
-        ReputationProviderMetricsV1, ReputationReserveStageV1, ReputationWeightsV1,
-        SETTLEMENT_RECEIPT_VERSION_V1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+        MODERATION_LEDGER_PUBLICATION_VERSION_V1, OrderbookSignatureV1,
+        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+        ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
+        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
         SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementReceiptV1,
@@ -3908,7 +4418,7 @@ mod tests {
         SoraFsModerationVoteCountsV1, SorafsReconciliationReportV1, build_reputation_snapshot,
         validate_governance_dag_head_against_chain_v1,
     };
-    use tempfile::TempDir;
+    use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
 
@@ -3959,7 +4469,7 @@ mod tests {
             settled_at: 1_700_000_010,
             audit_notes: None,
         };
-        let encoded = Encode::encode(&settlement);
+        let encoded = norito::to_bytes(&settlement).expect("encode settlement");
         (settlement, encoded)
     }
 
@@ -4278,13 +4788,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bounded_governance_state_reader_rejects_oversized_file() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("index.json");
+        fs::write(&path, b"123456789").expect("write oversized state");
+
+        let error = read_bounded_governance_state_file(&path, 8)
+            .expect_err("oversized governance state must fail before allocation");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("exceeds 8 bytes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_governance_state_reader_rejects_symlink() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("target.json");
+        let path = temp.path().join("index.json");
+        fs::write(&target, b"{}").expect("write target");
+        std::os::unix::fs::symlink(&target, &path).expect("create index symlink");
+
+        let error = read_bounded_governance_state_file(&path, 8)
+            .expect_err("governance state symlink must fail closed");
+        assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_governance_state_reader_rejects_hard_link() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("target.json");
+        let path = temp.path().join("index.json");
+        fs::write(&target, b"{}").expect("write target");
+        fs::hard_link(&target, &path).expect("create index hard link");
+
+        let error = read_bounded_governance_state_file(&path, 8)
+            .expect_err("hard-linked governance state must fail closed");
+        assert!(error.to_string().contains("exactly one hard link"));
+    }
+
     fn signed_runtime_publisher(root: &Path) -> FilesystemGovernancePublisher {
-        let key_path = root.join("governance-dag-ed25519.key");
-        fs::write(&key_path, hex::encode([0x31; 32])).expect("write runtime DAG key");
+        let key_file = NamedTempFile::new().expect("runtime DAG key file");
+        let key_path = key_file
+            .path()
+            .canonicalize()
+            .expect("canonical runtime DAG key path");
+        write_runtime_signing_key(&key_path, hex::encode([0x31; 32]).as_bytes());
         FilesystemGovernancePublisher::try_new(root.to_path_buf())
             .expect("publisher")
             .with_runtime_dag_signer(b"12D3KooWRuntimeDagPublisher".to_vec(), &key_path)
             .expect("runtime DAG signer")
+    }
+
+    fn write_runtime_signing_key(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).expect("write runtime DAG key");
+        #[cfg(unix)]
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("secure runtime DAG key permissions");
     }
 
     fn runtime_index(root: &Path) -> JsonValue {
@@ -4309,6 +4870,362 @@ mod tests {
                 norito::decode_from_bytes(&bytes).expect("decode runtime block")
             })
             .collect()
+    }
+
+    fn assert_single_runtime_external(root: &Path, kind: &str, encoded: &[u8]) {
+        let index = runtime_index(root);
+        let blocks = runtime_blocks_from_index(root, &index);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0].node.payload {
+            GovernanceLogPayloadV1::ExternalPayload(payload) => {
+                payload.validate().expect("external payload validates");
+                assert_eq!(payload.payload_kind, kind);
+                assert_eq!(payload.encoded_payload, encoded);
+                assert_eq!(payload.encoded_blake3, *blake3::hash(encoded).as_bytes());
+            }
+            other => panic!("expected external runtime payload, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_noncanonical_or_mismatched_payload_bytes() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let (settlement, canonical) = sample_settlement();
+
+        let bare = settlement.encode();
+        let error = publisher
+            .publish_deal_settlement(&settlement, &bare)
+            .expect_err("bare payload without a Norito header must fail");
+        assert!(error.to_string().contains("canonical header-bearing"));
+
+        let mut conflicting = settlement.clone();
+        conflicting.audit_notes = Some("different typed payload".to_owned());
+        let error = publisher
+            .publish_deal_settlement(&conflicting, &canonical)
+            .expect_err("typed payload and canonical bytes must match");
+        assert!(error.to_string().contains("do not match"));
+        assert!(
+            !temp.path().join("settlements").exists(),
+            "validation must fail before any governance artifact is written"
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_semantically_invalid_payload_before_writes() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let (mut settlement, _) = sample_settlement();
+        settlement.deal_id[0] ^= 0x80;
+        let encoded = norito::to_bytes(&settlement).expect("encode invalid settlement");
+
+        let error = publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect_err("ledger and settlement deal identifiers must match");
+        assert!(error.to_string().contains("invalid deal settlement"));
+        assert!(
+            !temp.path().join("settlements").exists(),
+            "semantic validation must fail before any governance artifact is written"
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_tampered_audit_binding_before_writes() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let payload = RepairTaskEventV1 {
+            version: REPAIR_TASK_EVENT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-TAMPERED-AUDIT".into()),
+            manifest_digest: [0x21; 32],
+            provider_id: [0x22; 32],
+            status: RepairTaskStatusV1::Queued,
+            occurred_at_unix: 1_700_000_111,
+            actor: None,
+            message: None,
+        };
+        let mut event = RepairAuditEventV1 {
+            version: REPAIR_AUDIT_EVENT_VERSION_V1,
+            header: SorafsAuditHeaderV1 {
+                sequence: 1,
+                occurred_at_unix: payload.occurred_at_unix,
+                signer: sorafs_manifest::repair::REPAIR_AUDIT_DEFAULT_SIGNER_V1.into(),
+                payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
+            },
+            payload,
+        };
+        event.header.payload_digest[0] ^= 0x80;
+        let encoded = norito::to_bytes(&event).expect("encode tampered audit event");
+
+        let error = publisher
+            .publish_repair_audit_event(&event, &encoded)
+            .expect_err("tampered audit digest must fail");
+        assert!(error.to_string().contains("invalid repair audit event"));
+        assert!(
+            !temp.path().join("repairs").exists(),
+            "audit validation must fail before any governance artifact is written"
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_rejects_embedded_slash_approval_before_writes() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-EMBEDDED-APPROVAL".into()),
+            provider_id: [0x11; 32],
+            manifest_digest: [0x22; 32],
+            auditor_account: "auditor-1".into(),
+            proposed_penalty_nano: 50_000,
+            submitted_at_unix: 1_700_000_222,
+            rationale: "missed SLA".into(),
+            approval: Some(RepairEscalationApprovalV1 {
+                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+                approve_votes: 3,
+                reject_votes: 0,
+                abstain_votes: 0,
+                approved_at_unix: 1_700_000_223,
+                finalized_at_unix: 1_700_000_224,
+            }),
+        };
+        let encoded = norito::to_bytes(&proposal).expect("encode proposal");
+
+        let error = publisher
+            .publish_repair_slash_proposal(&proposal, &encoded, RepairSlashStage::Submitted)
+            .expect_err("embedded approval must not be publication authority");
+        assert!(error.to_string().contains("must not embed an approval"));
+        assert!(
+            !temp.path().join("repairs").exists(),
+            "approval rejection must happen before any governance artifact is written"
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_root_has_a_single_process_owner() {
+        let temp = tempdir().expect("tempdir");
+        let owner = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("acquire publisher root");
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("a second publisher must not share mutable index state");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(error.to_string().contains("already in use"));
+
+        drop(owner);
+        FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect("publisher root ownership releases on drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_publisher_root_lock_rejects_symlink() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("lock-target");
+        fs::write(&target, b"must remain untouched").expect("write lock target");
+        std::os::unix::fs::symlink(&target, temp.path().join(GOVERNANCE_PUBLISHER_LOCK_FILE))
+            .expect("create publisher lock symlink");
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("publisher lock symlink must fail closed");
+        assert!(error.to_string().contains("must not be a symlink"));
+        assert_eq!(
+            fs::read(&target).expect("read lock target"),
+            b"must remain untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_publisher_root_lock_rejects_hard_link() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("lock-target");
+        fs::write(&target, b"must remain untouched").expect("write lock target");
+        fs::hard_link(&target, temp.path().join(GOVERNANCE_PUBLISHER_LOCK_FILE))
+            .expect("create publisher lock hard link");
+
+        let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
+            .expect_err("publisher lock hard link must fail closed");
+        assert!(error.to_string().contains("exactly one hard link"));
+        assert_eq!(
+            fs::read(&target).expect("read lock target"),
+            b"must remain untouched"
+        );
+    }
+
+    #[test]
+    fn runtime_dag_signing_key_rejects_noncanonical_and_inert_material() {
+        let temp = tempdir().expect("tempdir");
+        let key_path = temp.path().join("runtime.key");
+
+        write_runtime_signing_key(&key_path, &[0x31; 32]);
+        load_runtime_dag_signing_key(&key_path).expect("nonzero raw seed");
+
+        write_runtime_signing_key(&key_path, hex::encode([0xAB; 32]).as_bytes());
+        load_runtime_dag_signing_key(&key_path).expect("canonical lowercase hex seed");
+
+        write_runtime_signing_key(&key_path, hex::encode_upper([0xAB; 32]).as_bytes());
+        let error = load_runtime_dag_signing_key(&key_path)
+            .expect_err("uppercase hex signing seed must fail");
+        assert!(error.to_string().contains("64 lowercase hex bytes"));
+
+        let mut whitespace = hex::encode([0xAB; 32]).into_bytes();
+        whitespace.push(b'\n');
+        write_runtime_signing_key(&key_path, &whitespace);
+        let error = load_runtime_dag_signing_key(&key_path)
+            .expect_err("whitespace-bearing signing seed must fail");
+        assert!(error.to_string().contains("exceeds 64 bytes"));
+
+        write_runtime_signing_key(&key_path, &[0; 32]);
+        let error =
+            load_runtime_dag_signing_key(&key_path).expect_err("all-zero signing seed must fail");
+        assert!(error.to_string().contains("must not be all zero"));
+    }
+
+    #[test]
+    fn runtime_dag_signer_rejects_key_inside_publisher_root() {
+        let temp = tempdir().expect("tempdir");
+        let key_path = temp.path().join("runtime.key");
+        write_runtime_signing_key(&key_path, &[0x31; 32]);
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let error = publisher
+            .with_runtime_dag_signer(b"12D3KooWRuntimeDagPublisher".to_vec(), &key_path)
+            .expect_err("publisher-root signing secret must fail");
+        assert!(error.to_string().contains("outside the publisher root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_dag_signing_key_rejects_permissive_mode_and_symlink() {
+        let temp = tempdir().expect("tempdir");
+        let key_path = temp.path().join("runtime.key");
+        fs::write(&key_path, [0x31; 32]).expect("write permissive key");
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
+            .expect("set permissive mode");
+        let error = load_runtime_dag_signing_key(&key_path)
+            .expect_err("group-readable signing key must fail");
+        assert!(error.to_string().contains("group or other users"));
+
+        let target = temp.path().join("runtime-target.key");
+        write_runtime_signing_key(&target, &[0x31; 32]);
+        fs::remove_file(&key_path).expect("remove permissive key");
+        std::os::unix::fs::symlink(&target, &key_path).expect("create signing-key symlink");
+        let error =
+            load_runtime_dag_signing_key(&key_path).expect_err("signing-key symlink must fail");
+        assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_dag_signing_key_rejects_hard_link() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("runtime-target.key");
+        let key_path = temp.path().join("runtime.key");
+        write_runtime_signing_key(&target, &[0x31; 32]);
+        fs::hard_link(&target, &key_path).expect("create signing-key hard link");
+
+        let error =
+            load_runtime_dag_signing_key(&key_path).expect_err("hard-linked key must fail closed");
+        assert!(error.to_string().contains("exactly one hard link"));
+    }
+
+    #[test]
+    fn filesystem_publisher_serializes_concurrent_index_and_signed_head_updates() {
+        const PUBLICATION_COUNT: usize = 16;
+
+        let temp = tempdir().expect("tempdir");
+        let publisher = Arc::new(signed_runtime_publisher(temp.path()));
+        let (template, _) = sample_settlement();
+        let threads = (0..PUBLICATION_COUNT)
+            .map(|index| {
+                let publisher = Arc::clone(&publisher);
+                let mut settlement = template.clone();
+                let marker = u8::try_from(index + 1).expect("small publication count");
+                settlement.deal_id = [marker; 32];
+                settlement.ledger.deal_id = settlement.deal_id;
+                settlement.settled_at = settlement
+                    .settled_at
+                    .checked_add(u64::try_from(index).expect("small publication index"))
+                    .expect("settlement timestamp range");
+                thread::spawn(move || {
+                    let encoded = norito::to_bytes(&settlement).expect("encode settlement");
+                    publisher
+                        .publish_deal_settlement(&settlement, &encoded)
+                        .expect("publish settlement concurrently");
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for thread in threads {
+            thread.join().expect("publisher thread");
+        }
+
+        let publish_index: JsonValue = json::from_slice(
+            &fs::read(temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE))
+                .expect("publish index exists"),
+        )
+        .expect("publish index parses");
+        assert_eq!(
+            publish_index.get("entry_count").and_then(JsonValue::as_u64),
+            Some(PUBLICATION_COUNT as u64)
+        );
+        let entries = publish_index
+            .get("entries")
+            .and_then(JsonValue::as_array)
+            .expect("publish index entries");
+        assert_eq!(entries.len(), PUBLICATION_COUNT);
+        for (expected_position, entry) in entries.iter().enumerate() {
+            assert_eq!(
+                entry.get("position").and_then(JsonValue::as_u64),
+                Some(expected_position as u64)
+            );
+        }
+
+        let runtime_index = runtime_index(temp.path());
+        assert_eq!(
+            runtime_index.get("block_count").and_then(JsonValue::as_u64),
+            Some(PUBLICATION_COUNT as u64)
+        );
+        assert_eq!(
+            runtime_index
+                .get("blocks")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(PUBLICATION_COUNT)
+        );
+    }
+
+    #[test]
+    fn filesystem_publisher_poisoned_transaction_lock_fails_before_writes() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let poisoned = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = publisher
+                .publication_lock
+                .lock()
+                .expect("publication lock starts healthy");
+            panic!("poison publication transaction lock");
+        }));
+        assert!(poisoned.is_err());
+
+        let (settlement, encoded) = sample_settlement();
+        let error = publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect_err("poisoned publisher must fail closed");
+        assert!(error.to_string().contains("transaction lock is poisoned"));
+        assert!(
+            !temp.path().join("settlements").exists(),
+            "poison detection must happen before artifact writes"
+        );
+        assert!(
+            !temp.path().join(GOVERNANCE_PUBLISH_INDEX_FILE).exists(),
+            "poison detection must happen before index writes"
+        );
     }
 
     #[test]
@@ -4694,8 +5611,7 @@ mod tests {
     #[test]
     fn filesystem_publisher_writes_proof_token_issuance_files_and_car_queue() {
         let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let publisher = signed_runtime_publisher(temp.path());
         let (issuance, encoded) = sample_proof_token_issuance();
 
         publisher
@@ -4762,6 +5678,7 @@ mod tests {
             labels.get("entry_count").and_then(JsonValue::as_u64),
             Some(2)
         );
+        assert_single_runtime_external(temp.path(), "proof_token_issuance", &encoded);
 
         let queue_bytes = fs::read(temp.path().join(GOVERNANCE_CAR_QUEUE_FILE)).expect("car queue");
         let queue: JsonValue = json::from_slice(&queue_bytes).expect("car queue json");
@@ -5105,8 +6022,7 @@ mod tests {
     #[test]
     fn filesystem_publisher_writes_settlement_files() {
         let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let publisher = signed_runtime_publisher(temp.path());
 
         let (settlement, encoded) = sample_settlement();
 
@@ -5435,6 +6351,27 @@ mod tests {
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
 
+    #[test]
+    fn write_atomic_surfaces_post_rename_directory_sync_failure() {
+        let dir = tempdir().expect("tempdir");
+        let output_path = dir.path().join("governance.to");
+        let error = write_atomic_with_directory_sync(&output_path, b"committed", |_| {
+            Err(io::Error::other("injected directory sync failure"))
+        })
+        .expect_err("directory sync failure must be reported");
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected directory sync failure")
+        );
+        assert_eq!(
+            fs::read(&output_path).expect("renamed output remains visible"),
+            b"committed",
+            "the caller must treat this as committed-unknown and retry idempotently"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn write_atomic_rejects_symlink_parent() {
@@ -5482,8 +6419,7 @@ mod tests {
     #[test]
     fn filesystem_publisher_writes_repair_audit_files() {
         let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let publisher = signed_runtime_publisher(temp.path());
 
         let payload = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
@@ -5495,19 +6431,18 @@ mod tests {
             actor: Some("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into()),
             message: Some("queued".into()),
         };
-        let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {
             sequence: 42,
             occurred_at_unix: payload.occurred_at_unix,
             signer: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            payload_digest: *digest.as_ref(),
+            payload_digest: repair_audit_payload_digest_v1(&payload).expect("audit digest"),
         };
         let event = RepairAuditEventV1 {
             version: REPAIR_AUDIT_EVENT_VERSION_V1,
             header,
             payload,
         };
-        let encoded = Encode::encode(&event);
+        let encoded = norito::to_bytes(&event).expect("encode repair audit event");
 
         publisher
             .publish_repair_audit_event(&event, &encoded)
@@ -5552,13 +6487,13 @@ mod tests {
         assert_eq!(ticket_id, event.payload.ticket_id.0.as_str());
         assert_eq!(manifest, manifest_hex.as_str());
         assert_eq!(provider, provider_hex.as_str());
+        assert_single_runtime_external(temp.path(), "repair_audit", &encoded);
     }
 
     #[test]
     fn filesystem_publisher_writes_repair_slash_files() {
         let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let publisher = signed_runtime_publisher(temp.path());
 
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
@@ -5571,7 +6506,7 @@ mod tests {
             rationale: "missed SLA".into(),
             approval: None,
         };
-        let encoded = Encode::encode(&proposal);
+        let encoded = norito::to_bytes(&proposal).expect("encode repair slash proposal");
 
         publisher
             .publish_repair_slash_proposal(&proposal, &encoded, RepairSlashStage::Drafted)
@@ -5621,13 +6556,13 @@ mod tests {
         assert_eq!(ticket_id, proposal.ticket_id.0.as_str());
         assert_eq!(manifest, manifest_hex.as_str());
         assert_eq!(provider, provider_hex.as_str());
+        assert_single_runtime_external(temp.path(), "repair_slash", &encoded);
     }
 
     #[test]
     fn filesystem_publisher_writes_gc_audit_files() {
         let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let publisher = signed_runtime_publisher(temp.path());
 
         let payload = GcAuditPayloadV1 {
             version: GC_AUDIT_PAYLOAD_VERSION_V1,
@@ -5638,19 +6573,18 @@ mod tests {
             reason: "retention_expired".into(),
             blocked_reason: None,
         };
-        let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {
             sequence: 7,
             occurred_at_unix: payload.evicted_at_unix,
-            signer: "sorafs-gc".into(),
-            payload_digest: *digest.as_ref(),
+            signer: GC_AUDIT_SIGNER_V1.into(),
+            payload_digest: gc_audit_payload_digest_v1(&payload).expect("audit digest"),
         };
         let event = GcAuditEventV1 {
             version: GC_AUDIT_EVENT_VERSION_V1,
             header,
             payload,
         };
-        let encoded = Encode::encode(&event);
+        let encoded = norito::to_bytes(&event).expect("encode GC audit event");
 
         publisher
             .publish_gc_audit_event(&event, &encoded)
@@ -5675,13 +6609,13 @@ mod tests {
             .and_then(JsonValue::as_str)
             .expect("reason");
         assert_eq!(reason, "retention_expired");
+        assert_single_runtime_external(temp.path(), "gc_audit", &encoded);
     }
 
     #[test]
     fn filesystem_publisher_writes_reconciliation_report_files() {
         let temp = tempdir().expect("tempdir");
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let publisher = signed_runtime_publisher(temp.path());
 
         let report = SorafsReconciliationReportV1 {
             version: SORAFS_RECONCILIATION_REPORT_VERSION_V1,
@@ -5697,7 +6631,7 @@ mod tests {
             divergence_count: 1,
             appeal_finance: None,
         };
-        let encoded = Encode::encode(&report);
+        let encoded = norito::to_bytes(&report).expect("encode reconciliation report");
 
         publisher
             .publish_reconciliation_report(&report, &encoded)
@@ -5730,6 +6664,7 @@ mod tests {
             .expect("divergence_count");
         assert_eq!(provider, hex::encode(report.provider_id));
         assert_eq!(divergence, 1);
+        assert_single_runtime_external(temp.path(), "reconciliation", &encoded);
     }
 
     #[test]

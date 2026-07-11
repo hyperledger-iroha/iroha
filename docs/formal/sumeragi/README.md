@@ -3730,12 +3730,24 @@ reconfiguration and elastic-lane lifecycle after commit:
 - create/retire geometry is journaled and restart-reconciled against the
   consensus catalog,
 - recreated lanes receive a fresh incarnation and activation height, and
-- stale-incarnation artifacts, undrained retirement, and non-consensus catalog
-  writes fail closed.
+- a committed drain request closes routing above its exact proposal height,
+- every lane incarnation immutably pins its creation committee while the
+  current validator roster may churn independently,
+- historical pre-close commit signers retain their lock until certified work
+  reaches the canonical merge frontier, so every pinned drain quorum overlaps
+  the commit quorum,
+- drain certification waits for the canonical merge frontier to include every
+  committed pre-close item, including commit evidence delayed in the network,
+- malformed, forged, and under-quorum drain certificates fail closed,
+- the validated certificate is committed by a global carrier before a strictly
+  later carrier may retire the lane, and
+- stale-incarnation artifacts, lost delayed work, same-carrier/uncertified
+  retirement, and non-consensus catalog writes fail closed.
 
-Its TLC cross-check independently exhausts the same sixteen expected-failure
-configs as Apalache. The recreate mutation uses depth 15 so the checker reaches
-the complete create → retire → recreate witness.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache. The recreate mutation uses depth 15 so
+the checker reaches the complete request → certify → carry → retire → recreate
+witness.
 
 `SumeragiMergeExecutionOrder.tla` captures the execution barrier between
 independently arriving lane certificates and shared state:
@@ -3751,6 +3763,29 @@ The lane effects are deliberately non-commutative, so arrival-order execution
 would fork immediately. TLC exhausts the complete bounded state graph, while
 Apalache rejects arrival-order, pre-certificate, duplicate, restart-double,
 torn-commit, and wrong-payload mutations.
+
+`SumeragiMergeCarrierSafety.tla` covers the preceding certification and compact
+carrier boundary that the execution-order model intentionally abstracts away:
+- only the authenticated deterministic global-round leader can supply a
+  candidate, and every accepted body must match the exact epoch, view, carrier
+  height, parent, roster, digest, and deterministic re-execution result,
+- an honest validator durably locks that complete context before exposing its
+  signature and retains the lock across restart,
+- with four validators, at most one Byzantine validator, and quorum three, two
+  different candidate digests cannot both form merge QCs,
+- the compact global carrier names exactly the QC-certified digest, and
+- no replica applies the merge entry before the carrier commits and the full
+  hash-verified sidecar is available.
+
+`MergeCarrierExactness` composes candidate admission, durable signing locks,
+quorum uniqueness, carrier binding, sidecar admission, apply ordering, and
+replica convergence. `MergeCarrierCorrectnessEnvelope` checks that complete
+model-specific bundle together with `TypeInvariant`.
+
+TLC exhausts the full bounded production graph and the expected-failure suite
+injects wrong leaders, wrong contexts, invalid bodies, missing/double/lost
+signing locks, under-quorum QCs, unbound carriers, corrupt sidecars, and
+premature or mismatched application.
 
 `SumeragiCommitQuorumSignersGate.tla` captures commit-QC signer quorum gating:
 - missing QC signer metadata never counts as a quorum, even at a zero
@@ -8850,12 +8885,19 @@ verification, and full networking details.
 - `SumeragiCommitPipelineStatusGate.tla`: commit-pipeline status recorder model.
 - `SumeragiCommitPipelineStatusGate_fast.cfg`: CI-friendly commit-pipeline status recorder correctness-envelope check.
 - `SumeragiCommitPipelineStatusGate_bug_*.cfg`: expected-failure last-field, EMA, non-EMA, snapshot, and reset mutations.
-- `SumeragiAutoscaleTransitionGate.tla`: autoscale transition commit gate model.
+- `SumeragiAutoscaleTransitionGate.tla`: autoscale transition commit gate plus
+  two-phase drain-certificate/carrier lifecycle model.
 - `SumeragiAutoscaleTransitionGate_fast.cfg`: CI-friendly direct autoscale transition commit gate check.
-- `SumeragiAutoscaleTransitionGate_bug_*.cfg`: expected-failure commit-gate, stale-artifact, early-activation, baseline/catalog mutation, crash-geometry, undrained-retire, and incarnation-reuse mutations.
+- `SumeragiAutoscaleTransitionGate_bug_*.cfg`: expected-failure commit-gate,
+  stale/post-close artifact, early-activation, baseline/catalog mutation,
+  crash-geometry, delayed-work/certificate admission, pinned-committee/current-
+  roster drift, early/same-carrier retirement, and incarnation-reuse mutations.
 - `SumeragiMergeExecutionOrder.tla`: merge-certified lane execution ordering and restart model.
 - `SumeragiMergeExecutionOrder_fast.cfg`: CI-friendly merge execution ordering correctness-envelope check.
 - `SumeragiMergeExecutionOrder_bug_*.cfg`: expected-failure arrival-order, pre-certificate, duplicate, restart-double, torn-commit, and wrong-payload mutations.
+- `SumeragiMergeCarrierSafety.tla`: exact-leader merge certification, durable anti-equivocation, compact-carrier, and sidecar-before-apply model.
+- `SumeragiMergeCarrierSafety_fast.cfg`: CI-friendly merge carrier correctness-envelope check.
+- `SumeragiMergeCarrierSafety_bug_*.cfg`: expected-failure leader/context/body, signing-lock, quorum, carrier-binding, sidecar-integrity, and apply-order mutations.
 - `SumeragiCommitQuorumSignersGate.tla`: commit-QC signer quorum helper model.
 - `SumeragiCommitQuorumSignersGate_fast.cfg`: CI-friendly commit-QC signer quorum correctness-envelope check.
 - `SumeragiCommitQuorumSignersGate_bug_*.cfg`: expected-failure missing metadata, zero-threshold, threshold-boundary, and failed-branch mutations.
@@ -17015,6 +17057,7 @@ bash scripts/formal/sumeragi_apalache.sh commit-pipeline-sample-fast
 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-status-fast
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-fast
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-fast
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-fast
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-accept-stale-artifact
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-activate-early
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-mutate-baseline
@@ -17022,12 +17065,34 @@ bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-non-consensus-
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-restart-geometry-drift
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-retire-undrained
 bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-reuse-incarnation
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-accept-post-close-proposal
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-certify-unmerged-work
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-accept-malformed-certificate
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-accept-forged-certificate
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-accept-under-quorum-certificate
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-retire-without-carried-certificate
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-retire-same-carrier
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-retire-loses-delayed-work
+bash scripts/formal/sumeragi_apalache.sh autoscale-transition-bug-drain-uses-current-roster
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-arrival-order
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-apply-before-certificate
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-duplicate-apply
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-restart-replays-applied
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-torn-commit
 bash scripts/formal/sumeragi_apalache.sh merge-execution-order-bug-wrong-payload
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-accept-wrong-leader
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-accept-wrong-context
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-accept-invalid-body
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-double-sign
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-sign-without-lock
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-forget-lock-on-restart
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-qc-without-quorum
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-carrier-without-qc
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-carrier-wrong-context
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-accept-corrupt-sidecar
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-apply-before-commit
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-apply-without-sidecar
+bash scripts/formal/sumeragi_apalache.sh merge-carrier-safety-bug-apply-wrong-digest
 bash scripts/formal/sumeragi_apalache.sh commit-quorum-signers-fast
 bash scripts/formal/sumeragi_apalache.sh signature-index-recovery-fast
 bash scripts/formal/sumeragi_apalache.sh commit-qc-lookup-fast
@@ -17834,12 +17899,17 @@ bash scripts/formal/sumeragi_tlc.sh commit-pipeline-sample-fast
 bash scripts/formal/sumeragi_tlc.sh commit-pipeline-status-fast
 bash scripts/formal/sumeragi_tlc.sh autoscale-transition-fast
 bash scripts/formal/sumeragi_tlc.sh merge-execution-order-fast
+bash scripts/formal/sumeragi_tlc.sh merge-carrier-safety-fast
 bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-arrival-order
 bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-apply-before-certificate
 bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-duplicate-apply
 bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-restart-replays-applied
 bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-torn-commit
 bash scripts/formal/sumeragi_tlc.sh merge-execution-order-bug-wrong-payload
+bash scripts/formal/sumeragi_tlc.sh merge-carrier-safety-bug-accept-wrong-leader
+bash scripts/formal/sumeragi_tlc.sh merge-carrier-safety-bug-double-sign
+bash scripts/formal/sumeragi_tlc.sh merge-carrier-safety-bug-accept-corrupt-sidecar
+bash scripts/formal/sumeragi_tlc.sh merge-carrier-safety-bug-apply-before-commit
 bash scripts/formal/sumeragi_tlc.sh signature-index-recovery-fast
 bash scripts/formal/sumeragi_tlc.sh embedded-qc-roster-fast
 bash scripts/formal/sumeragi_tlc.sh roster-validation-memo-fast
@@ -18122,8 +18192,9 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `commit-drain-summary-fast` | 1 | CI commit-drain summary aggregation correctness-envelope check |
 | `commit-pipeline-sample-fast` | 1 | CI direct commit-pipeline timing sample helper check |
 | `commit-pipeline-status-fast` | 1 | CI commit-pipeline status recorder correctness-envelope check |
-| `autoscale-transition-fast` | 10 | CI autoscale lifecycle, incarnation, activation, and crash-geometry correctness-envelope check |
+| `autoscale-transition-fast` | 9 | CI autoscale create/restart plus close, drain certification, global commitment, and later-carrier retirement correctness-envelope check |
 | `merge-execution-order-fast` | 8 | CI merge-certified lane execution order and restart correctness-envelope check |
+| `merge-carrier-safety-fast` | 10 | CI exact-leader merge QC, durable signing lock, compact carrier, and sidecar-before-apply correctness-envelope check |
 | `commit-quorum-signers-fast` | 1 | CI commit-QC signer quorum correctness-envelope check |
 | `signature-index-recovery-fast` | 1 | CI direct commit signature-index recovery helper correctness-envelope check |
 | `commit-qc-lookup-fast` | 1 | CI direct commit-QC cache/history lookup correctness-envelope check |

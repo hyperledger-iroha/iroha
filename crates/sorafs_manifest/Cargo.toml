@@ -21,6 +21,9 @@ sha3 = "0.10.8"
 http = { workspace = true }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
 rand = { workspace = true }
+rand_core_06 = { workspace = true }
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["circuit-params", "multicore"] }
+poseidon-primitives = "0.2.0"
 
 [dev-dependencies]
 tempfile = "3.23.0"

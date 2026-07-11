@@ -26,7 +26,7 @@ use std::{
 #[cfg(test)]
 use std::collections::HashSet;
 
-use crate::state::StateViewContextGuard;
+use crate::{lane_drain::LaneDrainSigningGuard, state::StateViewContextGuard};
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
@@ -57,6 +57,7 @@ use iroha_data_model::{
     events::{EventBox, pipeline::PipelineEventBox},
     isi::register::RegisterPeerWithPop,
     merge::{
+        LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainIntentV1,
         MergeCommitteeSignature, MergeLedgerEntry, MergeQuorumCertificate, MergeSignerProof,
     },
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
@@ -85,6 +86,84 @@ fn try_sign_consensus_preimage(
     preimage: &[u8],
 ) -> std::result::Result<Vec<u8>, iroha_crypto::Error> {
     Signature::try_new(private_key, preimage).map(|signature| signature.payload().to_vec())
+}
+
+/// Resolve an autoscaled lane's immutable, incarnation-bound PoPs in exact
+/// validator-set order.
+///
+/// `Some(None)` identifies an operator-managed lane, whose existing live-roster
+/// policy remains applicable. `Some(Some(_))` is the exact pinned autoscale
+/// vector. `None` means a missing/malformed pin, absent lane, or validator-set
+/// mismatch and must never trigger a live-cache fallback.
+fn pinned_autoscale_validator_pops_for_set(
+    state: &State,
+    lane_id: LaneId,
+    validator_set: &[PeerId],
+) -> Option<Option<Vec<Vec<u8>>>> {
+    let nexus = state.nexus_snapshot();
+    let lane = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)?;
+    if !lane.claims_autoscale_managed() {
+        return Some(None);
+    }
+    let pinned = crate::state::autoscale_lane_pinned_committee_with_pops(lane)?;
+    align_exact_pinned_validator_pops(pinned, validator_set).map(Some)
+}
+
+fn align_exact_pinned_validator_pops(
+    pinned: Vec<(PeerId, Vec<u8>)>,
+    validator_set: &[PeerId],
+) -> Option<Vec<Vec<u8>>> {
+    if pinned.len() != validator_set.len()
+        || pinned
+            .iter()
+            .zip(validator_set)
+            .any(|((pinned_peer, _), validator)| pinned_peer != validator)
+    {
+        return None;
+    }
+    Some(pinned.into_iter().map(|(_, pop)| pop).collect())
+}
+
+#[cfg(test)]
+mod pinned_autoscale_validator_pops_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
+
+    #[test]
+    fn exact_alignment_rejects_reordered_or_mismatched_validator_sets() {
+        let keypairs = (1_u8..=3)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS fixture")
+            })
+            .collect::<Vec<_>>();
+        let validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let pinned = validator_set
+            .iter()
+            .enumerate()
+            .map(|(index, peer)| (peer.clone(), vec![u8::try_from(index).expect("index")]))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            align_exact_pinned_validator_pops(pinned.clone(), &validator_set),
+            Some(vec![vec![0], vec![1], vec![2]])
+        );
+        let mut reordered = validator_set.clone();
+        reordered.swap(0, 1);
+        assert!(align_exact_pinned_validator_pops(pinned.clone(), &reordered).is_none());
+        assert!(
+            align_exact_pinned_validator_pops(pinned, &validator_set[..2]).is_none(),
+            "cardinality drift must fail closed"
+        );
+    }
 }
 
 fn queued_empty_frontier_can_make_progress(
@@ -434,10 +513,10 @@ use crate::{
     block::{BlockBuilder, BlockValidationError, ValidBlock, valid::ValidationTimings},
     kura::{BlockCount, Kura},
     merge_sidecar::{
-        CandidateChunkOutcome, CertifiedMergeSidecarMessage, ChunkIngestOutcome,
-        MergeCandidateAdvertV1, MergeCandidateMessage, MergeCandidatePost,
-        MergeCandidateTransport, MergeSidecarPost, MergeSidecarTransport, MergeSigningContextV1,
-        MergeSigningGuard,
+        CandidateChunkOutcome, CertifiedMergeSidecarMessage,
+        ChunkIngestOutcome as MergeSidecarChunkIngestOutcome, MergeCandidateAdvertV1,
+        MergeCandidateMessage, MergeCandidatePost, MergeCandidateTransport, MergeSidecarPost,
+        MergeSidecarTransport, MergeSigningContextV1, MergeSigningGuard,
         certified_merge_reference_digest, certified_merge_sidecar_holders,
         decode_certified_merge_sidecar, decode_merge_candidate_body,
     },
@@ -1297,6 +1376,7 @@ mod requeue_block_transaction_tests {
         stale_participant_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "10".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(stale_participant_lane);
         let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
             .expect("current lane catalog");
 
@@ -4035,6 +4115,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::DaPinIntentBundle(_)
         | BlockValidationError::DaReceiptCursor(_)
         | BlockValidationError::DaShardCursor(_)
+        | BlockValidationError::MissingCertifiedMergeSidecar { .. }
         | BlockValidationError::AxtEnvelopeValidationFailed(_) => VALIDATION_REASON_EXECUTION,
         BlockValidationError::ConfidentialFeaturesMismatch { .. }
         | BlockValidationError::ProofPolicyHashMismatch { .. }
@@ -13630,6 +13711,8 @@ struct ActorSubsystems {
     da_rbc: DaRbcState,
     vrf: VrfActor,
     merge: MergeLaneState,
+    lane_drain_signing_guard: LaneDrainSigningGuard,
+    lane_drain_votes: LaneDrainVoteState,
     lane_blocks: crate::lane_consensus::LaneBlockSessionCache,
     lane_new_view_votes: crate::lane_consensus::LaneBlockNewViewVoteCache,
     lane_new_view_certificates: crate::lane_consensus::LaneBlockNewViewCertificateCache,
@@ -13637,11 +13720,30 @@ struct ActorSubsystems {
     committed_lane_blocks: CommittedLaneBlockQueue,
 }
 
-// Tracks certified lane blocks until their payloads are recovered, directly
-// applied, and covered by durable application receipts.
+// Tracks certified lane blocks until their payloads are recovered, committed
+// through the canonical global carrier, and covered by durable application
+// receipts.
 struct CommittedLaneBlockQueue {
     capacity: usize,
     pending: VecDeque<crate::lane_consensus::CommittedLaneBlockSession>,
+    /// Exact proposals whose durable execution input was fully verified during
+    /// this actor lifetime.
+    ///
+    /// Kura deliberately performs complete autonomous READY/DELIVER proof
+    /// validation when an execution input is read. Repeating that cryptographic
+    /// work for status publication several times per tick can consume the whole
+    /// consensus work budget and starve merge-candidate production. This set is
+    /// bounded by `pending` and is only an observational/recovery fast path:
+    /// safety-critical merge construction still reads and fully revalidates the
+    /// durable Kura artifact.
+    verified_execution_inputs: BTreeSet<Hash>,
+    /// Verified inputs recovered from autonomous lane payloads rather than an
+    /// already committed canonical global block.
+    verified_autonomous_execution_inputs: BTreeSet<Hash>,
+    /// One-shot liveness pulse consumed by merge scheduling when this queue
+    /// first verifies an exact durable execution input, including inputs that
+    /// already existed before actor startup.
+    execution_input_verification_progress: bool,
 }
 
 impl CommittedLaneBlockQueue {
@@ -13649,7 +13751,51 @@ impl CommittedLaneBlockQueue {
         Self {
             capacity: capacity.max(1),
             pending: VecDeque::new(),
+            verified_execution_inputs: BTreeSet::new(),
+            verified_autonomous_execution_inputs: BTreeSet::new(),
+            execution_input_verification_progress: false,
         }
+    }
+
+    fn execution_input_identity(
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> Hash {
+        Hash::new(
+            norito::to_bytes(proposal)
+                .expect("lane-block proposal identity must encode for local queue tracking"),
+        )
+    }
+
+    fn execution_input_verified(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        self.verified_execution_inputs
+            .contains(&Self::execution_input_identity(proposal))
+    }
+
+    fn autonomous_execution_input_verified(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        self.verified_autonomous_execution_inputs
+            .contains(&Self::execution_input_identity(proposal))
+    }
+
+    fn retain_verified_execution_inputs_for_pending(&mut self) {
+        let pending = self
+            .pending
+            .iter()
+            .map(|session| Self::execution_input_identity(&session.proposal))
+            .collect::<BTreeSet<_>>();
+        self.verified_execution_inputs
+            .retain(|identity| pending.contains(identity));
+        self.verified_autonomous_execution_inputs
+            .retain(|identity| pending.contains(identity));
+    }
+
+    fn take_execution_input_verification_progress(&mut self) -> bool {
+        std::mem::take(&mut self.execution_input_verification_progress)
     }
 
     fn len(&self) -> usize {
@@ -13720,7 +13866,11 @@ impl CommittedLaneBlockQueue {
         let before = self.pending.len();
         self.pending
             .retain(|session| !kura.lane_block_application_receipt_available(&session.proposal));
-        before.saturating_sub(self.pending.len())
+        let pruned = before.saturating_sub(self.pending.len());
+        if pruned > 0 {
+            self.retain_verified_execution_inputs_for_pending();
+        }
+        pruned
     }
 
     fn unapplied_lane_ids_for_admissible_lanes(
@@ -13762,7 +13912,11 @@ impl CommittedLaneBlockQueue {
                 descriptor.proposal_height,
             )
         });
-        before.saturating_sub(self.pending.len())
+        let pruned = before.saturating_sub(self.pending.len());
+        if pruned > 0 {
+            self.retain_verified_execution_inputs_for_pending();
+        }
+        pruned
     }
 
     fn contains_session(&self, session: &crate::lane_consensus::CommittedLaneBlockSession) -> bool {
@@ -13792,6 +13946,24 @@ impl CommittedLaneBlockQueue {
         current_state_height: u64,
         current_state_hash: Option<HashOf<BlockHeader>>,
     ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+        self.status_snapshot_with_payload_availability_and_autonomous_context(
+            kura,
+            current_state_height,
+            current_state_hash,
+            |_| None,
+        )
+    }
+
+    fn status_snapshot_with_payload_availability_and_autonomous_context<F>(
+        &self,
+        kura: &crate::kura::Kura,
+        current_state_height: u64,
+        current_state_hash: Option<HashOf<BlockHeader>>,
+        mut autonomous_context: F,
+    ) -> Vec<super::status::CommittedLaneBlockSnapshot>
+    where
+        F: FnMut(&crate::lane_consensus::CommittedLaneBlockSession) -> Option<(Hash, u64)>,
+    {
         self.pending
             .iter()
             .map(|session| {
@@ -13838,13 +14010,22 @@ impl CommittedLaneBlockQueue {
                     )
                 {
                     super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication
-                } else if kura
-                    .lane_block_execution_input_available(&session.proposal)
+                } else if self.execution_input_verified(&session.proposal)
+                    || kura.lane_block_execution_input_available(&session.proposal)
                 {
                     super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
                 } else if kura
                     .lane_block_payload_availability(&session.proposal)
                     .is_available()
+                    || autonomous_context(session).is_some_and(
+                        |(expected_chain_id_hash, expected_epoch)| {
+                            kura.autonomous_lane_payload_available(
+                                &session.proposal,
+                                expected_chain_id_hash,
+                                expected_epoch,
+                            )
+                        },
+                    )
                 {
                     super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
                 } else {
@@ -13863,10 +14044,13 @@ impl CommittedLaneBlockQueue {
         state: &crate::state::State,
     ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
         let durable_applied = Self::durable_applied_status_snapshot_for_state(state);
-        let pending = self.status_snapshot_with_payload_availability(
+        let expected_chain_id_hash =
+            Hash::new(state.chain_id_ref().clone().into_inner().as_bytes());
+        let pending = self.status_snapshot_with_payload_availability_and_autonomous_context(
             state.kura(),
             u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
             Some(state.lane_execution_state_hash()),
+            |session| Self::certified_autonomous_payload_context(session, expected_chain_id_hash),
         );
         merge_committed_lane_block_statuses(durable_applied, pending)
     }
@@ -13936,19 +14120,56 @@ impl CommittedLaneBlockQueue {
         }
     }
 
-    fn recover_available_payloads_into_kura(&self, kura: &crate::kura::Kura) -> usize {
+    fn recover_available_payloads_into_kura_with_autonomous_context<F>(
+        &mut self,
+        kura: &crate::kura::Kura,
+        mut autonomous_context: F,
+    ) -> usize
+    where
+        F: FnMut(&crate::lane_consensus::CommittedLaneBlockSession) -> Option<(Hash, u64)>,
+    {
         let mut recovered = 0_usize;
         for session in &self.pending {
             if !kura.lane_block_predecessor_application_receipt_available(&session.proposal) {
                 continue;
             }
-            if kura.lane_block_execution_input_available(&session.proposal) {
+            let input_identity = Self::execution_input_identity(&session.proposal);
+            if self.verified_execution_inputs.contains(&input_identity) {
+                continue;
+            }
+            let descriptor = &session.proposal.descriptor;
+            if let Some(input) = kura
+                .read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
+                .filter(|input| input.proposal == session.proposal)
+            {
+                if self.verified_execution_inputs.insert(input_identity) {
+                    self.execution_input_verification_progress = true;
+                }
+                if input.autonomous_payload_hash.is_some() {
+                    self.verified_autonomous_execution_inputs
+                        .insert(input_identity);
+                }
                 continue;
             }
             let payload = match kura.recover_lane_block_payload(&session.proposal) {
                 Ok(payload) => payload,
-                Err(_) => continue,
+                Err(_) => {
+                    let Some((expected_chain_id_hash, expected_epoch)) =
+                        autonomous_context(session)
+                    else {
+                        continue;
+                    };
+                    let Ok(payload) = kura.recover_autonomous_lane_block_payload(
+                        &session.proposal,
+                        expected_chain_id_hash,
+                        expected_epoch,
+                    ) else {
+                        continue;
+                    };
+                    payload
+                }
             };
+            let autonomous = payload.autonomous_payload_hash.is_some();
             if let Err(err) = kura.persist_lane_block_execution_input(&payload) {
                 warn!(
                     ?err,
@@ -13960,9 +14181,52 @@ impl CommittedLaneBlockQueue {
                 );
                 continue;
             }
+            if self.verified_execution_inputs.insert(input_identity) {
+                self.execution_input_verification_progress = true;
+            }
+            if autonomous {
+                self.verified_autonomous_execution_inputs
+                    .insert(input_identity);
+            }
             recovered = recovered.saturating_add(1);
         }
         recovered
+    }
+
+    #[cfg(test)]
+    fn recover_available_payloads_into_kura(&mut self, kura: &crate::kura::Kura) -> usize {
+        self.recover_available_payloads_into_kura_with_autonomous_context(kura, |_| None)
+    }
+
+    /// Return the locally admissible chain/epoch binding certified by the
+    /// exact READY quorum embedded in this committed session.
+    ///
+    /// The autonomous artifact and its durable DELIVER certificate are fully
+    /// revalidated by Kura before recovery.  These cheap identity checks keep
+    /// a foreign-chain or proposal-rebound certificate from selecting the
+    /// autonomous fallback in the first place.
+    fn certified_autonomous_payload_context(
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        expected_chain_id_hash: Hash,
+    ) -> Option<(Hash, u64)> {
+        let proposal = &session.proposal;
+        let descriptor = &proposal.descriptor;
+        let body = &session.prepare_qc.payload_availability_qc.as_ref()?.body;
+        (body.chain_id_hash == expected_chain_id_hash
+            && body.lane_id == descriptor.lane_id
+            && body.dataspace_id == descriptor.dataspace_id
+            && body.lane_incarnation == descriptor.lane_incarnation
+            && body.proposal_height == descriptor.proposal_height
+            && body.lane_block_height == descriptor.lane_block_height
+            && body.current_lane_block_view == descriptor.lane_block_view
+            && body.current_proposal_hash == proposal.proposal_hash
+            && body.current_descriptor_hash == descriptor.descriptor_hash
+            && body.validator_set_hash_version == descriptor.validator_set_hash_version
+            && body.validator_set_hash == descriptor.validator_set_hash
+            && body.validator_count == descriptor.validator_count
+            && body.min_quorum == descriptor.min_quorum
+            && body.qc_mode_tag == descriptor.qc_mode_tag)
+            .then_some((expected_chain_id_hash, body.epoch))
     }
 
     /// Recover immutable execution inputs while leaving shared WSV untouched.
@@ -13971,8 +14235,12 @@ impl CommittedLaneBlockQueue {
     /// until the merge subsystem supplies a consensus-certified total order.
     /// Its state argument is intentional: adversarial tests assert that neither
     /// QC arrival order nor payload recovery changes the shared state identity.
-    fn recover_certified_inputs_awaiting_merge(&self, state: &crate::state::State) -> usize {
-        self.recover_available_payloads_into_kura(state.kura())
+    fn recover_certified_inputs_awaiting_merge(&mut self, state: &crate::state::State) -> usize {
+        let expected_chain_id_hash =
+            Hash::new(state.chain_id_ref().clone().into_inner().as_bytes());
+        self.recover_available_payloads_into_kura_with_autonomous_context(state.kura(), |session| {
+            Self::certified_autonomous_payload_context(session, expected_chain_id_hash)
+        })
     }
 
     fn payload_hint_repair_candidates(
@@ -13985,6 +14253,7 @@ impl CommittedLaneBlockQueue {
                 let proposal = &session.proposal;
                 proposal.payload_block_hint.as_ref()?;
                 if kura.lane_block_application_receipt_available(proposal)
+                    || self.execution_input_verified(proposal)
                     || kura.lane_block_execution_input_available(proposal)
                     || kura
                         .lane_block_payload_availability(proposal)
@@ -14498,6 +14767,13 @@ impl CommittedLaneBlockQueue {
         let mut recorded = 0_usize;
         for session in &self.pending {
             if kura.lane_block_application_receipt_available(&session.proposal) {
+                continue;
+            }
+            if self.autonomous_execution_input_verified(&session.proposal) {
+                // Autonomous inputs cannot have canonical block results before
+                // their merge carrier commits. Re-probing the legacy global
+                // block recovery path revalidates the same READY/DELIVER proof
+                // on every tick and can starve merge maintenance itself.
                 continue;
             }
             if !kura.lane_block_predecessor_application_receipt_available(&session.proposal) {
@@ -15260,6 +15536,154 @@ struct MergeCommitteeState {
     signing_guard: MergeSigningGuard,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct LaneDrainRemoteSignerContext {
+    intent_hash: HashOf<LaneDrainIntentV1>,
+    signer: PeerId,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LaneDrainRemoteSignerDecision {
+    body_digest: Hash,
+    final_lane_block_height: u64,
+    last_seen: Instant,
+}
+
+#[derive(Debug)]
+struct LaneDrainVoteState {
+    active_body: Option<LaneDrainCertificateBodyV1>,
+    votes: BTreeMap<PeerId, crate::lane_consensus::LaneDrainVoteV1>,
+    remote_signers: BTreeMap<LaneDrainRemoteSignerContext, LaneDrainRemoteSignerDecision>,
+    remote_equivocators: BTreeMap<LaneDrainRemoteSignerContext, Instant>,
+    certificate: Option<LaneDrainCertificateV1>,
+    last_local_vote_broadcast: Option<Instant>,
+}
+
+fn lane_drain_vote_recipients(
+    lane_committee: &[PeerId],
+    global_committee: &[PeerId],
+    local_peer: &PeerId,
+) -> Vec<PeerId> {
+    lane_committee
+        .iter()
+        .chain(global_committee)
+        .filter(|peer| *peer != local_peer)
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+impl LaneDrainVoteState {
+    const MAX_REMOTE_SIGNERS: usize = 4_096;
+
+    fn new() -> Self {
+        Self {
+            active_body: None,
+            votes: BTreeMap::new(),
+            remote_signers: BTreeMap::new(),
+            remote_equivocators: BTreeMap::new(),
+            certificate: None,
+            last_local_vote_broadcast: None,
+        }
+    }
+
+    fn body_digest(body: &LaneDrainCertificateBodyV1) -> Hash {
+        Hash::new(body.signature_preimage())
+    }
+
+    fn retain_body(&mut self, body: Option<LaneDrainCertificateBodyV1>) {
+        if self.active_body.as_ref() == body.as_ref() {
+            return;
+        }
+        let retains_intent_decisions = self
+            .active_body
+            .as_ref()
+            .zip(body.as_ref())
+            .is_some_and(|(active, next)| active.intent == next.intent);
+        self.active_body = body;
+        self.votes.clear();
+        // A final frontier can advance while pre-close, already-certified work
+        // is globally applied. Keep signer decisions for the same immutable
+        // intent so same-height drift and frontier regression remain detectable;
+        // `insert_vote` permits only a strictly higher refreshed frontier. A
+        // different/no intent is a distinct lifecycle and drops the cache.
+        if !retains_intent_decisions {
+            self.remote_signers.clear();
+            self.remote_equivocators.clear();
+        }
+        self.certificate = None;
+        self.last_local_vote_broadcast = None;
+    }
+
+    fn insert_vote(
+        &mut self,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+        now: Instant,
+    ) -> Result<bool, &'static str> {
+        if self.active_body.as_ref() != Some(&vote.body) {
+            return Err("vote does not match the active canonical drain body");
+        }
+        let context = LaneDrainRemoteSignerContext {
+            intent_hash: vote.body.intent.canonical_hash(),
+            signer: vote.signer.clone(),
+        };
+        if self.remote_equivocators.contains_key(&context) {
+            return Err("signer already equivocated for this drain intent");
+        }
+        let body_digest = Self::body_digest(&vote.body);
+        if let Some(existing) = self.remote_signers.get(&context)
+            && existing.body_digest != body_digest
+        {
+            if vote.body.final_lane_block_height <= existing.final_lane_block_height {
+                self.remote_signers.remove(&context);
+                self.remote_equivocators.insert(context.clone(), now);
+                self.votes.remove(&context.signer);
+                self.certificate = None;
+                self.prune_remote_signers();
+                return Err("signer equivocated or regressed across drain bodies");
+            }
+        }
+        self.remote_signers.insert(
+            context,
+            LaneDrainRemoteSignerDecision {
+                body_digest,
+                final_lane_block_height: vote.body.final_lane_block_height,
+                last_seen: now,
+            },
+        );
+        let changed = self
+            .votes
+            .insert(vote.signer.clone(), vote.clone())
+            .as_ref()
+            != Some(&vote);
+        self.prune_remote_signers();
+        Ok(changed)
+    }
+
+    fn prune_remote_signers(&mut self) {
+        while self.remote_signers.len() > Self::MAX_REMOTE_SIGNERS {
+            let oldest = self
+                .remote_signers
+                .iter()
+                .min_by_key(|(context, decision)| (decision.last_seen, (*context).clone()))
+                .map(|(context, _)| context.clone());
+            let Some(oldest) = oldest else { break };
+            self.remote_signers.remove(&oldest);
+            self.votes.remove(&oldest.signer);
+        }
+        while self.remote_equivocators.len() > Self::MAX_REMOTE_SIGNERS {
+            let oldest = self
+                .remote_equivocators
+                .iter()
+                .min_by_key(|(context, observed)| (**observed, (*context).clone()))
+                .map(|(context, _)| context.clone());
+            let Some(oldest) = oldest else { break };
+            self.remote_equivocators.remove(&oldest);
+        }
+    }
+}
+
 impl MergeCommitteeState {
     const MAX_PENDING: usize = 256;
     const MAX_REMOTE_SIGNERS: usize = 4_096;
@@ -15380,6 +15804,25 @@ impl MergeCommitteeState {
             started_at: now,
         });
     }
+
+    /// Drop a completed same-round attempt only when it proved that no
+    /// candidate was available and reserved no signing digest.
+    ///
+    /// Certified lane input can arrive after that empty decision. Clearing the
+    /// empty cache is safe because no signature or digest reservation exists;
+    /// reserved or deferred attempts must remain immutable.
+    fn invalidate_completed_empty_execution_attempt(&mut self) -> bool {
+        let empty = self.execution_attempt.as_ref().is_some_and(|attempt| {
+            attempt.completed
+                && !attempt.reserved
+                && attempt.message_digest.is_none()
+                && attempt.candidate.is_none()
+        });
+        if empty {
+            self.execution_attempt = None;
+        }
+        empty
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15420,13 +15863,50 @@ fn preferred_merge_candidates<T>(execution: Option<T>, relay: Vec<T>) -> Vec<T> 
 #[cfg(test)]
 mod preferred_merge_candidates_tests {
     use super::{
-        MergeCommitteeState, MergeExecutionRound, MergeRemoteSignerContext,
+        MergeCommitteeState, MergeExecutionAttempt, MergeExecutionRound, MergeRemoteSignerContext,
         MergeRemoteSignerDecision, preferred_merge_candidates,
     };
     use crate::merge_sidecar::MergeSigningGuard;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{block::BlockHeader, peer::PeerId};
     use std::time::{Duration, Instant};
+
+    fn sample_round() -> MergeExecutionRound {
+        MergeExecutionRound {
+            height: 7,
+            parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"merge parent")),
+            view: 3,
+            epoch_id: 6,
+            validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        }
+    }
+
+    #[test]
+    fn certified_source_progress_invalidates_only_completed_empty_attempt() {
+        let temp = tempfile::tempdir().expect("temporary signing guard");
+        let guard = MergeSigningGuard::open(temp.path()).expect("open signing guard");
+        let mut committee = MergeCommitteeState::new(guard);
+        let round = sample_round();
+        committee.execution_attempt = Some(MergeExecutionAttempt {
+            round,
+            message_digest: None,
+            candidate: None,
+            reserved: false,
+            completed: true,
+        });
+        assert!(committee.invalidate_completed_empty_execution_attempt());
+        assert!(committee.execution_attempt.is_none());
+
+        committee.execution_attempt = Some(MergeExecutionAttempt {
+            round,
+            message_digest: Some(Hash::new(b"reserved merge digest")),
+            candidate: None,
+            reserved: true,
+            completed: true,
+        });
+        assert!(!committee.invalidate_completed_empty_execution_attempt());
+        assert!(committee.execution_attempt.is_some());
+    }
 
     #[test]
     fn execution_candidate_is_the_only_candidate_for_an_epoch() {
@@ -15435,7 +15915,10 @@ mod preferred_merge_candidates_tests {
 
     #[test]
     fn relay_candidates_remain_available_without_execution() {
-        assert_eq!(preferred_merge_candidates(None, vec![1, 2, 3]), vec![1, 2, 3]);
+        assert_eq!(
+            preferred_merge_candidates(None, vec![1, 2, 3]),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
@@ -22440,6 +22923,13 @@ impl Actor {
             u64::try_from(state.committed_height()).unwrap_or(u64::MAX),
         )
         .map_err(|error| eyre!("failed to open merge signing guard: {error}"))?;
+        let active_lane_incarnations = state
+            .lane_incarnations_snapshot()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let lane_drain_signing_guard =
+            LaneDrainSigningGuard::open(&kura.store_root(), &active_lane_incarnations)
+                .map_err(|error| eyre!("failed to open lane drain signing guard: {error}"))?;
 
         #[cfg(feature = "telemetry")]
         {
@@ -22536,6 +23026,8 @@ impl Actor {
                 sidecars: MergeSidecarTransport::new(),
                 candidates: MergeCandidateTransport::new(),
             },
+            lane_drain_signing_guard,
+            lane_drain_votes: LaneDrainVoteState::new(),
             lane_blocks: crate::lane_consensus::LaneBlockSessionCache::new(
                 config.recovery.pending_proposal_cap.max(1),
             ),
@@ -24178,9 +24670,7 @@ impl Actor {
     /// after merge publication can never requeue already-applied work. A stale
     /// retired/recreated incarnation is not retained merely because its archived
     /// payload still exists.
-    fn reconcile_lane_reservation_ownership(
-        &self,
-    ) -> Result<(usize, usize)> {
+    fn reconcile_lane_reservation_ownership(&self) -> Result<(usize, usize)> {
         let recovered = self.queue.live_lane_reservations();
         let mut exact_committed = BTreeMap::new();
         for entry in self
@@ -24281,6 +24771,19 @@ impl Actor {
     const TICK_HEARTBEAT_LOG_INTERVAL_ACTIVE: Duration = Duration::from_secs(10);
     const TICK_HEARTBEAT_LOG_INTERVAL_IDLE: Duration = Duration::from_secs(30);
     const TICK_EXPIRED_CULL_STRIDE: u64 = 4;
+    /// Consensus-critical merge work must not be starved indefinitely by
+    /// earlier bounded tick stages that repeatedly consume the work budget.
+    const TICK_MERGE_MAINTENANCE_FAIRNESS_STRIDE: u64 = 4;
+
+    fn merge_maintenance_due(
+        tick_budget_exhausted: bool,
+        certified_source_progress: bool,
+        tick_counter: u64,
+    ) -> bool {
+        !tick_budget_exhausted
+            || certified_source_progress
+            || tick_counter % Self::TICK_MERGE_MAINTENANCE_FAIRNESS_STRIDE == 0
+    }
 
     fn tick_heartbeat_log_due(now: Instant, last_log: Instant, interval: Duration) -> bool {
         now.saturating_duration_since(last_log) >= interval
@@ -24516,8 +25019,16 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.round_liveness_fsm");
             self.drive_round_liveness_fsm(now)
         };
-        let merge_committee_progress = if Self::tick_budget_exhausted(tick_deadline, Instant::now())
-        {
+        let merge_budget_exhausted = Self::tick_budget_exhausted(tick_deadline, Instant::now());
+        let merge_fairness_due =
+            self.tick_counter % Self::TICK_MERGE_MAINTENANCE_FAIRNESS_STRIDE == 0;
+        let merge_committee_start = Instant::now();
+        let merge_committee_ran = Self::merge_maintenance_due(
+            merge_budget_exhausted,
+            committed_lane_block_progress,
+            self.tick_counter,
+        );
+        let merge_committee_progress = if !merge_committee_ran {
             false
         } else {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.merge_committee");
@@ -24532,6 +25043,7 @@ impl Actor {
                 }
             }
         };
+        let merge_committee_cost = merge_committee_start.elapsed();
         let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
         let rbc_outbound_progress = self.flush_rbc_outbound_chunks(now);
         let rbc_session_ttl_progress = self.prune_stale_rbc_sessions(SystemTime::now());
@@ -24820,6 +25332,10 @@ impl Actor {
                         missing_block_ms = missing_block_cost.as_millis(),
                         reschedule_ms = reschedule_cost.as_millis(),
                         idle_view_ms = idle_view_cost.as_millis(),
+                        merge_committee_ms = merge_committee_cost.as_millis(),
+                        merge_committee_ran,
+                        merge_budget_exhausted,
+                        merge_fairness_due,
                         commit_pipeline_ms = commit_pipeline_cost.as_millis(),
                         commit_pipeline_ran = commit_pipeline_timings.ran,
                         commit_pipeline_blocks_considered =
@@ -27306,6 +27822,10 @@ impl Actor {
                 self.on_merge_signature(signature)?;
                 self.handle_merge_entry_candidates(false).map(|_| ())
             }
+            super::LaneRelayMessage::LaneDrainVote { sender, vote } => {
+                self.on_lane_drain_vote(sender, vote)?;
+                self.handle_merge_entry_candidates(false).map(|_| ())
+            }
             super::LaneRelayMessage::CertifiedMergeSidecar { sender, message } => {
                 self.on_certified_merge_sidecar_message(sender, message);
                 Ok(())
@@ -27318,6 +27838,211 @@ impl Actor {
                 self.on_native_amx_message(sender, message)
             }
         }
+    }
+
+    fn accept_lane_drain_vote_for_body(
+        &mut self,
+        sender: &PeerId,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+        expected_body: LaneDrainCertificateBodyV1,
+        validator_set: &[PeerId],
+        now: Instant,
+    ) -> bool {
+        if sender != &vote.signer {
+            warn!(
+                %sender,
+                declared_signer = %vote.signer,
+                "dropping lane-drain vote whose authenticated sender differs from its signer"
+            );
+            return false;
+        }
+        if vote.body != expected_body {
+            debug!(
+                %sender,
+                lane = vote.body.intent.lane_id.as_u32(),
+                "dropping lane-drain vote outside the exact canonical drain frontier"
+            );
+            return false;
+        }
+        if !validator_set.contains(&vote.signer) {
+            warn!(
+                signer = %vote.signer,
+                lane = vote.body.intent.lane_id.as_u32(),
+                "dropping lane-drain vote from outside the intent-bound committee"
+            );
+            return false;
+        }
+        if let Err(err) = vote.validate_ingress() {
+            warn!(
+                ?err,
+                signer = %vote.signer,
+                lane = vote.body.intent.lane_id.as_u32(),
+                "dropping invalid lane-drain vote"
+            );
+            return false;
+        }
+        self.subsystems
+            .lane_drain_votes
+            .retain_body(Some(expected_body));
+        match self.subsystems.lane_drain_votes.insert_vote(vote, now) {
+            Ok(changed) => changed,
+            Err(reason) => {
+                warn!(%sender, reason, "dropping conflicting lane-drain vote");
+                false
+            }
+        }
+    }
+
+    fn aggregate_active_lane_drain_certificate(&mut self, validator_set: &[PeerId]) -> bool {
+        if self.subsystems.lane_drain_votes.certificate.is_some() {
+            return false;
+        }
+        let Some(body) = self.subsystems.lane_drain_votes.active_body.clone() else {
+            return false;
+        };
+        let Ok(required) = usize::try_from(body.intent.min_quorum) else {
+            return false;
+        };
+        if self.subsystems.lane_drain_votes.votes.len() < required {
+            return false;
+        }
+        let votes = self
+            .subsystems
+            .lane_drain_votes
+            .votes
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let certificate = match crate::lane_consensus::aggregate_lane_drain_votes(
+            body.clone(),
+            validator_set.to_vec(),
+            &votes,
+        ) {
+            Ok(certificate) => certificate,
+            Err(err) => {
+                debug!(
+                    ?err,
+                    lane = body.intent.lane_id.as_u32(),
+                    votes = votes.len(),
+                    required,
+                    "lane-drain votes are not yet aggregatable"
+                );
+                return false;
+            }
+        };
+        info!(
+            lane = body.intent.lane_id.as_u32(),
+            dataspace = body.intent.dataspace_id.as_u64(),
+            final_lane_block_height = body.final_lane_block_height,
+            signers = certificate.signer_proofs.len(),
+            "sealed lane-drain certificate for global merge ordering"
+        );
+        self.subsystems.lane_drain_votes.certificate = Some(certificate);
+        true
+    }
+
+    fn on_lane_drain_vote(
+        &mut self,
+        sender: PeerId,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<()> {
+        let Some((expected_body, validator_set)) = self.state.pending_autoscale_lane_drain_body()
+        else {
+            self.subsystems.lane_drain_votes.retain_body(None);
+            debug!(%sender, "ignoring lane-drain vote without a canonical pending intent");
+            return Ok(());
+        };
+        let now = Instant::now();
+        if self.accept_lane_drain_vote_for_body(&sender, vote, expected_body, &validator_set, now) {
+            let _ = self.aggregate_active_lane_drain_certificate(&validator_set);
+        }
+        Ok(())
+    }
+
+    fn drive_lane_drain_certificate(&mut self) -> Option<LaneDrainCertificateV1> {
+        let Some((body, validator_set)) = self.state.pending_autoscale_lane_drain_body() else {
+            self.subsystems.lane_drain_votes.retain_body(None);
+            return None;
+        };
+        self.subsystems
+            .lane_drain_votes
+            .retain_body(Some(body.clone()));
+        let local_peer = self.common_config.peer.id().clone();
+        if validator_set.contains(&local_peer) {
+            // The next global merge leader need not belong to this bounded lane
+            // committee. Disseminate restart-verifiable votes to both sets so
+            // any current global validator can assemble and carry the close QC.
+            let global_committee = self
+                .state
+                .commit_topology
+                .view()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            let recipients =
+                lane_drain_vote_recipients(&validator_set, &global_committee, &local_peer);
+            let now = Instant::now();
+            let rebroadcast_cooldown = self.control_plane_rebroadcast_cooldown();
+            let vote_due = self
+                .subsystems
+                .lane_drain_votes
+                .last_local_vote_broadcast
+                .is_none_or(|last| now.saturating_duration_since(last) >= rebroadcast_cooldown);
+            if vote_due {
+                match self
+                    .subsystems
+                    .lane_drain_signing_guard
+                    .authorize_drain(&body)
+                    .and_then(|()| {
+                        crate::lane_consensus::LaneDrainVoteV1::new_signed(
+                            body.clone(),
+                            local_peer.clone(),
+                            self.common_config.key_pair.private_key(),
+                        )
+                        .map_err(|error| {
+                            crate::lane_drain::LaneDrainSigningGuardError::InvalidInput(
+                                error.to_string(),
+                            )
+                        })
+                    }) {
+                    Ok(vote) => {
+                        let accepted = self.accept_lane_drain_vote_for_body(
+                            &local_peer,
+                            vote.clone(),
+                            body.clone(),
+                            &validator_set,
+                            now,
+                        );
+                        for peer in &recipients {
+                            self.network.post(Post {
+                                data: NetworkMessage::LaneDrainVote(Box::new(vote.clone())),
+                                peer_id: peer.clone(),
+                                priority: Priority::High,
+                            });
+                        }
+                        self.subsystems.lane_drain_votes.last_local_vote_broadcast = Some(now);
+                        if accepted {
+                            debug!(
+                                lane = body.intent.lane_id.as_u32(),
+                                final_lane_block_height = body.final_lane_block_height,
+                                targets = recipients.len(),
+                                "persisted and broadcast local lane-drain vote"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        debug!(
+                            ?err,
+                            lane = body.intent.lane_id.as_u32(),
+                            final_lane_block_height = body.final_lane_block_height,
+                            "local lane-drain vote remains blocked by its durable safety guard"
+                        );
+                    }
+                }
+            }
+        }
+        let _ = self.aggregate_active_lane_drain_certificate(&validator_set);
+        self.subsystems.lane_drain_votes.certificate.clone()
     }
 
     fn post_certified_merge_sidecar(&self, post: MergeSidecarPost) {
@@ -27350,12 +28075,12 @@ impl Actor {
     ) {
         let now = Instant::now();
         let local_peer = self.common_config.peer.id().clone();
-        if let Err(error) = self.subsystems.merge.sidecars.admit_server_request(
-            &sender,
-            &request,
-            &local_peer,
-            now,
-        ) {
+        if let Err(error) =
+            self.subsystems
+                .merge
+                .sidecars
+                .admit_server_request(&sender, &request, &local_peer, now)
+        {
             debug!(%sender, ?error, "dropping certified merge-sidecar request");
             return;
         }
@@ -27395,19 +28120,16 @@ impl Actor {
             );
             return;
         }
-        if let Err(error) = self.subsystems.merge.sidecars.enqueue_response(
-            request,
-            entry.canonical_bytes(),
-            now,
-        ) {
+        if let Err(error) =
+            self.subsystems
+                .merge
+                .sidecars
+                .enqueue_response(request, entry.canonical_bytes(), now)
+        {
             debug!(%sender, ?error, "certified merge-sidecar response budget rejected request");
             return;
         }
-        let posts = self
-            .subsystems
-            .merge
-            .sidecars
-            .drain_outbound_chunks(8, now);
+        let posts = self.subsystems.merge.sidecars.drain_outbound_chunks(8, now);
         for post in posts {
             self.post_certified_merge_sidecar(post);
         }
@@ -27432,7 +28154,7 @@ impl Actor {
                 return;
             }
         };
-        let ChunkIngestOutcome::Complete(completed) = outcome else {
+        let MergeSidecarChunkIngestOutcome::Complete(completed) = outcome else {
             return;
         };
         let entry = match decode_certified_merge_sidecar(&completed.reference, &completed.bytes) {
@@ -27452,11 +28174,7 @@ impl Actor {
             .state
             .validate_certified_merge_entry_for_global_order(&entry)
         {
-            let deferred = self
-                .subsystems
-                .merge
-                .sidecars
-                .discard_invalid(entry_hash);
+            let deferred = self.subsystems.merge.sidecars.discard_invalid(entry_hash);
             warn!(
                 %sender,
                 %entry_hash,
@@ -27470,12 +28188,11 @@ impl Actor {
         match self.kura.persist_pending_certified_merge_entry(&entry) {
             Ok(persisted_hash) if persisted_hash == entry_hash => {
                 let requester = self.common_config.peer.id().clone();
-                let (deferred, _) = self.subsystems.merge.sidecars.finish_completed(
-                    entry_hash,
-                    true,
-                    &requester,
-                    now,
-                );
+                let (deferred, _) = self
+                    .subsystems
+                    .merge
+                    .sidecars
+                    .finish_completed(entry_hash, true, &requester, now);
                 info!(
                     %sender,
                     %entry_hash,
@@ -27490,11 +28207,7 @@ impl Actor {
                     actual = %other_hash,
                     "Kura returned a different hash for a validated certified merge sidecar"
                 );
-                let deferred = self
-                    .subsystems
-                    .merge
-                    .sidecars
-                    .discard_invalid(entry_hash);
+                let deferred = self.subsystems.merge.sidecars.discard_invalid(entry_hash);
                 self.reject_invalid_certified_merge_sidecar_blocks(
                     deferred,
                     "Kura persisted a conflicting certified merge sidecar hash".to_owned(),
@@ -27517,12 +28230,11 @@ impl Actor {
         now: Instant,
     ) {
         let requester = self.common_config.peer.id().clone();
-        let (_, retry) = self.subsystems.merge.sidecars.finish_completed(
-            entry_hash,
-            false,
-            &requester,
-            now,
-        );
+        let (_, retry) = self
+            .subsystems
+            .merge
+            .sidecars
+            .finish_completed(entry_hash, false, &requester, now);
         if let Some(post) = retry {
             self.post_certified_merge_sidecar(post);
         }
@@ -27562,11 +28274,7 @@ impl Actor {
             .merge
             .sidecars
             .retain_pending_blocks(&pending_blocks, committed_height);
-        let posts = self
-            .subsystems
-            .merge
-            .sidecars
-            .tick(&requester, now);
+        let posts = self.subsystems.merge.sidecars.tick(&requester, now);
         let mut progress = !posts.is_empty();
         for post in posts {
             self.post_certified_merge_sidecar(post);
@@ -27697,8 +28405,7 @@ impl Actor {
             &leader,
             round,
             validator_set_hash,
-        )
-            || candidate.epoch_id != round.epoch_id
+        ) || candidate.epoch_id != round.epoch_id
             || candidate.view != round.view
             || candidate.carrier_height != round.height
             || candidate.carrier_parent_hash != round.parent_hash
@@ -27728,9 +28435,7 @@ impl Actor {
             round.view,
         ) {
             self.on_merge_candidate_leader_equivocation(round, leader);
-            return Err(eyre!(
-                "leader merge candidate validation failed: {error}"
-            ));
+            return Err(eyre!("leader merge candidate validation failed: {error}"));
         }
 
         let signing_context = MergeSigningContextV1 {
@@ -27761,27 +28466,24 @@ impl Actor {
 
         let now = Instant::now();
         self.subsystems.merge.committee.retain_round(round);
-        self.subsystems
-            .merge
-            .committee
-            .mark_preparation(round, now);
+        self.subsystems.merge.committee.mark_preparation(round, now);
         let key = MergeCommitteeKey {
             epoch_id: candidate.epoch_id,
             view: candidate.view,
             message_digest: expected_digest,
         };
-        let conflicting = self
-            .subsystems
-            .merge
-            .committee
-            .pending
-            .iter()
-            .any(|(pending_key, entry)| {
-                pending_key.epoch_id == round.epoch_id
-                    && pending_key.view == round.view
-                    && pending_key.message_digest != expected_digest
-                    && entry.candidate.is_some()
-            });
+        let conflicting =
+            self.subsystems
+                .merge
+                .committee
+                .pending
+                .iter()
+                .any(|(pending_key, entry)| {
+                    pending_key.epoch_id == round.epoch_id
+                        && pending_key.view == round.view
+                        && pending_key.message_digest != expected_digest
+                        && entry.candidate.is_some()
+                });
         if conflicting {
             self.on_merge_candidate_leader_equivocation(round, leader);
             return Err(eyre!(
@@ -27866,10 +28568,7 @@ impl Actor {
             Ok(post) => {
                 let now = Instant::now();
                 self.subsystems.merge.committee.retain_round(round);
-                self.subsystems
-                    .merge
-                    .committee
-                    .mark_preparation(round, now);
+                self.subsystems.merge.committee.mark_preparation(round, now);
                 if let Some(post) = post {
                     self.post_merge_candidate(post);
                 }
@@ -27882,8 +28581,10 @@ impl Actor {
                     view = round.view,
                     "dropping invalid round-leader merge candidate announcement"
                 );
-                if matches!(error, crate::merge_sidecar::MergeSidecarError::CandidateEquivocation)
-                {
+                if matches!(
+                    error,
+                    crate::merge_sidecar::MergeSidecarError::CandidateEquivocation
+                ) {
                     self.on_merge_candidate_leader_equivocation(round, sender);
                 }
             }
@@ -28305,13 +29006,33 @@ impl Actor {
             return None;
         }
         {
-            let world = self.state.world_view();
-            let valid_pop = crate::state::live_consensus_key_pop_for_peer(
-                &world,
-                &local_peer,
-                body.authority_context_height,
-            )
-            .is_some_and(|pop| {
+            let Some(pinned) = pinned_autoscale_validator_pops_for_set(
+                &self.state,
+                body.participant_lane_id,
+                &participant_committee,
+            ) else {
+                iroha_logger::warn!(
+                    sender = ?sender,
+                    %local_peer,
+                    participant_lane = body.participant_lane_id.as_u32(),
+                    "dropping native AMX request because the autoscale committee pin is missing or mismatched"
+                );
+                return None;
+            };
+            let pop = if let Some(pops) = pinned {
+                participant_committee
+                    .iter()
+                    .position(|peer| peer == &local_peer)
+                    .and_then(|index| pops.get(index).cloned())
+            } else {
+                let world = self.state.world_view();
+                crate::state::live_consensus_key_pop_for_peer(
+                    &world,
+                    &local_peer,
+                    body.authority_context_height,
+                )
+            };
+            let valid_pop = pop.is_some_and(|pop| {
                 pop.len() == crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
                     && iroha_crypto::bls_normal_pop_verify(local_peer.public_key(), &pop).is_ok()
             });
@@ -28320,7 +29041,7 @@ impl Actor {
                     sender = ?sender,
                     %local_peer,
                     height = body.authority_context_height,
-                    "dropping native AMX request because local consensus key has no live PoP"
+                    "dropping native AMX request because local consensus key has no authoritative PoP"
                 );
                 return None;
             }
@@ -28455,16 +29176,36 @@ impl Actor {
             return;
         }
         {
-            let world = self.state.world_view();
-            let Some(pop) = crate::state::live_consensus_key_pop_for_peer(
-                &world,
-                &vote.signer,
-                vote.body.authority_context_height,
+            let Some(pinned) = pinned_autoscale_validator_pops_for_set(
+                &self.state,
+                body.participant_lane_id,
+                &participant_committee,
             ) else {
                 iroha_logger::warn!(
                     signer = %vote.signer,
+                    participant_lane = body.participant_lane_id.as_u32(),
+                    "dropping native AMX vote because the autoscale committee pin is missing or mismatched"
+                );
+                return;
+            };
+            let pop = if let Some(pops) = pinned {
+                participant_committee
+                    .iter()
+                    .position(|peer| peer == &vote.signer)
+                    .and_then(|index| pops.get(index).cloned())
+            } else {
+                let world = self.state.world_view();
+                crate::state::live_consensus_key_pop_for_peer(
+                    &world,
+                    &vote.signer,
+                    vote.body.authority_context_height,
+                )
+            };
+            let Some(pop) = pop else {
+                iroha_logger::warn!(
+                    signer = %vote.signer,
                     height = vote.body.authority_context_height,
-                    "dropping native AMX vote because signer has no live PoP"
+                    "dropping native AMX vote because signer has no authoritative PoP"
                 );
                 return;
             };
@@ -28742,12 +29483,7 @@ impl Actor {
         }
 
         let pending_cap = self.config.recovery.pending_proposal_cap.max(1);
-        if !self
-            .subsystems
-            .merge
-            .committee
-            .pending
-            .contains_key(&key)
+        if !self.subsystems.merge.committee.pending.contains_key(&key)
             && self.subsystems.merge.committee.pending.len() >= pending_cap
         {
             iroha_logger::warn!(
@@ -29008,15 +29744,21 @@ impl Actor {
     }
 
     fn handle_merge_entry_candidates(&mut self, force_execution_refresh: bool) -> Result<bool> {
-        let commit_topology = self.state.commit_topology.view();
+        let drain_certificate = self.drive_lane_drain_certificate();
+        let commit_topology = self
+            .state
+            .commit_topology
+            .view()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         if commit_topology.is_empty() {
             return Ok(false);
         }
 
-        let validator_set: Vec<_> = commit_topology.iter().cloned().collect();
+        let validator_set = commit_topology.clone();
         let validator_set_hash = HashOf::new(&validator_set);
-        let Some((round, parent_header)) =
-            self.current_merge_execution_round(validator_set_hash)
+        let Some((round, parent_header)) = self.current_merge_execution_round(validator_set_hash)
         else {
             return Ok(false);
         };
@@ -29035,21 +29777,13 @@ impl Actor {
         self.subsystems.merge.committee.retain_round(round);
         self.subsystems.merge.committee.prune(now);
         let pending_execution_backlog = self.state.has_pending_merge_execution_sources();
-        let pending_relay_backlog = self
-            .subsystems
-            .merge
-            .committee
-            .preparation
-            .is_none()
+        let pending_relay_backlog = self.subsystems.merge.committee.preparation.is_none()
             && !self
                 .state
                 .merge_entry_candidates_from_lane_relays_for_view(round.view)
                 .is_empty();
         if force_execution_refresh || pending_execution_backlog || pending_relay_backlog {
-            self.subsystems
-                .merge
-                .committee
-                .mark_preparation(round, now);
+            self.subsystems.merge.committee.mark_preparation(round, now);
         }
 
         let mut leader_topology = super::network_topology::Topology::new(validator_set.clone());
@@ -29058,16 +29792,43 @@ impl Actor {
         let local_is_merge_leader = merge_leader
             .as_ref()
             .is_some_and(|leader| leader == self.common_config.peer.id());
-        let (execution_candidate, execution_reserved) = if local_is_merge_leader {
-            self.merge_execution_candidate_for_round(
-                round,
-                &parent_header,
-                force_execution_refresh,
-            )
+        let existing_reserved_attempt = self
+            .subsystems
+            .merge
+            .committee
+            .execution_attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.round == round && attempt.reserved);
+        let drain_candidate = if local_is_merge_leader && !existing_reserved_attempt {
+            drain_certificate.and_then(|certificate| {
+                match self.state.merge_drain_candidate_for_next_carrier(
+                    &parent_header,
+                    round.view,
+                    certificate,
+                ) {
+                    Ok(candidate) => Some(candidate),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            epoch = round.epoch_id,
+                            view = round.view,
+                            "dropping lane-drain certificate that is no longer eligible for this carrier"
+                        );
+                        None
+                    }
+                }
+            })
+        } else {
+            None
+        };
+        let (execution_candidate, execution_reserved) = if local_is_merge_leader
+            && drain_candidate.is_none()
+        {
+            self.merge_execution_candidate_for_round(round, &parent_header, force_execution_refresh)
         } else {
             (None, false)
         };
-        let relay_candidates = if local_is_merge_leader {
+        let relay_candidates = if local_is_merge_leader && drain_candidate.is_none() {
             self.state
                 .merge_entry_candidates_from_lane_relays_for_view(round.view)
                 .into_iter()
@@ -29076,11 +29837,8 @@ impl Actor {
         } else {
             Vec::new()
         };
-        if execution_reserved || !relay_candidates.is_empty() {
-            self.subsystems
-                .merge
-                .committee
-                .mark_preparation(round, now);
+        if drain_candidate.is_some() || execution_reserved || !relay_candidates.is_empty() {
+            self.subsystems.merge.committee.mark_preparation(round, now);
         }
         let signing_context = MergeSigningContextV1 {
             epoch_id: round.epoch_id,
@@ -29110,9 +29868,10 @@ impl Actor {
                     && candidate.carrier_parent_hash == round.parent_hash
             })
             .collect::<Vec<_>>();
-        let mut available_candidates = execution_candidate
+        let mut available_candidates = drain_candidate
             .clone()
             .into_iter()
+            .chain(execution_candidate.clone())
             .chain(relay_candidates.iter().cloned())
             .chain(installed_candidates.iter().cloned())
             .filter(|candidate| {
@@ -29144,6 +29903,8 @@ impl Actor {
                 })
                 .into_iter()
                 .collect::<Vec<_>>()
+        } else if let Some(drain_candidate) = drain_candidate {
+            vec![drain_candidate]
         } else if execution_reserved {
             execution_candidate.into_iter().collect()
         } else if !local_is_merge_leader {
@@ -29209,10 +29970,7 @@ impl Actor {
                     timestamp_ms_now(),
                 )
             {
-                self.subsystems
-                    .merge
-                    .committee
-                    .mark_preparation(round, now);
+                self.subsystems.merge.committee.mark_preparation(round, now);
                 continue;
             }
 
@@ -29232,17 +29990,8 @@ impl Actor {
                 );
                 continue;
             }
-            if !self
-                .subsystems
-                .merge
-                .committee
-                .pending
-                .contains_key(&key)
-            {
-                self.subsystems
-                    .merge
-                    .committee
-                    .ensure_pending_capacity(now);
+            if !self.subsystems.merge.committee.pending.contains_key(&key) {
+                self.subsystems.merge.committee.ensure_pending_capacity(now);
             }
             let existing_local_signature = local_index.and_then(|signer| {
                 let entry = self.subsystems.merge.committee.pending.get(&key)?;
@@ -29279,12 +30028,11 @@ impl Actor {
                     });
                 if advert_due {
                     self.broadcast_guarded_merge_candidate(&candidate, round, message_digest)?;
-                    self.subsystems.merge.committee.leader_advert =
-                        Some(MergeLeaderAdvertState {
-                            round,
-                            message_digest,
-                            last_broadcast_at: now,
-                        });
+                    self.subsystems.merge.committee.leader_advert = Some(MergeLeaderAdvertState {
+                        round,
+                        message_digest,
+                        last_broadcast_at: now,
+                    });
                     progress = true;
                 }
             }
@@ -29293,25 +30041,24 @@ impl Actor {
                 .get()
                 .rebroadcast_cooldown
                 .max(Duration::from_millis(1));
-            let local_signature = if let Some((signer, bls_sig, last_broadcast)) =
-                existing_local_signature
-            {
-                last_broadcast
-                    .is_none_or(|last| {
-                        now.saturating_duration_since(last) >= signature_rebroadcast_cooldown
-                    })
-                    .then_some(MergeCommitteeSignature {
-                        epoch_id: candidate.epoch_id,
-                        view,
-                        signer,
-                        message_digest,
-                        bls_sig,
-                    })
-            } else if let Some(signer) = local_index {
-                self.build_merge_signature(signer, view, &candidate, message_digest)
-            } else {
-                None
-            };
+            let local_signature =
+                if let Some((signer, bls_sig, last_broadcast)) = existing_local_signature {
+                    last_broadcast
+                        .is_none_or(|last| {
+                            now.saturating_duration_since(last) >= signature_rebroadcast_cooldown
+                        })
+                        .then_some(MergeCommitteeSignature {
+                            epoch_id: candidate.epoch_id,
+                            view,
+                            signer,
+                            message_digest,
+                            bls_sig,
+                        })
+                } else if let Some(signer) = local_index {
+                    self.build_merge_signature(signer, view, &candidate, message_digest)
+                } else {
+                    None
+                };
 
             let mut broadcast_signature: Option<MergeCommitteeSignature> = None;
             {

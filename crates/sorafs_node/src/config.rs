@@ -15,6 +15,8 @@ pub struct StorageConfig {
     max_parallel_fetches: usize,
     max_pins: usize,
     por_sample_interval_secs: u64,
+    pdp_sample_window: u16,
+    pdp_tree_memory_limit_bytes: iroha_config::base::util::Bytes<u64>,
     runtime_retention: RuntimeRetentionPolicy,
     alias: Option<String>,
     adverts: AdvertOverrides,
@@ -71,6 +73,18 @@ impl StorageConfig {
     #[must_use]
     pub fn por_sample_interval_secs(&self) -> u64 {
         self.por_sample_interval_secs
+    }
+
+    /// Maximum PDP segments that one governed challenge may sample.
+    #[must_use]
+    pub fn pdp_sample_window(&self) -> u16 {
+        self.pdp_sample_window
+    }
+
+    /// Aggregate in-memory budget for canonical PDP tree indexes.
+    #[must_use]
+    pub fn pdp_tree_memory_limit_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
+        self.pdp_tree_memory_limit_bytes
     }
 
     /// Safety ceilings for auxiliary runtime state and replay histories.
@@ -185,6 +199,8 @@ impl StorageConfig {
             max_parallel_fetches: storage.max_parallel_fetches,
             max_pins: storage.max_pins,
             por_sample_interval_secs: storage.por_sample_interval_secs,
+            pdp_sample_window: storage.pdp_sample_window,
+            pdp_tree_memory_limit_bytes: storage.pdp_tree_memory_limit_bytes,
             runtime_retention: RuntimeRetentionPolicy::from(storage.runtime),
             alias: storage.alias.clone(),
             adverts: AdvertOverrides::from(&storage.adverts),
@@ -260,6 +276,23 @@ impl StorageConfigBuilder {
     #[must_use]
     pub fn por_sample_interval_secs(mut self, interval: u64) -> Self {
         self.inner.por_sample_interval_secs = interval;
+        self
+    }
+
+    /// Set the maximum number of PDP segment samples in one challenge.
+    #[must_use]
+    pub fn pdp_sample_window(mut self, sample_window: u16) -> Self {
+        self.inner.pdp_sample_window = sample_window;
+        self
+    }
+
+    /// Set the aggregate memory budget for canonical PDP tree indexes.
+    #[must_use]
+    pub fn pdp_tree_memory_limit_bytes(
+        mut self,
+        bytes: iroha_config::base::util::Bytes<u64>,
+    ) -> Self {
+        self.inner.pdp_tree_memory_limit_bytes = bytes;
         self
     }
 

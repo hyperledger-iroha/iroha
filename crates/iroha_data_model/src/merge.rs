@@ -24,6 +24,10 @@ use crate::{
 };
 
 const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v1\0";
+const LANE_DRAIN_INTENT_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-intent:v1\0";
+const LANE_DRAIN_CERTIFICATE_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-certificate:v1\0";
+const LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
+    b"iroha:nexus:lane-drain-certificate-signature:v1\0";
 
 /// Maximum canonical framed size of one full merge-ledger entry.
 ///
@@ -92,6 +96,185 @@ pub struct MergeSignerProof {
     pub signer: ValidatorIndex,
     /// BLS proof of possession for the indexed validator key.
     pub proof_of_possession: Vec<u8>,
+}
+
+/// Canonical first phase of an automatic lane retirement.
+///
+/// Committing an intent closes the named lane to new work after
+/// `close_global_height`. It does not authorize retirement. The authoritative
+/// lane committee must subsequently certify a final contiguous lane frontier,
+/// and that certificate must be carried and applied by the global merge ledger.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneDrainIntentV1 {
+    /// Schema version. Only version one is valid.
+    pub version: u8,
+    /// Domain-separated digest of the chain identifier.
+    pub chain_id_digest: Hash,
+    /// Lane being closed to new work.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane at the close boundary.
+    pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation being closed.
+    pub lane_incarnation: Hash,
+    /// Global height after which new lane work is inadmissible.
+    pub close_global_height: u64,
+    /// Last globally applied contiguous lane height when draining began.
+    pub initial_merged_lane_height: u64,
+    /// Descriptor hash at `initial_merged_lane_height`, or `None` for height zero.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub initial_merged_descriptor_hash: Option<Hash>,
+    /// Version of the canonical lane-committee hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Hash of the exact authoritative lane committee at the close boundary.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Exact authoritative lane committee at the close boundary.
+    ///
+    /// Persisting the order makes drain voting restart-safe even after the
+    /// global commit topology or stake election changes.
+    pub validator_set: Vec<PeerId>,
+    /// Number of validators in the authoritative lane committee.
+    pub validator_count: u32,
+    /// Minimum distinct signers required for a drain certificate.
+    pub min_quorum: u32,
+}
+
+impl LaneDrainIntentV1 {
+    /// Return the domain-separated canonical intent hash.
+    #[must_use]
+    pub fn canonical_hash(&self) -> HashOf<Self> {
+        let bytes = norito::to_bytes(self)
+            .expect("lane drain intent must have a canonical Norito encoding");
+        HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+            LANE_DRAIN_INTENT_HASH_DOMAIN,
+            bytes.as_slice(),
+        ]))
+    }
+}
+
+/// Lane-committee statement that no certified successor exists beyond one
+/// final contiguous frontier for a committed drain intent.
+///
+/// Honest lane validators persist a close lock before signing this body and
+/// refuse both a frontier below any commit QC they have signed and every later
+/// lane-block commit for the closed incarnation. Quorum intersection therefore
+/// prevents a certificate from coexisting with a higher certified lane block.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneDrainCertificateBodyV1 {
+    /// Schema version. Only version one is valid.
+    pub version: u8,
+    /// Exact committed drain intent authorized by this certificate.
+    pub intent: LaneDrainIntentV1,
+    /// Final contiguous lane-local height certified by the committee.
+    pub final_lane_block_height: u64,
+    /// Descriptor hash at `final_lane_block_height`, or `None` for height zero.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub final_lane_block_descriptor_hash: Option<Hash>,
+}
+
+impl LaneDrainCertificateBodyV1 {
+    /// Build the domain-separated BLS signature preimage.
+    #[must_use]
+    pub fn signature_preimage(&self) -> Vec<u8> {
+        let encoded = norito::to_bytes(self)
+            .expect("lane drain certificate body must have a canonical Norito encoding");
+        let mut preimage =
+            Vec::with_capacity(LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN.len() + encoded.len());
+        preimage.extend_from_slice(LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN);
+        preimage.extend_from_slice(&encoded);
+        preimage
+    }
+}
+
+/// Self-contained quorum certificate closing one lane incarnation at an exact
+/// globally applied frontier.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneDrainCertificateV1 {
+    /// Body signed by the authoritative lane committee.
+    pub body: LaneDrainCertificateBodyV1,
+    /// Exact historical validator set indexed by `signers_bitmap`.
+    pub validator_set: Vec<PeerId>,
+    /// Bitmap encoding of participating validators (LSB-first).
+    pub signers_bitmap: Vec<u8>,
+    /// Canonical PoPs for the selected signer indices, in bitmap order.
+    pub signer_proofs: Vec<MergeSignerProof>,
+    /// Aggregate BLS-normal signature over [`LaneDrainCertificateBodyV1::signature_preimage`].
+    pub aggregate_signature: Vec<u8>,
+}
+
+impl LaneDrainCertificateV1 {
+    /// Return the domain-separated canonical certificate hash.
+    #[must_use]
+    pub fn canonical_hash(&self) -> HashOf<Self> {
+        let bytes = norito::to_bytes(self)
+            .expect("lane drain certificate must have a canonical Norito encoding");
+        HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
+            LANE_DRAIN_CERTIFICATE_HASH_DOMAIN,
+            bytes.as_slice(),
+        ]))
+    }
+}
+
+/// Globally carried proof that an exact lane drain certificate was accepted at
+/// a specific canonical carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneDrainCommitmentV1 {
+    /// Exact certificate accepted by the merge committee.
+    pub certificate_hash: HashOf<LaneDrainCertificateV1>,
+    /// Full merge entry that globally ordered the certificate.
+    pub merge_entry_hash: HashOf<MergeLedgerEntry>,
+    /// Canonical global block height that carried the merge entry.
+    pub carrier_height: u64,
+    /// Final contiguous lane-local height certified by the lane committee.
+    pub final_lane_block_height: u64,
+    /// Descriptor hash at `final_lane_block_height`, or `None` for height zero.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub final_lane_block_descriptor_hash: Option<Hash>,
+}
+
+/// Consensus-persisted two-phase drain state embedded in an autoscale-managed
+/// lane's reserved metadata.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneDrainStateV1 {
+    /// Schema version. Only version one is valid.
+    pub version: u8,
+    /// Canonical close intent that made the lane reject new work.
+    pub intent: LaneDrainIntentV1,
+    /// Globally carried certificate commitment once the lane is fully drained.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub commitment: Option<LaneDrainCommitmentV1>,
+}
+
+impl LaneDrainStateV1 {
+    /// Return `true` once the exact lane committee certificate has been
+    /// globally ordered by a later merge carrier.
+    #[must_use]
+    pub const fn is_certified(&self) -> bool {
+        self.commitment.is_some()
+    }
 }
 
 /// Canonical active lane incarnation and first eligible proposal height.
@@ -374,6 +557,13 @@ pub struct MergeLedgerEntry {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub execution_batch: Option<MergeExecutionBatch>,
+    /// Lane-committee drain certificates globally ordered by this entry.
+    ///
+    /// This trailing field lets a quiet network make retirement progress
+    /// without inventing an executable lane payload. Runtime admission limits
+    /// an entry to the single highest autoscale retirement candidate.
+    #[norito(default)]
+    pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
 }
 
 impl MergeLedgerEntry {
@@ -433,6 +623,8 @@ impl MergeLedgerEntry {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
@@ -449,12 +641,188 @@ mod tests {
         merge_qc: MergeQuorumCertificate,
     }
 
+    #[derive(Encode)]
+    struct PreviousMergeLedgerEntry {
+        epoch_id: u64,
+        lane_catalog_hash: Hash,
+        active_lanes: Vec<MergeLaneBinding>,
+        incarnation_root: Hash,
+        activation_root: Hash,
+        lane_snapshots: Vec<MergeLaneSnapshot>,
+        global_state_root: Hash,
+        merge_qc: MergeQuorumCertificate,
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        execution_batch: Option<MergeExecutionBatch>,
+    }
+
     fn sample_tip(label: &[u8]) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new(label))
     }
 
     fn sample_hash(label: &[u8]) -> Hash {
         Hash::new(label)
+    }
+
+    fn sample_lane_drain_intent() -> LaneDrainIntentV1 {
+        let validator_set = vec![PeerId::new(
+            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                .expect("BLS drain fixture keypair")
+                .public_key()
+                .clone(),
+        )];
+        LaneDrainIntentV1 {
+            version: 1,
+            chain_id_digest: sample_hash(b"drain-chain"),
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: sample_hash(b"drain-incarnation"),
+            close_global_height: 42,
+            initial_merged_lane_height: 9,
+            initial_merged_descriptor_hash: Some(sample_hash(b"initial-drain-tip")),
+            validator_set_hash_version: 1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            validator_count: 1,
+            min_quorum: 1,
+        }
+    }
+
+    fn sample_lane_drain_certificate() -> LaneDrainCertificateV1 {
+        let intent = sample_lane_drain_intent();
+        let validator_set = intent.validator_set.clone();
+        LaneDrainCertificateV1 {
+            body: LaneDrainCertificateBodyV1 {
+                version: 1,
+                intent,
+                final_lane_block_height: 12,
+                final_lane_block_descriptor_hash: Some(sample_hash(b"final-drain-tip")),
+            },
+            validator_set,
+            signers_bitmap: Vec::new(),
+            signer_proofs: Vec::new(),
+            aggregate_signature: vec![0xA5; 96],
+        }
+    }
+
+    fn sample_lane_drain_commitment() -> LaneDrainCommitmentV1 {
+        LaneDrainCommitmentV1 {
+            certificate_hash: sample_lane_drain_certificate().canonical_hash(),
+            merge_entry_hash: HashOf::from_untyped_unchecked(sample_hash(
+                b"drain-carrier-merge-entry",
+            )),
+            carrier_height: 57,
+            final_lane_block_height: 12,
+            final_lane_block_descriptor_hash: Some(sample_hash(b"final-drain-tip")),
+        }
+    }
+
+    fn sample_execution_batch() -> MergeExecutionBatch {
+        let base_state_hash =
+            HashOf::from_untyped_unchecked(sample_hash(b"legacy-batch-base-state"));
+        MergeExecutionBatch {
+            version: 1,
+            base_state_height: 1,
+            base_state_hash,
+            application_block_header: BlockHeader::new(
+                NonZeroU64::new(2).expect("non-zero block height"),
+                Some(base_state_hash),
+                None,
+                None,
+                7,
+                0,
+            ),
+            lanes: Vec::new(),
+            entrypoint_count: 0,
+            entrypoint_merkle_root: HashOf::from_untyped_unchecked(sample_hash(
+                b"legacy-batch-entrypoint-root",
+            )),
+            result_merkle_root: HashOf::from_untyped_unchecked(sample_hash(
+                b"legacy-batch-result-root",
+            )),
+            execution_root: sample_hash(b"legacy-batch-execution-root"),
+            application_write_set_root: sample_hash(b"legacy-batch-application-write-set"),
+            write_set_root: sample_hash(b"legacy-batch-write-set"),
+            expected_post_state_hash: HashOf::from_untyped_unchecked(sample_hash(
+                b"legacy-batch-post-state",
+            )),
+            batch_hash: sample_hash(b"legacy-batch-hash"),
+        }
+    }
+
+    fn assert_commitment_canonical_wire_changes(
+        baseline: &LaneDrainCommitmentV1,
+        changed: &LaneDrainCommitmentV1,
+        field: &str,
+    ) {
+        let baseline_bytes =
+            norito::to_bytes(baseline).expect("drain commitment has canonical bytes");
+        let changed_bytes =
+            norito::to_bytes(changed).expect("changed drain commitment has canonical bytes");
+        assert_ne!(
+            baseline_bytes, changed_bytes,
+            "{field} must bind canonical bytes"
+        );
+        assert_ne!(
+            Hash::new(baseline_bytes.as_slice()),
+            Hash::new(changed_bytes.as_slice()),
+            "{field} must bind the hash-relevant canonical representation"
+        );
+    }
+
+    fn assert_state_canonical_wire_changes(
+        baseline: &LaneDrainStateV1,
+        changed: &LaneDrainStateV1,
+        field: &str,
+    ) {
+        let baseline_bytes = norito::to_bytes(baseline).expect("drain state has canonical bytes");
+        let changed_bytes =
+            norito::to_bytes(changed).expect("changed drain state has canonical bytes");
+        assert_ne!(
+            baseline_bytes, changed_bytes,
+            "{field} must bind canonical bytes"
+        );
+        assert_ne!(
+            Hash::new(baseline_bytes.as_slice()),
+            Hash::new(changed_bytes.as_slice()),
+            "{field} must bind the hash-relevant canonical representation"
+        );
+    }
+
+    fn assert_canonical_decoder_rejects_invalid_wire<T>(encoded: &[u8], fixture: &str)
+    where
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        for prefix_len in 0..encoded.len() {
+            assert!(
+                norito::decode_from_bytes::<T>(&encoded[..prefix_len]).is_err(),
+                "{fixture} truncated at byte {prefix_len} must be rejected"
+            );
+        }
+
+        let mut trailing = encoded.to_vec();
+        trailing.push(0xA5);
+        assert!(
+            norito::decode_from_bytes::<T>(&trailing).is_err(),
+            "{fixture} with trailing data must be rejected"
+        );
+
+        let mut malformed_header = encoded.to_vec();
+        malformed_header[0] ^= 0xFF;
+        assert!(
+            norito::decode_from_bytes::<T>(&malformed_header).is_err(),
+            "{fixture} with malformed Norito magic must be rejected"
+        );
+
+        let mut malformed_payload = encoded.to_vec();
+        let payload_byte = malformed_payload
+            .last_mut()
+            .expect("canonical encoding is non-empty");
+        *payload_byte ^= 0xFF;
+        assert!(
+            norito::decode_from_bytes::<T>(&malformed_payload).is_err(),
+            "{fixture} with a checksum-invalid payload must be rejected"
+        );
     }
 
     fn sample_settlement(
@@ -552,6 +920,7 @@ mod tests {
                 sample_hash(b"max-overhead-message"),
             ),
             execution_batch: None,
+            lane_drain_certificates: Vec::new(),
         };
         let envelope_overhead = entry.canonical_bytes().len();
         assert!(
@@ -646,6 +1015,7 @@ mod tests {
                 },
             ],
             execution_batch: None,
+            lane_drain_certificates: vec![sample_lane_drain_certificate()],
             global_state_root: sample_hash(b"global"),
             merge_qc: qc.clone(),
         };
@@ -673,9 +1043,266 @@ mod tests {
         let mut legacy_slice = legacy_encoded.as_slice();
         let decoded_legacy = MergeLedgerEntry::decode(&mut legacy_slice)
             .expect("legacy merge entry must decode with a missing trailing batch");
+        assert!(legacy_slice.is_empty());
         assert_eq!(decoded_legacy.execution_batch, None);
+        assert!(decoded_legacy.lane_drain_certificates.is_empty());
         assert_eq!(decoded_legacy.epoch_id, entry.epoch_id);
         assert_eq!(decoded_legacy.merge_qc, entry.merge_qc);
+
+        let previous_batch = sample_execution_batch();
+        let previous = PreviousMergeLedgerEntry {
+            epoch_id: entry.epoch_id,
+            lane_catalog_hash: entry.lane_catalog_hash,
+            active_lanes: entry.active_lanes.clone(),
+            incarnation_root: entry.incarnation_root,
+            activation_root: entry.activation_root,
+            lane_snapshots: entry.lane_snapshots.clone(),
+            global_state_root: entry.global_state_root,
+            merge_qc: entry.merge_qc.clone(),
+            execution_batch: Some(previous_batch.clone()),
+        };
+        let previous_encoded = previous.encode();
+        let mut previous_slice = previous_encoded.as_slice();
+        let decoded_previous = MergeLedgerEntry::decode(&mut previous_slice)
+            .expect("pre-drain merge entry must default its missing trailing certificates");
+        assert!(previous_slice.is_empty());
+        assert_eq!(decoded_previous.execution_batch, Some(previous_batch));
+        assert!(decoded_previous.lane_drain_certificates.is_empty());
+        assert_eq!(decoded_previous.epoch_id, entry.epoch_id);
+        assert_eq!(decoded_previous.merge_qc, entry.merge_qc);
+    }
+
+    #[test]
+    fn lane_drain_intent_and_certificate_hash_every_consensus_field() {
+        let intent = sample_lane_drain_intent();
+        let intent_hash = intent.canonical_hash();
+        let encoded = intent.encode();
+        let decoded = LaneDrainIntentV1::decode(&mut encoded.as_slice())
+            .expect("lane drain intent round-trips");
+        assert_eq!(decoded, intent);
+
+        macro_rules! assert_intent_field_bound {
+            ($mutation:expr, $field:literal) => {{
+                let mut changed = intent.clone();
+                ($mutation)(&mut changed);
+                assert_ne!(
+                    changed.canonical_hash(),
+                    intent_hash,
+                    concat!("intent hash must bind ", $field)
+                );
+            }};
+        }
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.version += 1,
+            "version"
+        );
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.chain_id_digest = sample_hash(b"other-chain"),
+            "chain_id_digest"
+        );
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.lane_id = LaneId::new(8),
+            "lane_id"
+        );
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.dataspace_id = DataSpaceId::new(12),
+            "dataspace_id"
+        );
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.lane_incarnation =
+                sample_hash(b"other-incarnation"),
+            "lane_incarnation"
+        );
+        let mut changed = intent.clone();
+        changed.close_global_height = changed.close_global_height.saturating_add(1);
+        assert_ne!(changed.canonical_hash(), intent_hash);
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.initial_merged_lane_height += 1,
+            "initial_merged_lane_height"
+        );
+        changed = intent.clone();
+        changed.initial_merged_descriptor_hash = Some(sample_hash(b"different-initial-tip"));
+        assert_ne!(changed.canonical_hash(), intent_hash);
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.validator_set_hash_version += 1,
+            "validator_set_hash_version"
+        );
+        changed = intent.clone();
+        changed.validator_set_hash = HashOf::new(&Vec::<PeerId>::new());
+        assert_ne!(changed.canonical_hash(), intent_hash);
+        changed = intent.clone();
+        changed.validator_set = vec![PeerId::new(
+            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                .expect("alternate BLS drain fixture keypair")
+                .public_key()
+                .clone(),
+        )];
+        assert_ne!(changed.canonical_hash(), intent_hash);
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.validator_count += 1,
+            "validator_count"
+        );
+        assert_intent_field_bound!(
+            |changed: &mut LaneDrainIntentV1| changed.min_quorum += 1,
+            "min_quorum"
+        );
+
+        let certificate = sample_lane_drain_certificate();
+        let certificate_hash = certificate.canonical_hash();
+        let signature_preimage = certificate.body.signature_preimage();
+        let encoded = certificate.encode();
+        let decoded = LaneDrainCertificateV1::decode(&mut encoded.as_slice())
+            .expect("lane drain certificate round-trips");
+        assert_eq!(decoded, certificate);
+
+        let mut changed = certificate.clone();
+        changed.body.final_lane_block_height =
+            changed.body.final_lane_block_height.saturating_add(1);
+        assert_ne!(changed.body.signature_preimage(), signature_preimage);
+        assert_ne!(changed.canonical_hash(), certificate_hash);
+        changed = certificate.clone();
+        changed.body.intent.lane_incarnation = sample_hash(b"different-drain-incarnation");
+        assert_ne!(changed.body.signature_preimage(), signature_preimage);
+        assert_ne!(changed.canonical_hash(), certificate_hash);
+        changed = certificate.clone();
+        changed.aggregate_signature[0] ^= 0xFF;
+        assert_ne!(changed.canonical_hash(), certificate_hash);
+    }
+
+    #[test]
+    fn lane_drain_commitment_canonical_wire_roundtrip_and_field_binding() {
+        let commitment = sample_lane_drain_commitment();
+        let canonical =
+            norito::to_bytes(&commitment).expect("drain commitment has canonical bytes");
+        let decoded: LaneDrainCommitmentV1 = norito::decode_from_bytes(&canonical)
+            .expect("canonical drain commitment must round-trip");
+        assert_eq!(decoded, commitment);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("decoded drain commitment re-encodes"),
+            canonical,
+            "decode/re-encode must preserve the exact canonical representation"
+        );
+        assert_canonical_decoder_rejects_invalid_wire::<LaneDrainCommitmentV1>(
+            &canonical,
+            "drain commitment",
+        );
+
+        let mut changed = commitment;
+        changed.certificate_hash =
+            HashOf::from_untyped_unchecked(sample_hash(b"different-drain-certificate"));
+        assert_commitment_canonical_wire_changes(&commitment, &changed, "certificate_hash");
+
+        changed = commitment;
+        changed.merge_entry_hash =
+            HashOf::from_untyped_unchecked(sample_hash(b"different-merge-entry"));
+        assert_commitment_canonical_wire_changes(&commitment, &changed, "merge_entry_hash");
+
+        changed = commitment;
+        changed.carrier_height = changed.carrier_height.saturating_add(1);
+        assert_commitment_canonical_wire_changes(&commitment, &changed, "carrier_height");
+
+        changed = commitment;
+        changed.final_lane_block_height = changed.final_lane_block_height.saturating_add(1);
+        assert_commitment_canonical_wire_changes(&commitment, &changed, "final_lane_block_height");
+
+        changed = commitment;
+        changed.final_lane_block_descriptor_hash = Some(sample_hash(b"different-final-drain-tip"));
+        assert_commitment_canonical_wire_changes(
+            &commitment,
+            &changed,
+            "final_lane_block_descriptor_hash value",
+        );
+
+        changed = commitment;
+        changed.final_lane_block_descriptor_hash = None;
+        assert_commitment_canonical_wire_changes(
+            &commitment,
+            &changed,
+            "final_lane_block_descriptor_hash presence",
+        );
+    }
+
+    #[test]
+    fn lane_drain_state_canonical_wire_roundtrip_and_field_binding() {
+        let intent_only = LaneDrainStateV1 {
+            version: 1,
+            intent: sample_lane_drain_intent(),
+            commitment: None,
+        };
+        assert!(!intent_only.is_certified());
+        let intent_only_bytes =
+            norito::to_bytes(&intent_only).expect("intent-only drain state has canonical bytes");
+        let decoded_intent_only: LaneDrainStateV1 = norito::decode_from_bytes(&intent_only_bytes)
+            .expect("canonical intent-only drain state must round-trip");
+        assert_eq!(decoded_intent_only, intent_only);
+        assert_eq!(
+            norito::to_bytes(&decoded_intent_only).expect("intent-only state re-encodes"),
+            intent_only_bytes
+        );
+
+        let certified = LaneDrainStateV1 {
+            commitment: Some(sample_lane_drain_commitment()),
+            ..intent_only.clone()
+        };
+        assert!(certified.is_certified());
+        let certified_bytes =
+            norito::to_bytes(&certified).expect("certified drain state has canonical bytes");
+        let decoded_certified: LaneDrainStateV1 = norito::decode_from_bytes(&certified_bytes)
+            .expect("canonical certified drain state must round-trip");
+        assert_eq!(decoded_certified, certified);
+        assert_eq!(
+            norito::to_bytes(&decoded_certified).expect("certified state re-encodes"),
+            certified_bytes
+        );
+        assert_ne!(
+            intent_only_bytes, certified_bytes,
+            "commitment presence must bind the canonical state representation"
+        );
+
+        let mut changed = certified.clone();
+        changed.version = changed.version.saturating_add(1);
+        assert_state_canonical_wire_changes(&certified, &changed, "version");
+
+        changed = certified.clone();
+        changed.intent.chain_id_digest = sample_hash(b"different-state-intent");
+        assert_state_canonical_wire_changes(&certified, &changed, "intent");
+
+        changed = certified.clone();
+        changed.commitment = None;
+        assert_state_canonical_wire_changes(&certified, &changed, "commitment presence");
+
+        changed = certified.clone();
+        changed
+            .commitment
+            .as_mut()
+            .expect("certified state has a commitment")
+            .carrier_height += 1;
+        assert_state_canonical_wire_changes(&certified, &changed, "commitment value");
+    }
+
+    #[test]
+    fn lane_drain_state_canonical_decoder_rejects_invalid_wire() {
+        let intent = sample_lane_drain_intent();
+        let intent_only = norito::to_bytes(&LaneDrainStateV1 {
+            version: 1,
+            intent: intent.clone(),
+            commitment: None,
+        })
+        .expect("intent-only drain state has canonical bytes");
+        assert_canonical_decoder_rejects_invalid_wire::<LaneDrainStateV1>(
+            &intent_only,
+            "intent-only state",
+        );
+        let certified = norito::to_bytes(&LaneDrainStateV1 {
+            version: 1,
+            intent,
+            commitment: Some(sample_lane_drain_commitment()),
+        })
+        .expect("certified drain state has canonical bytes");
+        assert_canonical_decoder_rejects_invalid_wire::<LaneDrainStateV1>(
+            &certified,
+            "certified state",
+        );
     }
 
     #[test]

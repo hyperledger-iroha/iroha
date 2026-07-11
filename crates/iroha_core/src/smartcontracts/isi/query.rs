@@ -1,7 +1,12 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
 
-use std::{collections::BinaryHeap, num::NonZeroU64, sync::Weak};
+use std::{
+    collections::BinaryHeap,
+    num::NonZeroU64,
+    ops::ControlFlow,
+    sync::{Arc, Mutex, Weak},
+};
 
 use eyre::Result;
 use iroha_config::parameters::{
@@ -31,6 +36,9 @@ use crate::{
         },
     },
     smartcontracts::ValidQuery,
+    smartcontracts::isi::tx::{
+        TransactionHistoryAnchor, TransactionHistoryCursor, visit_committed_transactions,
+    },
     state::{State, StateReadOnly, WorldReadOnly},
 };
 
@@ -915,6 +923,693 @@ impl<T: SortableQueryOutput> Ord for EphemeralSortedEntry<T> {
 }
 
 const STREAMING_SORTED_PREFIX_LIMIT: usize = 4096;
+
+struct ScannedTransactionPage {
+    values: Vec<CommittedTransaction>,
+    remaining_items: Option<u64>,
+    has_more: bool,
+    processed_items: u64,
+    history_cursor: Option<TransactionHistoryCursor>,
+}
+
+struct TransactionReplayCheckpoint {
+    history_cursor: TransactionHistoryCursor,
+    remaining_items: Option<u64>,
+}
+
+fn transaction_fetch_size(params: &QueryParams, limits: QueryLimits) -> Result<NonZeroU64, Error> {
+    let fetch_size = params.fetch_size.fetch_size.unwrap_or(DEFAULT_FETCH_SIZE);
+    if fetch_size.get() > limits.max_fetch_size {
+        return Err(Error::FetchSizeTooBig);
+    }
+    Ok(fetch_size)
+}
+
+fn scan_unsorted_transaction_page(
+    state: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    returned_offset: u64,
+    anchor: TransactionHistoryAnchor,
+    history_cursor: Option<TransactionHistoryCursor>,
+    known_remaining_items: Option<u64>,
+    budget_items: Option<u64>,
+) -> Result<ScannedTransactionPage, Error> {
+    let fetch_size = transaction_fetch_size(params, limits)?;
+    let remaining_limit = params
+        .pagination
+        .limit_value()
+        .map(|limit| limit.get().saturating_sub(returned_offset));
+    if remaining_limit == Some(0) {
+        return Err(Error::CursorDone);
+    }
+
+    let exact = limits.count_mode == QueryCountMode::Exact;
+    if known_remaining_items.is_some() && !exact {
+        return Err(Error::Conversion(
+            "bounded transaction scan received an exact remaining count".to_owned(),
+        ));
+    }
+    let fetch_size = usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
+    let page_capacity = remaining_limit.map_or(fetch_size, |limit| {
+        usize::try_from(limit).unwrap_or(usize::MAX).min(fetch_size)
+    });
+    let page_capacity = known_remaining_items.map_or(page_capacity, |remaining| {
+        usize::try_from(remaining)
+            .unwrap_or(usize::MAX)
+            .min(page_capacity)
+    });
+    let source_offset = history_cursor
+        .is_none()
+        .then(|| params.pagination.offset_value())
+        .unwrap_or(0);
+    let scan_limit = remaining_limit;
+    let limit_allows_probe = remaining_limit
+        .is_none_or(|remaining| remaining > u64::try_from(page_capacity).unwrap_or(u64::MAX));
+    let exact_full_scan = exact && known_remaining_items.is_none();
+
+    let mut matched = 0_u64;
+    let mut processed_items = 0_u64;
+    let mut values = Vec::with_capacity(page_capacity.min(1024));
+    let mut has_more = false;
+    let mut next_history_cursor = None;
+    visit_committed_transactions(
+        state,
+        filter,
+        anchor,
+        history_cursor,
+        |projection_work| {
+            processed_items = processed_items.saturating_add(projection_work);
+            if budget_items.is_some_and(|budget| processed_items > budget) {
+                return Err(Error::GasBudgetExceeded);
+            }
+            Ok(())
+        },
+        |transaction, matches, cursor_after| {
+            if !matches {
+                return Ok(ControlFlow::Continue(()));
+            }
+
+            let position = matched;
+            matched = matched.saturating_add(1);
+
+            let Some(after_offset) = position.checked_sub(source_offset) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            if scan_limit.is_some_and(|limit| after_offset >= limit) {
+                // Exact mode continues to validate every selected carrier even after
+                // the requested pagination window is fully counted.
+                return Ok(if exact_full_scan {
+                    ControlFlow::Continue(())
+                } else {
+                    ControlFlow::Break(())
+                });
+            }
+
+            if values.len() < page_capacity {
+                values.push(transaction);
+                if values.len() == page_capacity {
+                    next_history_cursor = Some(cursor_after);
+                }
+                if values.len() == page_capacity
+                    && (known_remaining_items.is_some()
+                        || (!exact_full_scan && !limit_allows_probe))
+                {
+                    return Ok(ControlFlow::Break(()));
+                }
+                return Ok(ControlFlow::Continue(()));
+            }
+
+            if !exact_full_scan {
+                has_more = true;
+                return Ok(ControlFlow::Break(()));
+            }
+            Ok(ControlFlow::Continue(()))
+        },
+    )?;
+
+    if let Some(known_remaining_items) = known_remaining_items {
+        let returned = u64::try_from(values.len()).unwrap_or(u64::MAX);
+        let expected = known_remaining_items
+            .min(scan_limit.unwrap_or(u64::MAX))
+            .min(u64::try_from(fetch_size).unwrap_or(u64::MAX));
+        if returned != expected {
+            return Err(Error::Expired);
+        }
+        let remaining_items = known_remaining_items.saturating_sub(returned);
+        has_more = remaining_items > 0;
+        Ok(ScannedTransactionPage {
+            values,
+            remaining_items: Some(remaining_items),
+            has_more,
+            processed_items,
+            history_cursor: next_history_cursor,
+        })
+    } else if exact {
+        let total_after_pagination = matched
+            .saturating_sub(source_offset)
+            .min(scan_limit.unwrap_or(u64::MAX));
+        let returned = u64::try_from(values.len()).unwrap_or(u64::MAX);
+        let remaining_items = total_after_pagination.saturating_sub(returned);
+        has_more = remaining_items > 0;
+        Ok(ScannedTransactionPage {
+            values,
+            remaining_items: Some(remaining_items),
+            has_more,
+            processed_items,
+            history_cursor: next_history_cursor,
+        })
+    } else {
+        Ok(ScannedTransactionPage {
+            values,
+            remaining_items: None,
+            has_more,
+            processed_items,
+            history_cursor: next_history_cursor,
+        })
+    }
+}
+
+fn transaction_sorted_prefix_keep(
+    params: &QueryParams,
+    limits: QueryLimits,
+    returned_offset: u64,
+) -> Result<usize, Error> {
+    let fetch_size = transaction_fetch_size(params, limits)?;
+    let remaining_limit = params
+        .pagination
+        .limit_value()
+        .map(|limit| limit.get().saturating_sub(returned_offset));
+    if remaining_limit == Some(0) {
+        return Err(Error::CursorDone);
+    }
+    let take = remaining_limit.map_or(fetch_size.get(), |limit| limit.min(fetch_size.get()));
+    let keep = params
+        .pagination
+        .offset_value()
+        .saturating_add(returned_offset)
+        .saturating_add(take);
+    Ok(usize::try_from(keep).unwrap_or(usize::MAX))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_sorted_transaction_prefix(
+    state: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    key: &Name,
+    order: SortOrder,
+    keep: usize,
+    anchor: TransactionHistoryAnchor,
+    budget_items: Option<u64>,
+) -> Result<(Vec<CommittedTransaction>, u64, u64), Error> {
+    if keep > STREAMING_SORTED_PREFIX_LIMIT {
+        return Err(Error::GasBudgetExceeded);
+    }
+    let mut heap = BinaryHeap::with_capacity(keep);
+    let mut matched = 0_u64;
+    let mut processed_items = 0_u64;
+
+    visit_committed_transactions(
+        state,
+        filter,
+        anchor,
+        None,
+        |projection_work| {
+            processed_items = processed_items.saturating_add(projection_work);
+            if budget_items.is_some_and(|budget| processed_items > budget) {
+                return Err(Error::GasBudgetExceeded);
+            }
+            Ok(())
+        },
+        |value, matches, _| {
+            if !matches {
+                return Ok(ControlFlow::Continue(()));
+            }
+            matched = matched.saturating_add(1);
+            if keep == 0 {
+                return Ok(ControlFlow::Continue(()));
+            }
+            let entry = EphemeralSortedEntry {
+                sort_key: value.get_metadata_sorting_key(key).cloned(),
+                value,
+                order,
+            };
+            if heap.len() < keep {
+                heap.push(entry);
+            } else if heap
+                .peek()
+                .is_some_and(|worst| entry.cmp(worst) == core::cmp::Ordering::Less)
+            {
+                let _ = heap.pop();
+                heap.push(entry);
+            }
+            Ok(ControlFlow::Continue(()))
+        },
+    )?;
+
+    let mut entries = heap.into_vec();
+    entries.sort_unstable();
+    Ok((
+        entries.into_iter().map(|entry| entry.value).collect(),
+        matched,
+        processed_items,
+    ))
+}
+
+fn scan_sorted_transaction_page(
+    state: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    returned_offset: u64,
+    anchor: TransactionHistoryAnchor,
+    budget_items: Option<u64>,
+) -> Result<ScannedTransactionPage, Error> {
+    let keep = transaction_sorted_prefix_keep(params, limits, returned_offset)?;
+    let key = params
+        .sorting
+        .sort_by_metadata_key
+        .as_ref()
+        .ok_or_else(|| Error::Conversion("sorted transaction scan has no metadata key".into()))?;
+    let order = params.sorting.order.unwrap_or(SortOrder::Asc);
+    let (entries, matched, processed_items) =
+        collect_sorted_transaction_prefix(state, filter, key, order, keep, anchor, budget_items)?;
+
+    let offset = params
+        .pagination
+        .offset_value()
+        .saturating_add(returned_offset);
+    let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+    let values = entries.into_iter().skip(offset).collect::<Vec<_>>();
+    let total_after_pagination = matched
+        .saturating_sub(params.pagination.offset_value())
+        .min(
+            params
+                .pagination
+                .limit_value()
+                .map_or(u64::MAX, NonZeroU64::get),
+        );
+    let returned = returned_offset.saturating_add(u64::try_from(values.len()).unwrap_or(u64::MAX));
+    let remaining_items = total_after_pagination.saturating_sub(returned);
+
+    let exact = limits.count_mode == QueryCountMode::Exact;
+    Ok(ScannedTransactionPage {
+        values,
+        remaining_items: exact.then_some(remaining_items),
+        has_more: remaining_items > 0,
+        processed_items,
+        history_cursor: None,
+    })
+}
+
+fn materialize_sorted_transaction_window(
+    state: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    params: &QueryParams,
+    anchor: TransactionHistoryAnchor,
+    budget_items: Option<u64>,
+) -> Result<Vec<CommittedTransaction>, Error> {
+    let limit = params
+        .pagination
+        .limit_value()
+        .ok_or(Error::GasBudgetExceeded)?;
+    let offset = params.pagination.offset_value();
+    let keep = offset.saturating_add(limit.get());
+    let keep = usize::try_from(keep).map_err(|_| Error::GasBudgetExceeded)?;
+    let key = params
+        .sorting
+        .sort_by_metadata_key
+        .as_ref()
+        .ok_or_else(|| Error::Conversion("sorted transaction scan has no metadata key".into()))?;
+    let order = params.sorting.order.unwrap_or(SortOrder::Asc);
+    let (prefix, _, _) =
+        collect_sorted_transaction_prefix(state, filter, key, order, keep, anchor, budget_items)?;
+    let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+    let limit = usize::try_from(limit.get()).unwrap_or(usize::MAX);
+    Ok(prefix.into_iter().skip(offset).take(limit).collect())
+}
+
+fn project_transaction_page(
+    values: Vec<CommittedTransaction>,
+    selector: SelectorTuple<CommittedTransaction>,
+    fetch_size: NonZeroU64,
+) -> Result<QueryOutputBatchBoxTuple, Error> {
+    let mut iter = ErasedQueryIterator::new(values.into_iter(), selector, fetch_size);
+    iter.next_batch(0).map(|(batch, _)| batch)
+}
+
+fn prepare_materialized_transaction_start(
+    values: Vec<CommittedTransaction>,
+    selector: SelectorTuple<CommittedTransaction>,
+    fetch_size: NonZeroU64,
+    count_mode: QueryCountMode,
+) -> Result<PreparedQueryStart, Error> {
+    let fetch_size_usize = usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
+    let mut values = values.into_iter();
+    let first_values = values.by_ref().take(fetch_size_usize).collect::<Vec<_>>();
+    let first_len = first_values.len();
+    let deferred_values = values.collect::<Vec<_>>();
+    let remaining = u64::try_from(deferred_values.len()).unwrap_or(u64::MAX);
+    let first_batch = project_transaction_page(first_values, selector.clone(), fetch_size)?;
+    let reported_remaining = (count_mode == QueryCountMode::Exact).then_some(remaining);
+    if deferred_values.is_empty() {
+        return Ok(PreparedQueryStart {
+            first_batch,
+            remaining_items: reported_remaining,
+            deferred_continuation: None,
+        });
+    }
+
+    let first_cursor =
+        NonZeroU64::new(u64::try_from(first_len).unwrap_or(u64::MAX)).ok_or_else(|| {
+            Error::Conversion("materialized transaction window has an empty first page".to_owned())
+        })?;
+    let deferred_continuation = DeferredQueryContinuation::new(
+        first_cursor,
+        reported_remaining,
+        move || match count_mode {
+            QueryCountMode::Exact => ErasedQueryIterator::new_with_cursor(
+                deferred_values.into_iter(),
+                selector,
+                fetch_size,
+                first_cursor.get(),
+            ),
+            QueryCountMode::Bounded => ErasedQueryIterator::new_streaming_with_cursor(
+                deferred_values.into_iter(),
+                selector,
+                fetch_size,
+                first_cursor.get(),
+            ),
+        },
+    );
+    Ok(PreparedQueryStart {
+        first_batch,
+        remaining_items: reported_remaining,
+        deferred_continuation: Some(deferred_continuation),
+    })
+}
+
+fn validate_transaction_sorted_materialization_budget(
+    params: &QueryParams,
+    limits: QueryLimits,
+) -> Result<(), Error> {
+    let _ = transaction_fetch_size(params, limits)?;
+    if params.sorting.sort_by_metadata_key.is_none() {
+        return Ok(());
+    }
+
+    // Sorting requires a global scan. Require a finite, bounded prefix so a
+    // client cannot turn the transaction query into history-sized retained
+    // materialization. `GasBudgetExceeded` is also the public materialization-
+    // budget error.
+    let Some(limit) = params.pagination.limit_value() else {
+        return Err(Error::GasBudgetExceeded);
+    };
+    let keep = params.pagination.offset_value().saturating_add(limit.get());
+    if !usize::try_from(keep).is_ok_and(|keep| keep <= STREAMING_SORTED_PREFIX_LIMIT) {
+        return Err(Error::GasBudgetExceeded);
+    }
+    Ok(())
+}
+
+fn scan_transaction_page(
+    state: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    returned_offset: u64,
+    anchor: TransactionHistoryAnchor,
+    history_cursor: Option<TransactionHistoryCursor>,
+    known_remaining_items: Option<u64>,
+    budget_items: Option<u64>,
+) -> Result<ScannedTransactionPage, Error> {
+    if params.sorting.sort_by_metadata_key.is_some() {
+        if history_cursor.is_some() || known_remaining_items.is_some() {
+            return Err(Error::Conversion(
+                "sorted transaction scans do not accept history cursors".to_owned(),
+            ));
+        }
+        scan_sorted_transaction_page(
+            state,
+            filter,
+            params,
+            limits,
+            returned_offset,
+            anchor,
+            budget_items,
+        )
+    } else {
+        scan_unsorted_transaction_page(
+            state,
+            filter,
+            params,
+            limits,
+            returned_offset,
+            anchor,
+            history_cursor,
+            known_remaining_items,
+            budget_items,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_handle_find_transactions_stored(
+    state: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    selector: SelectorTuple<CommittedTransaction>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    gas_budget: Option<u64>,
+    replay_state: Option<Weak<State>>,
+) -> Result<QueryOutput, Error> {
+    validate_transaction_sorted_materialization_budget(params, limits)?;
+
+    let fixed_anchor = TransactionHistoryAnchor::capture(state);
+    let fetch_size = transaction_fetch_size(params, limits)?;
+
+    if params.sorting.sort_by_metadata_key.is_some() {
+        let values = materialize_sorted_transaction_window(
+            state,
+            &filter,
+            params,
+            fixed_anchor,
+            gas_budget,
+        )?;
+        let continuation_required =
+            values.len() > usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
+        if continuation_required && replay_state.is_none() {
+            return Err(Error::Conversion(
+                "FindTransactions continuation requires replay-capable stored query state"
+                    .to_owned(),
+            ));
+        }
+        let prepared = prepare_materialized_transaction_start(
+            values,
+            selector,
+            fetch_size,
+            limits.count_mode,
+        )?;
+        return live_query_store.handle_iter_start_prepared(prepared, authority, gas_budget);
+    }
+
+    let page = scan_transaction_page(
+        state,
+        &filter,
+        params,
+        limits,
+        0,
+        fixed_anchor,
+        None,
+        None,
+        gas_budget,
+    )?;
+    let page_len = page.values.len();
+    let first_batch = project_transaction_page(page.values, selector.clone(), fetch_size)?;
+    let continuation_required = page.has_more;
+
+    if !continuation_required {
+        return live_query_store.handle_iter_start_prepared(
+            PreparedQueryStart {
+                first_batch,
+                remaining_items: page.remaining_items,
+                deferred_continuation: None,
+            },
+            authority,
+            gas_budget,
+        );
+    }
+
+    let Some(replay_state) = replay_state else {
+        return Err(Error::Conversion(
+            "FindTransactions continuation requires replay-capable stored query state".to_owned(),
+        ));
+    };
+    let history_cursor = page.history_cursor.ok_or_else(|| {
+        Error::Conversion("transaction continuation omitted its history checkpoint".to_owned())
+    })?;
+
+    let first_cursor =
+        NonZeroU64::new(u64::try_from(page_len).unwrap_or(u64::MAX)).ok_or_else(|| {
+            Error::Conversion("transaction continuation has an empty first page".to_owned())
+        })?;
+    let params_for_replay = params.clone();
+    let filter_for_replay = filter.clone();
+    let selector_for_replay = selector;
+    let checkpoint = Arc::new(Mutex::new(TransactionReplayCheckpoint {
+        history_cursor,
+        remaining_items: page.remaining_items,
+    }));
+    let make_next_page = Arc::new(move |cursor: u64, gas_budget: Option<u64>| {
+        let state = replay_state.upgrade().ok_or(Error::Expired)?;
+        let view = state.query_view();
+        let mut checkpoint = checkpoint.lock().map_err(|_| {
+            Error::Conversion("transaction replay checkpoint lock is poisoned".to_owned())
+        })?;
+        let page = scan_transaction_page(
+            &view,
+            &filter_for_replay,
+            &params_for_replay,
+            limits,
+            cursor,
+            fixed_anchor,
+            Some(checkpoint.history_cursor),
+            checkpoint.remaining_items,
+            gas_budget,
+        )?;
+        let page_len = u64::try_from(page.values.len()).unwrap_or(u64::MAX);
+        let batch = project_transaction_page(page.values, selector_for_replay.clone(), fetch_size)?;
+        let next_cursor = if page.has_more {
+            if page_len == 0 {
+                return Err(Error::Conversion(
+                    "transaction continuation made no progress".to_owned(),
+                ));
+            }
+            Some(
+                cursor
+                    .checked_add(page_len)
+                    .and_then(NonZeroU64::new)
+                    .ok_or_else(|| {
+                        Error::Conversion("transaction continuation cursor overflowed".to_owned())
+                    })?,
+            )
+        } else {
+            None
+        };
+        if page.has_more {
+            checkpoint.history_cursor = page.history_cursor.ok_or_else(|| {
+                Error::Conversion(
+                    "transaction continuation omitted its next history checkpoint".to_owned(),
+                )
+            })?;
+        }
+        checkpoint.remaining_items = page.remaining_items;
+        Ok((batch, page.remaining_items, next_cursor))
+    });
+
+    let paged_continuation = if let Some(remaining_items) = page.remaining_items {
+        let make_next_page = Arc::clone(&make_next_page);
+        PagedQueryContinuation::new_counted_budgeted(
+            first_cursor,
+            remaining_items,
+            move |cursor, gas_budget| {
+                let (batch, remaining_items, next_cursor) = make_next_page(cursor, gas_budget)?;
+                let remaining_items = remaining_items.ok_or_else(|| {
+                    Error::Conversion(
+                        "exact transaction page omitted its remaining count".to_owned(),
+                    )
+                })?;
+                Ok((batch, remaining_items, next_cursor))
+            },
+        )
+    } else {
+        let make_next_page = Arc::clone(&make_next_page);
+        PagedQueryContinuation::new_budgeted(first_cursor, move |cursor, gas_budget| {
+            let (batch, _, next_cursor) = make_next_page(cursor, gas_budget)?;
+            Ok((batch, next_cursor))
+        })
+    };
+
+    live_query_store.handle_iter_start_paged_prepared(
+        PreparedPagedQueryStart {
+            first_batch,
+            paged_continuation: Some(paged_continuation),
+        },
+        authority,
+        gas_budget,
+    )
+}
+
+fn try_handle_find_transactions_ephemeral(
+    state: &impl StateReadOnly,
+    filter: &CompoundPredicate<CommittedTransaction>,
+    selector: SelectorTuple<CommittedTransaction>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    budget_items: Option<u64>,
+) -> Result<(QueryOutput, u64), Error> {
+    validate_transaction_sorted_materialization_budget(params, limits)?;
+    let page = scan_transaction_page(
+        state,
+        filter,
+        params,
+        limits,
+        0,
+        TransactionHistoryAnchor::capture(state),
+        None,
+        None,
+        budget_items,
+    )?;
+    let batch = project_transaction_page(
+        page.values,
+        selector,
+        transaction_fetch_size(params, limits)?,
+    )?;
+    let output = match page.remaining_items {
+        Some(remaining_items) => QueryOutput::new(batch, remaining_items, None),
+        None => QueryOutput::new_bounded(batch, page.has_more, None),
+    };
+    Ok((output, page.processed_items))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_find_transactions_stored(
+    state: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    selector: SelectorTuple<CommittedTransaction>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    gas_budget: Option<u64>,
+    replay_state: Option<Weak<State>>,
+) -> Result<QueryOutput, Error> {
+    try_handle_find_transactions_stored(
+        state,
+        filter,
+        selector,
+        params,
+        limits,
+        live_query_store,
+        authority,
+        gas_budget,
+        replay_state,
+    )
+}
+
+fn handle_find_transactions_ephemeral(
+    state: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    selector: SelectorTuple<CommittedTransaction>,
+    params: &QueryParams,
+    limits: QueryLimits,
+    budget_items: Option<u64>,
+) -> Result<(QueryOutput, u64), Error> {
+    try_handle_find_transactions_ephemeral(state, &filter, selector, params, limits, budget_items)
+}
 
 fn collect_ephemeral_sorted_prefix<I>(
     iter: I,
@@ -2104,7 +2799,7 @@ impl ValidQueryRequest {
         state: &impl StateReadOnly,
         authority: &AccountId,
     ) -> Result<QueryResponse, Error> {
-        self.execute_stored_inner(live_query_store, state, authority, None)
+        self.execute_stored_inner(live_query_store, state, authority, None, None)
     }
 
     /// Execute a validated query request with an optional state handle for
@@ -2120,7 +2815,30 @@ impl ValidQueryRequest {
         authority: &AccountId,
         replay_state: Weak<State>,
     ) -> Result<QueryResponse, Error> {
-        self.execute_stored_inner(live_query_store, state, authority, Some(replay_state))
+        self.execute_stored_inner(live_query_store, state, authority, Some(replay_state), None)
+    }
+
+    /// Execute a validated stored query with an owning replay state and the
+    /// client-provided budget for the initial `Start` request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if query execution or budgeted projection fails.
+    pub fn execute_with_replay_state_and_start_budget(
+        self,
+        live_query_store: &LiveQueryStoreHandle,
+        state: &impl StateReadOnly,
+        authority: &AccountId,
+        replay_state: Weak<State>,
+        stored_start_budget: Option<u64>,
+    ) -> Result<QueryResponse, Error> {
+        self.execute_stored_inner(
+            live_query_store,
+            state,
+            authority,
+            Some(replay_state),
+            stored_start_budget,
+        )
     }
 
     #[allow(clippy::too_many_lines)] // not much we can do, we _need_ to list all the box types here
@@ -2130,6 +2848,7 @@ impl ValidQueryRequest {
         state: &impl StateReadOnly,
         authority: &AccountId,
         replay_state: Option<Weak<State>>,
+        stored_start_budget: Option<u64>,
     ) -> Result<QueryResponse, Error> {
         let Self { request, limits } = self;
         match request {
@@ -2214,7 +2933,7 @@ impl ValidQueryRequest {
                 #[cfg_attr(not(feature = "fast_dsl"), allow(unused_variables))]
                 let stored_cursor_budget = {
                     let min = state.pipeline().query_stored_min_gas_units;
-                    (min > 0).then_some(min)
+                    stored_start_budget.or_else(|| (min > 0).then_some(min))
                 };
                 // Fast-DSL path: when the boxed query payload is not present, reconstruct
                 // from item kind and encoded predicate/selector.
@@ -2402,10 +3121,26 @@ impl ValidQueryRequest {
                                 iroha_data_model::trigger::Trigger,
                                 iroha_data_model::query::trigger::prelude::FindTriggers
                             ),
-                            QueryItemKind::CommittedTransaction => run_payload_or_default!(
-                                iroha_data_model::query::CommittedTransaction,
-                                iroha_data_model::query::transaction::prelude::FindTransactions
-                            ),
+                            QueryItemKind::CommittedTransaction => {
+                                let pred = dec::<CompoundPredicate<CommittedTransaction>>(
+                                    &iter_query.predicate_bytes,
+                                )?;
+                                let sel = dec::<SelectorTuple<CommittedTransaction>>(
+                                    &iter_query.selector_bytes,
+                                )?;
+                                let output = handle_find_transactions_stored(
+                                    state,
+                                    pred,
+                                    sel,
+                                    params,
+                                    limits,
+                                    live_query_store,
+                                    authority,
+                                    stored_cursor_budget,
+                                    replay_state.clone(),
+                                )?;
+                                return Ok(QueryResponse::Iterable(output));
+                            }
                             QueryItemKind::SignedBlock => run_payload_or_default!(
                                 iroha_data_model::block::SignedBlock,
                                 iroha_data_model::query::block::prelude::FindBlocks
@@ -3394,29 +4129,19 @@ impl ValidQueryRequest {
                 )? {
                     return Ok(resp);
                 }
-                if let Some(resp) = run_dispatch::<
-                    iroha_data_model::query::CommittedTransaction,
-                    iroha_data_model::query::transaction::prelude::FindTransactions,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    state,
-                    live_query_store,
-                    authority,
-                    stored_cursor_budget,
-                    replay_state.clone(),
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::transaction::prelude::FindTransactions,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::transaction::prelude::FindTransactions,
-                        ))
-                    },
-                )? {
-                    return Ok(resp);
+                if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
+                    let output = handle_find_transactions_stored(
+                        state,
+                        erased.predicate_cloned(),
+                        erased.selector_cloned(),
+                        params,
+                        limits,
+                        live_query_store,
+                        authority,
+                        stored_cursor_budget,
+                        replay_state.clone(),
+                    )?;
+                    return Ok(QueryResponse::Iterable(output));
                 }
                 if let Some(resp) = run_dispatch::<
                     iroha_data_model::block::SignedBlock,
@@ -3907,10 +4632,23 @@ impl ValidQueryRequest {
                                 iroha_data_model::trigger::Trigger,
                                 iroha_data_model::query::trigger::prelude::FindTriggers
                             ),
-                            QueryItemKind::CommittedTransaction => run_payload_or_default!(
-                                iroha_data_model::query::CommittedTransaction,
-                                iroha_data_model::query::transaction::prelude::FindTransactions
-                            ),
+                            QueryItemKind::CommittedTransaction => {
+                                let pred = dec::<CompoundPredicate<CommittedTransaction>>(
+                                    &iter_query.predicate_bytes,
+                                )?;
+                                let sel = dec::<SelectorTuple<CommittedTransaction>>(
+                                    &iter_query.selector_bytes,
+                                )?;
+                                let (output, processed_items) = handle_find_transactions_ephemeral(
+                                    state,
+                                    pred,
+                                    sel,
+                                    params,
+                                    limits,
+                                    budget_items,
+                                )?;
+                                return Ok((QueryResponse::Iterable(output), processed_items));
+                            }
                             QueryItemKind::SignedBlock => run_payload_or_default!(
                                 iroha_data_model::block::SignedBlock,
                                 iroha_data_model::query::block::prelude::FindBlocks
@@ -4355,29 +5093,16 @@ impl ValidQueryRequest {
                 )? {
                     return Ok((resp, processed_items));
                 }
-                if let Some((resp, processed_items)) = run_dispatch::<
-                    iroha_data_model::query::CommittedTransaction,
-                    iroha_data_model::query::transaction::prelude::FindTransactions,
-                    _,
-                >(
-                    qbox,
-                    params,
-                    limits,
-                    budget_items,
-                    state,
-                    live_query_store,
-                    authority,
-                    None,
-                    |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::transaction::prelude::FindTransactions,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::transaction::prelude::FindTransactions,
-                        ))
-                    },
-                )? {
-                    return Ok((resp, processed_items));
+                if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
+                    let (output, processed_items) = handle_find_transactions_ephemeral(
+                        state,
+                        erased.predicate_cloned(),
+                        erased.selector_cloned(),
+                        params,
+                        limits,
+                        budget_items,
+                    )?;
+                    return Ok((QueryResponse::Iterable(output), processed_items));
                 }
                 if let Some((resp, processed_items)) = run_dispatch::<
                     iroha_data_model::block::SignedBlock,
@@ -4679,7 +5404,7 @@ impl ValidQueryRequest {
 mod tests {
     #![allow(clippy::many_single_char_names)]
     use core::time::Duration;
-    use std::borrow::Cow;
+    use std::{borrow::Cow, num::NonZeroUsize, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
@@ -4709,6 +5434,34 @@ mod tests {
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("query algorithm-specific fixture key generation should succeed")
+    }
+
+    fn find_transactions_request_with_filter(
+        params: QueryParams,
+        filter: CompoundPredicate<CommittedTransaction>,
+    ) -> QueryRequest {
+        let payload = norito::codec::Encode::encode(
+            &iroha_data_model::query::transaction::prelude::FindTransactions,
+        );
+        let qbox: QueryBox<_> = Box::new(iroha_data_model::query::ErasedIterQuery::<
+            CommittedTransaction,
+        >::new(filter, SelectorTuple::default(), payload));
+        #[cfg(feature = "fast_dsl")]
+        let query = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        #[cfg(not(feature = "fast_dsl"))]
+        let query = iroha_data_model::query::QueryWithParams::new(qbox, params);
+        QueryRequest::Start(query)
+    }
+
+    fn find_transactions_request(params: QueryParams) -> QueryRequest {
+        find_transactions_request_with_filter(params, CompoundPredicate::PASS)
+    }
+
+    fn transactions_from_batch(batch: QueryOutputBatchBoxTuple) -> Vec<CommittedTransaction> {
+        match batch.into_iter().next().expect("transaction batch") {
+            QueryOutputBatchBox::CommittedTransaction(transactions) => transactions,
+            other => panic!("unexpected transaction batch: {other:?}"),
+        }
     }
 
     #[test]
@@ -7784,6 +8537,703 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn find_transactions_bounded_ephemeral_scans_only_the_page_carriers() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let query_handle = state_view.query_handle().clone();
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(3_u64))),
+        };
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            limits,
+        )
+        .expect("validate bounded transaction query");
+        state_view.kura().reset_merge_query_read_counters_for_test();
+
+        let QueryResponse::Iterable(output) = validated
+            .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+            .expect("execute bounded transaction query")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        let (batch, remaining_items, has_more, cursor) = output.into_parts_with_count_mode();
+        assert_eq!(transactions_from_batch(batch).len(), 3);
+        assert_eq!(remaining_items, None);
+        assert!(has_more);
+        assert!(cursor.is_none());
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 2),
+            "three transactions plus the bounded probe touch two two-entry carriers"
+        );
+    }
+
+    #[test]
+    fn find_transactions_bounded_replay_ignores_blocks_appended_after_start() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state = Arc::new(fixture.sandbox.state);
+        let state_view = state.view();
+        let query_handle = state_view.query_handle().clone();
+        let expected = crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
+            .expect("bounded replay baseline");
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(3_u64))),
+        };
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+        )
+        .expect("validate bounded replay query");
+        let QueryResponse::Iterable(first) = validated
+            .execute_with_replay_state(
+                &query_handle,
+                &state_view,
+                &ALICE_ID,
+                Arc::downgrade(&state),
+            )
+            .expect("start bounded replay query")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        let mut collected = transactions_from_batch(first.batch);
+        let mut cursor = first.continue_cursor;
+
+        let latest_height = NonZeroUsize::new(state_view.height()).expect("seeded history");
+        let latest = state_view
+            .kura()
+            .get_block(latest_height)
+            .expect("latest seeded carrier");
+        let (appended, entry) =
+            crate::smartcontracts::isi::tx::tests::certified_query_carrier(&latest, 17, true);
+        state_view
+            .kura()
+            .store_block_with_merge_entry(appended, &entry)
+            .expect("append carrier after query start");
+
+        while let Some(current) = cursor {
+            let next = query_handle
+                .handle_iter_continue(current)
+                .expect("continue bounded replay query");
+            collected.extend(transactions_from_batch(next.batch));
+            cursor = next.continue_cursor;
+        }
+        assert_eq!(collected, expected);
+    }
+
+    #[test]
+    fn find_transactions_exact_ephemeral_counts_without_complete_carrier_snapshot() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let query_handle = state_view.query_handle().clone();
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(3_u64))),
+        };
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Exact),
+        )
+        .expect("validate exact transaction query");
+        state_view.kura().reset_merge_query_read_counters_for_test();
+
+        let (QueryResponse::Iterable(output), processed_items) = validated
+            .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(64))
+            .expect("execute exact transaction query")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        let (batch, remaining_items, has_more, cursor) = output.into_parts_with_count_mode();
+        assert_eq!(transactions_from_batch(batch).len(), 3);
+        assert_eq!(remaining_items, Some(29));
+        assert!(has_more);
+        assert!(cursor.is_none());
+        assert_eq!(processed_items, 32);
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 16),
+            "exact query point-resolves every carrier without materializing a carrier snapshot"
+        );
+    }
+
+    #[test]
+    fn find_transactions_exact_budget_charges_matches_outside_pagination_window() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let query_handle = state_view.query_handle().clone();
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Exact);
+
+        for offset in [0, 31] {
+            let params = QueryParams {
+                pagination: Pagination::new(Some(nonzero!(1_u64)), offset),
+                sorting: Sorting::default(),
+                fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            };
+            let validated = ValidQueryRequest::validate_for_client_parts(
+                find_transactions_request(params),
+                &ALICE_ID,
+                &state_view,
+                limits,
+            )
+            .expect("validate budgeted exact transaction query");
+            let err = validated
+                .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(1))
+                .expect_err("exact full-history scan must exceed a one-item budget");
+            assert_eq!(err, Error::GasBudgetExceeded);
+        }
+    }
+
+    #[test]
+    fn find_transactions_false_predicate_cannot_force_uncharged_projection() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let query_handle = state_view.query_handle().clone();
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+        for (count_mode, sorting) in [
+            (QueryCountMode::Bounded, Sorting::default()),
+            (QueryCountMode::Exact, Sorting::default()),
+            (
+                QueryCountMode::Bounded,
+                Sorting {
+                    sort_by_metadata_key: Some("rank".parse().expect("metadata key")),
+                    order: Some(SortOrder::Asc),
+                },
+            ),
+            (
+                QueryCountMode::Exact,
+                Sorting {
+                    sort_by_metadata_key: Some("rank".parse().expect("metadata key")),
+                    order: Some(SortOrder::Desc),
+                },
+            ),
+        ] {
+            let params = QueryParams {
+                pagination: Pagination::new(Some(nonzero!(1_u64)), 0),
+                sorting,
+                fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            };
+            let validated = ValidQueryRequest::validate_for_client_parts(
+                find_transactions_request_with_filter(params, false_filter.clone()),
+                &ALICE_ID,
+                &state_view,
+                QueryLimits::default().with_count_mode(count_mode),
+            )
+            .expect("validate false-predicate transaction query");
+            crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
+
+            let err = validated
+                .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(1))
+                .expect_err("eager carrier projection must be precharged before proof work");
+            assert_eq!(err, Error::GasBudgetExceeded);
+            assert_eq!(
+                crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test(),
+                0,
+                "insufficient gas must reject before merge Merkle proof reconstruction"
+            );
+        }
+    }
+
+    #[test]
+    fn find_transactions_stored_start_precharges_before_false_predicate_or_sorted_projection() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let mut fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        fixture.sandbox.state.pipeline.query_stored_min_gas_units = 1;
+        let state = Arc::new(fixture.sandbox.state);
+        let state_view = state.view();
+        let query_handle = state_view.query_handle().clone();
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+
+        for (count_mode, sorting) in [
+            (QueryCountMode::Bounded, Sorting::default()),
+            (
+                QueryCountMode::Exact,
+                Sorting {
+                    sort_by_metadata_key: Some("rank".parse().expect("metadata key")),
+                    order: Some(SortOrder::Desc),
+                },
+            ),
+        ] {
+            let params = QueryParams {
+                pagination: Pagination::new(Some(nonzero!(1_u64)), 0),
+                sorting,
+                fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            };
+            let validated = ValidQueryRequest::validate_for_client_parts(
+                find_transactions_request_with_filter(params, false_filter.clone()),
+                &ALICE_ID,
+                &state_view,
+                QueryLimits::default().with_count_mode(count_mode),
+            )
+            .expect("validate stored transaction query");
+            state_view.kura().reset_merge_query_read_counters_for_test();
+            crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
+
+            let err = validated
+                .execute_with_replay_state_and_start_budget(
+                    &query_handle,
+                    &state_view,
+                    &ALICE_ID,
+                    Arc::downgrade(&state),
+                    Some(1),
+                )
+                .expect_err("stored start must enforce its projection budget");
+            assert_eq!(err, Error::GasBudgetExceeded);
+            assert_eq!(
+                crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test(),
+                0,
+                "stored start must reject before merge Merkle proof reconstruction"
+            );
+            assert_eq!(
+                state_view.kura().merge_query_read_counters_for_test(),
+                (0, 0, 0),
+                "stored start must reject before merge sidecar resolution or decode"
+            );
+        }
+
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+        )
+        .expect("validate sufficiently budgeted stored transaction query");
+        let QueryResponse::Iterable(output) = validated
+            .execute_with_replay_state_and_start_budget(
+                &query_handle,
+                &state_view,
+                &ALICE_ID,
+                Arc::downgrade(&state),
+                Some(2),
+            )
+            .expect("client budget above the server minimum covers one carrier")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        assert_eq!(
+            output
+                .continue_cursor
+                .expect("stored continuation")
+                .gas_budget,
+            Some(2),
+            "the actual validated Start budget must be carried into the cursor"
+        );
+    }
+
+    #[test]
+    fn find_transactions_stored_continue_precharges_and_underfunded_retry_does_not_advance() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let mut fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        fixture.sandbox.state.pipeline.query_stored_min_gas_units = 2;
+        let state = Arc::new(fixture.sandbox.state);
+        let state_view = state.view();
+        let query_handle = state_view.query_handle().clone();
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+        };
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+        )
+        .expect("validate stored transaction query");
+        let QueryResponse::Iterable(first) = validated
+            .execute_with_replay_state(
+                &query_handle,
+                &state_view,
+                &ALICE_ID,
+                Arc::downgrade(&state),
+            )
+            .expect("start budgeted stored transaction query")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        let original_cursor = first.continue_cursor.expect("stored continuation");
+        assert_eq!(original_cursor.gas_budget, Some(2));
+
+        let mut underfunded = original_cursor.clone();
+        underfunded.gas_budget = Some(1);
+        state_view.kura().reset_merge_query_read_counters_for_test();
+        crate::smartcontracts::isi::tx::reset_certified_merge_projection_calls_for_test();
+        let err = query_handle
+            .handle_iter_continue(underfunded)
+            .expect_err("continuation must enforce its current request budget");
+        assert_eq!(err, Error::GasBudgetExceeded);
+        assert_eq!(
+            crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test(),
+            0,
+            "underfunded continuation must reject before merge Merkle proof reconstruction"
+        );
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 0),
+            "underfunded continuation must reject before merge sidecar resolution or decode"
+        );
+
+        let next = query_handle
+            .handle_iter_continue(original_cursor)
+            .expect("the same cursor remains retryable with sufficient budget");
+        assert_eq!(transactions_from_batch(next.batch).len(), 1);
+        assert!(
+            crate::smartcontracts::isi::tx::certified_merge_projection_calls_for_test() > 0,
+            "successful retry should reconstruct the selected carrier proof"
+        );
+    }
+
+    #[test]
+    fn find_transactions_exact_stored_replay_preserves_count_cursor_and_order() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state = Arc::new(fixture.sandbox.state);
+        let state_view = state.view();
+        let query_handle = state_view.query_handle().clone();
+        let expected = crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
+            .expect("exact transaction baseline");
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(5_u64))),
+        };
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Exact);
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            limits,
+        )
+        .expect("validate exact stored transaction query");
+        state_view.kura().reset_merge_query_read_counters_for_test();
+
+        let QueryResponse::Iterable(first) = validated
+            .execute_with_replay_state(
+                &query_handle,
+                &state_view,
+                &ALICE_ID,
+                Arc::downgrade(&state),
+            )
+            .expect("start exact stored transaction query")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        assert_eq!(first.remaining_items, Some(27));
+        let mut collected = transactions_from_batch(first.batch);
+        let mut cursor = first.continue_cursor;
+        let mut expected_remaining = 27_u64;
+        while let Some(current) = cursor {
+            let next = query_handle
+                .handle_iter_continue(current)
+                .expect("continue exact transaction query");
+            let page = transactions_from_batch(next.batch);
+            expected_remaining = expected_remaining
+                .saturating_sub(u64::try_from(page.len()).expect("page length fits u64"));
+            assert_eq!(next.remaining_items, Some(expected_remaining));
+            collected.extend(page);
+            cursor = next.continue_cursor;
+        }
+
+        assert_eq!(collected, expected);
+        assert_eq!(expected_remaining, 0);
+        let (_, complete_scans, indexed_lookups) =
+            state_view.kura().merge_query_read_counters_for_test();
+        assert_eq!(complete_scans, 0);
+        assert_eq!(
+            indexed_lookups,
+            16 * 2,
+            "exact replay validates every carrier once, then resumes through each carrier once"
+        );
+    }
+
+    #[test]
+    fn find_transactions_sorted_prefix_matches_deterministic_full_order_across_pages() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state = Arc::new(fixture.sandbox.state);
+        let state_view = state.view();
+        let query_handle = state_view.query_handle().clone();
+        let mut expected =
+            crate::smartcontracts::isi::tx::committed_transactions_snapshot(&state_view)
+                .expect("sorted transaction baseline");
+        expected.sort_unstable_by(|left, right| left.tiebreak_cmp(right));
+        let expected = expected.into_iter().skip(2).take(7).collect::<Vec<_>>();
+        let params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(7_u64)), 2),
+            sorting: Sorting {
+                sort_by_metadata_key: Some("rank".parse().expect("metadata key")),
+                order: Some(SortOrder::Asc),
+            },
+            fetch_size: FetchSize::new(Some(nonzero!(3_u64))),
+        };
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Exact);
+
+        let ephemeral = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params.clone()),
+            &ALICE_ID,
+            &state_view,
+            limits,
+        )
+        .expect("validate sorted ephemeral transaction query");
+        let QueryResponse::Iterable(first_ephemeral) = ephemeral
+            .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+            .expect("execute sorted ephemeral transaction query")
+        else {
+            panic!("expected sorted iterable transaction output");
+        };
+        assert_eq!(first_ephemeral.remaining_items, Some(4));
+        assert_eq!(
+            transactions_from_batch(first_ephemeral.batch),
+            expected[..3]
+        );
+
+        let stored = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            limits,
+        )
+        .expect("validate sorted stored transaction query");
+        let QueryResponse::Iterable(first) = stored
+            .execute_with_replay_state(
+                &query_handle,
+                &state_view,
+                &ALICE_ID,
+                Arc::downgrade(&state),
+            )
+            .expect("start sorted stored transaction query")
+        else {
+            panic!("expected sorted iterable transaction output");
+        };
+        let mut collected = transactions_from_batch(first.batch);
+        let mut cursor = first.continue_cursor;
+        while let Some(current) = cursor {
+            let next = query_handle
+                .handle_iter_continue(current)
+                .expect("continue sorted transaction query");
+            collected.extend(transactions_from_batch(next.batch));
+            cursor = next.continue_cursor;
+        }
+        assert_eq!(collected, expected);
+    }
+
+    #[test]
+    fn find_transactions_exact_replay_fails_closed_on_sidecar_corruption() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let target_entry_hash = fixture.target_entry_hash;
+        let state = Arc::new(fixture.sandbox.state);
+        let state_view = state.view();
+        let query_handle = state_view.query_handle().clone();
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Exact),
+        )
+        .expect("validate exact replay corruption query");
+        let QueryResponse::Iterable(first) = validated
+            .execute_with_replay_state(
+                &query_handle,
+                &state_view,
+                &ALICE_ID,
+                Arc::downgrade(&state),
+            )
+            .expect("start exact replay corruption query")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        let mut cursor = first.continue_cursor.expect("exact query continuation");
+
+        state
+            .kura()
+            .remove_merge_entry_payload_for_test(target_entry_hash);
+        loop {
+            match query_handle.handle_iter_continue(cursor) {
+                Ok(next) => {
+                    cursor = next.continue_cursor.expect(
+                        "replay must encounter selected corruption before exhausting the cursor",
+                    );
+                }
+                Err(err) => {
+                    assert!(matches!(err, Error::Conversion(_)));
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn find_transactions_stored_without_replay_rejects_required_continuation() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let query_handle = state_view.query_handle().clone();
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+        let validated = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params.clone()),
+            &ALICE_ID,
+            &state_view,
+            limits,
+        )
+        .expect("validate stored transaction query");
+        let err = validated
+            .execute(&query_handle, &state_view, &ALICE_ID)
+            .expect_err("borrowed stored execution cannot safely retain a transaction tail");
+        assert!(matches!(err, Error::Conversion(message) if message.contains("replay-capable")));
+
+        let terminal_params = QueryParams {
+            pagination: Pagination::new(Some(nonzero!(2_u64)), 0),
+            ..params
+        };
+        let terminal = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(terminal_params),
+            &ALICE_ID,
+            &state_view,
+            limits,
+        )
+        .expect("validate terminal stored transaction query");
+        let QueryResponse::Iterable(output) = terminal
+            .execute(&query_handle, &state_view, &ALICE_ID)
+            .expect("one-page bounded query does not need replay state")
+        else {
+            panic!("expected iterable transaction output");
+        };
+        assert_eq!(transactions_from_batch(output.batch).len(), 2);
+        assert!(!output.has_more);
+        assert!(output.continue_cursor.is_none());
+    }
+
+    #[test]
+    fn find_transactions_bounded_defers_old_corruption_but_exact_fails() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        fixture
+            .sandbox
+            .state
+            .kura()
+            .remove_merge_entry_payload_for_test(fixture.unrelated_entry_hash);
+        let state_view = fixture.sandbox.state.view();
+        let query_handle = state_view.query_handle().clone();
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
+        };
+
+        let bounded = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params.clone()),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Bounded),
+        )
+        .expect("validate bounded query");
+        let QueryResponse::Iterable(output) = bounded
+            .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+            .expect("bounded first page avoids corrupt oldest carrier")
+        else {
+            panic!("expected bounded transaction output");
+        };
+        assert_eq!(transactions_from_batch(output.batch).len(), 2);
+
+        let exact = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Exact),
+        )
+        .expect("validate exact query");
+        let err = exact
+            .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+            .expect_err("exact query must validate corrupt selected history");
+        assert!(matches!(err, Error::Conversion(_)));
+    }
+
+    #[test]
+    fn find_transactions_rejects_unbounded_or_oversized_sorted_prefix() {
+        use iroha_data_model::query::parameters::{FetchSize, Pagination, Sorting};
+
+        let fixture = crate::smartcontracts::isi::tx::tests::merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let query_handle = state_view.query_handle().clone();
+        let sorted = Sorting {
+            sort_by_metadata_key: Some("rank".parse().expect("metadata key")),
+            order: Some(SortOrder::Asc),
+        };
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
+
+        for pagination in [
+            Pagination::default(),
+            Pagination::new(Some(nonzero!(4_097_u64)), 0),
+            Pagination::new(Some(nonzero!(1_u64)), 4_096),
+        ] {
+            let params = QueryParams {
+                pagination,
+                sorting: sorted.clone(),
+                fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            };
+            let validated = ValidQueryRequest::validate_for_client_parts(
+                find_transactions_request(params),
+                &ALICE_ID,
+                &state_view,
+                limits,
+            )
+            .expect("materialization budget is enforced during execution");
+            let err = validated
+                .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+                .expect_err("unsafe sorted prefix must be rejected");
+            assert_eq!(err, Error::GasBudgetExceeded);
+        }
     }
 
     #[tokio::test]

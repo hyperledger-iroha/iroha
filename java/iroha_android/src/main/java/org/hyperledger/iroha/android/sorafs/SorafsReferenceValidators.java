@@ -7,6 +7,8 @@ import java.util.Arrays;
 public final class SorafsReferenceValidators {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 16;
+  /** Canonical maximum byte length for a V1 orderbook owner account. */
+  public static final int ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 = 256;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private SorafsReferenceValidators() {}
@@ -541,6 +543,10 @@ public final class SorafsReferenceValidators {
     }
     if (payload.length == 0) {
       throw new IllegalArgumentException(field + " must not be empty");
+    }
+    if (payload.length > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1) {
+      throw new IllegalArgumentException(
+          field + " must be at most " + ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + " bytes");
     }
     return payload.clone();
   }

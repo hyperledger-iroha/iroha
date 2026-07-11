@@ -64,13 +64,14 @@ use sorafs_manifest::{
     AdmissionRecord, AdvertEndpoint, AliasBindingV1, AvailabilityTier, CapabilityTlv,
     CapabilityType, CouncilSignature, EndpointAdmissionV1, EndpointAttestationKind,
     EndpointAttestationV1, EndpointKind, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,
-    PathDiversityPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
-    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1,
-    QosHints, REPLICATION_ORDER_VERSION_V1, RendezvousTopic, ReplicationAssignmentV1,
-    ReplicationOrderSlaV1, ReplicationOrderV1, SignatureAlgorithm, StakePointer, StreamBudgetV1,
-    TransportHintV1, TransportProtocol,
+    PathDiversityPolicy, ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1,
+    ProviderAdmissionProposalV1, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1,
+    ProviderVrfPublicKeyV1, QosHints, REPLICATION_ORDER_VERSION_V1, RendezvousTopic,
+    ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1, SignatureAlgorithm,
+    StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol,
     alias_cache::{AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof},
-    compute_advert_body_digest, compute_envelope_digest, compute_proposal_digest,
+    compute_advert_body_digest, compute_envelope_authorization_digest, compute_envelope_digest,
+    compute_proposal_digest,
     deal::{MICRO_XOR_PER_XOR, XorAmount},
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
     verify_advert_against_record,
@@ -4697,6 +4698,34 @@ fn checked_ed25519_public_key_array(
     })
 }
 
+const PROVIDER_ADMISSION_FIXTURE_COUNCIL_SEEDS: [&str; 2] = [
+    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    "8899aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
+];
+
+fn provider_admission_fixture_council_keypairs() -> Result<Vec<KeyPair>, Box<dyn Error>> {
+    PROVIDER_ADMISSION_FIXTURE_COUNCIL_SEEDS
+        .iter()
+        .map(|seed| {
+            let bytes = decode_hex_array::<32>(seed)?;
+            KeyPair::try_from_seed(bytes.to_vec(), Algorithm::Ed25519).map_err(|err| {
+                format!("failed to derive council admission fixture key: {err}").into()
+            })
+        })
+        .collect()
+}
+
+fn provider_admission_fixture_council_policy(
+    keypairs: &[KeyPair],
+) -> Result<ProviderAdmissionCouncilPolicy, Box<dyn Error>> {
+    let trusted_signers = keypairs
+        .iter()
+        .map(|keypair| checked_ed25519_public_key_array(keypair.public_key(), "council public key"))
+        .collect::<Result<Vec<_>, _>>()?;
+    ProviderAdmissionCouncilPolicy::new(trusted_signers, keypairs.len())
+        .map_err(|err| format!("invalid council admission fixture policy: {err}").into())
+}
+
 pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(target_dir)?;
 
@@ -4910,27 +4939,11 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     let advert_bytes = to_bytes(&advert)?;
     let advert_body_digest = compute_advert_body_digest(&advert_body)?;
 
-    let council_seeds = [
-        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-        "8899aabbccddeeff00112233445566778899aabbccddeeff0011223344556677",
-    ];
-    let mut council_signatures = Vec::new();
-    for seed in &council_seeds {
-        let sk_bytes = decode_hex_array::<32>(seed)?;
-        let council_pair = KeyPair::try_from_seed(sk_bytes.to_vec(), Algorithm::Ed25519)
-            .map_err(|err| format!("failed to derive council admission fixture key: {err}"))?;
-        let signer =
-            checked_ed25519_public_key_array(council_pair.public_key(), "council public key")?;
-        let signature = Signature::try_new(council_pair.private_key(), proposal_digest.as_slice())
-            .map_err(|err| format!("failed to sign council admission fixture: {err}"))?;
-        council_signatures.push(CouncilSignature {
-            signer,
-            signature: signature.payload().to_vec(),
-        });
-    }
+    let council_keypairs = provider_admission_fixture_council_keypairs()?;
+    let council_policy = provider_admission_fixture_council_policy(&council_keypairs)?;
 
     let retention_epoch = issued_at + 86_400 * 90;
-    let envelope = ProviderAdmissionEnvelopeV1 {
+    let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
         proposal: proposal.clone(),
         proposal_digest,
@@ -4938,10 +4951,28 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
         advert_body_digest,
         issued_at,
         retention_epoch,
-        council_signatures: council_signatures.clone(),
+        council_signatures: Vec::new(),
         notes: Some("Fixture council approval for provider alpha".to_owned()),
     };
-    let record = AdmissionRecord::new(envelope.clone())
+    let authorization_digest = compute_envelope_authorization_digest(&envelope)?;
+    let mut council_signatures = council_keypairs
+        .iter()
+        .map(|council_pair| {
+            let signer =
+                checked_ed25519_public_key_array(council_pair.public_key(), "council public key")?;
+            let signature =
+                Signature::try_new(council_pair.private_key(), authorization_digest.as_slice())
+                    .map_err(|err| format!("failed to sign council admission fixture: {err}"))?;
+            Ok(CouncilSignature {
+                signer,
+                signature: signature.payload().to_vec(),
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    council_signatures.sort_unstable_by_key(|signature| signature.signer);
+    envelope.council_signatures = council_signatures.clone();
+
+    let record = AdmissionRecord::new(envelope.clone(), &council_policy)
         .map_err(|err| format!("envelope validation failed: {err}"))?;
     verify_advert_against_record(&advert, &record)
         .map_err(|err| format!("fixture advert mismatched envelope: {err}"))?;
@@ -7895,7 +7926,11 @@ mod tests {
         let envelope_bytes = fs::read(envelope_path).expect("read provider envelope");
         let envelope: ProviderAdmissionEnvelopeV1 =
             decode_from_bytes(&envelope_bytes).expect("decode provider envelope");
-        AdmissionRecord::new(envelope).expect("council signatures verify");
+        let council_keypairs =
+            provider_admission_fixture_council_keypairs().expect("derive fixture council keypairs");
+        let council_policy = provider_admission_fixture_council_policy(&council_keypairs)
+            .expect("build fixture council policy");
+        AdmissionRecord::new(envelope, &council_policy).expect("council signatures verify");
     }
 
     #[test]

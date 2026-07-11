@@ -2,6 +2,8 @@
 
 //! SoraFS proof-of-personhood credential payloads and deterministic validators.
 
+mod zk;
+
 use std::collections::BTreeSet;
 
 use blake3::Hasher;
@@ -27,7 +29,30 @@ pub const POP_MEMBERSHIP_PROOF_VERSION_V1: u8 = 1;
 const POP_CREDENTIAL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pop.credential.signature.v1";
 const POP_ROOT_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pop.commitment-root.signature.v1";
 const POP_REVOCATION_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pop.revocation-list.signature.v1";
-const POP_MEMBERSHIP_PROOF_DOMAIN_V1: &[u8] = b"sorafs.pop.membership-proof.transcript.v1";
+
+/// Fixed depth of the first-release credential commitment tree.
+pub const POP_CREDENTIAL_TREE_DEPTH_V1: u8 = 32;
+/// Fixed depth of the first-release sparse revocation tree.
+///
+/// Revocation nonces are uniformly random 128-bit values and every bit selects
+/// one path level, giving 128-bit collision resistance for sparse-tree keys.
+pub const POP_REVOCATION_TREE_DEPTH_V1: u8 = 128;
+/// Maximum accepted verifier-context length in UTF-8 bytes.
+pub const POP_MEMBERSHIP_CONTEXT_MAX_BYTES_V1: usize = 256;
+/// Maximum number of replay-cache nullifiers accepted by the slice API.
+pub const POP_MEMBERSHIP_SEEN_NULLIFIERS_MAX_V1: usize = 65_536;
+/// Maximum serialized Halo2 transcript accepted by the verifier.
+pub const POP_MEMBERSHIP_PROOF_MAX_BYTES_V1: usize = 128 * 1024;
+/// Maximum number of explicit revocations in one signed V1 snapshot.
+pub const POP_REVOCATION_ENTRIES_MAX_V1: usize = 4_096;
+/// Maximum number of committed attributes carried by one credential.
+pub const POP_CREDENTIAL_ATTRIBUTES_MAX_V1: usize = 64;
+/// Maximum number of attribute keys requested during enrollment.
+pub const POP_REQUESTED_ATTRIBUTES_MAX_V1: usize = 64;
+/// Maximum UTF-8 byte length of issuer and applicant identifiers.
+pub const POP_IDENTITY_TEXT_MAX_BYTES_V1: usize = 256;
+/// Maximum UTF-8 byte length of an attribute key.
+pub const POP_ATTRIBUTE_KEY_MAX_BYTES_V1: usize = 128;
 
 /// Proof-of-personhood credential class used for juror eligibility routing.
 #[derive(
@@ -75,7 +100,7 @@ pub enum PopSignatureAlgorithmV1 {
     Ed25519,
 }
 
-/// Membership proof transcript scheme.
+/// Membership proof system.
 #[derive(
     Debug,
     Clone,
@@ -89,11 +114,8 @@ pub enum PopSignatureAlgorithmV1 {
 )]
 #[norito(tag = "proof_system", content = "value", rename_all = "snake_case")]
 pub enum PopMembershipProofSystemV1 {
-    /// Deterministic transcript digest for local policy fixtures and reference validation.
-    ///
-    /// This proves only transcript consistency. Production PoP verification rejects this
-    /// proof system until a privacy-preserving membership proof verifier is selected.
-    TranscriptDigestV1,
+    /// Halo2 over the Pasta cycle with transparent IPA polynomial commitments.
+    Halo2IpaPastaV1,
 }
 
 /// Credential attribute commitment.
@@ -110,7 +132,7 @@ pub struct PopCredentialAttributeV1 {
 impl PopCredentialAttributeV1 {
     /// Validate the committed attribute shape.
     pub fn validate(&self) -> Result<(), PopCredentialValidationError> {
-        validate_text("attribute key", &self.key)?;
+        validate_bounded_text("attribute key", &self.key, POP_ATTRIBUTE_KEY_MAX_BYTES_V1)?;
         validate_digest("attribute value commitment", self.value_commitment)?;
         Ok(())
     }
@@ -205,9 +227,18 @@ impl PopCredentialV1 {
             });
         }
         validate_digest("credential id", self.credential_id)?;
+        validate_canonical_scalar("credential id", self.credential_id)?;
         validate_digest("holder commitment", self.holder_commitment)?;
+        validate_canonical_scalar("holder commitment", self.holder_commitment)?;
+        if self.attributes.len() > POP_CREDENTIAL_ATTRIBUTES_MAX_V1 {
+            return Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "credential attributes",
+                maximum: POP_CREDENTIAL_ATTRIBUTES_MAX_V1,
+                actual: self.attributes.len(),
+            });
+        }
         validate_attributes(&self.attributes)?;
-        validate_text("issuer id", &self.issuer_id)?;
+        validate_bounded_text("issuer id", &self.issuer_id, POP_IDENTITY_TEXT_MAX_BYTES_V1)?;
         if self.issued_at_epoch == 0 {
             return Err(PopCredentialValidationError::InvalidTimestamp {
                 field: "issued_at_epoch",
@@ -229,7 +260,9 @@ impl PopCredentialV1 {
             });
         }
         validate_digest("revocation nonce", self.revocation_nonce)?;
+        validate_revocation_nonce(self.revocation_nonce)?;
         validate_digest("commitment root", self.commitment_root)?;
+        validate_canonical_scalar("commitment root", self.commitment_root)?;
         if self.commitment_tree_version == 0 {
             return Err(PopCredentialValidationError::InvalidVersionCounter {
                 field: "commitment_tree_version",
@@ -267,6 +300,8 @@ pub struct PopCommitmentRootV1 {
     pub root_digest: [u8; 32],
     /// Number of leaves included in the root.
     pub tree_size: u64,
+    /// Fixed depth of the credential commitment tree.
+    pub tree_depth: u8,
     /// Monotonic commitment tree version.
     pub tree_version: u64,
     /// Issuer identifier.
@@ -291,15 +326,31 @@ impl PopCommitmentRootV1 {
             });
         }
         validate_digest("commitment root", self.root_digest)?;
+        validate_canonical_scalar("commitment root", self.root_digest)?;
         if self.tree_size == 0 {
             return Err(PopCredentialValidationError::InvalidVersionCounter { field: "tree_size" });
+        }
+        if self.tree_depth != POP_CREDENTIAL_TREE_DEPTH_V1 {
+            return Err(PopCredentialValidationError::InvalidTreeDepth {
+                tree: "credential",
+                expected: POP_CREDENTIAL_TREE_DEPTH_V1,
+                actual: self.tree_depth,
+            });
+        }
+        if self.tree_size > (1u64 << POP_CREDENTIAL_TREE_DEPTH_V1) {
+            return Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "credential tree leaves",
+                maximum: usize::try_from(1u64 << POP_CREDENTIAL_TREE_DEPTH_V1)
+                    .unwrap_or(usize::MAX),
+                actual: usize::try_from(self.tree_size).unwrap_or(usize::MAX),
+            });
         }
         if self.tree_version == 0 {
             return Err(PopCredentialValidationError::InvalidVersionCounter {
                 field: "tree_version",
             });
         }
-        validate_text("issuer id", &self.issuer_id)?;
+        validate_bounded_text("issuer id", &self.issuer_id, POP_IDENTITY_TEXT_MAX_BYTES_V1)?;
         if self.published_at_epoch == 0 {
             return Err(PopCredentialValidationError::InvalidTimestamp {
                 field: "published_at_epoch",
@@ -369,6 +420,7 @@ impl PopRevocationEntryV1 {
     /// Validate a revocation entry.
     pub fn validate(&self) -> Result<(), PopCredentialValidationError> {
         validate_digest("revocation nonce", self.nonce)?;
+        validate_revocation_nonce(self.nonce)?;
         if self.revoked_at_epoch == 0 {
             return Err(PopCredentialValidationError::InvalidTimestamp {
                 field: "revoked_at_epoch",
@@ -389,6 +441,10 @@ pub struct PopRevocationListV1 {
     pub list_version: u64,
     /// Commitment root this list applies to.
     pub commitment_root: [u8; 32],
+    /// Root of the sparse revoked-nonce tree.
+    pub revocation_root: [u8; 32],
+    /// Fixed depth of the sparse revoked-nonce tree.
+    pub revocation_tree_depth: u8,
     /// Issuer identifier.
     pub issuer_id: String,
     /// Unix epoch seconds when the list was published.
@@ -414,10 +470,28 @@ impl PopRevocationListV1 {
             });
         }
         validate_digest("commitment root", self.commitment_root)?;
-        validate_text("issuer id", &self.issuer_id)?;
+        validate_canonical_scalar("commitment root", self.commitment_root)?;
+        validate_digest("revocation root", self.revocation_root)?;
+        validate_canonical_scalar("revocation root", self.revocation_root)?;
+        if self.revocation_tree_depth != POP_REVOCATION_TREE_DEPTH_V1 {
+            return Err(PopCredentialValidationError::InvalidTreeDepth {
+                tree: "revocation",
+                expected: POP_REVOCATION_TREE_DEPTH_V1,
+                actual: self.revocation_tree_depth,
+            });
+        }
+        validate_bounded_text("issuer id", &self.issuer_id, POP_IDENTITY_TEXT_MAX_BYTES_V1)?;
         if self.published_at_epoch == 0 {
             return Err(PopCredentialValidationError::InvalidTimestamp {
                 field: "published_at_epoch",
+            });
+        }
+
+        if self.entries.len() > POP_REVOCATION_ENTRIES_MAX_V1 {
+            return Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "revocation entries",
+                maximum: POP_REVOCATION_ENTRIES_MAX_V1,
+                actual: self.entries.len(),
             });
         }
 
@@ -433,6 +507,10 @@ impl PopRevocationListV1 {
                 }
             }
             previous_nonce = Some(entry.nonce);
+        }
+        let expected_root = zk::revocation_root_from_entries_v1(&self.entries)?;
+        if self.revocation_root != expected_root {
+            return Err(PopCredentialValidationError::RevocationRootMismatch);
         }
         self.publisher_signature.validate()
     }
@@ -514,7 +592,18 @@ impl PopEnrollmentRequestV1 {
             });
         }
         validate_digest("enrollment request id", self.request_id)?;
-        validate_text("applicant id", &self.applicant_id)?;
+        validate_bounded_text(
+            "applicant id",
+            &self.applicant_id,
+            POP_IDENTITY_TEXT_MAX_BYTES_V1,
+        )?;
+        if self.requested_attributes.len() > POP_REQUESTED_ATTRIBUTES_MAX_V1 {
+            return Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "requested attributes",
+                maximum: POP_REQUESTED_ATTRIBUTES_MAX_V1,
+                actual: self.requested_attributes.len(),
+            });
+        }
         validate_text_list("requested attribute", &self.requested_attributes)?;
         validate_digest("attestation digest", self.attestation_digest)?;
         if self.submitted_at_epoch == 0 {
@@ -589,28 +678,72 @@ impl PopRenewalRequestV1 {
     }
 }
 
+/// Pinned verifier metadata for the first-release PoP circuit.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct PopMembershipVerifierMaterialV1 {
+    /// Stable circuit identifier.
+    pub circuit_id: String,
+    /// Halo2 domain exponent.
+    pub circuit_k: u32,
+    /// Credential membership-tree depth compiled into the circuit.
+    pub credential_tree_depth: u8,
+    /// Sparse revocation-tree depth compiled into the circuit.
+    pub revocation_tree_depth: u8,
+    /// BLAKE3 digest of the deterministic transparent IPA parameters.
+    pub parameter_digest: [u8; 32],
+    /// BLAKE3 digest of the processed verifying key.
+    pub verifying_key_digest: [u8; 32],
+}
+
+impl PopMembershipVerifierMaterialV1 {
+    /// Validate the fixed circuit shape and non-inert key fingerprints.
+    pub fn validate(&self) -> Result<(), PopCredentialValidationError> {
+        validate_text("membership circuit id", &self.circuit_id)?;
+        if self.circuit_id != zk::POP_MEMBERSHIP_CIRCUIT_ID_V1 {
+            return Err(PopCredentialValidationError::InvalidVerifierMaterial {
+                reason: "unexpected membership circuit id".to_owned(),
+            });
+        }
+        if self.circuit_k != zk::POP_MEMBERSHIP_CIRCUIT_K_V1 {
+            return Err(PopCredentialValidationError::InvalidVerifierMaterial {
+                reason: "unexpected Halo2 circuit exponent".to_owned(),
+            });
+        }
+        if self.credential_tree_depth != POP_CREDENTIAL_TREE_DEPTH_V1
+            || self.revocation_tree_depth != POP_REVOCATION_TREE_DEPTH_V1
+        {
+            return Err(PopCredentialValidationError::InvalidVerifierMaterial {
+                reason: "unexpected membership circuit tree depth".to_owned(),
+            });
+        }
+        validate_digest("membership parameter digest", self.parameter_digest)?;
+        validate_digest("membership verifying-key digest", self.verifying_key_digest)
+    }
+}
+
 /// Membership proof presented by a juror client for a verifier challenge.
+///
+/// Credential identifiers, holder commitments, revocation nonces, and Merkle
+/// paths are deliberately absent. They exist only as Halo2 private witnesses.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
 pub struct PopMembershipProofV1 {
     /// Schema version (`POP_MEMBERSHIP_PROOF_VERSION_V1`).
     pub version: u8,
-    /// Unique proof identifier.
-    pub proof_id: [u8; 32],
-    /// Credential identifier bound to the proof.
-    pub credential_id: [u8; 32],
-    /// Holder commitment disclosed to the proof verifier.
-    pub holder_commitment: [u8; 32],
-    /// Eligibility class proven by the credential.
+    /// Eligibility class proven by the hidden credential leaf.
     pub eligibility_class: PopEligibilityClassV1,
-    /// Commitment root used by the proof.
+    /// Signed active credential commitment root used by the proof.
     pub commitment_root: [u8; 32],
     /// Commitment tree version used by the proof.
     pub commitment_tree_version: u64,
+    /// Signed sparse revocation root used by the non-membership proof.
+    pub revocation_root: [u8; 32],
     /// Revocation list version used by the proof.
     pub revocation_list_version: u64,
-    /// Per-verifier nullifier for replay prevention.
+    /// Per-holder, per-challenge/context nullifier for replay prevention.
     pub nullifier: [u8; 32],
     /// Verifier challenge digest.
     pub challenge_digest: [u8; 32],
@@ -618,14 +751,16 @@ pub struct PopMembershipProofV1 {
     pub verifier_context: String,
     /// Membership proof system.
     pub proof_system: PopMembershipProofSystemV1,
-    /// Deterministic proof transcript digest.
-    pub proof_digest: [u8; 32],
-    /// Unix epoch seconds when this proof expires.
+    /// Pinned transparent parameters and verifying-key fingerprints.
+    pub verifier_material: PopMembershipVerifierMaterialV1,
+    /// Raw Halo2/IPA proof transcript.
+    pub proof_bytes: Vec<u8>,
+    /// Credential expiry proven by the hidden leaf.
     pub expires_at_epoch: u64,
 }
 
 impl PopMembershipProofV1 {
-    /// Validate proof shape and transcript digest.
+    /// Validate bounded proof metadata before any expensive cryptography.
     pub fn validate(&self) -> Result<(), PopCredentialValidationError> {
         if self.version != POP_MEMBERSHIP_PROOF_VERSION_V1 {
             return Err(PopCredentialValidationError::UnsupportedVersion {
@@ -633,32 +768,37 @@ impl PopMembershipProofV1 {
                 found: self.version,
             });
         }
-        validate_digest("proof id", self.proof_id)?;
-        validate_digest("credential id", self.credential_id)?;
-        validate_digest("holder commitment", self.holder_commitment)?;
         validate_digest("commitment root", self.commitment_root)?;
+        validate_canonical_scalar("commitment root", self.commitment_root)?;
         if self.commitment_tree_version == 0 {
             return Err(PopCredentialValidationError::InvalidVersionCounter {
                 field: "commitment_tree_version",
             });
         }
+        validate_digest("revocation root", self.revocation_root)?;
+        validate_canonical_scalar("revocation root", self.revocation_root)?;
         if self.revocation_list_version == 0 {
             return Err(PopCredentialValidationError::InvalidVersionCounter {
                 field: "revocation_list_version",
             });
         }
         validate_digest("nullifier", self.nullifier)?;
+        validate_canonical_scalar("nullifier", self.nullifier)?;
         validate_digest("challenge digest", self.challenge_digest)?;
-        validate_text("verifier context", &self.verifier_context)?;
-        validate_digest("proof digest", self.proof_digest)?;
+        validate_verifier_context(&self.verifier_context)?;
+        self.verifier_material.validate()?;
+        if self.proof_bytes.is_empty() || self.proof_bytes.len() > POP_MEMBERSHIP_PROOF_MAX_BYTES_V1
+        {
+            return Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "membership proof bytes",
+                maximum: POP_MEMBERSHIP_PROOF_MAX_BYTES_V1,
+                actual: self.proof_bytes.len(),
+            });
+        }
         if self.expires_at_epoch == 0 {
             return Err(PopCredentialValidationError::InvalidTimestamp {
                 field: "expires_at_epoch",
             });
-        }
-        let expected = pop_membership_proof_transcript_digest_v1(self)?;
-        if self.proof_digest != expected {
-            return Err(PopCredentialValidationError::ProofDigestMismatch);
         }
         Ok(())
     }
@@ -671,6 +811,117 @@ impl PopMembershipProofV1 {
                 now_epoch,
                 expires_at_epoch: self.expires_at_epoch,
             });
+        }
+        Ok(())
+    }
+}
+
+/// Private credential-tree authentication path held by the juror wallet.
+#[derive(Clone)]
+pub struct PopCredentialMerklePathV1 {
+    /// One canonical Pasta scalar sibling per credential-tree level.
+    pub siblings: Vec<[u8; 32]>,
+    /// `false` when the current node is left, `true` when it is right.
+    pub directions: Vec<bool>,
+}
+
+impl core::fmt::Debug for PopCredentialMerklePathV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("PopCredentialMerklePathV1")
+            .field("depth", &self.siblings.len())
+            .field("path", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Private sparse-tree non-membership path held by the juror wallet.
+#[derive(Clone)]
+pub struct PopRevocationNonMembershipPathV1 {
+    /// One canonical Pasta scalar sibling per sparse-tree level.
+    pub siblings: Vec<[u8; 32]>,
+}
+
+impl core::fmt::Debug for PopRevocationNonMembershipPathV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("PopRevocationNonMembershipPathV1")
+            .field("depth", &self.siblings.len())
+            .field("path", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Private witness consumed by the PoP prover and never serialized into a proof.
+pub struct PopMembershipWitnessV1 {
+    /// Canonical non-zero Pasta scalar known only to the holder.
+    pub holder_secret: [u8; 32],
+    /// Authentication path for the hidden credential leaf.
+    pub credential_path: PopCredentialMerklePathV1,
+    /// Empty-leaf path at the credential's hidden revocation nonce.
+    pub revocation_path: PopRevocationNonMembershipPathV1,
+}
+
+impl core::fmt::Debug for PopMembershipWitnessV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("PopMembershipWitnessV1")
+            .field("holder_secret", &"[REDACTED]")
+            .field(
+                "credential_path_depth",
+                &self.credential_path.siblings.len(),
+            )
+            .field(
+                "revocation_path_depth",
+                &self.revocation_path.siblings.len(),
+            )
+            .finish()
+    }
+}
+
+impl Drop for PopMembershipWitnessV1 {
+    fn drop(&mut self) {
+        self.holder_secret.fill(0);
+        for sibling in &mut self.credential_path.siblings {
+            sibling.fill(0);
+        }
+        self.credential_path.directions.fill(false);
+        for sibling in &mut self.revocation_path.siblings {
+            sibling.fill(0);
+        }
+    }
+}
+
+impl PopMembershipWitnessV1 {
+    /// Validate private witness dimensions and canonical field encodings.
+    pub fn validate(&self) -> Result<(), PopCredentialValidationError> {
+        validate_digest("holder secret", self.holder_secret)?;
+        validate_canonical_scalar("holder secret", self.holder_secret)?;
+        if self.credential_path.siblings.len() != usize::from(POP_CREDENTIAL_TREE_DEPTH_V1)
+            || self.credential_path.directions.len() != usize::from(POP_CREDENTIAL_TREE_DEPTH_V1)
+        {
+            return Err(PopCredentialValidationError::InvalidMerklePathDepth {
+                tree: "credential",
+                expected: usize::from(POP_CREDENTIAL_TREE_DEPTH_V1),
+                siblings: self.credential_path.siblings.len(),
+                directions: self.credential_path.directions.len(),
+            });
+        }
+        if self.revocation_path.siblings.len() != usize::from(POP_REVOCATION_TREE_DEPTH_V1) {
+            return Err(PopCredentialValidationError::InvalidMerklePathDepth {
+                tree: "revocation",
+                expected: usize::from(POP_REVOCATION_TREE_DEPTH_V1),
+                siblings: self.revocation_path.siblings.len(),
+                directions: usize::from(POP_REVOCATION_TREE_DEPTH_V1),
+            });
+        }
+        for sibling in self
+            .credential_path
+            .siblings
+            .iter()
+            .chain(self.revocation_path.siblings.iter())
+        {
+            validate_canonical_scalar("membership path sibling", *sibling)?;
         }
         Ok(())
     }
@@ -783,93 +1034,141 @@ pub fn issue_pop_credential_bundle_ed25519_v1(
     Ok(bundle)
 }
 
-/// Derive the deterministic transcript digest for a membership proof.
-pub fn pop_membership_proof_transcript_digest_v1(
-    proof: &PopMembershipProofV1,
+/// Derive a holder commitment from a private holder secret and credential id.
+///
+/// Both inputs must be canonical non-zero Pasta scalars. The returned
+/// commitment is suitable for [`PopCredentialV1::holder_commitment`].
+pub fn derive_pop_holder_commitment_v1(
+    holder_secret: [u8; 32],
+    credential_id: [u8; 32],
 ) -> Result<[u8; 32], PopCredentialValidationError> {
-    let mut transcript = proof.clone();
-    transcript.proof_digest = [0; 32];
-    pop_signature_digest(POP_MEMBERSHIP_PROOF_DOMAIN_V1, &transcript)
+    zk::holder_commitment_v1(holder_secret, credential_id)
 }
 
-/// Fill and validate the deterministic transcript digest for a membership proof.
-pub fn finalize_pop_membership_proof_digest_v1(
-    mut proof: PopMembershipProofV1,
-) -> Result<PopMembershipProofV1, PopCredentialValidationError> {
-    proof.proof_digest = pop_membership_proof_transcript_digest_v1(&proof)?;
-    proof.validate()?;
-    Ok(proof)
+/// Derive the canonical hidden credential leaf committed by the issuer tree.
+pub fn pop_credential_leaf_v1(
+    credential: &PopCredentialV1,
+) -> Result<[u8; 32], PopCredentialValidationError> {
+    credential.validate()?;
+    zk::credential_leaf_v1(credential)
 }
 
-/// Verify a PoP membership proof against active root and revocation material.
-///
-/// The production verifier is fail-closed while V1 only has the local
-/// transcript-digest proof foundation. Use
-/// [`verify_pop_membership_transcript_policy_v1`] only for local fixture and
-/// reference-policy checks that intentionally accept transcript-digest proofs.
-pub fn verify_pop_membership_proof_v1(
-    proof: &PopMembershipProofV1,
-    _credential: &PopCredentialV1,
-    _commitment_root: &PopCommitmentRootV1,
-    _revocations: &PopRevocationListV1,
-    _now_epoch: u64,
-    _seen_nullifiers: &[[u8; 32]],
-) -> Result<(), PopCredentialValidationError> {
-    match proof.proof_system {
-        PopMembershipProofSystemV1::TranscriptDigestV1 => {
-            Err(PopCredentialValidationError::PolicyOnlyProofSystem)
-        }
+/// Fold one fixed-depth credential authentication path into its root.
+pub fn pop_credential_root_from_path_v1(
+    leaf: [u8; 32],
+    path: &PopCredentialMerklePathV1,
+) -> Result<[u8; 32], PopCredentialValidationError> {
+    zk::credential_root_from_path_v1(leaf, &path.siblings, &path.directions)
+}
+
+/// Compute the canonical sparse revocation root for a signed snapshot.
+pub fn pop_revocation_root_v1(
+    entries: &[PopRevocationEntryV1],
+) -> Result<[u8; 32], PopCredentialValidationError> {
+    if entries.len() > POP_REVOCATION_ENTRIES_MAX_V1 {
+        return Err(PopCredentialValidationError::ResourceLimitExceeded {
+            resource: "revocation entries",
+            maximum: POP_REVOCATION_ENTRIES_MAX_V1,
+            actual: entries.len(),
+        });
     }
+    zk::revocation_root_from_entries_v1(entries)
 }
 
-/// Verify a transcript-digest PoP proof for local policy fixtures.
-///
-/// This helper performs the deterministic transcript, expiry, root,
-/// revocation-list, revoked-nonce, and nullifier checks used by local reference
-/// tooling. It is not a production privacy-preserving membership verifier.
-pub fn verify_pop_membership_transcript_policy_v1(
-    proof: &PopMembershipProofV1,
+/// Build the private sparse-tree path proving that `nonce` is not revoked.
+pub fn build_pop_revocation_non_membership_path_v1(
+    entries: &[PopRevocationEntryV1],
+    nonce: [u8; 32],
+) -> Result<PopRevocationNonMembershipPathV1, PopCredentialValidationError> {
+    if entries.len() > POP_REVOCATION_ENTRIES_MAX_V1 {
+        return Err(PopCredentialValidationError::ResourceLimitExceeded {
+            resource: "revocation entries",
+            maximum: POP_REVOCATION_ENTRIES_MAX_V1,
+            actual: entries.len(),
+        });
+    }
+    zk::build_revocation_non_membership_path_v1(entries, nonce)
+}
+
+/// Return the deterministic, pinned V1 parameter and verifying-key fingerprints.
+pub fn pop_membership_verifier_material_v1()
+-> Result<PopMembershipVerifierMaterialV1, PopCredentialValidationError> {
+    zk::verifier_material_v1()
+}
+
+/// Create a privacy-preserving PoP membership proof for a verifier challenge.
+pub fn prove_pop_membership_v1(
     credential: &PopCredentialV1,
     commitment_root: &PopCommitmentRootV1,
     revocations: &PopRevocationListV1,
+    witness: &PopMembershipWitnessV1,
+    challenge_digest: [u8; 32],
+    verifier_context: &str,
     now_epoch: u64,
-    seen_nullifiers: &[[u8; 32]],
-) -> Result<(), PopCredentialValidationError> {
-    match proof.proof_system {
-        PopMembershipProofSystemV1::TranscriptDigestV1 => {}
-    }
-    proof.validate_at(now_epoch)?;
+) -> Result<PopMembershipProofV1, PopCredentialValidationError> {
+    validate_digest("challenge digest", challenge_digest)?;
+    validate_verifier_context(verifier_context)?;
+    witness.validate()?;
     credential.validate_at(now_epoch)?;
-    commitment_root.validate()?;
-    revocations.validate()?;
     verify_pop_credential_signature_v1(credential)?;
     verify_pop_commitment_root_signature_v1(commitment_root)?;
     verify_pop_revocation_list_signature_v1(revocations)?;
+    validate_pop_active_publications_v1(credential, commitment_root, revocations)?;
+    if revocations.contains_nonce(credential.revocation_nonce) {
+        return Err(PopCredentialValidationError::RevokedCredential);
+    }
+    zk::validate_prover_paths(
+        credential,
+        witness,
+        commitment_root.root_digest,
+        revocations.revocation_root,
+    )?;
+    let proof = zk::prove_v1(
+        credential,
+        witness,
+        commitment_root.root_digest,
+        revocations.revocation_root,
+        revocations.list_version,
+        challenge_digest,
+        verifier_context,
+    )?;
+    verify_pop_membership_proof_v1(
+        &proof,
+        commitment_root,
+        revocations,
+        challenge_digest,
+        verifier_context,
+        now_epoch,
+        &[],
+    )?;
+    Ok(proof)
+}
 
-    if proof.credential_id != credential.credential_id {
-        return Err(PopCredentialValidationError::ProofCredentialMismatch);
+/// Verify a PoP membership proof against signed active root and revocation state.
+pub fn verify_pop_membership_proof_v1(
+    proof: &PopMembershipProofV1,
+    commitment_root: &PopCommitmentRootV1,
+    revocations: &PopRevocationListV1,
+    expected_challenge_digest: [u8; 32],
+    expected_verifier_context: &str,
+    now_epoch: u64,
+    seen_nullifiers: &[[u8; 32]],
+) -> Result<(), PopCredentialValidationError> {
+    if seen_nullifiers.len() > POP_MEMBERSHIP_SEEN_NULLIFIERS_MAX_V1 {
+        return Err(PopCredentialValidationError::ReplayCacheLimitExceeded);
     }
-    if proof.holder_commitment != credential.holder_commitment {
-        return Err(PopCredentialValidationError::ProofHolderCommitmentMismatch);
-    }
-    if proof.eligibility_class != credential.eligibility_class {
-        return Err(PopCredentialValidationError::ProofEligibilityClassMismatch);
-    }
-    if proof.commitment_root != commitment_root.root_digest
-        || credential.commitment_root != commitment_root.root_digest
-        || revocations.commitment_root != commitment_root.root_digest
-    {
+    proof.validate_at(now_epoch)?;
+    verify_pop_commitment_root_signature_v1(commitment_root)?;
+    verify_pop_revocation_list_signature_v1(revocations)?;
+    validate_pop_verifier_publications_v1(commitment_root, revocations)?;
+    if proof.commitment_root != commitment_root.root_digest {
         return Err(PopCredentialValidationError::WrongCommitmentRoot);
     }
-    if proof.commitment_tree_version != commitment_root.tree_version
-        || credential.commitment_tree_version != commitment_root.tree_version
-    {
+    if proof.commitment_tree_version != commitment_root.tree_version {
         return Err(PopCredentialValidationError::CommitmentTreeVersionMismatch);
     }
-    if credential.issuer_id.as_str() != commitment_root.issuer_id.as_str()
-        || credential.issuer_id.as_str() != revocations.issuer_id.as_str()
-    {
-        return Err(PopCredentialValidationError::IssuerMismatch);
+    if proof.revocation_root != revocations.revocation_root {
+        return Err(PopCredentialValidationError::RevocationRootMismatch);
     }
     if proof.revocation_list_version < revocations.list_version {
         return Err(PopCredentialValidationError::StaleRevocationList {
@@ -885,16 +1184,16 @@ pub fn verify_pop_membership_transcript_policy_v1(
             },
         );
     }
-    if credential.revocation_list_version > revocations.list_version {
-        return Err(PopCredentialValidationError::CredentialRevocationListMismatch);
+    if proof.challenge_digest != expected_challenge_digest {
+        return Err(PopCredentialValidationError::ChallengeMismatch);
     }
-    if revocations.contains_nonce(credential.revocation_nonce) {
-        return Err(PopCredentialValidationError::RevokedCredential);
+    if proof.verifier_context != expected_verifier_context {
+        return Err(PopCredentialValidationError::VerifierContextMismatch);
     }
     if seen_nullifiers.contains(&proof.nullifier) {
         return Err(PopCredentialValidationError::ReplayedProof);
     }
-    Ok(())
+    zk::verify_v1(proof)
 }
 
 /// Errors returned by SFM-4b1 PoP credential validators.
@@ -924,6 +1223,36 @@ pub enum PopCredentialValidationError {
     /// Monotonic counter field is invalid.
     #[error("{field} must be greater than zero")]
     InvalidVersionCounter { field: &'static str },
+    /// A fixed Merkle-tree depth does not match the compiled V1 circuit.
+    #[error("{tree} tree depth must be {expected}, got {actual}")]
+    InvalidTreeDepth {
+        tree: &'static str,
+        expected: u8,
+        actual: u8,
+    },
+    /// A private Merkle authentication path has the wrong dimensions.
+    #[error(
+        "{tree} Merkle path requires {expected} levels, got {siblings} siblings and {directions} directions"
+    )]
+    InvalidMerklePathDepth {
+        tree: &'static str,
+        expected: usize,
+        siblings: usize,
+        directions: usize,
+    },
+    /// A bounded collection or byte payload exceeded its hard limit.
+    #[error("{resource} exceeds maximum {maximum}: got {actual}")]
+    ResourceLimitExceeded {
+        resource: &'static str,
+        maximum: usize,
+        actual: usize,
+    },
+    /// A field element is not canonically encoded for the Pasta scalar field.
+    #[error("{field} is not a canonical Pasta scalar")]
+    InvalidScalarEncoding { field: &'static str },
+    /// Revocation nonces must be canonical non-zero 128-bit little-endian keys.
+    #[error("revocation nonce must be a non-zero 128-bit little-endian value")]
+    InvalidRevocationNonceEncoding,
     /// Validity window is empty or inverted.
     #[error("validity window {starts_at_epoch}..{ends_at_epoch} is invalid")]
     InvalidValidityWindow {
@@ -973,18 +1302,12 @@ pub enum PopCredentialValidationError {
     /// Revocation list has duplicate nonces.
     #[error("revocation list has duplicate nonces")]
     DuplicateRevocationNonce,
-    /// Proof digest does not match the canonical transcript.
-    #[error("membership proof transcript digest mismatch")]
-    ProofDigestMismatch,
-    /// Proof credential id does not match the supplied credential.
-    #[error("membership proof credential id mismatch")]
-    ProofCredentialMismatch,
+    /// Signed sparse revocation root does not match the supplied state or witness.
+    #[error("sparse revocation root mismatch")]
+    RevocationRootMismatch,
     /// Proof holder commitment does not match the supplied credential.
     #[error("membership proof holder commitment mismatch")]
     ProofHolderCommitmentMismatch,
-    /// Proof eligibility class does not match the supplied credential.
-    #[error("membership proof eligibility class mismatch")]
-    ProofEligibilityClassMismatch,
     /// Commitment root does not match credential, proof, or revocation material.
     #[error("membership proof uses the wrong commitment root")]
     WrongCommitmentRoot,
@@ -1022,9 +1345,24 @@ pub enum PopCredentialValidationError {
     /// Proof nullifier has already been consumed.
     #[error("membership proof nullifier has already been consumed")]
     ReplayedProof,
-    /// Proof system is policy-only and cannot satisfy production verification.
-    #[error("membership proof system is policy-only and is not accepted by production verifier")]
-    PolicyOnlyProofSystem,
+    /// Caller supplied too many replay-cache entries to the slice verifier.
+    #[error("membership proof replay-cache input exceeds the bounded slice API")]
+    ReplayCacheLimitExceeded,
+    /// Pinned Halo2 parameters or verifying-key material is invalid.
+    #[error("invalid PoP membership verifier material: {reason}")]
+    InvalidVerifierMaterial { reason: String },
+    /// Halo2 proving or deterministic material construction failed.
+    #[error("PoP membership proof backend failed: {reason}")]
+    ProofBackend { reason: String },
+    /// Halo2/IPA cryptographic verification failed.
+    #[error("invalid PoP membership proof: {reason}")]
+    InvalidMembershipProof { reason: String },
+    /// Expected challenge does not match the proof statement.
+    #[error("membership proof challenge does not match verifier challenge")]
+    ChallengeMismatch,
+    /// Expected verifier domain/context does not match the proof statement.
+    #[error("membership proof context does not match verifier context")]
+    VerifierContextMismatch,
 }
 
 fn pop_signature_digest<T: norito::core::NoritoSerialize>(
@@ -1091,12 +1429,53 @@ fn validate_digest(
     Ok(())
 }
 
+fn validate_canonical_scalar(
+    field: &'static str,
+    bytes: [u8; 32],
+) -> Result<(), PopCredentialValidationError> {
+    zk::canonical_scalar(bytes)
+        .map(|_| ())
+        .map_err(|_| PopCredentialValidationError::InvalidScalarEncoding { field })
+}
+
+fn validate_revocation_nonce(nonce: [u8; 32]) -> Result<(), PopCredentialValidationError> {
+    zk::revocation_nonce_u128(nonce).map(|_| ())
+}
+
+fn validate_verifier_context(context: &str) -> Result<(), PopCredentialValidationError> {
+    validate_text("verifier context", context)?;
+    if context.len() > POP_MEMBERSHIP_CONTEXT_MAX_BYTES_V1 {
+        return Err(PopCredentialValidationError::ResourceLimitExceeded {
+            resource: "verifier context bytes",
+            maximum: POP_MEMBERSHIP_CONTEXT_MAX_BYTES_V1,
+            actual: context.len(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_text(field: &'static str, value: &str) -> Result<(), PopCredentialValidationError> {
     if value.trim().is_empty() {
         return Err(PopCredentialValidationError::EmptyText { field });
     }
     if value != value.trim() || value.chars().any(char::is_control) {
         return Err(PopCredentialValidationError::InvalidText { field });
+    }
+    Ok(())
+}
+
+fn validate_bounded_text(
+    field: &'static str,
+    value: &str,
+    maximum: usize,
+) -> Result<(), PopCredentialValidationError> {
+    validate_text(field, value)?;
+    if value.len() > maximum {
+        return Err(PopCredentialValidationError::ResourceLimitExceeded {
+            resource: field,
+            maximum,
+            actual: value.len(),
+        });
     }
     Ok(())
 }
@@ -1150,13 +1529,55 @@ fn validate_pop_issuer_publications_v1(
     Ok(())
 }
 
+fn validate_pop_verifier_publications_v1(
+    commitment_root: &PopCommitmentRootV1,
+    revocation_list: &PopRevocationListV1,
+) -> Result<(), PopCredentialValidationError> {
+    if revocation_list.commitment_root != commitment_root.root_digest {
+        return Err(PopCredentialValidationError::WrongCommitmentRoot);
+    }
+    if commitment_root.issuer_id != revocation_list.issuer_id {
+        return Err(PopCredentialValidationError::IssuerMismatch);
+    }
+    if commitment_root.publisher_signature.public_key
+        != revocation_list.publisher_signature.public_key
+    {
+        return Err(PopCredentialValidationError::IssuerKeyMismatch);
+    }
+    Ok(())
+}
+
+fn validate_pop_active_publications_v1(
+    credential: &PopCredentialV1,
+    commitment_root: &PopCommitmentRootV1,
+    revocation_list: &PopRevocationListV1,
+) -> Result<(), PopCredentialValidationError> {
+    validate_pop_verifier_publications_v1(commitment_root, revocation_list)?;
+    if credential.commitment_root != commitment_root.root_digest {
+        return Err(PopCredentialValidationError::WrongCommitmentRoot);
+    }
+    if credential.commitment_tree_version != commitment_root.tree_version {
+        return Err(PopCredentialValidationError::CommitmentTreeVersionMismatch);
+    }
+    if credential.issuer_id != commitment_root.issuer_id {
+        return Err(PopCredentialValidationError::IssuerMismatch);
+    }
+    if credential.issuer_signature.public_key != commitment_root.publisher_signature.public_key {
+        return Err(PopCredentialValidationError::IssuerKeyMismatch);
+    }
+    if credential.revocation_list_version > revocation_list.list_version {
+        return Err(PopCredentialValidationError::CredentialRevocationListMismatch);
+    }
+    Ok(())
+}
+
 fn validate_text_list(
     field: &'static str,
     values: &[String],
 ) -> Result<(), PopCredentialValidationError> {
     let mut seen = BTreeSet::new();
     for value in values {
-        validate_text(field, value)?;
+        validate_bounded_text(field, value, POP_ATTRIBUTE_KEY_MAX_BYTES_V1)?;
         if !seen.insert(value.clone()) {
             return Err(PopCredentialValidationError::DuplicateRequestedAttribute {
                 key: value.clone(),
@@ -1169,6 +1590,7 @@ fn validate_text_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
 
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1184,63 +1606,158 @@ mod tests {
         [seed; 32]
     }
 
+    fn scalar(value: u64) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    fn nonce(value: u128) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
     fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
     }
 
-    fn empty_signature() -> PopSignatureV1 {
+    fn empty_signature(key: &SigningKey) -> PopSignatureV1 {
         PopSignatureV1 {
             algorithm: PopSignatureAlgorithmV1::Ed25519,
-            public_key: vec![1; 32],
+            public_key: key.verifying_key().to_bytes().to_vec(),
             signature: vec![2; 64],
         }
     }
 
-    fn credential() -> PopCredentialV1 {
-        PopCredentialV1 {
+    #[derive(Clone)]
+    struct Fixture {
+        credential: PopCredentialV1,
+        root: PopCommitmentRootV1,
+        revocations: PopRevocationListV1,
+        proof: PopMembershipProofV1,
+        holder_secret: [u8; 32],
+        credential_path: PopCredentialMerklePathV1,
+        revocation_path: PopRevocationNonMembershipPathV1,
+    }
+
+    fn build_fixture() -> Fixture {
+        let key = signing_key(0x55);
+        let holder_secret = scalar(0x1234_5678);
+        let credential_id = scalar(0x8765_4321);
+        let holder_commitment =
+            derive_pop_holder_commitment_v1(holder_secret, credential_id).expect("commitment");
+        let mut credential = PopCredentialV1 {
             version: POP_CREDENTIAL_VERSION_V1,
-            credential_id: digest(0x11),
-            holder_commitment: digest(0x12),
+            credential_id,
+            holder_commitment,
             eligibility_class: PopEligibilityClassV1::General,
             attributes: vec![PopCredentialAttributeV1 {
-                key: "residency".to_string(),
+                key: "residency".to_owned(),
                 value_commitment: digest(0x13),
             }],
-            issuer_id: "issuer.sorafs".to_string(),
+            issuer_id: "issuer.sorafs".to_owned(),
             issued_at_epoch: 100,
             expires_at_epoch: 1_000,
             renewal_at_epoch: 800,
-            revocation_nonce: digest(0x14),
-            commitment_root: digest(0x15),
+            revocation_nonce: nonce(0xfeed_beef_dead_cafe_1234_5678_9abc_def0),
+            commitment_root: scalar(1),
             commitment_tree_version: 7,
             revocation_list_version: 3,
-            issuer_signature: empty_signature(),
+            issuer_signature: empty_signature(&key),
+        };
+        credential =
+            sign_pop_credential_ed25519_v1(credential, &key).expect("placeholder signature");
+
+        let credential_path = PopCredentialMerklePathV1 {
+            siblings: vec![scalar(0); usize::from(POP_CREDENTIAL_TREE_DEPTH_V1)],
+            directions: (0..usize::from(POP_CREDENTIAL_TREE_DEPTH_V1))
+                .map(|level| level % 3 == 1)
+                .collect(),
+        };
+        let leaf = pop_credential_leaf_v1(&credential).expect("credential leaf");
+        let root_digest =
+            pop_credential_root_from_path_v1(leaf, &credential_path).expect("credential root");
+        credential.commitment_root = root_digest;
+        credential =
+            sign_pop_credential_ed25519_v1(credential, &key).expect("credential signature");
+
+        let root = sign_pop_commitment_root_ed25519_v1(
+            PopCommitmentRootV1 {
+                version: POP_COMMITMENT_ROOT_VERSION_V1,
+                root_digest,
+                tree_size: 1,
+                tree_depth: POP_CREDENTIAL_TREE_DEPTH_V1,
+                tree_version: 7,
+                issuer_id: "issuer.sorafs".to_owned(),
+                published_at_epoch: 120,
+                previous_root_digest: Some(scalar(99)),
+                governance_event_digest: digest(0x17),
+                publisher_signature: empty_signature(&key),
+            },
+            &key,
+        )
+        .expect("root signature");
+
+        let revocation_entries = Vec::new();
+        let revocation_root =
+            pop_revocation_root_v1(&revocation_entries).expect("empty revocation root");
+        let revocations = sign_pop_revocation_list_ed25519_v1(
+            PopRevocationListV1 {
+                version: POP_REVOCATION_LIST_VERSION_V1,
+                list_version: 3,
+                commitment_root: root_digest,
+                revocation_root,
+                revocation_tree_depth: POP_REVOCATION_TREE_DEPTH_V1,
+                issuer_id: "issuer.sorafs".to_owned(),
+                published_at_epoch: 130,
+                entries: revocation_entries,
+                publisher_signature: empty_signature(&key),
+            },
+            &key,
+        )
+        .expect("revocation signature");
+        let revocation_path = build_pop_revocation_non_membership_path_v1(
+            &revocations.entries,
+            credential.revocation_nonce,
+        )
+        .expect("non-membership path");
+        let witness = PopMembershipWitnessV1 {
+            holder_secret,
+            credential_path: credential_path.clone(),
+            revocation_path: revocation_path.clone(),
+        };
+        let proof = prove_pop_membership_v1(
+            &credential,
+            &root,
+            &revocations,
+            &witness,
+            digest(0x43),
+            "jury-case-1",
+            500,
+        )
+        .expect("membership proof");
+        Fixture {
+            credential,
+            root,
+            revocations,
+            proof,
+            holder_secret,
+            credential_path,
+            revocation_path,
         }
     }
 
-    fn root() -> PopCommitmentRootV1 {
-        PopCommitmentRootV1 {
-            version: POP_COMMITMENT_ROOT_VERSION_V1,
-            root_digest: digest(0x15),
-            tree_size: 32,
-            tree_version: 7,
-            issuer_id: "issuer.sorafs".to_string(),
-            published_at_epoch: 120,
-            previous_root_digest: Some(digest(0x16)),
-            governance_event_digest: digest(0x17),
-            publisher_signature: empty_signature(),
-        }
+    fn fixture() -> &'static Fixture {
+        static FIXTURE: OnceLock<Fixture> = OnceLock::new();
+        FIXTURE.get_or_init(build_fixture)
     }
 
-    fn revocations() -> PopRevocationListV1 {
-        PopRevocationListV1 {
-            version: POP_REVOCATION_LIST_VERSION_V1,
-            list_version: 3,
-            commitment_root: digest(0x15),
-            issuer_id: "issuer.sorafs".to_string(),
-            published_at_epoch: 130,
-            entries: Vec::new(),
-            publisher_signature: empty_signature(),
+    fn witness_from(fixture: &Fixture) -> PopMembershipWitnessV1 {
+        PopMembershipWitnessV1 {
+            holder_secret: fixture.holder_secret,
+            credential_path: fixture.credential_path.clone(),
+            revocation_path: fixture.revocation_path.clone(),
         }
     }
 
@@ -1261,53 +1778,13 @@ mod tests {
         PopRenewalRequestV1 {
             version: POP_RENEWAL_REQUEST_VERSION_V1,
             request_id: digest(0x31),
-            previous_credential_id: digest(0x11),
-            holder_commitment: digest(0x12),
-            rotation_commitment: digest(0x32),
+            previous_credential_id: scalar(11),
+            holder_commitment: scalar(12),
+            rotation_commitment: scalar(32),
             requested_expires_at_epoch: 2_000,
             submitted_at_epoch: 900,
             attestation_digest: digest(0x33),
         }
-    }
-
-    fn proof() -> PopMembershipProofV1 {
-        finalize_pop_membership_proof_digest_v1(PopMembershipProofV1 {
-            version: POP_MEMBERSHIP_PROOF_VERSION_V1,
-            proof_id: digest(0x41),
-            credential_id: digest(0x11),
-            holder_commitment: digest(0x12),
-            eligibility_class: PopEligibilityClassV1::General,
-            commitment_root: digest(0x15),
-            commitment_tree_version: 7,
-            revocation_list_version: 3,
-            nullifier: digest(0x42),
-            challenge_digest: digest(0x43),
-            verifier_context: "jury-case-1".to_string(),
-            proof_system: PopMembershipProofSystemV1::TranscriptDigestV1,
-            proof_digest: [0; 32],
-            expires_at_epoch: 2_000,
-        })
-        .expect("proof digest")
-    }
-
-    fn signed_material() -> (PopCredentialV1, PopCommitmentRootV1, PopRevocationListV1) {
-        let key = signing_key(0x55);
-        let credential =
-            sign_pop_credential_ed25519_v1(credential(), &key).expect("credential signature");
-        let root = sign_pop_commitment_root_ed25519_v1(root(), &key).expect("root signature");
-        let revocations = sign_pop_revocation_list_ed25519_v1(revocations(), &key)
-            .expect("revocations signature");
-        (credential, root, revocations)
-    }
-
-    fn issued_bundle() -> PopIssuedCredentialBundleV1 {
-        issue_pop_credential_bundle_ed25519_v1(
-            credential(),
-            root(),
-            revocations(),
-            &signing_key(0x55),
-        )
-        .expect("issue bundle")
     }
 
     fn norito_roundtrip<T>(value: &T) -> T
@@ -1325,25 +1802,30 @@ mod tests {
 
     #[test]
     fn payloads_roundtrip_through_norito() {
-        let (credential, root, revocations) = signed_material();
-        norito_roundtrip(&credential);
-        norito_roundtrip(&root);
-        norito_roundtrip(&revocations);
-        norito_roundtrip(&issued_bundle());
+        let fixture = fixture();
+        norito_roundtrip(&fixture.credential);
+        norito_roundtrip(&fixture.root);
+        norito_roundtrip(&fixture.revocations);
+        norito_roundtrip(&PopIssuedCredentialBundleV1 {
+            version: POP_ISSUED_CREDENTIAL_BUNDLE_VERSION_V1,
+            credential: fixture.credential.clone(),
+            commitment_root: fixture.root.clone(),
+            revocation_list: fixture.revocations.clone(),
+        });
         norito_roundtrip(&enrollment());
         norito_roundtrip(&renewal());
-        norito_roundtrip(&proof());
+        norito_roundtrip(&fixture.proof);
     }
 
     #[test]
     fn signatures_verify_and_reject_forgery() {
-        let (credential, root, revocations) = signed_material();
-        verify_pop_credential_signature_v1(&credential).expect("credential verifies");
-        verify_pop_commitment_root_signature_v1(&root).expect("root verifies");
-        verify_pop_revocation_list_signature_v1(&revocations).expect("revocations verify");
+        let fixture = fixture();
+        verify_pop_credential_signature_v1(&fixture.credential).expect("credential verifies");
+        verify_pop_commitment_root_signature_v1(&fixture.root).expect("root verifies");
+        verify_pop_revocation_list_signature_v1(&fixture.revocations).expect("revocations verify");
 
-        let mut forged = credential.clone();
-        forged.credential_id = digest(0x99);
+        let mut forged = fixture.credential.clone();
+        forged.credential_id = scalar(0x99);
         let err = verify_pop_credential_signature_v1(&forged).expect_err("forgery rejected");
         assert!(matches!(
             err,
@@ -1353,7 +1835,10 @@ mod tests {
 
     #[test]
     fn signatures_reject_all_zero_signature_material() {
-        let (mut credential, mut root, mut revocations) = signed_material();
+        let fixture = fixture();
+        let mut credential = fixture.credential.clone();
+        let mut root = fixture.root.clone();
+        let mut revocations = fixture.revocations.clone();
         credential.issuer_signature.signature.fill(0);
         root.publisher_signature.signature.fill(0);
         revocations.publisher_signature.signature.fill(0);
@@ -1389,7 +1874,7 @@ mod tests {
             ("small-order", SMALL_ORDER_R, "small-order"),
             ("noncanonical", NONCANONICAL_R, "not a canonical"),
         ] {
-            let (mut credential, _root, _revocations) = signed_material();
+            let mut credential = fixture().credential.clone();
             credential.issuer_signature.signature[..PUBLIC_KEY_LENGTH]
                 .copy_from_slice(&replacement_r);
 
@@ -1408,30 +1893,40 @@ mod tests {
 
     #[test]
     fn issued_credential_bundle_signs_and_validates_publications() {
-        let bundle = issued_bundle();
+        let fixture = fixture();
+        let bundle = PopIssuedCredentialBundleV1 {
+            version: POP_ISSUED_CREDENTIAL_BUNDLE_VERSION_V1,
+            credential: fixture.credential.clone(),
+            commitment_root: fixture.root.clone(),
+            revocation_list: fixture.revocations.clone(),
+        };
         bundle.validate().expect("issued bundle validates");
-        verify_pop_membership_transcript_policy_v1(
-            &proof(),
-            &bundle.credential,
+        verify_pop_membership_proof_v1(
+            &fixture.proof,
             &bundle.commitment_root,
             &bundle.revocation_list,
+            digest(0x43),
+            "jury-case-1",
             500,
             &[],
         )
-        .expect("bundle material verifies membership proof");
+        .expect("bundle verifies private membership proof");
     }
 
     #[test]
     fn issued_credential_bundle_rejects_inconsistent_revocation_version() {
-        let mut revocations = revocations();
-        revocations.list_version += 1;
-        let err = issue_pop_credential_bundle_ed25519_v1(
-            credential(),
-            root(),
-            revocations,
-            &signing_key(0x55),
-        )
-        .expect_err("revocation version mismatch");
+        let fixture = fixture();
+        let mut bundle = PopIssuedCredentialBundleV1 {
+            version: POP_ISSUED_CREDENTIAL_BUNDLE_VERSION_V1,
+            credential: fixture.credential.clone(),
+            commitment_root: fixture.root.clone(),
+            revocation_list: fixture.revocations.clone(),
+        };
+        bundle.revocation_list.list_version += 1;
+        bundle.revocation_list =
+            sign_pop_revocation_list_ed25519_v1(bundle.revocation_list, &signing_key(0x55))
+                .expect("resign revocations");
+        let err = bundle.validate().expect_err("revocation version mismatch");
         assert_eq!(
             err,
             PopCredentialValidationError::CredentialRevocationListMismatch
@@ -1440,86 +1935,503 @@ mod tests {
 
     #[test]
     fn issued_credential_bundle_rejects_issuer_key_drift() {
-        let mut bundle = issued_bundle();
+        let fixture = fixture();
+        let mut bundle = PopIssuedCredentialBundleV1 {
+            version: POP_ISSUED_CREDENTIAL_BUNDLE_VERSION_V1,
+            credential: fixture.credential.clone(),
+            commitment_root: fixture.root.clone(),
+            revocation_list: fixture.revocations.clone(),
+        };
+        bundle.commitment_root.publisher_signature = empty_signature(&signing_key(0x66));
         bundle.commitment_root =
-            sign_pop_commitment_root_ed25519_v1(root(), &signing_key(0x66)).expect("resign root");
+            sign_pop_commitment_root_ed25519_v1(bundle.commitment_root, &signing_key(0x66))
+                .expect("resign root");
         let err = bundle.validate().expect_err("issuer key drift");
         assert_eq!(err, PopCredentialValidationError::IssuerKeyMismatch);
     }
 
     #[test]
-    fn membership_proof_verifies_active_unrevoked_credential() {
-        let (credential, root, revocations) = signed_material();
-        verify_pop_membership_transcript_policy_v1(
-            &proof(),
-            &credential,
-            &root,
-            &revocations,
+    fn membership_proof_verifies_without_public_identity_material() {
+        let fixture = fixture();
+        verify_pop_membership_proof_v1(
+            &fixture.proof,
+            &fixture.root,
+            &fixture.revocations,
+            digest(0x43),
+            "jury-case-1",
             500,
             &[],
         )
         .expect("membership proof verifies");
+        let encoded = norito::to_bytes(&fixture.proof).expect("encode proof");
+        assert!(
+            !encoded
+                .windows(fixture.credential.credential_id.len())
+                .any(|window| window == &fixture.credential.credential_id[..])
+        );
+        assert!(
+            !encoded
+                .windows(fixture.credential.holder_commitment.len())
+                .any(|window| window == &fixture.credential.holder_commitment[..])
+        );
+        assert!(
+            !encoded
+                .windows(fixture.credential.revocation_nonce.len())
+                .any(|window| window == &fixture.credential.revocation_nonce[..])
+        );
     }
 
     #[test]
-    fn production_membership_verifier_rejects_policy_only_transcripts() {
-        let (credential, root, revocations) = signed_material();
-        let err =
-            verify_pop_membership_proof_v1(&proof(), &credential, &root, &revocations, 500, &[])
-                .expect_err("policy-only transcript is not production proof");
-        assert_eq!(err, PopCredentialValidationError::PolicyOnlyProofSystem);
-    }
-
-    #[test]
-    fn expired_credentials_are_rejected() {
-        let (credential, root, revocations) = signed_material();
-        let err = verify_pop_membership_transcript_policy_v1(
-            &proof(),
-            &credential,
-            &root,
-            &revocations,
+    fn expired_proofs_are_rejected() {
+        let fixture = fixture();
+        let err = verify_pop_membership_proof_v1(
+            &fixture.proof,
+            &fixture.root,
+            &fixture.revocations,
+            digest(0x43),
+            "jury-case-1",
             1_000,
             &[],
         )
-        .expect_err("expired credential");
+        .expect_err("expired proof");
         assert!(matches!(
             err,
-            PopCredentialValidationError::ExpiredCredential { .. }
+            PopCredentialValidationError::ExpiredProof { .. }
         ));
     }
 
     #[test]
-    fn revoked_nonces_are_rejected() {
-        let (credential, root, mut revocations) = signed_material();
+    fn revoked_witnesses_are_rejected_before_proving() {
+        let fixture = fixture();
+        let mut revocations = fixture.revocations.clone();
         revocations.entries.push(PopRevocationEntryV1 {
-            nonce: credential.revocation_nonce,
+            nonce: fixture.credential.revocation_nonce,
             revoked_at_epoch: 200,
             reason: PopRevocationReasonV1::GovernanceSuspension,
         });
-        revocations =
-            sign_pop_revocation_list_ed25519_v1(revocations, &signing_key(0x55)).expect("resign");
-        let err = verify_pop_membership_transcript_policy_v1(
-            &proof(),
-            &credential,
-            &root,
+        revocations.revocation_root =
+            pop_revocation_root_v1(&revocations.entries).expect("revoked root");
+        revocations = sign_pop_revocation_list_ed25519_v1(revocations, &signing_key(0x55))
+            .expect("resign revocations");
+        let err = prove_pop_membership_v1(
+            &fixture.credential,
+            &fixture.root,
             &revocations,
+            &witness_from(fixture),
+            digest(0x43),
+            "jury-case-1",
             500,
-            &[],
         )
-        .expect_err("revoked credential");
+        .expect_err("revoked witness");
         assert_eq!(err, PopCredentialValidationError::RevokedCredential);
+        assert_eq!(
+            build_pop_revocation_non_membership_path_v1(
+                &revocations.entries,
+                fixture.credential.revocation_nonce,
+            )
+            .expect_err("revoked key has no empty-leaf path"),
+            PopCredentialValidationError::RevokedCredential
+        );
     }
 
     #[test]
-    fn wrong_roots_are_rejected() {
-        let (credential, mut root, revocations) = signed_material();
-        root.root_digest = digest(0x66);
-        root = sign_pop_commitment_root_ed25519_v1(root, &signing_key(0x55)).expect("resign");
-        let err = verify_pop_membership_transcript_policy_v1(
-            &proof(),
-            &credential,
-            &root,
-            &revocations,
+    fn wrong_root_tree_version_class_and_revocation_state_are_rejected() {
+        let fixture = fixture();
+        let mut proof = fixture.proof.clone();
+        proof.commitment_root = scalar(66);
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            )
+            .expect_err("wrong root"),
+            PopCredentialValidationError::WrongCommitmentRoot
+        );
+
+        let mut proof = fixture.proof.clone();
+        proof.commitment_tree_version += 1;
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            )
+            .expect_err("wrong tree version"),
+            PopCredentialValidationError::CommitmentTreeVersionMismatch
+        );
+
+        let mut proof = fixture.proof.clone();
+        proof.eligibility_class = PopEligibilityClassV1::Expert;
+        assert!(matches!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            ),
+            Err(PopCredentialValidationError::InvalidMembershipProof { .. })
+        ));
+
+        let mut proof = fixture.proof.clone();
+        proof.revocation_root = scalar(77);
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            )
+            .expect_err("wrong revocation root"),
+            PopCredentialValidationError::RevocationRootMismatch
+        );
+    }
+
+    #[test]
+    fn wrong_challenge_and_context_are_rejected_before_crypto() {
+        let fixture = fixture();
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &fixture.proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x44),
+                "jury-case-1",
+                500,
+                &[],
+            )
+            .expect_err("wrong challenge"),
+            PopCredentialValidationError::ChallengeMismatch
+        );
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &fixture.proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-2",
+                500,
+                &[],
+            )
+            .expect_err("wrong context"),
+            PopCredentialValidationError::VerifierContextMismatch
+        );
+    }
+
+    #[test]
+    fn wrong_revocation_list_versions_are_rejected() {
+        let fixture = fixture();
+        let mut proof = fixture.proof.clone();
+        proof.revocation_list_version -= 1;
+        assert!(matches!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            ),
+            Err(PopCredentialValidationError::StaleRevocationList { .. })
+        ));
+        proof.revocation_list_version += 2;
+        assert!(matches!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            ),
+            Err(PopCredentialValidationError::RevocationListVersionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn replayed_and_tampered_nullifiers_are_rejected() {
+        let fixture = fixture();
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &fixture.proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[fixture.proof.nullifier],
+            )
+            .expect_err("replayed nullifier"),
+            PopCredentialValidationError::ReplayedProof
+        );
+        let mut proof = fixture.proof.clone();
+        proof.nullifier = scalar(987_654);
+        assert!(matches!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            ),
+            Err(PopCredentialValidationError::InvalidMembershipProof { .. })
+        ));
+    }
+
+    #[test]
+    fn malformed_truncated_oversized_and_mutated_proofs_are_rejected() {
+        let fixture = fixture();
+        let mut proof = fixture.proof.clone();
+        proof.proof_bytes.clear();
+        assert!(matches!(
+            proof.validate(),
+            Err(PopCredentialValidationError::ResourceLimitExceeded { .. })
+        ));
+
+        let mut proof = fixture.proof.clone();
+        proof.proof_bytes.truncate(proof.proof_bytes.len() / 2);
+        assert!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            )
+            .is_err()
+        );
+
+        let mut proof = fixture.proof.clone();
+        proof.proof_bytes = vec![0xAA; POP_MEMBERSHIP_PROOF_MAX_BYTES_V1 + 1];
+        assert!(matches!(
+            proof.validate(),
+            Err(PopCredentialValidationError::ResourceLimitExceeded { .. })
+        ));
+
+        let mut proof = fixture.proof.clone();
+        let midpoint = proof.proof_bytes.len() / 2;
+        proof.proof_bytes[midpoint] ^= 0x80;
+        assert!(matches!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            ),
+            Err(PopCredentialValidationError::InvalidMembershipProof { .. })
+        ));
+
+        let mut proof = fixture.proof.clone();
+        proof.proof_bytes.push(0);
+        assert!(matches!(
+            verify_pop_membership_proof_v1(
+                &proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            ),
+            Err(PopCredentialValidationError::InvalidMembershipProof { .. })
+        ));
+    }
+
+    #[test]
+    fn pinned_key_and_parameter_material_rejects_tampering() {
+        let fixture = fixture();
+        for mutation in 0..3 {
+            let mut proof = fixture.proof.clone();
+            match mutation {
+                0 => proof.verifier_material.circuit_k += 1,
+                1 => proof.verifier_material.parameter_digest[0] ^= 1,
+                _ => proof.verifier_material.verifying_key_digest[0] ^= 1,
+            }
+            assert!(
+                verify_pop_membership_proof_v1(
+                    &proof,
+                    &fixture.root,
+                    &fixture.revocations,
+                    digest(0x43),
+                    "jury-case-1",
+                    500,
+                    &[],
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn public_input_reordering_is_rejected_by_halo2_transcript() {
+        let fixture = fixture();
+        assert!(matches!(
+            zk::verify_with_reordered_public_inputs_for_test(&fixture.proof),
+            Err(PopCredentialValidationError::InvalidMembershipProof { .. })
+        ));
+    }
+
+    #[test]
+    fn invalid_holder_secret_and_paths_fail_before_proving() {
+        let fixture = fixture();
+        let mut witness = witness_from(fixture);
+        witness.holder_secret = scalar(999);
+        assert_eq!(
+            prove_pop_membership_v1(
+                &fixture.credential,
+                &fixture.root,
+                &fixture.revocations,
+                &witness,
+                digest(0x43),
+                "jury-case-1",
+                500,
+            )
+            .expect_err("wrong holder secret"),
+            PopCredentialValidationError::ProofHolderCommitmentMismatch
+        );
+
+        let mut witness = witness_from(fixture);
+        witness.credential_path.siblings.pop();
+        assert!(matches!(
+            witness.validate(),
+            Err(PopCredentialValidationError::InvalidMerklePathDepth { .. })
+        ));
+
+        let mut witness = witness_from(fixture);
+        witness.revocation_path.siblings[0] = scalar(123);
+        assert_eq!(
+            prove_pop_membership_v1(
+                &fixture.credential,
+                &fixture.root,
+                &fixture.revocations,
+                &witness,
+                digest(0x43),
+                "jury-case-1",
+                500,
+            )
+            .expect_err("tampered revocation path"),
+            PopCredentialValidationError::RevocationRootMismatch
+        );
+    }
+
+    #[test]
+    fn invalid_tree_depth_nonce_encoding_and_revocation_root_fail_closed() {
+        let fixture = fixture();
+        let mut root = fixture.root.clone();
+        root.tree_depth -= 1;
+        assert!(matches!(
+            root.validate(),
+            Err(PopCredentialValidationError::InvalidTreeDepth { .. })
+        ));
+
+        let mut credential = fixture.credential.clone();
+        credential.revocation_nonce[31] = 1;
+        assert_eq!(
+            credential.validate().expect_err("wide nonce"),
+            PopCredentialValidationError::InvalidRevocationNonceEncoding
+        );
+
+        let mut revocations = fixture.revocations.clone();
+        revocations.revocation_root = scalar(1);
+        assert_eq!(
+            revocations.validate().expect_err("wrong sparse root"),
+            PopCredentialValidationError::RevocationRootMismatch
+        );
+    }
+
+    #[test]
+    fn replay_cache_and_context_are_strictly_bounded() {
+        let fixture = fixture();
+        let seen = vec![[1u8; 32]; POP_MEMBERSHIP_SEEN_NULLIFIERS_MAX_V1 + 1];
+        assert_eq!(
+            verify_pop_membership_proof_v1(
+                &fixture.proof,
+                &fixture.root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &seen,
+            )
+            .expect_err("oversized replay slice"),
+            PopCredentialValidationError::ReplayCacheLimitExceeded
+        );
+        let mut proof = fixture.proof.clone();
+        proof.verifier_context = "x".repeat(POP_MEMBERSHIP_CONTEXT_MAX_BYTES_V1 + 1);
+        assert!(matches!(
+            proof.validate(),
+            Err(PopCredentialValidationError::ResourceLimitExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn signed_publication_tampering_is_rejected() {
+        let fixture = fixture();
+        let mut root = fixture.root.clone();
+        root.publisher_signature.signature[10] ^= 1;
+        assert!(
+            verify_pop_membership_proof_v1(
+                &fixture.proof,
+                &root,
+                &fixture.revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            )
+            .is_err()
+        );
+
+        let mut revocations = fixture.revocations.clone();
+        revocations.publisher_signature.signature[10] ^= 1;
+        assert!(
+            verify_pop_membership_proof_v1(
+                &fixture.proof,
+                &fixture.root,
+                &revocations,
+                digest(0x43),
+                "jury-case-1",
+                500,
+                &[],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wrong_roots_are_rejected_before_crypto() {
+        let fixture = fixture();
+        let mut proof = fixture.proof.clone();
+        proof.commitment_root = scalar(66);
+        let err = verify_pop_membership_proof_v1(
+            &proof,
+            &fixture.root,
+            &fixture.revocations,
+            digest(0x43),
+            "jury-case-1",
             500,
             &[],
         )
@@ -1528,106 +2440,16 @@ mod tests {
     }
 
     #[test]
-    fn stale_revocation_lists_are_rejected() {
-        let (credential, root, mut revocations) = signed_material();
-        revocations.list_version = 4;
-        revocations =
-            sign_pop_revocation_list_ed25519_v1(revocations, &signing_key(0x55)).expect("resign");
-        let err = verify_pop_membership_transcript_policy_v1(
-            &proof(),
-            &credential,
-            &root,
-            &revocations,
-            500,
-            &[],
-        )
-        .expect_err("stale revocation list");
-        assert!(matches!(
-            err,
-            PopCredentialValidationError::StaleRevocationList {
-                proof_version: 3,
-                current_version: 4
-            }
-        ));
-    }
-
-    #[test]
-    fn future_revocation_list_versions_are_rejected() {
-        let (credential, root, revocations) = signed_material();
-        let mut proof = proof();
-        proof.revocation_list_version = 4;
-        proof.proof_digest = [0; 32];
-        proof = finalize_pop_membership_proof_digest_v1(proof).expect("refinalize proof");
-        let err = verify_pop_membership_transcript_policy_v1(
-            &proof,
-            &credential,
-            &root,
-            &revocations,
-            500,
-            &[],
-        )
-        .expect_err("future revocation list");
-        assert!(matches!(
-            err,
-            PopCredentialValidationError::RevocationListVersionMismatch {
-                proof_version: 4,
-                current_version: 3
-            }
-        ));
-    }
-
-    #[test]
-    fn issuer_mismatches_are_rejected() {
-        let (credential, mut root, revocations) = signed_material();
-        root.issuer_id = "other-issuer.sorafs".to_string();
-        root = sign_pop_commitment_root_ed25519_v1(root, &signing_key(0x55)).expect("resign root");
-        let err = verify_pop_membership_transcript_policy_v1(
-            &proof(),
-            &credential,
-            &root,
-            &revocations,
-            500,
-            &[],
-        )
-        .expect_err("issuer mismatch");
-        assert_eq!(err, PopCredentialValidationError::IssuerMismatch);
-    }
-
-    #[test]
-    fn replayed_nullifiers_are_rejected() {
-        let (credential, root, revocations) = signed_material();
-        let proof = proof();
-        let err = verify_pop_membership_transcript_policy_v1(
-            &proof,
-            &credential,
-            &root,
-            &revocations,
-            500,
-            &[proof.nullifier],
-        )
-        .expect_err("replayed proof");
-        assert_eq!(err, PopCredentialValidationError::ReplayedProof);
-    }
-
-    #[test]
-    fn transcript_digest_detects_tampering() {
-        let mut proof = proof();
-        proof.verifier_context = "other-context".to_string();
-        let err = proof.validate().expect_err("tampered transcript");
-        assert_eq!(err, PopCredentialValidationError::ProofDigestMismatch);
-    }
-
-    #[test]
     fn revocation_entries_must_be_sorted_and_unique() {
-        let mut list = revocations();
+        let mut list = fixture().revocations.clone();
         list.entries = vec![
             PopRevocationEntryV1 {
-                nonce: digest(0x20),
+                nonce: nonce(0x20),
                 revoked_at_epoch: 200,
                 reason: PopRevocationReasonV1::Rotated,
             },
             PopRevocationEntryV1 {
-                nonce: digest(0x10),
+                nonce: nonce(0x10),
                 revoked_at_epoch: 201,
                 reason: PopRevocationReasonV1::Rotated,
             },
@@ -1635,8 +2457,66 @@ mod tests {
         let err = list.validate().expect_err("unsorted list");
         assert_eq!(err, PopCredentialValidationError::UnsortedRevocationList);
 
-        list.entries[1].nonce = digest(0x20);
+        list.entries[1].nonce = nonce(0x20);
         let err = list.validate().expect_err("duplicate nonce");
         assert_eq!(err, PopCredentialValidationError::DuplicateRevocationNonce);
+    }
+
+    #[test]
+    fn identity_text_and_attribute_collections_are_strictly_bounded() {
+        let mut credential = fixture().credential.clone();
+        credential.issuer_id = "i".repeat(POP_IDENTITY_TEXT_MAX_BYTES_V1 + 1);
+        assert!(matches!(
+            credential.validate(),
+            Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "issuer id",
+                ..
+            })
+        ));
+
+        let mut credential = fixture().credential.clone();
+        credential.attributes = (0..=POP_CREDENTIAL_ATTRIBUTES_MAX_V1)
+            .map(|index| PopCredentialAttributeV1 {
+                key: format!("attribute-{index}"),
+                value_commitment: digest(0xA1),
+            })
+            .collect();
+        assert!(matches!(
+            credential.validate(),
+            Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "credential attributes",
+                ..
+            })
+        ));
+
+        let mut credential = fixture().credential.clone();
+        credential.attributes[0].key = "k".repeat(POP_ATTRIBUTE_KEY_MAX_BYTES_V1 + 1);
+        assert!(matches!(
+            credential.validate(),
+            Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "attribute key",
+                ..
+            })
+        ));
+
+        let request = PopEnrollmentRequestV1 {
+            version: POP_ENROLLMENT_REQUEST_VERSION_V1,
+            request_id: digest(0xA2),
+            applicant_id: "applicant".to_owned(),
+            requested_class: PopEligibilityClassV1::General,
+            requested_attributes: (0..=POP_REQUESTED_ATTRIBUTES_MAX_V1)
+                .map(|index| format!("attribute-{index}"))
+                .collect(),
+            attestation_digest: digest(0xA3),
+            submitted_at_epoch: 1,
+            expires_at_epoch: 2,
+        };
+        assert!(matches!(
+            request.validate(),
+            Err(PopCredentialValidationError::ResourceLimitExceeded {
+                resource: "requested attributes",
+                ..
+            })
+        ));
     }
 }

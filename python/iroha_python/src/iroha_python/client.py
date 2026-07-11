@@ -2904,26 +2904,6 @@ class SorafsPorSubmissionResponse:
 
 
 @dataclass(frozen=True)
-class SorafsPorObservationResponse:
-    """Response wrapper for PoR observation submissions."""
-
-    status: str
-    success: bool
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any], context: str) -> "SorafsPorObservationResponse":
-        if not isinstance(payload, Mapping):
-            raise TypeError(f"{context} must be a JSON object")
-        status = payload.get("status")
-        if not isinstance(status, str) or not status.strip():
-            raise TypeError(f"{context} missing string `status` field")
-        success = payload.get("success")
-        if not isinstance(success, bool):
-            raise TypeError(f"{context} missing boolean `success` field")
-        return cls(status=status.strip(), success=success)
-
-
-@dataclass(frozen=True)
 class SorafsPorVerdictResponse:
     """Response wrapper for PoR verdict submissions."""
 
@@ -9583,7 +9563,6 @@ __all__ = [
     "StreamingTransportConfig",
     "StreamingSoranetConfig",
     "SorafsPorSubmissionResponse",
-    "SorafsPorObservationResponse",
     "SorafsPorVerdictResponse",
     "SorafsPinAlias",
     "SorafsPinRegisterResponse",
@@ -11369,33 +11348,6 @@ class ToriiClient(_BaseToriiClient):
     # SoraFS Proof-of-Retrievability APIs
     # -------------------------
 
-    def record_sorafs_por_challenge(
-        self,
-        *,
-        challenge: Optional[Union[bytes, bytearray, memoryview]] = None,
-        challenge_b64: Optional[str] = None,
-        timeout: Optional[float] = None,
-    ) -> SorafsPorSubmissionResponse:
-        """Submit a `PorChallengeV1` record (auditor/governance only)."""
-
-        payload = {
-            "challenge_b64": _normalize_base64_payload(
-                challenge_b64, challenge, "record_sorafs_por_challenge.challenge"
-            )
-        }
-        response = self._request(
-            "POST",
-            "/v1/sorafs/capacity/por-challenge",
-            json_body=payload,
-            headers={"Accept": "application/json"},
-            timeout=timeout,
-        )
-        self._expect_status(response, (200,))
-        body = self._maybe_json(response)
-        if body is None:
-            raise RuntimeError("por-challenge endpoint returned an empty payload")
-        return SorafsPorSubmissionResponse.from_payload(body, "sorafs_por_challenge")
-
     def record_sorafs_por_proof(
         self,
         *,
@@ -11449,28 +11401,6 @@ class ToriiClient(_BaseToriiClient):
         if body is None:
             raise RuntimeError("por-verdict endpoint returned an empty payload")
         return SorafsPorVerdictResponse.from_payload(body, "sorafs_por_verdict")
-
-    def submit_sorafs_por_observation(
-        self,
-        success: bool,
-        *,
-        timeout: Optional[float] = None,
-    ) -> SorafsPorObservationResponse:
-        """Record the outcome of a PoR observation probe."""
-
-        payload = {"success": _coerce_bool_flag(success, "submit_sorafs_por_observation.success")}
-        response = self._request(
-            "POST",
-            "/v1/sorafs/capacity/por",
-            json_body=payload,
-            headers={"Accept": "application/json"},
-            timeout=timeout,
-        )
-        self._expect_status(response, (200,))
-        body = self._maybe_json(response)
-        if body is None:
-            raise RuntimeError("por observation endpoint returned an empty payload")
-        return SorafsPorObservationResponse.from_payload(body, "sorafs_por_observation")
 
     def get_sorafs_por_status(
         self,

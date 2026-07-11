@@ -5047,6 +5047,7 @@ pub mod prelude {
 #[cfg(test)]
 mod certified_merge_inclusion_tests {
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
+    use norito::codec::DecodeAll as _;
 
     use super::*;
     use crate::{
@@ -5054,7 +5055,10 @@ mod certified_merge_inclusion_tests {
         block::CertifiedMergeLedgerReference,
         merge::{MergeQuorumCertificate, MergeSignerProof},
         peer::PeerId,
-        transaction::{TransactionBuilder, signed::TransactionResult},
+        transaction::{
+            TransactionBuilder,
+            signed::{TransactionEntrypoint, TransactionResult},
+        },
         trigger::DataTriggerSequence,
     };
 

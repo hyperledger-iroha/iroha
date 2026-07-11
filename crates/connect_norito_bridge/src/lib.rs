@@ -73,8 +73,8 @@ use sorafs_car::{
     },
 };
 use sorafs_manifest::{
-    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
-    OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
+    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
+    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1, OrderbookPayloadSigningError,
     OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationContextFieldV1,
     ValidationOutcomeV1, build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -21653,6 +21653,11 @@ fn java_sorafs_orderbook_non_empty(bytes: Vec<u8>, field: &str) -> Result<Vec<u8
     if bytes.is_empty() {
         return Err(format!("{field} must not be empty"));
     }
+    if bytes.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
+        return Err(format!(
+            "{field} must be at most {ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1} bytes"
+        ));
+    }
     Ok(bytes)
 }
 
@@ -27330,6 +27335,7 @@ fn map_local_fetch_error(err: LocalFetchError) -> c_int {
         LocalFetchError::ScoreboardBuild(_) => ERR_FETCH_SCOREBOARD_BUILD,
         LocalFetchError::Fetch(_) => ERR_FETCH_EXECUTION,
         LocalFetchError::UnknownChunkerHandle(_) => ERR_FETCH_UNKNOWN_CHUNKER,
+        LocalFetchError::IntegrityVerificationDisabled(_) => ERR_FETCH_OPTIONS_JSON,
     }
 }
 
@@ -27760,14 +27766,15 @@ unsafe fn sorafs_read_fixed32(ptr_: *const c_uchar, len: c_ulong) -> Result<[u8;
     Ok(out)
 }
 
-unsafe fn sorafs_read_non_empty_bytes(
+unsafe fn sorafs_read_orderbook_owner_account(
     ptr_: *const c_uchar,
     len: c_ulong,
 ) -> Result<Vec<u8>, c_int> {
-    let bytes = unsafe { read_vec_bytes(ptr_, len) }.map_err(|err| err.code())?;
-    if bytes.is_empty() {
+    let len_usize = usize::try_from(len).map_err(|_| ERR_SORAFS_REFERENCE)?;
+    if len_usize == 0 || len_usize > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
         return Err(ERR_SORAFS_REFERENCE);
     }
+    let bytes = unsafe { read_vec_bytes(ptr_, len) }.map_err(|err| err.code())?;
     Ok(bytes)
 }
 
@@ -27935,11 +27942,12 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_derive_orderbook_order_
     if out_order_id_ptr.is_null() || out_order_id_len as usize != 32 || nonce == 0 {
         return ERR_SORAFS_REFERENCE;
     }
-    let owner_account =
-        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
-            Ok(value) => value,
-            Err(code) => return code,
-        };
+    let owner_account = match unsafe {
+        sorafs_read_orderbook_owner_account(owner_account_ptr, owner_account_len)
+    } {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
     let order_id = derive_orderbook_order_id_v1(&owner_account, nonce);
     unsafe {
         ptr::copy_nonoverlapping(order_id.as_ptr(), out_order_id_ptr, order_id.len());
@@ -27980,11 +27988,12 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
         Ok(value) => value,
         Err(code) => return code,
     };
-    let owner_account =
-        match unsafe { sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len) } {
-            Ok(value) => value,
-            Err(code) => return code,
-        };
+    let owner_account = match unsafe {
+        sorafs_read_orderbook_owner_account(owner_account_ptr, owner_account_len)
+    } {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
     if nonce == 0 {
         return ERR_SORAFS_REFERENCE;
     }
@@ -28056,7 +28065,7 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_build_signed_orderbook_
             Err(code) => return code,
         },
         owner_account: match unsafe {
-            sorafs_read_non_empty_bytes(owner_account_ptr, owner_account_len)
+            sorafs_read_orderbook_owner_account(owner_account_ptr, owner_account_len)
         } {
             Ok(value) => value,
             Err(code) => return code,
@@ -35669,6 +35678,147 @@ mod sorafs_tests {
             )
         };
         assert_eq!(rc, ERR_SORAFS_REFERENCE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn sorafs_reference_orderbook_bridge_enforces_owner_account_v1_byte_ceiling() {
+        let owner = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+        let private_key = [0xB7; 32];
+        let price = b"1";
+        let order_id = derive_orderbook_order_id_v1(&owner, 1);
+        let mut derived_order_id = [0_u8; 32];
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    derived_order_id.as_mut_ptr(),
+                    derived_order_id.len() as c_ulong,
+                )
+            },
+            0
+        );
+        assert_eq!(derived_order_id, order_id);
+
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                    order_id.as_ptr(),
+                    order_id.len() as c_ulong,
+                    SORAFS_ORDERBOOK_SIDE_BID,
+                    SORAFS_ORDERBOOK_TIER_HOT,
+                    price.as_ptr(),
+                    price.len() as c_ulong,
+                    1,
+                    1,
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    1,
+                    1,
+                    0,
+                    0,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            0
+        );
+        assert!(!out_ptr.is_null());
+        assert!(out_len > 0);
+        connect_norito_free(out_ptr);
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
+                    order_id.as_ptr(),
+                    order_id.len() as c_ulong,
+                    owner.as_ptr(),
+                    owner.len() as c_ulong,
+                    SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
+                    2,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            0
+        );
+        assert!(!out_ptr.is_null());
+        assert!(out_len > 0);
+        connect_norito_free(out_ptr);
+
+        let oversized = vec![0x45; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        let oversized_order_id = derive_orderbook_order_id_v1(&oversized, 1);
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_derive_orderbook_order_id(
+                    oversized.as_ptr(),
+                    oversized.len() as c_ulong,
+                    1,
+                    derived_order_id.as_mut_ptr(),
+                    derived_order_id.len() as c_ulong,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_request(
+                    oversized_order_id.as_ptr(),
+                    oversized_order_id.len() as c_ulong,
+                    SORAFS_ORDERBOOK_SIDE_BID,
+                    SORAFS_ORDERBOOK_TIER_HOT,
+                    price.as_ptr(),
+                    price.len() as c_ulong,
+                    1,
+                    1,
+                    oversized.as_ptr(),
+                    oversized.len() as c_ulong,
+                    1,
+                    1,
+                    0,
+                    0,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        assert_eq!(
+            unsafe {
+                connect_norito_sorafs_reference_build_signed_orderbook_order_cancel(
+                    oversized_order_id.as_ptr(),
+                    oversized_order_id.len() as c_ulong,
+                    oversized.as_ptr(),
+                    oversized.len() as c_ulong,
+                    SORAFS_ORDERBOOK_CANCEL_REASON_OWNER_REQUESTED,
+                    2,
+                    private_key.as_ptr(),
+                    private_key.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            },
+            ERR_SORAFS_REFERENCE
+        );
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }

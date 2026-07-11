@@ -1143,7 +1143,7 @@ impl Actor {
             participant_lane_id: participant.route.lane_id,
             participant_dataspace_id: participant.route.dataspace_id,
             participant_lane_incarnation,
-            participant_validator_set_hash: HashOf::new(participant_validator_set),
+            participant_validator_set_hash: HashOf::new(&participant_validator_set.to_vec()),
             participant_validator_count,
             participant_min_quorum,
             authority_context_height,
@@ -1169,18 +1169,27 @@ impl Actor {
         {
             return Err("native AMX participant lane attestation roster is malformed");
         }
-        let world = self.state.world_view();
-        let pops = roster
-            .iter()
-            .map(|peer| {
-                crate::state::live_consensus_key_pop_for_peer(&world, peer, block_height)
-                    .filter(|pop| {
-                        pop.len() == crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
-                            && iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_ok()
-                    })
-                    .ok_or("native AMX participant validator is missing a valid historical PoP")
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let pinned =
+            super::pinned_autoscale_validator_pops_for_set(&self.state, participant_lane, &roster)
+                .ok_or("native AMX autoscale participant committee pin is missing or mismatched")?;
+        let pops = if let Some(pops) = pinned {
+            pops
+        } else {
+            let world = self.state.world_view();
+            roster
+                .iter()
+                .map(|peer| {
+                    crate::state::live_consensus_key_pop_for_peer(&world, peer, block_height)
+                        .ok_or("native AMX participant validator is missing a valid historical PoP")
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        if roster.iter().zip(&pops).any(|(peer, pop)| {
+            pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
+                || iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_err()
+        }) {
+            return Err("native AMX participant committee contains an invalid historical PoP");
+        }
         let min_signers =
             crate::sumeragi::network_topology::commit_quorum_from_len(roster.len()).max(1);
         Ok((roster, pops, min_signers))
@@ -1591,7 +1600,7 @@ impl Actor {
         }
     }
 
-    fn merge_preparation_grace_active(
+    pub(super) fn merge_preparation_grace_active(
         &self,
         proposal_height: u64,
         proposal_view: u64,
@@ -4889,8 +4898,7 @@ impl Actor {
                     return Ok(false);
                 }
                 if work.autoscale_maintenance && !work.has_non_autoscale_work() {
-                    let heartbeat =
-                        self.build_recovery_heartbeat_transaction(proposal_height)?;
+                    let heartbeat = self.build_recovery_heartbeat_transaction(proposal_height)?;
                     let encoded_len = heartbeat.encoded_len();
                     transactions.push(heartbeat);
                     routing_decisions.push(RoutingDecision::default());
@@ -5245,9 +5253,7 @@ impl Actor {
                     .and_then(|entry| entry.execution_batch.as_ref())
                 {
                     builder = builder
-                        .bind_certified_merge_application_context(
-                            &batch.application_block_header,
-                        )
+                        .bind_certified_merge_application_context(&batch.application_block_header)
                         .map_err(|reason| eyre!(reason))?;
                 }
                 let routing_ledger_time_ms =
@@ -5642,9 +5648,8 @@ impl Actor {
                 let mut execution_context = BlockExecutionContextBundle::new(execution_context)
                     .with_lane_payload_ownerships(final_lane_payload_plan.ownerships.clone());
                 if let Some(entry) = pending_certified_merge_entry.as_ref() {
-                    execution_context = execution_context.with_merge_entry(
-                        CertifiedMergeLedgerReference::new(entry),
-                    );
+                    execution_context = execution_context
+                        .with_merge_entry(CertifiedMergeLedgerReference::new(entry));
                 }
                 if !execution_context.is_empty() {
                     builder = builder.with_execution_context(Some(execution_context));
@@ -5757,8 +5762,7 @@ impl Actor {
                     if total_chunks > usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize")
                     {
                         if tx_batch.is_empty()
-                            || (tx_batch.len() == 1
-                                && pending_certified_merge_entry.is_none())
+                            || (tx_batch.len() == 1 && pending_certified_merge_entry.is_none())
                         {
                             warn!(
                                 height = proposal_height,
@@ -9625,11 +9629,7 @@ impl Actor {
             &self.pending.pending_blocks,
         );
         let certified_merge = self
-            .pending_certified_merge_entry_for_proposal(
-                height,
-                view_idx,
-                prev_block.as_deref(),
-            )
+            .pending_certified_merge_entry_for_proposal(height, view_idx, prev_block.as_deref())
             .is_some();
         if should_defer_ordinary_proposal_for_merge(
             has_queue_work,
@@ -9748,8 +9748,8 @@ mod tests {
         collect_sccp_messages_for_committable_proposal_routes, consensus_queue_backpressure,
         da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
         refresh_proposal_routing_from_state, relay_tip_descriptor_hash_for_proposal,
-        reorder_vec_by_indices, should_defer_ordinary_proposal_for_merge,
-        trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
+        reorder_vec_by_indices, should_defer_ordinary_proposal_for_merge, trim_batch_for_size_cap,
+        trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -9788,7 +9788,9 @@ mod tests {
             !should_defer_ordinary_proposal_for_merge(true, true, true),
             "a ready certified merge must proceed without further preparation delay"
         );
-        assert!(!should_defer_ordinary_proposal_for_merge(false, false, true));
+        assert!(!should_defer_ordinary_proposal_for_merge(
+            false, false, true
+        ));
     }
 
     fn checked_key_pair() -> KeyPair {
@@ -10049,6 +10051,7 @@ mod tests {
         elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "7".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![LaneConfig::default(), elastic],
@@ -10396,6 +10399,7 @@ mod tests {
         elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![LaneConfig::default(), elastic],
@@ -10477,6 +10481,7 @@ mod tests {
         elastic
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic);
         let lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![LaneConfig::default(), elastic],
@@ -10610,6 +10615,7 @@ mod tests {
         stale_participant_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "10".to_string());
+        crate::state::attach_synthetic_autoscale_committee_for_test(stale_participant_lane);
         let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
             .expect("current lane catalog");
 

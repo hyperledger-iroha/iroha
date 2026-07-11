@@ -62,10 +62,11 @@ fn serialize_state_snapshot(
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
     let commit_topology = view.commit_topology.to_vec();
     let prev_commit_topology = view.prev_commit_topology.to_vec();
-    let nexus_runtime = SnapshotNexusRuntime::from_nexus(
+    let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
         &view.nexus,
         &view.lane_incarnations,
         &view.lane_incarnation_activation_heights,
+        &view.autoscale_sample_history,
     );
     let sccp_route_manifests = view.zk.sccp_route_manifests.clone();
     let public_lane_validators: Vec<_> = view

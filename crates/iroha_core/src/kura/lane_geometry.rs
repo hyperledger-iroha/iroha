@@ -30,15 +30,14 @@ use norito::codec::{Decode, Encode};
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
     AutonomousLaneBlockArtifact, BlockStore, CERTIFIED_LANE_BLOCKS_DATA_FILE,
-    CERTIFIED_LANE_BLOCKS_INDEX_FILE, CertifiedLaneBlockArtifact, Error, Kura,
-    LANE_ARTIFACTS_DATA_FILE, LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE,
-    LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
-    LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE, LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
-    LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
-    LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
-    LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact, MergeLedgerCarrierRecord,
-    PIPELINE_INDEX_ENTRY_SIZE, RecoveredLaneBlockPayload, Result, SidecarIndexEntry,
-    SidecarIndexLayout, create_dir_all_with_context, sync_dir,
+    CERTIFIED_LANE_BLOCKS_INDEX_FILE, Error, Kura, LANE_ARTIFACTS_DATA_FILE,
+    LANE_ARTIFACTS_DIR_NAME, LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
+    LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
+    LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
+    LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LaneBlockApplicationReceiptArtifact,
+    LaneBlockApplicationReceiptArtifactFormat, MergeLedgerCarrierRecord, PIPELINE_INDEX_ENTRY_SIZE,
+    RecoveredLaneBlockPayload, Result, SidecarIndexEntry, SidecarIndexLayout,
+    create_dir_all_with_context, sync_dir,
 };
 
 const LEGACY_JOURNAL_VERSION: u8 = 1;
@@ -245,6 +244,36 @@ impl Kura {
         updated_activation_heights: &BTreeMap<LaneId, u64>,
         replaced_lane_ids: &BTreeSet<LaneId>,
     ) -> Result<()> {
+        self.apply_lane_geometry_transition_with_certified_retirements(
+            previous,
+            updated,
+            previous_incarnations,
+            updated_incarnations,
+            previous_activation_heights,
+            updated_activation_heights,
+            replaced_lane_ids,
+            &BTreeSet::new(),
+        )
+    }
+
+    /// Apply one geometry transition while allowing node-local pending work
+    /// owned by an exactly certified retiring lane incarnation to be archived.
+    ///
+    /// The exception is intentionally narrower than general retirement
+    /// admission: payloads coordinated by another lane, malformed artifacts,
+    /// and in-flight files remain blocking. Callers must first validate a
+    /// globally committed drain certificate for every supplied identity.
+    pub(crate) fn apply_lane_geometry_transition_with_certified_retirements(
+        &self,
+        previous: &LaneConfig,
+        updated: &LaneConfig,
+        previous_incarnations: &BTreeMap<LaneId, Hash>,
+        updated_incarnations: &BTreeMap<LaneId, Hash>,
+        previous_activation_heights: &BTreeMap<LaneId, u64>,
+        updated_activation_heights: &BTreeMap<LaneId, u64>,
+        replaced_lane_ids: &BTreeSet<LaneId>,
+        certified_retirements: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
+    ) -> Result<()> {
         if self.store_root.as_os_str().is_empty() {
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
             return Ok(());
@@ -257,6 +286,16 @@ impl Kura {
             self.geometry_bindings(updated, updated_incarnations, updated_activation_heights)?;
         let previous_catalog = geometry_catalog_fingerprint(&previous_bindings);
         let updated_catalog = geometry_catalog_fingerprint(&updated_bindings);
+        let certified_retirements = certified_retirements
+            .iter()
+            .map(
+                |(lane_id, dataspace_id, lane_incarnation)| LaneRetirementIdentity {
+                    lane_id: *lane_id,
+                    dataspace_id: *dataspace_id,
+                    lane_incarnation: *lane_incarnation,
+                },
+            )
+            .collect::<BTreeSet<_>>();
         let mut journal = self.read_lane_geometry_journal()?;
         let _ = self.finish_pending_lane_geometry_gc_locked(&mut journal)?;
         self.reconcile_lane_geometry_history(&mut journal, previous_catalog)?;
@@ -279,7 +318,7 @@ impl Kura {
             let operations = journal.records[existing_index].operations.clone();
             let retiring = self.geometry_retirement_identities(previous, &operations)?;
             let _sidecar_guard = self.sidecar_lock.lock();
-            self.ensure_lane_retirement_admissible_locked(&retiring)?;
+            self.ensure_lane_retirement_admissible_locked(&retiring, &certified_retirements)?;
             self.apply_geometry_operations_forward(&operations)?;
             journal.records[existing_index].phase = LaneGeometryPhase::FilesApplied;
             self.write_lane_geometry_journal(&journal)?;
@@ -295,7 +334,7 @@ impl Kura {
         )?;
         let retiring = self.geometry_retirement_identities(previous, &operations)?;
         let _sidecar_guard = self.sidecar_lock.lock();
-        self.ensure_lane_retirement_admissible_locked(&retiring)?;
+        self.ensure_lane_retirement_admissible_locked(&retiring, &certified_retirements)?;
         let intent = LaneGeometryIntent {
             transition_id,
             previous_catalog,
@@ -547,14 +586,19 @@ impl Kura {
                 .as_ref()
                 .is_some_and(|checkpoint| checkpoint.bindings == bindings)
         };
-        if !exact_bindings_match
-            || journal.records[..prune_count]
-                .iter()
-                .any(|record| record.phase != LaneGeometryPhase::CatalogPublished)
+        if !exact_bindings_match {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidData,
+                "snapshot geometry bindings do not exactly match transition history",
+            ));
+        }
+        if journal.records[..prune_count]
+            .iter()
+            .any(|record| record.phase != LaneGeometryPhase::CatalogPublished)
         {
             return Err(self.geometry_error(
                 ErrorKind::InvalidData,
-                "snapshot geometry does not exactly match published transition history",
+                "snapshot geometry includes a transition that is not catalog-published",
             ));
         }
         if bindings
@@ -1123,29 +1167,49 @@ impl Kura {
                 ));
             }
         }
-        let applied_count = if journal.records[0].previous_catalog == authoritative {
-            0
-        } else {
-            journal
-                .records
-                .iter()
-                .rposition(|record| record.updated_catalog == authoritative)
-                .map(|index| index + 1)
-                .ok_or_else(|| {
-                    self.geometry_error(
-                        ErrorKind::InvalidData,
-                        "lane geometry journal does not contain the authoritative catalog",
-                    )
-                })?
-        };
+        // A catalog can recur after a create/retire cycle. Prefer its latest
+        // transition boundary so published archive history is not rolled back
+        // merely because the same active bindings also predated the journal.
+        let applied_count = journal
+            .records
+            .iter()
+            .rposition(|record| record.updated_catalog == authoritative)
+            .map(|index| index + 1)
+            .or_else(|| {
+                (journal.records[0].previous_catalog == authoritative).then_some(0)
+            })
+            .ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane geometry journal does not contain the authoritative catalog",
+                )
+            })?;
 
-        for record in journal.records[..applied_count].iter_mut() {
-            self.apply_geometry_operations_forward(&record.operations)?;
-            record.phase = LaneGeometryPhase::CatalogPublished;
-        }
+        // Roll back the unapplied suffix first. A later transition can consume
+        // paths produced by an earlier one, so restoring the suffix re-creates
+        // the exact intermediate geometry needed by any prefix repair.
         for record in journal.records[applied_count..].iter_mut().rev() {
+            // Always run the idempotent inverse operation. A process may die
+            // after persisting `RolledBack` and then leave a partially moved
+            // path behind; the phase alone cannot prove the filesystem repair
+            // completed.
             self.apply_geometry_operations_rollback(&record.operations)?;
             record.phase = LaneGeometryPhase::RolledBack;
+        }
+        for record in journal.records[..applied_count].iter_mut() {
+            // `FilesApplied` is durably written before the catalog can be
+            // published, while `CatalogPublished` can already have had its
+            // output consumed by a later applied transition. Replaying either
+            // would resurrect intermediate lane directories and then collide
+            // with their authenticated archives. Only incomplete or explicitly
+            // rolled-back records need their forward filesystem operation.
+            if matches!(
+                record.phase,
+                LaneGeometryPhase::Intent | LaneGeometryPhase::RolledBack
+            ) {
+                self.apply_geometry_operations_forward(&record.operations)?;
+            }
+            record.phase = LaneGeometryPhase::CatalogPublished;
         }
         Ok(())
     }
@@ -1195,11 +1259,18 @@ impl Kura {
     fn ensure_lane_retirement_admissible_locked(
         &self,
         retiring: &[LaneRetirementIdentity],
+        certified_retirements: &BTreeSet<LaneRetirementIdentity>,
     ) -> Result<()> {
+        let retiring = retiring.iter().copied().collect::<BTreeSet<_>>();
+        if !certified_retirements.is_subset(&retiring) {
+            return Err(self.geometry_error(
+                ErrorKind::InvalidInput,
+                "certified retirement identity does not exactly match the retiring geometry",
+            ));
+        }
         if retiring.is_empty() {
             return Ok(());
         }
-        let retiring = retiring.iter().copied().collect::<BTreeSet<_>>();
         let entries = self
             .lane_storage_entries
             .lock()
@@ -1662,6 +1733,12 @@ impl Kura {
                 continue;
             }
             if lane_proposal_coordinator_targets_retirement(&certified.proposal, &retiring) {
+                if lane_proposal_coordinator_targets_retirement(
+                    &certified.proposal,
+                    certified_retirements,
+                ) {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending certified work belongs to a retiring lane incarnation",
@@ -1694,7 +1771,14 @@ impl Kura {
             if receipt_applies_autonomous(identity, artifact, current) {
                 continue;
             }
+            let coordinator_has_certified_drain = lane_proposal_coordinator_targets_retirement(
+                &artifact.executable_payload.origin_proposal,
+                certified_retirements,
+            );
             if lane_payload_targets_retirement(&artifact.executable_payload, &retiring) {
+                if coordinator_has_certified_drain {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending autonomous payload targets a retiring lane incarnation",
@@ -1707,6 +1791,9 @@ impl Kura {
                 .is_some()
                 && hinted_payload_targets(&artifact.executable_payload.origin_proposal)?
             {
+                if coordinator_has_certified_drain {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending hinted autonomous payload targets a retiring lane incarnation",
@@ -1719,7 +1806,14 @@ impl Kura {
             {
                 continue;
             }
+            let coordinator_has_certified_drain = lane_proposal_coordinator_targets_retirement(
+                &input.proposal,
+                certified_retirements,
+            );
             if lane_proposal_coordinator_targets_retirement(&input.proposal, &retiring) {
+                if coordinator_has_certified_drain {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending execution input belongs to a retiring lane incarnation",
@@ -1729,6 +1823,9 @@ impl Kura {
                 continue;
             }
             if hinted_payload_targets(&input.proposal)? {
+                if coordinator_has_certified_drain {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending global execution input targets a retiring lane incarnation",
@@ -4007,7 +4104,7 @@ impl Kura {
         Ok(())
     }
 
-    fn lane_geometry_journal_path(&self) -> PathBuf {
+    pub(super) fn lane_geometry_journal_path(&self) -> PathBuf {
         self.store_root.join(JOURNAL_FILE_NAME)
     }
 
@@ -4282,6 +4379,7 @@ mod tests {
     use super::*;
     use crate::{
         block::BlockBuilder,
+        kura::CertifiedLaneBlockArtifact,
         lane_consensus::{
             CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
         },
@@ -4368,6 +4466,21 @@ mod tests {
             ]),
             BTreeMap::from([(LaneId::SINGLE, 1), (LaneId::new(1), 1)]),
         )
+    }
+
+    fn seed_geometry_markers_for_test(
+        kura: &Kura,
+        config: &RuntimeLaneConfig,
+        incarnations: &BTreeMap<LaneId, Hash>,
+        activations: &BTreeMap<LaneId, u64>,
+    ) {
+        for binding in kura
+            .geometry_bindings(config, incarnations, activations)
+            .expect("derive test geometry bindings")
+        {
+            kura.write_lane_marker(&binding)
+                .expect("write test lane incarnation marker");
+        }
     }
 
     struct RetiredGeometryFixture {
@@ -4820,6 +4933,12 @@ mod tests {
         let initial_activations =
             BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
         let kura = open_kura(&root, &extended);
+        seed_geometry_markers_for_test(
+            &kura,
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+        );
         let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
             extended_incarnations[&LaneId::SINGLE],
@@ -4843,10 +4962,9 @@ mod tests {
             )
             .expect_err("pending participant work must pin the retired incarnation");
         assert!(
-            error
-                .to_string()
+            format!("{error:?}")
                 .contains("pending autonomous payload targets a retiring lane incarnation"),
-            "unexpected retirement admission error: {error}"
+            "unexpected retirement admission error: {error:?}"
         );
         assert!(
             extended
@@ -4863,6 +4981,156 @@ mod tests {
                 .is_empty(),
             "rejected retirement does not publish an intent"
         );
+
+        let certified_retirement = BTreeSet::from([(
+            LaneId::new(1),
+            DataSpaceId::new(8),
+            extended_incarnations[&LaneId::new(1)],
+        )]);
+        let error = kura
+            .apply_lane_geometry_transition_with_certified_retirements(
+                &extended,
+                &initial,
+                &extended_incarnations,
+                &initial_incarnations,
+                &extended_activations,
+                &initial_activations,
+                &BTreeSet::new(),
+                &certified_retirement,
+            )
+            .expect_err(
+                "a drain certificate must not discard participant work coordinated elsewhere",
+            );
+        assert!(
+            format!("{error:?}")
+                .contains("pending autonomous payload targets a retiring lane incarnation"),
+            "unexpected certified-retirement participant error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn certified_scale_in_archives_pending_work_owned_by_exact_retiring_incarnation() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, extended_activations) = retirement_test_geometry();
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let kura = open_kura(&root, &extended);
+        seed_geometry_markers_for_test(
+            &kura,
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+        );
+        let retiring_lane = LaneId::new(1);
+        let retiring_dataspace = DataSpaceId::new(8);
+        let retiring_incarnation = extended_incarnations[&retiring_lane];
+        let artifact = certified_geometry_lane_block(
+            retiring_lane,
+            retiring_dataspace,
+            retiring_incarnation,
+            1,
+        );
+        kura.write_certified_lane_block_artifact(&artifact)
+            .expect("persist late local certified work");
+
+        let error = kura
+            .apply_lane_geometry_transition(
+                &extended,
+                &initial,
+                &extended_incarnations,
+                &initial_incarnations,
+                &extended_activations,
+                &initial_activations,
+                &BTreeSet::new(),
+            )
+            .expect_err("ordinary retirement must remain blocked by pending certified work");
+        assert!(
+            format!("{error:?}")
+                .contains("pending certified work belongs to a retiring lane incarnation"),
+            "unexpected ordinary-retirement error: {error:?}"
+        );
+
+        kura.apply_lane_geometry_transition_with_certified_retirements(
+            &extended,
+            &initial,
+            &extended_incarnations,
+            &initial_incarnations,
+            &extended_activations,
+            &initial_activations,
+            &BTreeSet::new(),
+            &BTreeSet::from([(retiring_lane, retiring_dataspace, retiring_incarnation)]),
+        )
+        .expect("globally certified exact-incarnation retirement archives local stragglers");
+        assert!(
+            !extended
+                .entry(retiring_lane)
+                .expect("retiring lane entry")
+                .blocks_dir(&root)
+                .exists(),
+            "certified retirement must move the old lane directory into the journal archive"
+        );
+    }
+
+    #[test]
+    fn certified_scale_in_rejects_wrong_retirement_identity() {
+        for (label, dataspace, incarnation) in [
+            (
+                "wrong-dataspace",
+                DataSpaceId::new(9),
+                Hash::prehashed([0x62; Hash::LENGTH]),
+            ),
+            (
+                "wrong-incarnation",
+                DataSpaceId::new(8),
+                Hash::prehashed([0x63; Hash::LENGTH]),
+            ),
+        ] {
+            let temp = TempDir::new().expect("temporary directory");
+            let root = temp.path().join(label);
+            let (initial, extended) = retirement_test_configs();
+            let (extended_incarnations, extended_activations) = retirement_test_geometry();
+            let initial_incarnations =
+                BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+            let initial_activations =
+                BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+            let kura = open_kura(&root, &extended);
+            seed_geometry_markers_for_test(
+                &kura,
+                &extended,
+                &extended_incarnations,
+                &extended_activations,
+            );
+
+            let error = kura
+                .apply_lane_geometry_transition_with_certified_retirements(
+                    &extended,
+                    &initial,
+                    &extended_incarnations,
+                    &initial_incarnations,
+                    &extended_activations,
+                    &initial_activations,
+                    &BTreeSet::new(),
+                    &BTreeSet::from([(LaneId::new(1), dataspace, incarnation)]),
+                )
+                .expect_err("mismatched certified identity must not bypass retirement admission");
+            assert!(
+                format!("{error:?}").contains(
+                    "certified retirement identity does not exactly match the retiring geometry"
+                ),
+                "unexpected {label} identity error: {error:?}"
+            );
+            assert!(
+                kura.read_lane_geometry_journal()
+                    .expect("geometry journal")
+                    .records
+                    .is_empty(),
+                "{label} must fail before publishing a retirement intent"
+            );
+        }
     }
 
     #[test]
@@ -4890,6 +5158,12 @@ mod tests {
             let initial_activations =
                 BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
             let kura = open_kura(&root, &extended);
+            seed_geometry_markers_for_test(
+                &kura,
+                &extended,
+                &extended_incarnations,
+                &extended_activations,
+            );
             let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let (chain_id_hash, epoch, payload) = autonomous_retirement_payload(
                 extended_incarnations[&LaneId::SINGLE],
@@ -4984,6 +5258,12 @@ mod tests {
             let initial_activations =
                 BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
             let kura = open_kura(&root, &extended);
+            seed_geometry_markers_for_test(
+                &kura,
+                &extended,
+                &extended_incarnations,
+                &extended_activations,
+            );
             let (canonical_hash, _) = durable_geometry_snapshot_identity(&kura, 1);
             let canonical_view = kura
                 .get_block(NonZeroUsize::new(1).expect("non-zero height"))
@@ -5032,8 +5312,8 @@ mod tests {
                 )
                 .expect_err("an unproven hint cannot mark certified work as applied");
             assert!(
-                error.to_string().contains("lane retirement payload hint"),
-                "unexpected {label} error: {error}"
+                format!("{error:?}").contains("lane retirement payload hint"),
+                "unexpected {label} error: {error:?}"
             );
             assert!(
                 kura.read_lane_geometry_journal()
@@ -5056,6 +5336,12 @@ mod tests {
         let initial_activations =
             BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
         let kura = open_kura(&root, &extended);
+        seed_geometry_markers_for_test(
+            &kura,
+            &extended,
+            &extended_incarnations,
+            &extended_activations,
+        );
         let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let chain: ChainId = "geometry-retirement-committed"
             .parse()
@@ -5155,6 +5441,104 @@ mod tests {
                 .records
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn consecutive_published_retirements_do_not_resurrect_intermediate_lanes() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let catalog = |active: u32| {
+            let lanes = (0..active)
+                .map(|raw| ModelLaneConfig {
+                    id: LaneId::new(raw),
+                    alias: if raw == 0 {
+                        "default".to_owned()
+                    } else {
+                        format!("elastic-{raw}")
+                    },
+                    ..ModelLaneConfig::default()
+                })
+                .collect::<Vec<_>>();
+            let catalog = LaneCatalog::new(
+                NonZeroU32::new(4).expect("fixed geometry bound is non-zero"),
+                lanes,
+            )
+            .expect("consecutive retirement catalog");
+            RuntimeLaneConfig::from_catalog(&catalog)
+        };
+        let configs = [catalog(4), catalog(3), catalog(2), catalog(1)];
+        let all_incarnations = (0_u32..4)
+            .map(|raw| {
+                (
+                    LaneId::new(raw),
+                    Hash::new(format!("consecutive-retirement-incarnation-{raw}")),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let all_activations = (0_u32..4)
+            .map(|raw| (LaneId::new(raw), u64::from(raw)))
+            .collect::<BTreeMap<_, _>>();
+        let geometry_for = |active: u32| {
+            let incarnations = all_incarnations
+                .iter()
+                .filter(|(lane, _)| lane.as_u32() < active)
+                .map(|(lane, incarnation)| (*lane, *incarnation))
+                .collect::<BTreeMap<_, _>>();
+            let activations = all_activations
+                .iter()
+                .filter(|(lane, _)| lane.as_u32() < active)
+                .map(|(lane, activation)| (*lane, *activation))
+                .collect::<BTreeMap<_, _>>();
+            (incarnations, activations)
+        };
+        let geometries = [
+            geometry_for(4),
+            geometry_for(3),
+            geometry_for(2),
+            geometry_for(1),
+        ];
+        let kura = open_kura(&root, &configs[0]);
+        seed_geometry_markers_for_test(&kura, &configs[0], &geometries[0].0, &geometries[0].1);
+
+        for index in 0..3 {
+            kura.apply_lane_geometry_transition(
+                &configs[index],
+                &configs[index + 1],
+                &geometries[index].0,
+                &geometries[index + 1].0,
+                &geometries[index].1,
+                &geometries[index + 1].1,
+                &BTreeSet::new(),
+            )
+            .unwrap_or_else(|error| {
+                panic!("consecutive retirement {} failed: {error:?}", index + 1)
+            });
+            kura.mark_lane_geometry_catalog_published(
+                &configs[index + 1],
+                &geometries[index + 1].0,
+                &geometries[index + 1].1,
+            )
+            .expect("publish consecutive retirement catalog");
+
+            for retired in (4 - u32::try_from(index).expect("index fits u32") - 1)..4 {
+                assert!(
+                    !configs[0]
+                        .entry(LaneId::new(retired))
+                        .expect("retired lane entry")
+                        .blocks_dir(&root)
+                        .exists(),
+                    "published transition resurrected retired lane {retired}"
+                );
+            }
+        }
+        assert_eq!(
+            kura.read_lane_geometry_journal()
+                .expect("geometry journal")
+                .records
+                .len(),
+            3,
+            "every consecutive retirement remains recoverable until checkpoint GC"
         );
     }
 
@@ -5422,6 +5806,7 @@ mod tests {
         )
         .expect("restore current snapshot geometry");
 
+        durable_geometry_snapshot_identity(&kura, 20);
         let cached_before = kura.refresh_disk_usage_bytes().expect("usage before GC");
         let summary = checkpoint_retired_geometry(&kura, &fixture, 20)
             .expect("checkpoint current snapshot geometry");
@@ -6054,10 +6439,8 @@ mod tests {
             .ensure_archived_lane_work_released(&archived_blocks, &binding, &[release])
             .expect_err("a merge release without its durable receipt must pin the archive");
         assert!(
-            error
-                .to_string()
-                .contains("merge application receipt is missing or malformed"),
-            "unexpected missing-receipt error: {error}"
+            format!("{error:?}").contains("merge application receipt is missing or malformed"),
+            "unexpected missing-receipt error: {error:?}"
         );
         assert!(fixture.archive_root.exists());
     }
@@ -6123,8 +6506,8 @@ mod tests {
             .join(hex::encode(journal.records[3].transition_id.as_ref()));
         let collision = second_archive.join("operator-data.txt");
         fs::write(&collision, b"retain until operator repair").expect("collision");
-        let cached_before = kura
-            .refresh_disk_usage_bytes()
+        durable_geometry_snapshot_identity(&kura, 20);
+        kura.refresh_disk_usage_bytes()
             .expect("usage before partial GC");
 
         checkpoint_retired_geometry(&kura, &fixture, 20)
@@ -6146,8 +6529,9 @@ mod tests {
                 .is_empty()
         );
         let exact_after_partial = kura.kura_disk_usage_bytes().expect("exact partial usage");
+        let cached_after_partial = kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed);
         assert!(
-            cached_before >= exact_after_partial,
+            cached_after_partial >= exact_after_partial,
             "a failed partial pass may over-account, but must never under-account retained bytes"
         );
 

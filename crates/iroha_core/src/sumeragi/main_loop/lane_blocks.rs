@@ -515,7 +515,19 @@ impl Actor {
             );
             return Ok(());
         }
-        let signer_pops = self.lane_new_view_certificate_signer_pops(&certificate);
+        let Some(signer_pops) = self.lane_new_view_certificate_signer_pops(&certificate) else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::LaneBlockQc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            warn!(
+                lane_id = body.lane_id.as_u32(),
+                dataspace_id = body.dataspace_id.as_u64(),
+                "dropping lane NewView certificate because the exact incarnation PoPs are unavailable"
+            );
+            return Ok(());
+        };
         if crate::lane_consensus::validate_lane_block_new_view_certificate(
             &certificate,
             &signer_pops,
@@ -1064,7 +1076,19 @@ impl Actor {
             }
         }
 
-        let pops = self.lane_block_qc_signer_pops(&qc);
+        let Some(pops) = self.lane_block_qc_signer_pops(&qc) else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::LaneBlockQc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            warn!(
+                lane_id = qc.body.lane_id.as_u32(),
+                dataspace_id = qc.body.dataspace_id.as_u64(),
+                "dropping lane-block QC because the exact incarnation PoPs are unavailable"
+            );
+            return Ok(());
+        };
         match self
             .subsystems
             .lane_blocks
@@ -1940,9 +1964,10 @@ impl Actor {
                     return None;
                 }
             };
-            let Some(validator_set_pops) =
-                self.lane_block_validator_set_pops(&proposal.descriptor.validator_set)
-            else {
+            let Some(validator_set_pops) = self.lane_block_validator_set_pops(
+                proposal.descriptor.lane_id,
+                &proposal.descriptor.validator_set,
+            ) else {
                 warn!("skipping READY vote because historical committee PoPs are incomplete");
                 return None;
             };
@@ -2853,6 +2878,25 @@ impl Actor {
                 return None;
             }
         };
+        // Signature construction is side-effect free. Publish the durable
+        // anti-equivocation decision after it succeeds, but before the signed
+        // vote can leave this function or reach the network.
+        if let Err(err) = self
+            .subsystems
+            .lane_drain_signing_guard
+            .authorize_commit_vote(&body)
+        {
+            warn!(
+                ?err,
+                lane = body.lane_id.as_u32(),
+                dataspace = body.dataspace_id.as_u64(),
+                lane_block_height = body.lane_block_height,
+                lane_block_view = body.lane_block_view,
+                proposal_height = body.proposal_height,
+                "skipping local lane-block commit vote because the durable drain guard refused it"
+            );
+            return None;
+        }
 
         Some(crate::lane_consensus::LaneBlockVoteV1 {
             body,
@@ -3066,6 +3110,10 @@ impl Actor {
             .subsystems
             .committed_lane_blocks
             .recover_certified_inputs_awaiting_merge(&self.state);
+        let verified_input_progress = self
+            .subsystems
+            .committed_lane_blocks
+            .take_execution_input_verification_progress();
         let payload_hint_repair_candidates = self
             .subsystems
             .committed_lane_blocks
@@ -3135,11 +3183,34 @@ impl Actor {
         let committed_status =
             super::merge_committed_lane_block_statuses(committed_status, final_committed_status);
         let pending = self.subsystems.committed_lane_blocks.len();
+        let merge_source_progress =
+            queued > 0 || recovered_inputs > 0 || verified_input_progress || queued_after_prune > 0;
+        if merge_source_progress
+            && self
+                .subsystems
+                .merge
+                .committee
+                .invalidate_completed_empty_execution_attempt()
+        {
+            // An empty attempt is safe to invalidate: it reserved no digest and
+            // produced no signature. Without this persistent invalidation, a
+            // certified input recovered by ingress can lose its one-tick
+            // `recovered_inputs` pulse before merge maintenance runs, leaving
+            // the same carrier round permanently cached as empty.
+            debug!(
+                queued,
+                recovered_inputs,
+                verified_input_progress,
+                queued_after_prune,
+                "invalidated completed empty merge attempt after certified source progress"
+            );
+        }
         super::status::set_committed_lane_blocks(committed_status);
         self.publish_lane_block_session_status();
         debug!(
             queued,
             recovered_inputs,
+            verified_input_progress,
             application_receipts,
             pruned_inactive_lane_sessions,
             pruned_applied_before,
@@ -3151,6 +3222,7 @@ impl Actor {
         );
         queued > 0
             || recovered_inputs > 0
+            || verified_input_progress
             || payload_hint_repair_requests > 0
             || application_receipts > 0
             || pruned_inactive_lane_sessions > 0
@@ -3169,7 +3241,16 @@ impl Actor {
             committed_lane_blocks.enqueue_ready_sessions(lane_blocks)
         };
         for session in &ready {
-            let signer_pops = self.committed_lane_block_session_pops(session);
+            let Some(signer_pops) = self.committed_lane_block_session_pops(session) else {
+                warn!(
+                    lane_id = ?session.proposal.descriptor.lane_id,
+                    dataspace_id = ?session.proposal.descriptor.dataspace_id,
+                    lane_block_height = session.proposal.descriptor.lane_block_height,
+                    lane_block_view = session.proposal.descriptor.lane_block_view,
+                    "refusing to persist certified lane-block session without exact incarnation PoPs"
+                );
+                continue;
+            };
             if let Err(err) = self
                 .state
                 .kura()
@@ -3191,16 +3272,21 @@ impl Actor {
     fn committed_lane_block_session_pops(
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
-    ) -> BTreeMap<PublicKey, Vec<u8>> {
-        let mut pops = self.lane_block_qc_signer_pops(&session.prepare_qc);
-        pops.extend(self.lane_block_qc_signer_pops(&session.commit_qc));
-        pops
+    ) -> Option<BTreeMap<PublicKey, Vec<u8>>> {
+        let mut pops = self.lane_block_qc_signer_pops(&session.prepare_qc)?;
+        pops.extend(self.lane_block_qc_signer_pops(&session.commit_qc)?);
+        Some(pops)
     }
 
     fn lane_block_qc_signer_pops(
         &self,
         qc: &crate::sumeragi::consensus::LaneBlockQcV1,
-    ) -> BTreeMap<PublicKey, Vec<u8>> {
+    ) -> Option<BTreeMap<PublicKey, Vec<u8>>> {
+        let pinned = super::pinned_autoscale_validator_pops_for_set(
+            &self.state,
+            qc.body.lane_id,
+            &qc.validator_set,
+        )?;
         let trusted = self.common_config.trusted_peers.value();
         let mut pops = BTreeMap::new();
         for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
@@ -3216,24 +3302,36 @@ impl Actor {
                     continue;
                 };
                 let pk = signer.public_key();
-                if let Some(pop) = self
-                    .roster_validation_cache
-                    .pops
-                    .get(pk)
-                    .or_else(|| trusted.pops.get(pk))
+                if let Some(pop) = pinned.as_ref().and_then(|pops| pops.get(signer_index)) {
+                    pops.insert(pk.clone(), pop.clone());
+                } else if pinned.is_none()
+                    && let Some(pop) = self
+                        .roster_validation_cache
+                        .pops
+                        .get(pk)
+                        .or_else(|| trusted.pops.get(pk))
                 {
                     pops.insert(pk.clone(), pop.clone());
                 }
             }
         }
-        pops
+        Some(pops)
     }
 
-    fn lane_block_validator_set_pops(&self, validator_set: &[PeerId]) -> Option<Vec<Vec<u8>>> {
+    fn lane_block_validator_set_pops(
+        &self,
+        lane_id: LaneId,
+        validator_set: &[PeerId],
+    ) -> Option<Vec<Vec<u8>>> {
         if validator_set.is_empty()
             || validator_set.len() > crate::lane_consensus::MAX_LANE_BLOCK_VALIDATORS
         {
             return None;
+        }
+        if let Some(pinned) =
+            super::pinned_autoscale_validator_pops_for_set(&self.state, lane_id, validator_set)?
+        {
+            return Some(pinned);
         }
         let trusted = self.common_config.trusted_peers.value();
         validator_set
@@ -3268,7 +3366,12 @@ impl Actor {
     fn lane_new_view_certificate_signer_pops(
         &self,
         certificate: &crate::lane_consensus::LaneBlockNewViewCertificateV1,
-    ) -> BTreeMap<PublicKey, Vec<u8>> {
+    ) -> Option<BTreeMap<PublicKey, Vec<u8>>> {
+        let pinned = super::pinned_autoscale_validator_pops_for_set(
+            &self.state,
+            certificate.body.lane_id,
+            &certificate.validator_set,
+        )?;
         let trusted = self.common_config.trusted_peers.value();
         let mut pops = BTreeMap::new();
         for (byte_index, byte) in certificate.signers_bitmap.iter().copied().enumerate() {
@@ -3284,17 +3387,20 @@ impl Actor {
                     continue;
                 };
                 let public_key = signer.public_key();
-                if let Some(pop) = self
-                    .roster_validation_cache
-                    .pops
-                    .get(public_key)
-                    .or_else(|| trusted.pops.get(public_key))
+                if let Some(pop) = pinned.as_ref().and_then(|pops| pops.get(signer_index)) {
+                    pops.insert(public_key.clone(), pop.clone());
+                } else if pinned.is_none()
+                    && let Some(pop) = self
+                        .roster_validation_cache
+                        .pops
+                        .get(public_key)
+                        .or_else(|| trusted.pops.get(public_key))
                 {
                     pops.insert(public_key.clone(), pop.clone());
                 }
             }
         }
-        pops
+        Some(pops)
     }
 }
 

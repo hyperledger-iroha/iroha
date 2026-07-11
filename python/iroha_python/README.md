@@ -793,14 +793,11 @@ for row in client.query_triggers(filter={"authority": "sorauﾛ1NcMBm2dﾌBokヱ
 client.delete_trigger("notify-admins")
 
 # Capture SoraFS PoR telemetry
-challenge_payload = b"...Norito PorChallengeV1 bytes..."
 proof_payload = b"...PorProofV1 bytes..."
 verdict_payload = b"...AuditVerdictV1 bytes..."
 
-challenge = client.record_sorafs_por_challenge(challenge=challenge_payload)
 proof = client.record_sorafs_por_proof(proof=proof_payload)
 verdict = client.record_sorafs_por_verdict(verdict=verdict_payload)
-observation = client.submit_sorafs_por_observation(success=True)
 status_bytes = client.get_sorafs_por_status(manifest_hex="ab" * 32, status="verified")
 weekly_report = client.get_sorafs_por_weekly_report("2026-W05")
 ingestion = client.get_sorafs_por_ingestion_status(manifest_hex="ab" * 32)

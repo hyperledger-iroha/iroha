@@ -6985,6 +6985,14 @@ redistributable schemas, and official trust/revocation bundles.
 
 ## Nexus independent lane consensus follow-ups
 
+> **Status (2026-07-10):** This historical checklist predates the certified
+> merge-carrier implementation. Independent lane proposal, DA/RBC, QC, durable
+> sidecar recovery, and exact global-carrier application are implemented. The
+> canonical current design and remaining validation gates are documented in
+> `nexus_cross_lane.md`, `merge_ledger.md`, `status.md`, and `roadmap.md`.
+> References below to direct WSV application describe retired intermediate
+> work and are retained only as implementation history.
+
 - Replace the current global proposal-path lane lookahead with the full
   per-lane proposal/vote scheduler so lane blocks are proposed, executed, and
   QC-sealed by their own lane committees instead of being emitted as relay

@@ -68,6 +68,9 @@ where
 {
     let mut cursor = 0usize;
     let len = read_len_u64(bytes, &mut cursor)?;
+    crate::core::enforce_decode_sequence_length(
+        u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
+    )?;
     let mut out = Vec::with_capacity(len);
     for _ in 0..len {
         let elem_len = read_len_u64(bytes, &mut cursor)?;
@@ -110,6 +113,9 @@ where
 {
     let mut cursor = 0usize;
     let len = read_len_u64(bytes, &mut cursor)?;
+    crate::core::enforce_decode_sequence_length(
+        u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
+    )?;
     let mut map = BTreeMap::new();
     for _ in 0..len {
         let key_len = read_len_u64(bytes, &mut cursor)?;

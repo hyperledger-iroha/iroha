@@ -38,6 +38,11 @@ pub const ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1: u8 = 1;
 pub const BYTES_PER_GIB: u64 = 1_073_741_824;
 /// Domain separator for canonical V1 order identifiers.
 pub const ORDERBOOK_ORDER_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-id.v1";
+/// Maximum canonical owner-account byte length accepted by V1 orderbook payloads.
+///
+/// This protocol ceiling bounds the durable owner-nonce high-water key space and
+/// must be enforced before hashing or signing owner-controlled input.
+pub const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: usize = 256;
 const ORDERBOOK_TRADE_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.trade-id.v1";
 const ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-signature.v1";
 const ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.cancel-signature.v1";
@@ -171,10 +176,8 @@ impl OrderRequestV1 {
                 found: self.version,
             });
         }
+        validate_owner_account_v1(&self.owner_account)?;
         validate_digest(self.order_id, OrderbookValidationError::InvalidOrderId)?;
-        if self.owner_account.is_empty() {
-            return Err(OrderbookValidationError::EmptyOwnerAccount);
-        }
         if self.nonce == 0 {
             return Err(OrderbookValidationError::ZeroNonce);
         }
@@ -248,10 +251,8 @@ impl OrderCancelV1 {
                 found: self.version,
             });
         }
+        validate_owner_account_v1(&self.owner_account)?;
         validate_digest(self.order_id, OrderbookValidationError::InvalidOrderId)?;
-        if self.owner_account.is_empty() {
-            return Err(OrderbookValidationError::EmptyOwnerAccount);
-        }
         if self.nonce == 0 {
             return Err(OrderbookValidationError::ZeroNonce);
         }
@@ -268,6 +269,7 @@ impl OrderCancelV1 {
 pub fn order_request_signature_digest_v1(
     order: &OrderRequestV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
+    validate_owner_account_v1(&order.owner_account)?;
     let mut signable = order.clone();
     signable.signature.signature.clear();
     orderbook_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &signable)
@@ -305,6 +307,7 @@ pub fn sign_order_request_ed25519_v1(
 pub fn order_cancel_signature_digest_v1(
     cancel: &OrderCancelV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
+    validate_owner_account_v1(&cancel.owner_account)?;
     let mut signable = cancel.clone();
     signable.signature.signature.clear();
     orderbook_signature_digest(ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1, &signable)
@@ -482,9 +485,7 @@ impl OrderbookRuntimeSnapshotV1 {
         let mut owner_nonce_high_waters = BTreeMap::new();
         let mut previous_owner: Option<&[u8]> = None;
         for entry in &self.owner_nonce_high_waters {
-            if entry.owner_account.is_empty() {
-                return Err(OrderbookValidationError::EmptyOwnerAccount);
-            }
+            validate_owner_account_v1(&entry.owner_account)?;
             if entry.highest_nonce == 0 {
                 return Err(OrderbookValidationError::ZeroNonce);
             }
@@ -1380,6 +1381,21 @@ fn validate_digest(
     Ok(())
 }
 
+pub(crate) fn validate_owner_account_v1(
+    owner_account: &[u8],
+) -> Result<(), OrderbookValidationError> {
+    if owner_account.is_empty() {
+        return Err(OrderbookValidationError::EmptyOwnerAccount);
+    }
+    if owner_account.len() > ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 {
+        return Err(OrderbookValidationError::OwnerAccountTooLong {
+            length: owner_account.len(),
+            max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+        });
+    }
+    Ok(())
+}
+
 fn validate_fee_bps(fee_bps: u16) -> Result<(), OrderbookValidationError> {
     if fee_bps > BASIS_POINTS_PER_UNIT {
         return Err(OrderbookValidationError::InvalidFeeBps { fee_bps });
@@ -1466,6 +1482,14 @@ pub enum OrderbookValidationError {
     /// Owner account bytes are empty.
     #[error("owner account must not be empty")]
     EmptyOwnerAccount,
+    /// Owner account exceeds the canonical V1 byte ceiling.
+    #[error("owner account length {length} exceeds maximum {max} bytes")]
+    OwnerAccountTooLong {
+        /// Observed owner-account byte length.
+        length: usize,
+        /// Canonical maximum owner-account byte length.
+        max: usize,
+    },
     /// Buyer account bytes are empty.
     #[error("buyer account must not be empty")]
     EmptyBuyerAccount,
@@ -2175,6 +2199,56 @@ mod tests {
     }
 
     #[test]
+    fn order_accepts_owner_account_at_v1_byte_ceiling() {
+        let mut bounded = order();
+        bounded.owner_account = vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+        refresh_order_id(&mut bounded);
+
+        assert_eq!(bounded.validate(), Ok(()));
+        let signed = sign_order(bounded, 0x41);
+        assert_eq!(verify_order_request_signature_v1(&signed), Ok(()));
+    }
+
+    #[test]
+    fn order_rejects_owner_account_above_v1_byte_ceiling_before_id_or_signature_use() {
+        let mut oversized = order();
+        oversized.owner_account = vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        oversized.order_id = [0xAA; 32];
+        oversized.signature.signature.clear();
+        let expected = OrderbookValidationError::OwnerAccountTooLong {
+            length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+            max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+        };
+
+        assert_eq!(oversized.validate(), Err(expected.clone()));
+        assert_eq!(order_request_signature_digest_v1(&oversized), Err(expected));
+    }
+
+    #[test]
+    fn cancel_accepts_owner_account_at_v1_byte_ceiling() {
+        let mut bounded = cancel();
+        bounded.owner_account = vec![0x43; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+
+        assert_eq!(bounded.validate(), Ok(()));
+        let signed = sign_cancel(bounded, 0x42);
+        assert_eq!(verify_order_cancel_signature_v1(&signed), Ok(()));
+    }
+
+    #[test]
+    fn cancel_rejects_owner_account_above_v1_byte_ceiling_before_signature_use() {
+        let mut oversized = cancel();
+        oversized.owner_account = vec![0x43; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        oversized.signature.signature.clear();
+        let expected = OrderbookValidationError::OwnerAccountTooLong {
+            length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+            max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+        };
+
+        assert_eq!(oversized.validate(), Err(expected.clone()));
+        assert_eq!(order_cancel_signature_digest_v1(&oversized), Err(expected));
+    }
+
+    #[test]
     fn order_id_derivation_binds_owner_and_nonce() {
         let owner = account(3);
         let order_id = derive_orderbook_order_id_v1(&owner, 1);
@@ -2857,6 +2931,17 @@ mod tests {
         assert_eq!(
             zero_nonce.validate(),
             Err(OrderbookValidationError::ZeroNonce)
+        );
+
+        let mut oversized_owner = runtime_snapshot();
+        oversized_owner.owner_nonce_high_waters[0].owner_account =
+            vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        assert_eq!(
+            oversized_owner.validate(),
+            Err(OrderbookValidationError::OwnerAccountTooLong {
+                length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+                max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+            })
         );
     }
 

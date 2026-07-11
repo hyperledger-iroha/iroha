@@ -491,6 +491,15 @@ impl CommitRosterJournal {
         self.entries.values().cloned().collect()
     }
 
+    /// Return whether the durable journal state contains any entry above `height`.
+    #[must_use]
+    pub(crate) fn has_entries_above(&self, height: u64) -> bool {
+        self.entries
+            .keys()
+            .next_back()
+            .is_some_and(|(entry_height, _)| *entry_height > height)
+    }
+
     fn enforce_retention(&mut self) {
         while self.entries.len() > self.retention.get() {
             if let Some(oldest) = self.entries.keys().next().copied() {
@@ -655,8 +664,10 @@ mod tests {
         let mut journal = CommitRosterJournal::new(path, retention(4));
         journal.upsert(cert1.clone(), checkpoint1, None);
         journal.upsert(cert2.clone(), checkpoint2, None);
+        assert!(journal.has_entries_above(1));
 
         journal.truncate_to_height(1).expect("truncate to height");
+        assert!(!journal.has_entries_above(1));
 
         assert!(
             journal

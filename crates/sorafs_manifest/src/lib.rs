@@ -46,6 +46,7 @@ pub mod repair;
 pub mod reputation;
 pub mod retention;
 pub mod token;
+pub mod transparency;
 pub mod validation;
 
 /// Decode a fixed-width Ed25519 signature after rejecting inert or malformed `R` payloads.
@@ -214,15 +215,25 @@ pub use gateway::{
     HostPattern,
 };
 pub use governance::{
-    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
+    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
+    GOVERNANCE_EXTERNAL_KIND_GC_AUDIT_V1, GOVERNANCE_EXTERNAL_KIND_PROOF_TOKEN_ISSUANCE_V1,
+    GOVERNANCE_EXTERNAL_KIND_RECONCILIATION_V1, GOVERNANCE_EXTERNAL_KIND_REPAIR_AUDIT_V1,
+    GOVERNANCE_EXTERNAL_KIND_REPAIR_SLASH_V1,
+    GOVERNANCE_EXTERNAL_KIND_TRANSPARENCY_LEDGER_PUBLICATION_V1, GOVERNANCE_LOG_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagBlockValidationError, GovernanceDagChainValidationError,
     GovernanceDagHeadChainValidationError, GovernanceDagHeadV1, GovernanceDagHeadValidationError,
     GovernanceExternalPayloadMetadataV1, GovernanceExternalPayloadV1,
-    GovernanceExternalPayloadValidationError, GovernanceLogNodeV1, GovernanceLogPayloadV1,
-    GovernanceLogSignatureV1, GovernanceLogSignatureVerificationError,
-    GovernanceLogValidationError, GovernanceSignatureAlgorithm,
-    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-    SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1, SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
+    GovernanceExternalPayloadValidationError, GovernanceExternalRepairSlashStageV1,
+    GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
+    GovernanceLogSignatureVerificationError, GovernanceLogValidationError,
+    GovernanceSignatureAlgorithm, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
+    SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
+    SORAFS_APPEAL_FINANCE_WEEKLY_ROLLUP_VERSION_V1,
+    SORAFS_GOVERNANCE_EXTERNAL_METADATA_KEY_MAX_BYTES_V1,
+    SORAFS_GOVERNANCE_EXTERNAL_METADATA_MAX_ENTRIES_V1,
+    SORAFS_GOVERNANCE_EXTERNAL_METADATA_TOTAL_MAX_BYTES_V1,
+    SORAFS_GOVERNANCE_EXTERNAL_METADATA_VALUE_MAX_BYTES_V1,
+    SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_MAX_BYTES_V1, SORAFS_GOVERNANCE_EXTERNAL_PAYLOAD_VERSION_V1,
     SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
     SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeRollupV1,
     SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
@@ -252,24 +263,34 @@ pub use manifest_capabilities::{
 };
 pub use orderbook::{
     BYTES_PER_GIB, ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_ID_DOMAIN_V1,
-    ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1, OrderBookMatchOutcomeV1,
-    OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1,
-    OrderTierV1, OrderbookOwnerNonceHighWaterV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
-    OrderbookValidationError, SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
-    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1, TradeEventV1,
-    apply_settlement_receipt_v1, derive_orderbook_order_id_v1, derive_orderbook_trade_id_v1,
-    match_order_book_v1, match_orders_v1, open_settlement_channel_for_trade_v1,
-    order_cancel_signature_digest_v1, order_request_signature_digest_v1,
-    settlement_receipt_signature_digest_v1, sign_order_cancel_ed25519_v1,
-    sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1, trade_escrow_requirement_v1,
-    trade_gross_value_v1, verify_order_cancel_signature_v1, verify_order_request_signature_v1,
+    ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+    ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
+    OrderBookMatchOutcomeV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1,
+    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookOwnerNonceHighWaterV1,
+    OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, OrderbookValidationError,
+    SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
+    SettlementChannelV1, SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1,
+    derive_orderbook_order_id_v1, derive_orderbook_trade_id_v1, match_order_book_v1,
+    match_orders_v1, open_settlement_channel_for_trade_v1, order_cancel_signature_digest_v1,
+    order_request_signature_digest_v1, settlement_receipt_signature_digest_v1,
+    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    sign_settlement_receipt_ed25519_v1, trade_escrow_requirement_v1, trade_gross_value_v1,
+    verify_order_cancel_signature_v1, verify_order_request_signature_v1,
     verify_settlement_receipt_signature_v1,
 };
 pub use pdp::{
-    HashAlgorithmV1, PDP_CHALLENGE_VERSION_V1, PDP_COMMITMENT_VERSION_V1, PDP_PROOF_VERSION_V1,
-    PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
-    PdpHotLeafProofV1, PdpProofLeafV1, PdpProofV1, PdpProofValidationError, PdpSampleV1,
+    HashAlgorithmV1, PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_CHALLENGE_VERSION_V1,
+    PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_VERSION_V1, PDP_HOT_LEAF_SIZE_V1,
+    PDP_HOT_LEAVES_PER_SEGMENT_V1, PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1,
+    PDP_MAX_MERKLE_PATH_DEPTH_V1, PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1,
+    PDP_PROOF_MAX_CANONICAL_BYTES_V1, PDP_PROOF_SIGNATURE_DOMAIN_V1, PDP_PROOF_VERSION_V1,
+    PDP_SEGMENT_SIZE_V1, PdpChallengeV1, PdpChallengeValidationError,
+    PdpChunkProfileValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
+    PdpEd25519SignatureV1, PdpHotLeafProofV1, PdpMerklePathError, PdpMerkleReadError,
+    PdpMerkleTreeBuilderV1, PdpMerkleTreeError, PdpMerkleTreeV1, PdpProofLeafV1,
+    PdpProofSigningError, PdpProofV1, PdpProofValidationError, PdpSampleV1,
+    PdpSignatureVerificationError, PdpVerificationError, VerifiedPdpProofV1,
+    sign_pdp_proof_ed25519_v1, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
 };
 pub use pin_registry::{
     AliasBindingV1, AliasBindingValidationError, ManifestPolicyV1, ManifestPolicyValidationError,
@@ -285,17 +306,15 @@ pub use pop_credentials::{
     PopEnrollmentRequestV1, PopIssuedCredentialBundleV1, PopMembershipProofSystemV1,
     PopMembershipProofV1, PopRenewalRequestV1, PopRevocationEntryV1, PopRevocationListV1,
     PopRevocationReasonV1, PopSignatureAlgorithmV1, PopSignatureV1,
-    finalize_pop_membership_proof_digest_v1, issue_pop_credential_bundle_ed25519_v1,
-    pop_commitment_root_signature_digest_v1, pop_credential_signature_digest_v1,
-    pop_membership_proof_transcript_digest_v1, pop_revocation_list_signature_digest_v1,
+    issue_pop_credential_bundle_ed25519_v1, pop_commitment_root_signature_digest_v1,
+    pop_credential_signature_digest_v1, pop_revocation_list_signature_digest_v1,
     sign_pop_commitment_root_ed25519_v1, sign_pop_credential_ed25519_v1,
     sign_pop_revocation_list_ed25519_v1, verify_pop_commitment_root_signature_v1,
     verify_pop_credential_signature_v1, verify_pop_membership_proof_v1,
-    verify_pop_membership_transcript_policy_v1, verify_pop_revocation_list_signature_v1,
+    verify_pop_revocation_list_signature_v1,
 };
 pub use por::{
     AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, AuditVerdictValidationError,
-    MANUAL_POR_CHALLENGE_VERSION_V1, ManualPorChallengeV1, ManualPorChallengeValidationError,
     POR_CHALLENGE_STATUS_VERSION_V1, POR_CHALLENGE_VERSION_V1, POR_PROOF_SIGNATURE_DOMAIN_V1,
     POR_PROOF_VERSION_V1, POR_VERDICT_SIGNATURE_DOMAIN_V1, POR_WEEKLY_REPORT_VERSION_V1,
     PorChallengeOutcome, PorChallengeOutcomeParseError, PorChallengeStatusV1,
@@ -399,6 +418,23 @@ pub use reputation::{
 pub use token::{
     STREAM_TOKEN_MAX_BASE64_BYTES_V1, STREAM_TOKEN_MAX_TTL_SECS_V1, STREAM_TOKEN_MAX_WIRE_BYTES_V1,
     StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
+};
+pub use transparency::{
+    MODERATION_LEDGER_BLOCK_VERSION_V1, MODERATION_LEDGER_ENTRY_VERSION_V1,
+    MODERATION_LEDGER_MAX_ENTRIES_V1, MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1,
+    MODERATION_LEDGER_MAX_EVIDENCE_URIS_V1, MODERATION_LEDGER_MAX_METADATA_ENTRIES_V1,
+    MODERATION_LEDGER_MAX_METADATA_KEY_BYTES_V1, MODERATION_LEDGER_MAX_METADATA_TOTAL_BYTES_V1,
+    MODERATION_LEDGER_MAX_METADATA_VALUE_BYTES_V1, MODERATION_LEDGER_MAX_PROOF_PATH_LEN,
+    MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, MODERATION_LEDGER_PROOF_VERSION_V1,
+    MODERATION_LEDGER_PUBLICATION_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
+    MODERATION_PRIVACY_DELTA_PPB_MAX, MODERATION_PRIVACY_MAX_METRICS_V1,
+    MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerBlockV1,
+    ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1, ModerationLedgerEntryV1,
+    ModerationLedgerMetadataV1, ModerationLedgerProofNodeV1, ModerationLedgerProofSideV1,
+    ModerationLedgerProofV1, ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1,
+    ModerationPrivacyModeV1, ModerationPrivacyParametersV1, PROOF_TOKEN_ISSUANCE_VERSION_V1,
+    PROOF_TOKEN_MAX_ENTRY_ID_BYTES_V1, PROOF_TOKEN_MAX_ENTRY_IDS_V1, ProofTokenIssuanceV1,
+    TransparencyLedgerError,
 };
 pub use validation::{
     ManifestValidationError, PinPolicyConstraints, validate_chunker_handle, validate_manifest,

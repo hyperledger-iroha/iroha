@@ -212,15 +212,33 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         "proposal_renewed_v1.to",
         &norito::to_bytes(&renewed_proposal_v1)?,
     )?;
+    write_json(
+        out_dir,
+        "proposal_renewed_v1.json",
+        Value::Object(build_proposal_summary(&renewed_proposal_v1)),
+    )?;
     write_binary(
         out_dir,
         "advert_renewed_v1.to",
         &norito::to_bytes(&renewed_advert_v1)?,
     )?;
+    write_json(
+        out_dir,
+        "advert_renewed_v1.json",
+        Value::Object(build_advert_summary(&renewed_advert_v1)),
+    )?;
     write_binary(
         out_dir,
         "envelope_renewed_v1.to",
         &norito::to_bytes(&renewed_envelope_v1)?,
+    )?;
+    write_json(
+        out_dir,
+        "envelope_renewed_v1.json",
+        Value::Object(build_envelope_summary(
+            &renewed_envelope_v1,
+            &renewed_record,
+        )),
     )?;
     write_binary(out_dir, "renewal_v1.to", &norito::to_bytes(&renewal)?)?;
     write_json(
@@ -742,6 +760,10 @@ They provide deterministic governance proposals, adverts, envelopes, renewals, a
 integration tests across Rust, Torii, and CLI tooling. Every admission object uses the first-release\n\
 V1 schema. Files named `*_renewed_v1` contain the V1 proposal, advert, and envelope carried by\n\
 `renewal_v1`; `renewed` describes lifecycle state, not a new schema version.\n\n\
+The generator uses test-only Ed25519 seeds `[0x21; 32]` for the provider and `[0x45; 32]` for\n\
+the one-member council. These keys are public fixture material and must never be used by a live\n\
+provider or governance council. Binary `.to` files are canonical Norito; matching `.json` files\n\
+are human-readable summaries, not alternative wire payloads.\n\n\
 Additional artifacts include a sample multi-source fetch plan so SDKs can exercise chunk scheduling\n\
 end-to-end.\n\n\
 Do not edit manually; rerun the generator if data changes.\n",

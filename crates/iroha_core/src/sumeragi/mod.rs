@@ -898,6 +898,36 @@ mod tests {
         }
     }
 
+    fn sample_lane_drain_vote() -> crate::lane_consensus::LaneDrainVoteV1 {
+        use iroha_data_model::merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1};
+
+        let keypair = checked_bls_keypair();
+        let signer = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![signer.clone()];
+        let body = LaneDrainCertificateBodyV1 {
+            version: 1,
+            intent: LaneDrainIntentV1 {
+                version: 1,
+                chain_id_digest: Hash::new(b"sumeragi-lane-drain-chain"),
+                lane_id: LaneId::new(3),
+                dataspace_id: DataSpaceId::new(7),
+                lane_incarnation: Hash::new(b"sumeragi-lane-drain-incarnation"),
+                close_global_height: 12,
+                initial_merged_lane_height: 4,
+                initial_merged_descriptor_hash: Some(Hash::new(b"sumeragi-lane-drain-initial")),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                min_quorum: 1,
+            },
+            final_lane_block_height: 5,
+            final_lane_block_descriptor_hash: Some(Hash::new(b"sumeragi-lane-drain-final")),
+        };
+        crate::lane_consensus::LaneDrainVoteV1::new_signed(body, signer, keypair.private_key())
+            .expect("sign valid lane-drain fixture vote")
+    }
+
     fn test_signed_block(height: u64, view: u64) -> SignedBlock {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("block height must be non-zero"),
@@ -3238,6 +3268,45 @@ mod tests {
             bls_sig: vec![0x22; 48],
         };
         assert!(!handle.try_incoming_merge_signature(signature));
+        assert!(!handle.try_incoming_lane_drain_vote(checked_peer(), sample_lane_drain_vote()));
+    }
+
+    #[test]
+    fn lane_drain_ingress_preserves_authenticated_transport_sender() {
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(0);
+        let (block_tx, _block_rx) = mpsc::sync_channel(0);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(0);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(0);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(0);
+        let (background_tx, _background_rx) = mpsc::sync_channel(0);
+        let (lane_tx, lane_rx) = mpsc::sync_channel(1);
+        let vote_dedup = Arc::new(Mutex::new(DedupCache::new(4, VOTE_DEDUP_CACHE_TTL)));
+        let block_payload_dedup = Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+            4,
+            BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+        )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+        let transport_sender = checked_peer();
+        let vote = sample_lane_drain_vote();
+        assert_ne!(transport_sender, vote.signer);
+
+        assert!(handle.try_incoming_lane_drain_vote(transport_sender.clone(), vote.clone()));
+        let received = lane_rx.try_recv().expect("queued lane-drain vote");
+        assert!(matches!(
+            received,
+            LaneRelayMessage::LaneDrainVote { sender, vote: queued }
+                if sender == transport_sender && queued == vote
+        ));
     }
 
     #[test]
@@ -13269,6 +13338,10 @@ impl BlockPayloadDedupCache {
 enum LaneRelayMessage {
     Envelope(LaneRelayEnvelope),
     MergeSignature(MergeCommitteeSignature),
+    LaneDrainVote {
+        sender: PeerId,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+    },
     CertifiedMergeSidecar {
         sender: PeerId,
         message: CertifiedMergeSidecarMessage,
@@ -14751,6 +14824,37 @@ impl SumeragiHandle {
                     false
                 }
             },
+        }
+    }
+
+    /// Enqueue an authenticated lane-drain vote without blocking the network
+    /// relay. Votes are periodically rebroadcast, so saturation is retryable.
+    pub fn try_incoming_lane_drain_vote(
+        &self,
+        sender: PeerId,
+        vote: crate::lane_consensus::LaneDrainVoteV1,
+    ) -> bool {
+        match self
+            .lane_relay
+            .try_send(LaneRelayMessage::LaneDrainVote { sender, vote })
+        {
+            Ok(()) => {
+                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                self.wake();
+                true
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!(
+                    "Sumeragi actor dropped lane-drain vote due to queue saturation"
+                );
+                false
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                iroha_logger::warn!("Sumeragi actor dropped lane-drain vote");
+                false
+            }
         }
     }
 

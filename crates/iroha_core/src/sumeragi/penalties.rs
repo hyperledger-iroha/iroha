@@ -1545,6 +1545,7 @@ mod tests {
             AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
             created_height.to_string(),
         );
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
 
         let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
             .expect("future-created lane count must be nonzero");

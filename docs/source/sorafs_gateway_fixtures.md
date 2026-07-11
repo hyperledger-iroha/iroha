@@ -95,6 +95,10 @@ cargo run -p sorafs_car --bin soranet_trustless_verifier --features cli --locked
 The summary records the manifest/CAR/payload digests, the reconstructed chunk
 plan SHA3-256 digest, and the PoR root so the gateway conformance suite can
 prove chunk-plan and PoR alignment without shelling out to ad hoc scripts.
+The embedded gateway applies the same distinction at startup: storage metadata
+binds the BLAKE3 digest of the raw payload, while `ManifestV1.car_digest` and
+`car_size` bind the reconstructed CAR archive. It refuses to serve a dataset if
+either reconstructed CAR value differs from the signed manifest.
 
 Pass `--dir <path>` to check a different release directory and `--allow-online`
 if Cargo must download dependencies (CI defaults to offline mode).

@@ -4146,49 +4146,6 @@ export class ToriiClient {
   }
 
   /**
-   * Record a PoR challenge issued by governance (`POST /v1/sorafs/capacity/por-challenge`).
-   * @param {{challenge?: string | ArrayBuffer | ArrayBufferView | Buffer, challengeB64?: string, signal?: AbortSignal}} [input]
-   * @returns {Promise<SorafsPorSubmissionResponse>}
-   */
-  async recordSorafsPorChallenge(input = {}) {
-    const normalizedInput = ensureRecord(
-      input ?? {},
-      "recordSorafsPorChallenge input",
-    );
-    const { signal } = normalizeSignalOption(
-      normalizedInput,
-      "recordSorafsPorChallenge",
-    );
-    const { signal: _ignored, ...record } = normalizedInput;
-    assertSupportedOptionKeys(
-      record,
-      new Set(["challenge", "challenge_b64", "challengeB64"]),
-      "recordSorafsPorChallenge input",
-    );
-    const payload = {
-      challenge_b64: normalizeRequiredBase64Payload(
-        record.challenge ?? record.challenge_b64 ?? record.challengeB64,
-        "recordSorafsPorChallenge.challenge",
-      ),
-    };
-    const response = await this._request(
-      "POST",
-      "/v1/sorafs/capacity/por-challenge",
-      {
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const json = await this._maybeJson(response);
-    if (!json) {
-      throw new Error("sorafs capacity por-challenge endpoint returned no payload");
-    }
-    return normalizeSorafsPorSubmissionResponse(json, "sorafs por challenge response");
-  }
-
-  /**
    * Record a PoR proof submitted by a provider (`POST /v1/sorafs/capacity/por-proof`).
    * @param {{proof?: string | ArrayBuffer | ArrayBufferView | Buffer, proofB64?: string, signal?: AbortSignal}} [input]
    * @returns {Promise<SorafsPorSubmissionResponse>}
@@ -4264,45 +4221,6 @@ export class ToriiClient {
       throw new Error("sorafs capacity por-verdict endpoint returned no payload");
     }
     return normalizeSorafsPorVerdictResponse(json);
-  }
-
-  /**
-   * Record a PoR probe observation (`POST /v1/sorafs/capacity/por`).
-   * @param {{success: boolean, signal?: AbortSignal}} [input]
-   * @returns {Promise<SorafsPorObservationResponse>}
-   */
-  async submitSorafsPorObservation(input = {}) {
-    const normalizedInput = ensureRecord(
-      input ?? {},
-      "submitSorafsPorObservation input",
-    );
-    const { signal } = normalizeSignalOption(
-      normalizedInput,
-      "submitSorafsPorObservation",
-    );
-    const { signal: _ignored, ...record } = normalizedInput;
-    assertSupportedOptionKeys(
-      record,
-      new Set(["success"]),
-      "submitSorafsPorObservation input",
-    );
-    const payload = {
-      success: requireBooleanLike(
-        record.success,
-        "submitSorafsPorObservation.success",
-      ),
-    };
-    const response = await this._request("POST", "/v1/sorafs/capacity/por", {
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const json = await this._maybeJson(response);
-    if (!json) {
-      throw new Error("sorafs capacity por endpoint returned no payload");
-    }
-    return normalizeSorafsPorObservationResponse(json);
   }
 
   /**
@@ -27148,17 +27066,6 @@ function normalizeSorafsPorVerdictResponse(
   context = "sorafs por verdict response",
 ) {
   return normalizeSorafsPorSubmissionResponse(payload, context);
-}
-
-function normalizeSorafsPorObservationResponse(
-  payload,
-  context = "sorafs por observation response",
-) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    status: requireNonEmptyString(record.status, `${context}.status`),
-    success: requireBooleanLike(record.success, `${context}.success`),
-  };
 }
 
 function normalizeIsoWeekLabel(input, name) {

@@ -693,13 +693,127 @@ pub fn data_frame_wire_len<T: Encode + Clone>(
 
 type WireMessage<T> = RelayMessage<T>;
 
+fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore::Error> {
+    const FIELD_COUNT: usize = 5;
+    const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
+
+    if flags & ncore::header_flags::PACKED_STRUCT == 0 {
+        let mut remaining = payload;
+        for index in 0..FIELD_COUNT {
+            let (field_len, prefix_len) = ncore::read_len_from_slice_with_flags(remaining, flags)?;
+            let field_end = prefix_len
+                .checked_add(field_len)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let field = remaining
+                .get(prefix_len..field_end)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            remaining = remaining
+                .get(field_end..)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            if index == PAYLOAD_FIELD_INDEX {
+                if !remaining.is_empty() {
+                    return Err(ncore::Error::LengthMismatch);
+                }
+                return Ok(field);
+            }
+        }
+        return Err(ncore::Error::LengthMismatch);
+    }
+
+    if flags & ncore::header_flags::FIELD_BITSET == 0 {
+        let table_len = (FIELD_COUNT + 1)
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let (offsets, field_data) = payload
+            .split_at_checked(table_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let read_offset = |index: usize| -> Result<usize, ncore::Error> {
+            let start = index
+                .checked_mul(core::mem::size_of::<u64>())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let end = start
+                .checked_add(core::mem::size_of::<u64>())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let bytes: [u8; 8] = offsets
+                .get(start..end)
+                .ok_or(ncore::Error::LengthMismatch)?
+                .try_into()
+                .map_err(|_| ncore::Error::LengthMismatch)?;
+            usize::try_from(u64::from_le_bytes(bytes)).map_err(|_| ncore::Error::LengthMismatch)
+        };
+        let mut previous = read_offset(0)?;
+        if previous != 0 {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        for index in 1..=FIELD_COUNT {
+            let current = read_offset(index)?;
+            if current < previous || current > field_data.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            previous = current;
+        }
+        if previous != field_data.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        let start = read_offset(PAYLOAD_FIELD_INDEX)?;
+        let end = read_offset(PAYLOAD_FIELD_INDEX + 1)?;
+        return field_data
+            .get(start..end)
+            .ok_or(ncore::Error::LengthMismatch);
+    }
+
+    // Hybrid packed RelayMessage fields needing explicit sizes are origin,
+    // target, priority, and payload. TTL is the sole one-byte fixed field.
+    const EXPECTED_FIELD_BITSET: u8 = 0b0001_1011;
+    let (&bitset, mut size_headers) = payload.split_first().ok_or(ncore::Error::LengthMismatch)?;
+    if bitset != EXPECTED_FIELD_BITSET {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    let mut field_sizes = [0_usize; 4];
+    for field_size in &mut field_sizes {
+        let (size, used) = ncore::read_len_from_slice_with_flags(size_headers, flags)?;
+        *field_size = size;
+        size_headers = size_headers
+            .get(used..)
+            .ok_or(ncore::Error::LengthMismatch)?;
+    }
+    let payload_start = field_sizes[0]
+        .checked_add(field_sizes[1])
+        .and_then(|offset| offset.checked_add(core::mem::size_of::<u8>()))
+        .and_then(|offset| offset.checked_add(field_sizes[2]))
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let payload_end = payload_start
+        .checked_add(field_sizes[3])
+        .ok_or(ncore::Error::LengthMismatch)?;
+    if payload_end != size_headers.len() {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    size_headers
+        .get(payload_start..payload_end)
+        .ok_or(ncore::Error::LengthMismatch)
+}
+
 impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
+    const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
+
     fn topic(&self) -> message::Topic {
         self.payload.topic()
     }
 
     fn priority(&self) -> message::Priority {
         self.priority
+    }
+
+    fn inbound_decode_limits(
+        payload: &[u8],
+        framed_len: usize,
+        flags: u8,
+    ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+        if !T::HAS_INBOUND_DECODE_LIMITS {
+            return Ok(None);
+        }
+        let nested_payload = relay_message_payload_field(payload, flags)?;
+        T::inbound_decode_limits(nested_payload, framed_len, flags)
     }
 }
 
@@ -841,6 +955,21 @@ mod data_frame_wire_len_tests {
         body: Vec<u8>,
     }
 
+    impl message::ClassifyTopic for DynamicDummy {
+        const HAS_INBOUND_DECODE_LIMITS: bool = true;
+
+        fn inbound_decode_limits(
+            payload: &[u8],
+            _framed_len: usize,
+            _flags: u8,
+        ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+            if payload.is_empty() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            Ok(Some(norito::DecodeLimits::new(8, 64, 16, 128, 8)))
+        }
+    }
+
     #[test]
     fn data_frame_wire_len_matches_manual_envelope() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -935,6 +1064,61 @@ mod data_frame_wire_len_tests {
             RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
             RelayTarget::Broadcast => panic!("expected direct relay target"),
         }
+    }
+
+    #[test]
+    fn relay_envelope_delegates_policy_to_exact_nested_payload() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let nested = DynamicDummy {
+            body: vec![1, 3, 3, 7],
+        };
+        let frame = RelayMessage::new(
+            origin,
+            RelayTarget::Direct(target),
+            5,
+            message::Priority::High,
+            nested.clone(),
+        );
+        let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
+        let nested_bare = nested.encode();
+
+        assert_eq!(
+            relay_message_payload_field(&bare, flags).expect("extract nested relay payload"),
+            nested_bare,
+            "the predecode hook must inspect only the nested application payload"
+        );
+        assert_eq!(
+            <RelayMessage<DynamicDummy> as message::ClassifyTopic>::inbound_decode_limits(
+                &bare, 512, flags,
+            )
+            .expect("delegate nested policy"),
+            Some(norito::DecodeLimits::new(8, 64, 16, 128, 8))
+        );
+    }
+
+    #[test]
+    fn relay_payload_extractor_rejects_truncated_or_trailing_layouts() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let frame = RelayMessage::new(
+            origin,
+            RelayTarget::Broadcast,
+            1,
+            message::Priority::Low,
+            DynamicDummy { body: vec![9] },
+        );
+        let (bare, flags) = norito::codec::encode_with_header_flags(&frame);
+
+        assert!(
+            relay_message_payload_field(&bare[..bare.len() - 1], flags).is_err(),
+            "truncated relay layout must fail before typed decode"
+        );
+        let mut trailing = bare;
+        trailing.push(0);
+        assert!(
+            relay_message_payload_field(&trailing, flags).is_err(),
+            "trailing bytes must not be ignored by the raw envelope parser"
+        );
     }
 }
 
@@ -11303,6 +11487,14 @@ pub mod message {
     /// define concrete network payloads (e.g., `iroha_core::NetworkMessage`)
     /// should implement this trait to provide useful classification.
     pub trait ClassifyTopic {
+        /// Whether this payload type installs an inbound resource policy before
+        /// Norito materializes an attacker-controlled archive.
+        ///
+        /// The default keeps the historical decode path for payload types that
+        /// do not need a variant-specific bound. Envelope types must propagate
+        /// this value from their nested payload.
+        const HAS_INBOUND_DECODE_LIMITS: bool = false;
+
         /// Return the logical topic of the message for scheduling.
         fn topic(&self) -> Topic {
             Topic::Other
@@ -11311,6 +11503,25 @@ pub mod message {
         /// Return the explicit delivery priority carried by the message.
         fn priority(&self) -> Priority {
             Priority::Low
+        }
+
+        /// Select resource limits for an inbound bare Norito payload.
+        ///
+        /// `payload` excludes the Norito header and any root-alignment padding.
+        /// `framed_len` is the byte length of the complete outer P2P Norito
+        /// frame and remains unchanged when an envelope delegates to its nested
+        /// payload. `flags` carries the authenticated layout flags from that
+        /// outer header.
+        ///
+        /// Implementations should inspect only bounded fixed-width prefixes and
+        /// return limits before deserializing dynamic fields. Returning `None`
+        /// preserves the ordinary decode path for the selected variant.
+        fn inbound_decode_limits(
+            _payload: &[u8],
+            _framed_len: usize,
+            _flags: u8,
+        ) -> Result<Option<norito::DecodeLimits>, norito::core::Error> {
+            Ok(None)
         }
     }
 

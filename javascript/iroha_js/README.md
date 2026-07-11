@@ -1839,14 +1839,13 @@ for await (const order of torii.iterateSorafsReplicationOrders({ pageSize: 25 })
 > continues to throw when the digest is absent so automation that expects a
 > manifest still fails fast.
 
-Uptime telemetry and PoR automation helpers surface the raw endpoints so SDK
-callers can publish probe samples, submit Norito-encoded challenges/proofs, and
-retrieve the coordinator exports:
+Uptime telemetry and PoR automation helpers surface the production endpoints so
+SDK callers can publish uptime samples, submit authenticated provider proofs and
+auditor verdicts, and retrieve coordinator exports. Challenge creation remains
+internal to the verified coordinator scheduler.
 
 ```js
 await torii.submitSorafsUptimeObservation({ uptimeSecs: 540, observedSecs: 600 });
-await torii.submitSorafsPorObservation({ success: true });
-await torii.recordSorafsPorChallenge({ challenge: porChallengeBytes });
 await torii.recordSorafsPorProof({ proof: porProofBytes });
 await torii.recordSorafsPorVerdict({ verdict: porVerdictBytes });
 

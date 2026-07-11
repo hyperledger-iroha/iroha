@@ -17,6 +17,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsRuntimeSnapshotSigningBeforeNativeDispatch();
     rejectsBadSigningKeyBeforeNativeDispatch();
     rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch();
+    rejectsOversizedOrderbookOwnerAccountsBeforeNativeDispatch();
     rejectsOrderbookOrderRequestFieldsBeforeNativeDispatch();
     rejectsOrderbookSettlementReceiptFieldsBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
@@ -41,6 +42,7 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsOrderbookTier.ARCHIVE.bridgeCode() == 3;
     assert SorafsOrderbookCancelReason.REPLACED.bridgeCode() == 4;
     assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 16;
+    assert SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 == 256;
     assert !SorafsReferenceValidators.isBridgeAbiSupported(15);
     assert SorafsReferenceValidators.isBridgeAbiSupported(16);
   }
@@ -105,6 +107,51 @@ public final class SorafsReferenceValidatorsTests {
       zeroNonceThrew = ex.getMessage() != null && ex.getMessage().contains("nonce");
     }
     assert zeroNonceThrew : "zero nonce must be rejected before native dispatch";
+  }
+
+  private static void rejectsOversizedOrderbookOwnerAccountsBeforeNativeDispatch() {
+    final byte[] oversized =
+        new byte[SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+    java.util.Arrays.fill(oversized, (byte) 0x45);
+
+    boolean deriveThrew = false;
+    try {
+      SorafsReferenceValidators.deriveOrderbookOrderId(oversized, 7L);
+    } catch (final IllegalArgumentException ex) {
+      deriveThrew = ex.getMessage() != null && ex.getMessage().contains("at most 256 bytes");
+    }
+    assert deriveThrew : "oversized derivation owner must be rejected before native dispatch";
+
+    boolean requestThrew = false;
+    try {
+      SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+          SorafsOrderbookSide.BID,
+          SorafsOrderbookTier.HOT,
+          "1",
+          1L,
+          oversized,
+          1L,
+          7L,
+          0,
+          0,
+          repeatedKey(0xB7));
+    } catch (final IllegalArgumentException ex) {
+      requestThrew = ex.getMessage() != null && ex.getMessage().contains("at most 256 bytes");
+    }
+    assert requestThrew : "oversized request owner must be rejected before native dispatch";
+
+    boolean cancelThrew = false;
+    try {
+      SorafsReferenceValidators.buildSignedOrderbookOrderCancel(
+          repeated(0x11),
+          oversized,
+          SorafsOrderbookCancelReason.OWNER_REQUESTED,
+          8L,
+          repeatedKey(0xB7));
+    } catch (final IllegalArgumentException ex) {
+      cancelThrew = ex.getMessage() != null && ex.getMessage().contains("at most 256 bytes");
+    }
+    assert cancelThrew : "oversized cancel owner must be rejected before native dispatch";
   }
 
   private static void rejectsOrderbookOrderRequestFieldsBeforeNativeDispatch() {
@@ -190,6 +237,41 @@ public final class SorafsReferenceValidatorsTests {
         orderId,
         SorafsReferenceValidators.deriveOrderbookOrderId(
             "provider@sora".getBytes(StandardCharsets.UTF_8), 7L));
+
+    final byte[] maximumOwner =
+        new byte[SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+    java.util.Arrays.fill(maximumOwner, (byte) 0x45);
+    final byte[] maximumOwnerOrderId =
+        SorafsReferenceValidators.deriveOrderbookOrderId(maximumOwner, 9L);
+    final byte[] maximumOwnerOrder =
+        SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            SorafsOrderbookSide.BID,
+            SorafsOrderbookTier.HOT,
+            "1",
+            1L,
+            maximumOwner,
+            1_800_000_000L,
+            9L,
+            0,
+            0,
+            repeatedKey(0xB7));
+    final String maximumOwnerOrderOutcome =
+        SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_REQUEST, maximumOwnerOrder, null, 123L);
+    assert maximumOwnerOrderOutcome.contains("\"status\": \"Ok\"")
+        : maximumOwnerOrderOutcome;
+    final byte[] maximumOwnerCancel =
+        SorafsReferenceValidators.buildSignedOrderbookOrderCancel(
+            maximumOwnerOrderId,
+            maximumOwner,
+            SorafsOrderbookCancelReason.OWNER_REQUESTED,
+            10L,
+            repeatedKey(0xB7));
+    final String maximumOwnerCancelOutcome =
+        SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_CANCEL, maximumOwnerCancel, null, 123L);
+    assert maximumOwnerCancelOutcome.contains("\"status\": \"Ok\"")
+        : maximumOwnerCancelOutcome;
 
     final byte[] signed =
         SorafsReferenceValidators.buildSignedOrderbookOrderRequest(

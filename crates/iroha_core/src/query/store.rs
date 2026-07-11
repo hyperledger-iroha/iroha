@@ -27,11 +27,14 @@ use tokio::task::JoinHandle;
 use super::cursor::ErasedQueryIterator;
 
 type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Sync>;
-type PagedBatcher = Box<
-    dyn Fn(u64) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail>
-        + Send
-        + Sync,
->;
+type PagedBatcher =
+    Box<dyn Fn(u64, Option<u64>) -> Result<PagedQueryPage, QueryExecutionFail> + Send + Sync>;
+
+struct PagedQueryPage {
+    batch: QueryOutputBatchBoxTuple,
+    remaining_items: Option<u64>,
+    next_cursor: Option<NonZeroU64>,
+}
 
 /// Prepared output for iterable query start.
 ///
@@ -101,6 +104,7 @@ impl fmt::Debug for DeferredQueryContinuation {
 /// Continuation that materializes one page per `Continue` request.
 pub(crate) struct PagedQueryContinuation {
     expected_cursor: NonZeroU64,
+    remaining_items: Option<u64>,
     next_page: PagedBatcher,
 }
 
@@ -115,7 +119,102 @@ impl PagedQueryContinuation {
     {
         Self {
             expected_cursor,
-            next_page: Box::new(next_page),
+            remaining_items: None,
+            next_page: Box::new(move |cursor, _gas_budget| {
+                let (batch, next_cursor) = next_page(cursor)?;
+                Ok(PagedQueryPage {
+                    batch,
+                    remaining_items: None,
+                    next_cursor,
+                })
+            }),
+        }
+    }
+
+    /// Construct a paged continuation whose page producer receives the gas
+    /// budget supplied by the current `Continue` request.
+    pub(crate) fn new_budgeted<F>(expected_cursor: NonZeroU64, next_page: F) -> Self
+    where
+        F: Fn(
+                u64,
+                Option<u64>,
+            )
+                -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self {
+            expected_cursor,
+            remaining_items: None,
+            next_page: Box::new(move |cursor, gas_budget| {
+                let (batch, next_cursor) = next_page(cursor, gas_budget)?;
+                Ok(PagedQueryPage {
+                    batch,
+                    remaining_items: None,
+                    next_cursor,
+                })
+            }),
+        }
+    }
+
+    /// Construct a paged continuation that reports exact remaining-item counts.
+    pub(crate) fn new_counted<F>(
+        expected_cursor: NonZeroU64,
+        remaining_items: u64,
+        next_page: F,
+    ) -> Self
+    where
+        F: Fn(
+                u64,
+            )
+                -> Result<(QueryOutputBatchBoxTuple, u64, Option<NonZeroU64>), QueryExecutionFail>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self {
+            expected_cursor,
+            remaining_items: Some(remaining_items),
+            next_page: Box::new(move |cursor, _gas_budget| {
+                let (batch, remaining_items, next_cursor) = next_page(cursor)?;
+                Ok(PagedQueryPage {
+                    batch,
+                    remaining_items: Some(remaining_items),
+                    next_cursor,
+                })
+            }),
+        }
+    }
+
+    /// Construct an exact-count paged continuation whose page producer
+    /// receives the gas budget supplied by the current `Continue` request.
+    pub(crate) fn new_counted_budgeted<F>(
+        expected_cursor: NonZeroU64,
+        remaining_items: u64,
+        next_page: F,
+    ) -> Self
+    where
+        F: Fn(
+                u64,
+                Option<u64>,
+            )
+                -> Result<(QueryOutputBatchBoxTuple, u64, Option<NonZeroU64>), QueryExecutionFail>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self {
+            expected_cursor,
+            remaining_items: Some(remaining_items),
+            next_page: Box::new(move |cursor, gas_budget| {
+                let (batch, remaining_items, next_cursor) = next_page(cursor, gas_budget)?;
+                Ok(PagedQueryPage {
+                    batch,
+                    remaining_items: Some(remaining_items),
+                    next_cursor,
+                })
+            }),
         }
     }
 
@@ -126,18 +225,46 @@ impl PagedQueryContinuation {
     fn next_batch(
         &mut self,
         cursor: u64,
+        gas_budget: Option<u64>,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail> {
         if self.expected_cursor.get() != cursor {
             return Err(QueryExecutionFail::CursorMismatch);
         }
-        let (batch, next_cursor) = (self.next_page)(cursor)?;
+        let PagedQueryPage {
+            batch,
+            remaining_items,
+            next_cursor,
+        } = (self.next_page)(cursor, gas_budget)?;
+        if self.remaining_items.is_some() != remaining_items.is_some() {
+            return Err(QueryExecutionFail::Conversion(
+                "paged query changed its count mode".to_owned(),
+            ));
+        }
+        if let (Some(previous), Some(remaining)) = (self.remaining_items, remaining_items) {
+            if remaining > previous {
+                return Err(QueryExecutionFail::Conversion(
+                    "paged query remaining count increased".to_owned(),
+                ));
+            }
+            let terminal = next_cursor.is_none();
+            if (remaining == 0 && !terminal) || (remaining > 0 && terminal) {
+                return Err(QueryExecutionFail::Conversion(
+                    "paged query cursor disagrees with its remaining count".to_owned(),
+                ));
+            }
+        }
         if let Some(next_cursor) = next_cursor {
             if next_cursor.get() <= cursor {
                 return Err(QueryExecutionFail::CursorDone);
             }
             self.expected_cursor = next_cursor;
         }
+        self.remaining_items = remaining_items;
         Ok((batch, next_cursor))
+    }
+
+    fn remaining(&self) -> Option<u64> {
+        self.remaining_items
     }
 }
 
@@ -145,6 +272,7 @@ impl fmt::Debug for PagedQueryContinuation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PagedQueryContinuation")
             .field("expected_cursor", &self.expected_cursor)
+            .field("remaining_items", &self.remaining_items)
             .finish_non_exhaustive()
     }
 }
@@ -172,6 +300,7 @@ impl LiveQuery {
     fn next_batch(
         &mut self,
         cursor: u64,
+        gas_budget: Option<u64>,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<NonZeroU64>), QueryExecutionFail> {
         match self {
             Self::Ready(live_query) => live_query.next_batch(cursor),
@@ -184,7 +313,7 @@ impl LiveQuery {
                 *self = Self::Ready(live_query);
                 next_batch
             }
-            Self::Paged(continuation) => continuation.next_batch(cursor),
+            Self::Paged(continuation) => continuation.next_batch(cursor, gas_budget),
         }
     }
 
@@ -192,7 +321,7 @@ impl LiveQuery {
         match self {
             Self::Ready(live_query) => live_query.remaining(),
             Self::Deferred(continuation) => continuation.remaining_items,
-            Self::Paged(_) => None,
+            Self::Paged(continuation) => continuation.remaining(),
         }
     }
 }
@@ -371,6 +500,7 @@ impl LiveQueryStore {
         &self,
         query_id: &QueryId,
         cursor: NonZeroU64,
+        gas_budget: Option<u64>,
     ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<NonZeroU64>), QueryExecutionFail>
     {
         trace!(%query_id, "Advancing existing query");
@@ -379,21 +509,22 @@ impl LiveQueryStore {
                 .queries
                 .get_mut(query_id)
                 .ok_or(QueryExecutionFail::Expired)?;
-            let (next_batch, next_cursor) = match entry.live_query.next_batch(cursor.get()) {
-                Ok(next) => next,
-                Err(err) => {
-                    return if matches!(
-                        err,
-                        QueryExecutionFail::Expired | QueryExecutionFail::CursorDone
-                    ) {
-                        drop(entry);
-                        self.remove(query_id);
-                        Err(err)
-                    } else {
-                        Err(err)
-                    };
-                }
-            };
+            let (next_batch, next_cursor) =
+                match entry.live_query.next_batch(cursor.get(), gas_budget) {
+                    Ok(next) => next,
+                    Err(err) => {
+                        return if matches!(
+                            err,
+                            QueryExecutionFail::Expired | QueryExecutionFail::CursorDone
+                        ) {
+                            drop(entry);
+                            self.remove(query_id);
+                            Err(err)
+                        } else {
+                            Err(err)
+                        };
+                    }
+                };
             let remaining = entry.live_query.remaining();
             entry.last_access_time = Instant::now();
             (next_batch, remaining, next_cursor)
@@ -421,7 +552,9 @@ impl LiveQueryStoreHandle {
     /// Construct a batched response from a post-processed query output.
     ///
     /// # Parameters
-    /// * `gas_budget` — optional budget hint that will be echoed in the returned cursor.
+    /// * `gas_budget` — optional per-request allowance carried in the returned cursor.
+    ///   Budget-aware paged continuations receive the current cursor allowance
+    ///   explicitly on every `Continue` request.
     ///
     /// # Errors
     ///
@@ -514,6 +647,9 @@ impl LiveQueryStoreHandle {
         let next_cursor = paged_continuation
             .as_ref()
             .map(PagedQueryContinuation::expected_cursor);
+        let remaining_items = paged_continuation
+            .as_ref()
+            .and_then(PagedQueryContinuation::remaining);
 
         if let Some(paged_continuation) = paged_continuation {
             self.store.insert_new_query(
@@ -525,7 +661,7 @@ impl LiveQueryStoreHandle {
 
         Ok(Self::construct_query_response(
             first_batch,
-            None,
+            remaining_items,
             query_id,
             next_cursor,
             gas_budget,
@@ -563,7 +699,9 @@ impl LiveQueryStoreHandle {
             gas_budget,
         }: ForwardCursor,
     ) -> Result<QueryOutput, QueryExecutionFail> {
-        let (batch, remaining, next_cursor) = self.store.get_query_next_batch(&query, cursor)?;
+        let (batch, remaining, next_cursor) = self
+            .store
+            .get_query_next_batch(&query, cursor, gas_budget)?;
 
         Ok(Self::construct_query_response(
             batch,
@@ -1212,6 +1350,63 @@ mod tests {
             .expect_err("rejected cursor should be evicted");
         assert_eq!(err, QueryExecutionFail::Expired);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn counted_paged_cursor_reports_exact_remaining_items() {
+        let handle = LiveQueryStore::start_test();
+        let prepared = PreparedPagedQueryStart {
+            first_batch: permission_batch(["p0"]),
+            paged_continuation: Some(PagedQueryContinuation::new_counted(
+                nonzero!(1_u64),
+                2,
+                |cursor| match cursor {
+                    1 => Ok((permission_batch(["p1"]), 1, Some(nonzero!(2_u64)))),
+                    2 => Ok((permission_batch(["p2"]), 0, None)),
+                    _ => Err(QueryExecutionFail::CursorMismatch),
+                },
+            )),
+        };
+
+        let first = handle
+            .handle_iter_start_paged_prepared(prepared, &ALICE_ID, None)
+            .expect("counted paged start");
+        assert_eq!(first.remaining_items, Some(2));
+        let first_cursor = first.continue_cursor.expect("first cursor");
+
+        let second = handle
+            .handle_iter_continue(first_cursor)
+            .expect("second counted page");
+        assert_eq!(second.remaining_items, Some(1));
+        let second_cursor = second.continue_cursor.expect("second cursor");
+
+        let third = handle
+            .handle_iter_continue(second_cursor)
+            .expect("terminal counted page");
+        assert_eq!(third.remaining_items, Some(0));
+        assert!(third.continue_cursor.is_none());
+    }
+
+    #[test]
+    fn counted_paged_cursor_rejects_inconsistent_remaining_items() {
+        let mut increasing = PagedQueryContinuation::new_counted(nonzero!(1_u64), 2, |_| {
+            Ok((permission_batch(["p1"]), 3, Some(nonzero!(2_u64))))
+        });
+        assert!(matches!(
+            increasing.next_batch(1, None),
+            Err(QueryExecutionFail::Conversion(message))
+                if message.contains("remaining count increased")
+        ));
+
+        let mut premature_terminal =
+            PagedQueryContinuation::new_counted(nonzero!(1_u64), 2, |_| {
+                Ok((permission_batch(["p1"]), 1, None))
+            });
+        assert!(matches!(
+            premature_terminal.next_batch(1, None),
+            Err(QueryExecutionFail::Conversion(message))
+                if message.contains("cursor disagrees")
+        ));
     }
 
     #[test]

@@ -317,6 +317,7 @@ mod tests {
                 Hash::new(b"merge-message"),
             ),
             execution_batch: None,
+            lane_drain_certificates: Vec::new(),
         }
     }
 

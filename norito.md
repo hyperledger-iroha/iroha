@@ -104,6 +104,36 @@ layout:
   hashes, and emitted bytes must remain identical. Native helper waits are
   bounded before CPU fallback.
 
+### Decode-scoped resource limits
+
+Archive byte limits do not bound collection reservations: an eight-byte
+sequence header can advertise an element count far larger than the containing
+payload, while nested length-delimited fields can amplify otherwise modest
+archives. Hosts decoding untrusted data with known semantic bounds
+must use `decode_from_bytes_with_limits` (or
+`decode_from_reader_with_limits`) and an explicit `DecodeLimits` value. The
+budget specifies a per-sequence element count, a per-field/blob byte length,
+cumulative element and allocation-byte totals, and a maximum nesting depth.
+Norito validates declared bodies against the bytes remaining before allocating
+temporary storage and returns typed resource-limit errors on violation.
+Compatibility layout fallbacks treat every resource-limit and allocation error
+as terminal: they never retry the same field through an alternate decoder after
+a budget has rejected it.
+
+Nested decode scopes may tighten but never relax an outer budget. Counters are
+shared with Norito-managed Rayon workers. They are not implicitly copied to
+arbitrary threads created by application-defined deserializers; such code must
+pass a bounded decode operation explicitly. Lazy callers must use
+`stream_seq_iter_with_limits`, `StreamSeqIter::new_with_limits`, or the bounded
+`StreamMapIter` constructors so the iterator owns a cloneable budget context
+and reapplies it for every `next`/`finish` call. No thread-local guard is moved
+with an iterator.
+
+The ordinary unbounded decode and iterator APIs remain available for trusted
+callers. A host must choose cumulative budgets with enough headroom for
+temporary alignment copies and container metadata; accounting is intentionally
+conservative and may charge both a declared field body and a temporary copy.
+
 ## Hardware Acceleration Validation
 
 Norito hardware acceleration is performance-only. Accelerated paths must either

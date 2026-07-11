@@ -19144,6 +19144,7 @@ pub mod isi {
                 iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
                 "7".to_owned(),
             );
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic);
             let lane_catalog = LaneCatalog::new(
                 NonZeroU32::new(2).expect("nonzero lane count"),
                 vec![LaneConfig::default(), elastic],
@@ -27165,6 +27166,7 @@ pub mod isi {
                 iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
                 "7".to_owned(),
             );
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let catalog = LaneCatalog::new(
                 NonZeroU32::new(2).expect("nonzero lane count"),
                 vec![LaneConfig::default(), elastic_lane],

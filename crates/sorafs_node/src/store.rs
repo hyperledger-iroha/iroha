@@ -57,6 +57,17 @@ static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 static INGEST_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn storage_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
+    let byte_limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    norito::DecodeLimits::new(
+        byte_limit,
+        byte_limit,
+        byte_limit,
+        byte_limit.checked_mul(4).unwrap_or(usize::MAX),
+        64,
+    )
+}
+
 /// Errors raised by the SoraFS storage backend.
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -572,13 +583,15 @@ impl StoredManifest {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = self.manifest_path();
         let bytes = read_bounded_regular_file(path, MAX_MANIFEST_BYTES)?;
-        let manifest: ManifestV1 = norito::decode_from_bytes(&bytes)?;
+        let manifest: ManifestV1 = norito::decode_from_bytes_with_limits(
+            &bytes,
+            storage_decode_limits(MAX_MANIFEST_BYTES),
+        )?;
         let canonical = manifest.encode()?;
         if canonical != bytes
             || blake3::hash(&bytes).as_bytes() != &self.manifest_digest
             || manifest.root_cid != self.manifest_cid
             || manifest.content_length != self.content_length
-            || manifest.car_digest != self.payload_digest
             || canonical_profile_handle(&manifest) != self.chunk_profile_handle
         {
             return Err(corrupt_storage_state(
@@ -1004,6 +1017,16 @@ fn acquire_storage_lock(root_dir: &Path) -> Result<File, StorageError> {
             "storage lock must be a regular file",
         ));
     }
+    #[cfg(unix)]
+    if opened_metadata.nlink() != 1 {
+        return Err(corrupt_storage_state(
+            &lock_path,
+            format!(
+                "storage lock must have exactly one hard link, found {}",
+                opened_metadata.nlink()
+            ),
+        ));
+    }
     if before_open
         .as_ref()
         .is_some_and(|metadata| !metadata_identifies_same_file(metadata, &opened_metadata))
@@ -1051,9 +1074,25 @@ fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> b
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
+#[cfg(unix)]
+fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    metadata_identifies_same_file(left, right)
+        && left.len() == right.len()
+        && left.nlink() == right.nlink()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
 #[cfg(not(unix))]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
+}
+
+#[cfg(not(unix))]
+fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    metadata_identifies_same_file(left, right) && left.modified().ok() == right.modified().ok()
 }
 
 fn persistent_u32(field: &'static str, value: usize) -> Result<u32, StorageError> {
@@ -1242,15 +1281,55 @@ fn clean_unindexed_manifests(
 }
 
 fn read_bounded_regular_file(path: &Path, max_len: u64) -> Result<Vec<u8>, StorageError> {
+    let before_open = fs::symlink_metadata(path)?;
+    validate_bounded_file_metadata(path, &before_open, max_len)?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
     set_no_follow_flag(&mut options);
     let mut file = options.open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
+    let opened_metadata = file.metadata()?;
+    validate_bounded_file_metadata(path, &opened_metadata, max_len)?;
+    if !metadata_identifies_same_file(&before_open, &opened_metadata) {
         return Err(corrupt_storage_state(
             path,
-            "artifact is not a regular file",
+            "artifact changed between inspection and open",
+        ));
+    }
+    let length = usize::try_from(opened_metadata.len()).map_err(|_| {
+        corrupt_storage_state(path, "artifact length is not representable on this host")
+    })?;
+    let mut bytes = vec![0_u8; length];
+    file.read_exact(&mut bytes)?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing)? != 0 {
+        return Err(corrupt_storage_state(
+            path,
+            "artifact changed length while it was being read",
+        ));
+    }
+    let after_read_file = file.metadata()?;
+    let after_read_path = fs::symlink_metadata(path)?;
+    validate_bounded_file_metadata(path, &after_read_path, max_len)?;
+    if !metadata_stable_during_read(&opened_metadata, &after_read_file)
+        || !metadata_identifies_same_file(&opened_metadata, &after_read_path)
+    {
+        return Err(corrupt_storage_state(
+            path,
+            "artifact identity or contents changed while being read",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validate_bounded_file_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+    max_len: u64,
+) -> Result<(), StorageError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(corrupt_storage_state(
+            path,
+            "artifact is not a regular non-symlink file",
         ));
     }
     if metadata.len() > max_len {
@@ -1263,19 +1342,17 @@ fn read_bounded_regular_file(path: &Path, max_len: u64) -> Result<Vec<u8>, Stora
             ),
         ));
     }
-    let length = usize::try_from(metadata.len()).map_err(|_| {
-        corrupt_storage_state(path, "artifact length is not representable on this host")
-    })?;
-    let mut bytes = vec![0_u8; length];
-    file.read_exact(&mut bytes)?;
-    let mut trailing = [0_u8; 1];
-    if file.read(&mut trailing)? != 0 {
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
         return Err(corrupt_storage_state(
             path,
-            "artifact changed length while it was being read",
+            format!(
+                "artifact must have exactly one hard link, found {}",
+                metadata.nlink()
+            ),
         ));
     }
-    Ok(bytes)
+    Ok(())
 }
 
 fn validate_manifest_id(
@@ -1352,7 +1429,6 @@ fn validate_persisted_manifest(
     if digest != record.manifest_digest
         || manifest.root_cid != record.manifest_cid
         || manifest.content_length != record.content_length
-        || manifest.car_digest != record.payload_digest
         || canonical_profile_handle(manifest) != record.chunk_profile_handle
     {
         return Err(corrupt_storage_state(
@@ -1522,7 +1598,17 @@ impl StorageBackend {
 
         let mut index = if index_path.exists() {
             let bytes = read_bounded_regular_file(&index_path, MAX_STORAGE_INDEX_BYTES)?;
-            norito::decode_from_bytes(&bytes)?
+            let decoded: ManifestIndex = norito::decode_from_bytes_with_limits(
+                &bytes,
+                storage_decode_limits(MAX_STORAGE_INDEX_BYTES),
+            )?;
+            if norito::to_bytes(&decoded)? != bytes {
+                return Err(corrupt_storage_state(
+                    &index_path,
+                    "storage index is not the canonical Norito encoding",
+                ));
+            }
+            decoded
         } else {
             ManifestIndex::default()
         };
@@ -1562,9 +1648,21 @@ impl StorageBackend {
 
             let metadata_bytes =
                 read_bounded_regular_file(&metadata_path, MAX_MANIFEST_METADATA_BYTES)?;
-            let mut record: StoredManifestRecord = norito::decode_from_bytes(&metadata_bytes)?;
+            let mut record: StoredManifestRecord = norito::decode_from_bytes_with_limits(
+                &metadata_bytes,
+                storage_decode_limits(MAX_MANIFEST_METADATA_BYTES),
+            )?;
+            if norito::to_bytes(&record)? != metadata_bytes {
+                return Err(corrupt_storage_state(
+                    &metadata_path,
+                    "manifest metadata is not the canonical Norito encoding",
+                ));
+            }
             let manifest_bytes = read_bounded_regular_file(&manifest_path, MAX_MANIFEST_BYTES)?;
-            let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)?;
+            let manifest: ManifestV1 = norito::decode_from_bytes_with_limits(
+                &manifest_bytes,
+                storage_decode_limits(MAX_MANIFEST_BYTES),
+            )?;
             validate_persisted_manifest(
                 entry,
                 &record,
@@ -3329,25 +3427,19 @@ fn read_verified_chunk(
             length: usize::MAX,
             limit: u32::MAX,
         })?;
+    let before_open = fs::symlink_metadata(&record.path).map_err(ChunkStoreError::Io)?;
+    validate_chunk_file_metadata(record, &before_open)?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
     set_no_follow_flag(&mut options);
     let mut file = options.open(&record.path).map_err(ChunkStoreError::Io)?;
-    let metadata = file.metadata().map_err(ChunkStoreError::Io)?;
-    if !metadata.is_file() {
-        return Err(ChunkStoreError::Io(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "chunk path `{}` is not a regular file",
-                record.path.display()
-            ),
-        )));
-    }
-    if metadata.len() != u64::from(record.length) {
-        return Err(ChunkStoreError::LengthMismatch {
-            expected: u64::from(record.length),
-            actual: metadata.len(),
-        });
+    let opened_metadata = file.metadata().map_err(ChunkStoreError::Io)?;
+    validate_chunk_file_metadata(record, &opened_metadata)?;
+    if !metadata_identifies_same_file(&before_open, &opened_metadata) {
+        return Err(invalid_chunk_file(
+            record,
+            "changed between inspection and open",
+        ));
     }
 
     let mut bytes = vec![0_u8; expected_len];
@@ -3359,10 +3451,57 @@ fn read_verified_chunk(
             actual: u64::from(record.length).saturating_add(1),
         });
     }
+    let after_read_file = file.metadata().map_err(ChunkStoreError::Io)?;
+    let after_read_path = fs::symlink_metadata(&record.path).map_err(ChunkStoreError::Io)?;
+    validate_chunk_file_metadata(record, &after_read_path)?;
+    if !metadata_stable_during_read(&opened_metadata, &after_read_file)
+        || !metadata_identifies_same_file(&opened_metadata, &after_read_path)
+    {
+        return Err(invalid_chunk_file(
+            record,
+            "identity or contents changed while being read",
+        ));
+    }
     if blake3::hash(&bytes).as_bytes() != &record.digest {
         return Err(ChunkStoreError::DigestMismatch { chunk_index });
     }
     Ok(bytes)
+}
+
+fn validate_chunk_file_metadata(
+    record: &ChunkFileRecord,
+    metadata: &fs::Metadata,
+) -> Result<(), ChunkStoreError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(invalid_chunk_file(
+            record,
+            "is not a regular non-symlink file",
+        ));
+    }
+    if metadata.len() != u64::from(record.length) {
+        return Err(ChunkStoreError::LengthMismatch {
+            expected: u64::from(record.length),
+            actual: metadata.len(),
+        });
+    }
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
+        return Err(invalid_chunk_file(
+            record,
+            &format!(
+                "must have exactly one hard link, found {}",
+                metadata.nlink()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_chunk_file(record: &ChunkFileRecord, reason: &str) -> ChunkStoreError {
+    ChunkStoreError::Io(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("chunk path `{}` {reason}", record.path.display()),
+    ))
 }
 
 fn splitmix64(mut state: u64) -> u64 {
@@ -3500,17 +3639,40 @@ mod tests {
     #[test]
     fn storage_lock_rejects_symlink() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config = temp_config(&temp_dir);
+        fs::create_dir_all(config.data_dir()).expect("create storage root");
         let target = temp_dir.path().join("lock-target");
         fs::write(&target, b"must remain untouched").expect("write lock target");
-        std::os::unix::fs::symlink(&target, temp_dir.path().join(STORAGE_LOCK_FILE_NAME))
+        std::os::unix::fs::symlink(&target, config.data_dir().join(STORAGE_LOCK_FILE_NAME))
             .expect("create storage lock symlink");
 
         assert!(matches!(
-            StorageBackend::new(temp_config(&temp_dir)),
+            StorageBackend::new(config),
             Err(StorageError::Io(_))
         ));
         assert_eq!(
             fs::read(&target).expect("read lock target"),
+            b"must remain untouched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_lock_rejects_hard_link() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config = temp_config(&temp_dir);
+        fs::create_dir_all(config.data_dir()).expect("create storage root");
+        let target = temp_dir.path().join("lock-target");
+        fs::write(&target, b"must remain untouched").expect("write lock target");
+        fs::hard_link(&target, config.data_dir().join(STORAGE_LOCK_FILE_NAME))
+            .expect("create storage lock hard link");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+        assert_eq!(
+            fs::read(&target).expect("read target"),
             b"must remain untouched"
         );
     }
@@ -4703,6 +4865,35 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn chunk_reads_reject_hard_link_aliases() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let payload = b"hard-linked chunks must fail closed";
+        let plan = single_file_plan(payload).expect("plan");
+        let manifest = test_manifest(payload, &plan, 0xB3);
+        let mut reader = payload.as_slice();
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+        let chunk = backend
+            .manifest(&manifest_id)
+            .and_then(|stored| stored.chunk(0).cloned())
+            .expect("stored chunk");
+        let alias = canonical_temp_path(&temp_dir).join("chunk-alias.bin");
+        fs::hard_link(&chunk.path, &alias).expect("create chunk hard link");
+
+        assert!(matches!(
+            backend.read_chunk(&manifest_id, &chunk.digest),
+            Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
+        ));
+        assert!(matches!(
+            backend.read_payload_range(&manifest_id, 0, payload.len()),
+            Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
+        ));
+    }
+
     #[test]
     fn restart_rehydrates_manifest_index() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -4791,6 +4982,37 @@ mod tests {
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
         ));
+    }
+
+    #[test]
+    fn restart_rejects_noncanonical_compressed_index() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"canonical index encoding";
+        let (config, backend, _) = ingest_test_payload(&temp_dir, payload, 0xC9);
+        let index_path = backend.index_path.clone();
+        let bytes = fs::read(&index_path).expect("read index");
+        let index: ManifestIndex = norito::decode_from_bytes(&bytes).expect("decode index");
+        let compressed =
+            norito::to_compressed_bytes(&index, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed index");
+        assert_ne!(compressed, bytes, "compressed form must be noncanonical");
+        drop(backend);
+        fs::write(&index_path, compressed).expect("write compressed index");
+
+        assert!(matches!(
+            StorageBackend::new(config),
+            Err(StorageError::CorruptStorageState { .. })
+        ));
+    }
+
+    #[test]
+    fn storage_decode_limits_bound_all_resource_dimensions() {
+        let limits = storage_decode_limits(1_024);
+        assert_eq!(limits.max_sequence_elements(), 1_024);
+        assert_eq!(limits.max_field_bytes(), 1_024);
+        assert_eq!(limits.max_total_elements(), 1_024);
+        assert_eq!(limits.max_total_allocated_bytes(), 4_096);
+        assert_eq!(limits.max_nesting_depth(), 64);
     }
 
     #[test]
@@ -4888,6 +5110,32 @@ mod tests {
             assert!(
                 StorageBackend::new(config).is_err(),
                 "symlinked {artifact_name} must be rejected"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restart_rejects_hardlinked_persistent_artifacts() {
+        for artifact_name in ["index", MANIFEST_FILE_NAME, METADATA_FILE_NAME] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let payload = b"hard-linked storage metadata";
+            let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC8);
+            let artifact_path = if artifact_name == "index" {
+                backend.index_path.clone()
+            } else {
+                backend.manifests_dir.join(manifest_id).join(artifact_name)
+            };
+            let alias_path = canonical_temp_path(&temp_dir).join(format!("{artifact_name}.alias"));
+            fs::hard_link(&artifact_path, &alias_path).expect("create artifact hard link");
+            drop(backend);
+
+            assert!(
+                matches!(
+                    StorageBackend::new(config),
+                    Err(StorageError::CorruptStorageState { .. })
+                ),
+                "hard-linked {artifact_name} must be rejected"
             );
         }
     }

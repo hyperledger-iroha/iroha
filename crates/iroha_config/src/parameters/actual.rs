@@ -7550,6 +7550,10 @@ pub struct SorafsStorage {
     pub max_pins: usize,
     /// Periodic Proof-of-Retrievability sampling cadence (seconds).
     pub por_sample_interval_secs: u64,
+    /// Maximum PDP segments that one governed challenge may sample.
+    pub pdp_sample_window: u16,
+    /// Aggregate in-memory budget for canonical PDP tree indexes.
+    pub pdp_tree_memory_limit_bytes: Bytes<u64>,
     /// Retention and checkpoint bounds for auxiliary embedded runtime state.
     pub runtime: SorafsRuntimeRetention,
     /// Optional human-friendly alias advertised in telemetry.
@@ -7574,8 +7578,96 @@ pub struct SorafsStorage {
     pub governance_dag_publisher_peer_id: Option<String>,
     /// Optional Ed25519 signing-key path used for signed Governance DAG blocks.
     pub governance_dag_signing_key_path: Option<PathBuf>,
+    /// Always-on Governance DAG public publisher and mirror service.
+    pub governance_dag_service: SorafsGovernanceDagService,
     /// Authentication and rate limits for manifest pin submissions.
     pub pin: SorafsStoragePin,
+}
+
+/// Always-on Governance DAG public publisher and bounded mirror configuration.
+#[derive(Debug, Clone)]
+pub struct SorafsGovernanceDagService {
+    /// Whether filesystem feeds are reconciled to the public endpoint continuously.
+    pub enabled: bool,
+    /// Optional service state directory; defaults below the governance publisher root.
+    pub state_dir: Option<PathBuf>,
+    /// IPFS-compatible HTTP API base URL used to add, pin, verify, and retrieve objects.
+    pub ipfs_api_url: Option<String>,
+    /// Public-head mode (`signed_http` or `ipns`).
+    pub head_mode: String,
+    /// Signed-head HTTP endpoint used by `signed_http` mode.
+    pub signed_head_url: Option<String>,
+    /// IPNS name resolved by `ipns` mode.
+    pub ipns_name: Option<String>,
+    /// IPFS keystore alias passed to `name/publish` by `ipns` mode.
+    pub ipns_key_name: Option<String>,
+    /// Runtime-only bearer-token file for the IPFS API.
+    pub ipfs_bearer_token_path: Option<PathBuf>,
+    /// Runtime-only bearer-token file for the signed-head endpoint.
+    pub head_bearer_token_path: Option<PathBuf>,
+    /// Runtime-only 32-byte key authenticating checkpoints and mirror indexes.
+    pub checkpoint_key_path: Option<PathBuf>,
+    /// Canonical lowercase Ed25519 public key expected on every block, node, and head.
+    pub publisher_public_key_hex: Option<String>,
+    /// Filesystem feed reconciliation interval.
+    pub poll_interval: Duration,
+    /// TCP/TLS connection timeout.
+    pub connect_timeout: Duration,
+    /// End-to-end HTTP request timeout.
+    pub request_timeout: Duration,
+    /// DNS resolution timeout before resolved addresses are pinned into the client.
+    pub dns_timeout: Duration,
+    /// Maximum remote response bytes accepted.
+    pub max_response_bytes: Bytes<u64>,
+    /// Maximum request payload bytes accepted from local feeds.
+    pub max_request_bytes: Bytes<u64>,
+    /// Maximum entries retained in the deterministic IPLD mirror.
+    pub mirror_max_entries: usize,
+    /// Maximum canonical block bytes retained in the deterministic IPLD mirror.
+    pub mirror_max_bytes: Bytes<u64>,
+    /// Maximum age of the source signed head at publication time.
+    pub max_head_age_secs: u64,
+    /// Maximum future clock skew accepted for source blocks and heads.
+    pub max_future_skew_secs: u64,
+    /// Permit plain HTTP endpoints (intended only for isolated test deployments).
+    pub allow_insecure_http: bool,
+    /// Permit a loopback, private, or otherwise non-public IPFS API endpoint.
+    pub allow_private_ipfs_endpoint: bool,
+    /// Permit a loopback, private, or otherwise non-public signed-head endpoint.
+    pub allow_private_head_endpoint: bool,
+    /// Permit publishing when the configured public head does not yet exist.
+    pub allow_head_bootstrap: bool,
+    /// Status, metrics, and bounded mirror query listener.
+    pub listen_addr: String,
+}
+
+/// Dedicated standalone Governance DAG service configuration view.
+///
+/// Unlike [`Root`], this view never loads consensus identity or node private
+/// keys from the source TOML.
+#[derive(Debug, Clone)]
+pub struct SorafsGovernanceDagServiceView {
+    /// Verified filesystem publisher root consumed by the service.
+    pub source_dir: Option<PathBuf>,
+    /// Validated public publisher/mirror settings.
+    pub service: SorafsGovernanceDagService,
+}
+
+impl SorafsGovernanceDagServiceView {
+    /// Read and validate only standalone Governance DAG service fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FromTomlSourceError`] when the dedicated view cannot be read
+    /// or its conditional service requirements are invalid.
+    pub fn from_toml_source(src: TomlSource) -> Result<Self, FromTomlSourceError> {
+        ConfigReader::new()
+            .with_toml_source(src)
+            .read_and_complete::<user::SorafsGovernanceDagServiceRoot>()
+            .change_context(FromTomlSourceError)?
+            .parse()
+            .change_context(FromTomlSourceError)
+    }
 }
 
 /// Retention and checkpoint bounds for auxiliary embedded SoraFS runtime state.
@@ -7655,6 +7747,8 @@ impl Default for SorafsStorage {
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
             max_pins: defaults::sorafs::storage::MAX_PINS,
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
+            pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
+            pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
             runtime: SorafsRuntimeRetention::default(),
             alias: defaults::sorafs::storage::alias(),
             adverts: SorafsAdvertOverrides::default(),
@@ -7668,7 +7762,43 @@ impl Default for SorafsStorage {
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
             governance_dag_signing_key_path,
+            governance_dag_service: SorafsGovernanceDagService::default(),
             pin: SorafsStoragePin::default(),
+        }
+    }
+}
+
+impl Default for SorafsGovernanceDagService {
+    fn default() -> Self {
+        use defaults::sorafs::storage::governance_dag_service as service;
+
+        Self {
+            enabled: service::ENABLED,
+            state_dir: service::state_dir(),
+            ipfs_api_url: None,
+            head_mode: service::HEAD_MODE.to_owned(),
+            signed_head_url: None,
+            ipns_name: None,
+            ipns_key_name: None,
+            ipfs_bearer_token_path: None,
+            head_bearer_token_path: None,
+            checkpoint_key_path: None,
+            publisher_public_key_hex: None,
+            poll_interval: Duration::from_secs(service::POLL_INTERVAL_SECS),
+            connect_timeout: Duration::from_millis(service::CONNECT_TIMEOUT_MS),
+            request_timeout: Duration::from_millis(service::REQUEST_TIMEOUT_MS),
+            dns_timeout: Duration::from_millis(service::DNS_TIMEOUT_MS),
+            max_response_bytes: service::MAX_RESPONSE_BYTES,
+            max_request_bytes: service::MAX_REQUEST_BYTES,
+            mirror_max_entries: service::MIRROR_MAX_ENTRIES,
+            mirror_max_bytes: service::MIRROR_MAX_BYTES,
+            max_head_age_secs: service::MAX_HEAD_AGE_SECS,
+            max_future_skew_secs: service::MAX_FUTURE_SKEW_SECS,
+            allow_insecure_http: service::ALLOW_INSECURE_HTTP,
+            allow_private_ipfs_endpoint: service::ALLOW_PRIVATE_IPFS_ENDPOINT,
+            allow_private_head_endpoint: service::ALLOW_PRIVATE_HEAD_ENDPOINT,
+            allow_head_bootstrap: service::ALLOW_HEAD_BOOTSTRAP,
+            listen_addr: service::LISTEN_ADDR.to_owned(),
         }
     }
 }

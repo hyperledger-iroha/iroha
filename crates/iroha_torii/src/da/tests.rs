@@ -59,7 +59,7 @@ use reqwest::Url;
 use sorafs_car::{CarBuildPlan, PersistedChunkRecord};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, CouncilSignature, ProfileId,
-    pdp::{HashAlgorithmV1, PDP_COMMITMENT_VERSION_V1, PdpCommitmentV1},
+    pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
@@ -1059,10 +1059,11 @@ fn verify_manifest_rejects_missing_proof_tier() {
 }
 
 fn sample_pdp_commitment_for_tests() -> PdpCommitmentV1 {
-    PdpCommitmentV1 {
-        version: PDP_COMMITMENT_VERSION_V1,
-        manifest_digest: [0x11; 32],
-        chunk_profile: ChunkingProfileV1 {
+    let tree = PdpMerkleTreeV1::from_bytes(&[0x44; 8_193]).expect("fixture PDP tree");
+    PdpCommitmentV1::from_tree(
+        &tree,
+        [0x11; 32],
+        ChunkingProfileV1 {
             profile_id: ProfileId(0xAB),
             namespace: "inline".to_owned(),
             name: "inline".to_owned(),
@@ -1074,14 +1075,10 @@ fn sample_pdp_commitment_for_tests() -> PdpCommitmentV1 {
             multihash_code: BLAKE3_256_MULTIHASH_CODE,
             aliases: vec!["inline.inline@1.0.0".to_owned()],
         },
-        commitment_root_hot: [0x22; 32],
-        commitment_root_segment: [0x33; 32],
-        hash_algorithm: HashAlgorithmV1::Blake3_256,
-        hot_tree_height: 6,
-        segment_tree_height: 4,
-        sample_window: 32,
-        sealed_at: 1_707_300_000,
-    }
+        32,
+        1_707_300_000,
+    )
+    .expect("fixture PDP commitment")
 }
 
 fn encode_alias_proof_bytes(
@@ -4127,9 +4124,20 @@ fn build_receipt_computes_chunk_root_from_payload() {
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
+        canonical.as_slice(),
         1_701_000_000,
     )
     .expect("pdp commitment");
+    let pdp_tree =
+        PdpMerkleTreeV1::from_bytes(canonical.as_slice()).expect("canonical PDP fixture tree");
+    assert_eq!(pdp_commitment.payload_len, pdp_tree.payload_len());
+    assert_eq!(pdp_commitment.hot_leaf_count, pdp_tree.hot_leaf_count());
+    assert_eq!(pdp_commitment.segment_count, pdp_tree.segment_count());
+    assert_eq!(pdp_commitment.commitment_root_hot, pdp_tree.hot_root());
+    assert_eq!(
+        pdp_commitment.commitment_root_segment,
+        pdp_tree.segment_root()
+    );
     let encoded_commitment =
         encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
@@ -4230,6 +4238,7 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
+        canonical.as_slice(),
         1_701_000_123,
     )
     .expect("pdp commitment");
@@ -4459,6 +4468,7 @@ fn persist_pdp_commitment_writes_and_is_idempotent() {
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
+        canonical.as_slice(),
         1_701_000_777,
     )
     .expect("commitment");
@@ -6095,6 +6105,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
+        canonical.as_slice(),
         1_701_000_999,
     )
     .expect("PDP commitment");
@@ -6198,6 +6209,7 @@ fn da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open(
         &manifest.manifest_hash,
         &manifest.manifest,
         &chunk_store,
+        canonical.as_slice(),
         1_701_000_999,
     )
     .expect("PDP commitment");

@@ -40,12 +40,11 @@ use norito::{
 };
 use parking_lot::{Mutex, RwLock};
 use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, ManualPorChallengeV1, ManualPorChallengeValidationError,
-    POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
-    PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
-    PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
-    PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
-    ProviderVrfSubmissionValidationError, provider_vrf_input,
+    AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1,
+    PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError,
+    PorProviderSummaryV1, PorProviderSummaryValidationError, PorReportIsoWeek,
+    PorReportIsoWeekValidationError, PorWeeklyReportV1, PorWeeklyReportValidationError,
+    ProviderVrfSubmissionV1, ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
 use sorafs_node::PorVerdictOutcome;
 #[cfg(feature = "app_api")]
@@ -761,31 +760,6 @@ impl PorCoordinator {
         Ok(report)
     }
 
-    /// Construct a manual challenge from an auditor request.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PorCoordinatorError::InvalidManualChallenge`] if the request
-    /// payload fails validation or [`PorCoordinatorError::InvalidChallenge`]
-    /// when the resulting challenge becomes inconsistent.
-    pub fn build_manual_challenge(
-        manual: &ManualPorChallengeV1,
-        base: &PorChallengeV1,
-    ) -> Result<PorChallengeV1, PorCoordinatorError> {
-        manual
-            .validate()
-            .map_err(PorCoordinatorError::InvalidManualChallenge)?;
-        let mut challenge = base.clone();
-        challenge.sample_count = manual.requested_samples.unwrap_or(challenge.sample_count);
-        if let Some(deadline_secs) = manual.requested_deadline_secs {
-            challenge.deadline_at = challenge.issued_at.saturating_add(u64::from(deadline_secs));
-        }
-        challenge
-            .validate()
-            .map_err(PorCoordinatorError::InvalidChallenge)?;
-        Ok(challenge)
-    }
-
     /// Persist coordinator state to the configured backing store, if present.
     ///
     /// # Errors
@@ -1186,6 +1160,7 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata),
     let absolute = absolute_secure_path(path)?;
     let parent = absolute
         .parent()
+        .map(Path::to_path_buf)
         .ok_or_else(|| SecureFileError::UnsafePath("persistence path has no parent".to_owned()))?;
     let mut cursor = PathBuf::new();
     for component in parent.components() {
@@ -1208,10 +1183,9 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata),
             Err(error) => return Err(error.into()),
         }
     }
-    let metadata = fs::symlink_metadata(parent)?;
+    let metadata = fs::symlink_metadata(&parent)?;
     #[cfg(unix)]
-    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
-    let effective_uid = unsafe { libc::geteuid() };
+    let effective_uid = rustix::process::geteuid().as_raw();
     #[cfg(unix)]
     if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
         return Err(SecureFileError::UnsafePath(format!(
@@ -1219,7 +1193,7 @@ fn ensure_secure_parent(path: &Path) -> Result<(PathBuf, PathBuf, fs::Metadata),
             parent.display()
         )));
     }
-    Ok((absolute, parent.to_owned(), metadata))
+    Ok((absolute, parent, metadata))
 }
 
 fn validate_secure_file_metadata(
@@ -1233,8 +1207,7 @@ fn validate_secure_file_metadata(
         )));
     }
     #[cfg(unix)]
-    // SAFETY: `geteuid` has no preconditions and does not dereference pointers.
-    let effective_uid = unsafe { libc::geteuid() };
+    let effective_uid = rustix::process::geteuid().as_raw();
     #[cfg(unix)]
     if metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
         return Err(SecureFileError::UnsafePath(format!(
@@ -1260,7 +1233,7 @@ fn secure_read_bytes(path: &Path, max_bytes: usize) -> Result<Option<Vec<u8>>, S
     options.read(true);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW);
-    let mut file = options.open(&absolute)?;
+    let file = options.open(&absolute)?;
     let opened = file.metadata()?;
     validate_secure_file_metadata(&absolute, &opened)?;
     #[cfg(unix)]
@@ -1870,33 +1843,34 @@ impl DrandHttpRandomnessProvider {
 
     async fn commit_high_water(&self, beacon: &VerifiedDrandBeacon) -> Result<(), RandomnessError> {
         let _commit = self.commit_lock.lock().await;
-        let mut state = self.state.lock();
-        if let Some(previous) = state.as_ref() {
-            if beacon.round < previous.round {
-                return Err(RandomnessError::Rollback {
-                    received: beacon.round,
-                    high_water: previous.round,
-                });
-            }
-            if beacon.round == previous.round {
-                if beacon.randomness != previous.randomness
-                    || beacon.signature != previous.signature
-                {
-                    return Err(RandomnessError::Equivocation {
-                        round: beacon.round,
+        let next = {
+            let state = self.state.lock();
+            if let Some(previous) = state.as_ref() {
+                if beacon.round < previous.round {
+                    return Err(RandomnessError::Rollback {
+                        received: beacon.round,
+                        high_water: previous.round,
                     });
                 }
-                return Ok(());
+                if beacon.round == previous.round {
+                    if beacon.randomness != previous.randomness
+                        || beacon.signature != previous.signature
+                    {
+                        return Err(RandomnessError::Equivocation {
+                            round: beacon.round,
+                        });
+                    }
+                    return Ok(());
+                }
             }
-        }
-        let next = DrandHighWaterStateV1 {
-            version: DRAND_STATE_VERSION_V1,
-            round: beacon.round,
-            randomness: beacon.randomness,
-            signature: beacon.signature,
+            DrandHighWaterStateV1 {
+                version: DRAND_STATE_VERSION_V1,
+                round: beacon.round,
+                randomness: beacon.randomness,
+                signature: beacon.signature,
+            }
         };
         let state_path = self.state_path.clone();
-        drop(state);
         let persisted = next.clone();
         tokio::task::spawn_blocking(move || store_secure_state(&state_path, &persisted, "drand"))
             .await
@@ -2217,7 +2191,12 @@ pub enum VrfError {
     InvalidEpoch,
     /// Provider sequence did not advance durable replay high-water state.
     #[error("provider VRF sequence replay: received {received}, high-water {high_water}")]
-    Replay { received: u64, high_water: u64 },
+    Replay {
+        /// Sequence supplied by the rejected submission.
+        received: u64,
+        /// Greatest sequence already committed for the provider.
+        high_water: u64,
+    },
     /// The exact manifest/epoch/round submission was already accepted.
     #[error("provider VRF submission is a duplicate")]
     Duplicate,
@@ -2226,7 +2205,10 @@ pub enum VrfError {
     Equivocation,
     /// Durable entry limit is exhausted after safe pruning.
     #[error("provider VRF state entry limit {limit} reached")]
-    Limit { limit: usize },
+    Limit {
+        /// Maximum number of durable VRF entries permitted by configuration.
+        limit: usize,
+    },
     /// Durable state failed closed.
     #[error("provider VRF state persistence failure: {0}")]
     Persistence(String),
@@ -3193,9 +3175,6 @@ pub enum PorCoordinatorError {
     /// Verdict signatures do not satisfy the configured auditor policy.
     #[error("verdict signatures invalid or unauthorised: {0}")]
     InvalidVerdictSignature(#[source] sorafs_manifest::por::PorSignatureVerificationError),
-    /// Manual challenge request failed validation.
-    #[error("manual challenge invalid: {0}")]
-    InvalidManualChallenge(#[source] sorafs_manifest::por::ManualPorChallengeValidationError),
     /// Weekly report failed validation.
     #[error("weekly report failed validation: {0}")]
     InvalidWeeklyReport(#[source] PorWeeklyReportValidationError),

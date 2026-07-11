@@ -645,7 +645,42 @@ pub(crate) trait NativeAmxAuthorityContext {
     ) -> bool;
     fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash>;
     fn authoritative_lane_peer_ids_at_height(&self, lane_id: LaneId, height: u64) -> Vec<PeerId>;
-    fn live_consensus_pop(&self, peer: &PeerId, height: u64) -> Option<Vec<u8>>;
+    fn consensus_pop_matches_authority(
+        &self,
+        lane_id: LaneId,
+        peer: &PeerId,
+        height: u64,
+        presented_pop: &[u8],
+    ) -> bool;
+}
+
+fn consensus_pop_matches_lane_authority(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    world: &impl WorldReadOnly,
+    lane_id: LaneId,
+    peer: &PeerId,
+    height: u64,
+    presented_pop: &[u8],
+) -> bool {
+    let Some(lane) = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+    else {
+        return false;
+    };
+    if lane.claims_autoscale_managed() {
+        return crate::state::autoscale_lane_pinned_committee_with_pops(lane).is_some_and(
+            |committee| {
+                committee.into_iter().any(|(pinned_peer, pinned_pop)| {
+                    pinned_peer == *peer && pinned_pop == presented_pop
+                })
+            },
+        );
+    }
+    crate::state::live_consensus_key_pop_for_peer(world, peer, height)
+        .is_none_or(|live_pop| live_pop == presented_pop)
 }
 
 impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
@@ -667,8 +702,21 @@ impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
         StateReadOnly::authoritative_lane_peer_ids_at_height(self, lane_id, height)
     }
 
-    fn live_consensus_pop(&self, peer: &PeerId, height: u64) -> Option<Vec<u8>> {
-        crate::state::live_consensus_key_pop_for_peer(self.world(), peer, height)
+    fn consensus_pop_matches_authority(
+        &self,
+        lane_id: LaneId,
+        peer: &PeerId,
+        height: u64,
+        presented_pop: &[u8],
+    ) -> bool {
+        consensus_pop_matches_lane_authority(
+            self.nexus(),
+            self.world(),
+            lane_id,
+            peer,
+            height,
+            presented_pop,
+        )
     }
 }
 
@@ -1010,9 +1058,12 @@ pub(crate) fn validate_native_amx_attestation_qc(
         if pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
             || !crate::sumeragi::is_bls_normal_public_key(validator.public_key())
             || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
-            || authority
-                .live_consensus_pop(validator, body.authority_context_height)
-                .is_some_and(|live_pop| live_pop != *pop)
+            || !authority.consensus_pop_matches_authority(
+                leg.lane_id,
+                validator,
+                body.authority_context_height,
+                pop,
+            )
         {
             return Err(
                 "native AMX attestation validator has invalid historical BLS proof-of-possession"
@@ -10278,6 +10329,12 @@ pub(crate) mod valid {
                             "pipeline recovery sidecar queue is full; skipping best-effort sidecar"
                         );
                     }
+                    PipelineSidecarEnqueueResult::RejectedPruneRecovery => {
+                        iroha_logger::warn!(
+                            height,
+                            "pipeline recovery sidecar rejected while Kura is actively pruning or requires prune recovery restart"
+                        );
+                    }
                 }
             }
 
@@ -10832,9 +10889,12 @@ pub(crate) mod valid {
                         LaneBlockCommitment {
                             block_height,
                             lane_id,
-                            lane_incarnation: state_block
-                                .lane_incarnation_at_height(lane_id, block_height)
-                                .expect("settlement lane must have an active incarnation"),
+                            lane_incarnation: StateReadOnly::lane_incarnation_at_height(
+                                state_block,
+                                lane_id,
+                                block_height,
+                            )
+                            .expect("settlement lane must have an active incarnation"),
                             dataspace_id,
                             tx_count: builder.tx_count,
                             total_local_micro: builder.total_local_micro,
@@ -14831,6 +14891,7 @@ pub(crate) mod valid {
                 "autoscale.created_height".to_owned(),
                 created_height.to_string(),
             );
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let lane_catalog =
                 LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                     .expect("future-created autoscale lane catalog");
@@ -17093,6 +17154,7 @@ pub(crate) mod valid {
                 elastic_lane
                     .metadata
                     .insert("autoscale.created_height".to_owned(), "2".to_owned());
+                crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
                 let mut nexus = state.nexus.write();
                 nexus.enabled = true;
                 nexus.autoscale.enabled = true;
@@ -17205,6 +17267,7 @@ pub(crate) mod valid {
                 elastic_lane
                     .metadata
                     .insert("autoscale.created_height".to_owned(), "2".to_owned());
+                crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
                 let mut nexus = state.nexus.write();
                 nexus.enabled = true;
                 nexus.autoscale.enabled = true;
@@ -17542,6 +17605,7 @@ pub(crate) mod valid {
                 elastic_lane
                     .metadata
                     .insert("autoscale.created_height".to_owned(), "2".to_owned());
+                crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
                 let mut nexus = state.nexus.write();
                 nexus.enabled = true;
                 nexus.autoscale.enabled = true;
@@ -17666,6 +17730,7 @@ pub(crate) mod valid {
                 elastic_lane
                     .metadata
                     .insert("autoscale.created_height".to_owned(), "2".to_owned());
+                crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
                 let mut nexus = state.nexus.write();
                 nexus.enabled = true;
                 nexus.autoscale.enabled = true;
@@ -18193,6 +18258,7 @@ pub(crate) mod valid {
             elastic_lane
                 .metadata
                 .insert("autoscale.created_height".to_owned(), "7".to_owned());
+            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             {
                 let mut nexus = state.nexus.write();
                 nexus.enabled = true;
@@ -23719,8 +23785,15 @@ mod tests {
             }
         }
 
-        fn live_consensus_pop(&self, peer: &PeerId, height: u64) -> Option<Vec<u8>> {
+        fn consensus_pop_matches_authority(
+            &self,
+            _lane_id: LaneId,
+            peer: &PeerId,
+            height: u64,
+            presented_pop: &[u8],
+        ) -> bool {
             crate::state::live_consensus_key_pop_for_peer(&self.world.view(), peer, height)
+                .is_none_or(|live_pop| live_pop == presented_pop)
         }
     }
 
@@ -23970,6 +24043,68 @@ mod tests {
             .sign(keypair.private_key());
         let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
         (tx, tx_hash)
+    }
+
+    #[test]
+    fn native_amx_autoscale_pop_policy_requires_the_exact_incarnation_pin() {
+        let lane_id = LaneId::new(1);
+        let mut elastic_lane = LaneConfig {
+            id: lane_id,
+            alias: "elastic-lane-1".to_owned(),
+            ..LaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert("autoscale.managed".to_owned(), "true".to_owned());
+        elastic_lane
+            .metadata
+            .insert("autoscale.created_height".to_owned(), "1".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
+        let pinned = crate::state::autoscale_lane_pinned_committee_with_pops(&elastic_lane)
+            .expect("synthetic autoscale lane carries a pin");
+        let (peer, exact_pop) = pinned[0].clone();
+
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![LaneConfig::default(), elastic_lane.clone()],
+        )
+        .expect("autoscale Native AMX policy fixture catalog");
+        let world = World::new();
+        assert!(consensus_pop_matches_lane_authority(
+            &nexus,
+            &world.view(),
+            lane_id,
+            &peer,
+            42,
+            &exact_pop,
+        ));
+
+        let wrong_pop = &pinned[1].1;
+        assert!(!consensus_pop_matches_lane_authority(
+            &nexus,
+            &world.view(),
+            lane_id,
+            &peer,
+            42,
+            wrong_pop,
+        ));
+
+        elastic_lane.metadata.remove("autoscale.committee_v1");
+        nexus.lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                .expect("missing-pin Native AMX policy fixture catalog");
+        assert!(
+            !consensus_pop_matches_lane_authority(
+                &nexus,
+                &world.view(),
+                lane_id,
+                &peer,
+                42,
+                &exact_pop,
+            ),
+            "an autoscale lane must never fall back to an absent live-key record"
+        );
     }
 
     #[test]

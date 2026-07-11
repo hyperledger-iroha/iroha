@@ -1064,6 +1064,7 @@ export {
 } from "./sccp.js";
 export {
   decodeReplicationOrder,
+  ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
   SORAFS_ORDERBOOK_PAYLOAD_KINDS,
   SORAFS_PDP_PAYLOAD_KINDS,
   SorafsGatewayFetchError,

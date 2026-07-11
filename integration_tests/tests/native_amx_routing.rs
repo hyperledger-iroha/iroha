@@ -518,8 +518,12 @@ fn assert_native_amx_execution_context(
         "native AMX receipt plan digest differs from execution context"
     );
     ensure!(
-        receipt.block_height == block.header().height().get(),
-        "native AMX receipt block height differs from containing block"
+        receipt.authority_context_height == block.header().height().get(),
+        "native AMX receipt authority context height differs from containing block"
+    );
+    ensure!(
+        receipt.lane_block_height > 0,
+        "native AMX receipt lane-local height must be positive"
     );
     let mut expected_source_id = [0_u8; Hash::LENGTH];
     expected_source_id.copy_from_slice(transaction.hash().as_ref());
@@ -696,11 +700,13 @@ fn assert_native_amx_relay_tamper_matrix(
         |receipt| receipt.plan_digest = Hash::new(b"tampered native AMX plan"),
     )?;
     assert_native_amx_relay_tamper_rejected(
-        "block height tamper",
+        "authority context height tamper",
         relay,
         expected_commitment,
         expected_receipt,
-        |receipt| receipt.block_height = receipt.block_height.saturating_add(1),
+        |receipt| {
+            receipt.authority_context_height = receipt.authority_context_height.saturating_add(1);
+        },
     )?;
     assert_native_amx_relay_tamper_rejected(
         "coordinator lane tamper",
@@ -906,7 +912,8 @@ fn status_contains_native_amx_receipt(status: &JsonValue, receipt: &NativeAmxRec
         let Some(commitment) = commitment.as_object() else {
             return false;
         };
-        if commitment.get("block_height").and_then(JsonValue::as_u64) != Some(receipt.block_height)
+        if commitment.get("block_height").and_then(JsonValue::as_u64)
+            != Some(receipt.authority_context_height)
             || commitment.get("lane_id").and_then(JsonValue::as_u64)
                 != Some(u64::from(receipt.lane_id))
             || commitment.get("dataspace_id").and_then(JsonValue::as_u64)
@@ -937,8 +944,12 @@ fn status_contains_native_amx_receipt(status: &JsonValue, receipt: &NativeAmxRec
                 .is_some_and(|value| !value.is_empty());
             if !source_id_is_hex
                 || !plan_digest_is_present
-                || native.get("block_height").and_then(JsonValue::as_u64)
-                    != Some(receipt.block_height)
+                || native
+                    .get("authority_context_height")
+                    .and_then(JsonValue::as_u64)
+                    != Some(receipt.authority_context_height)
+                || native.get("lane_block_height").and_then(JsonValue::as_u64)
+                    != Some(receipt.lane_block_height)
                 || native.get("lane_id").and_then(JsonValue::as_u64)
                     != Some(u64::from(receipt.lane_id))
                 || native.get("dataspace_id").and_then(JsonValue::as_u64)
@@ -1006,10 +1017,15 @@ fn native_amx_status_summary(status: &JsonValue) -> String {
             let native_summary = native
                 .map(|receipt| {
                     format!(
-                        " native_source={:?} native_plan={:?} native_height={:?} legs={}",
+                        " native_source={:?} native_plan={:?} authority_height={:?} lane_height={:?} legs={}",
                         receipt.get("source_id").and_then(JsonValue::as_str),
                         receipt.get("plan_digest").and_then(JsonValue::as_str),
-                        receipt.get("block_height").and_then(JsonValue::as_u64),
+                        receipt
+                            .get("authority_context_height")
+                            .and_then(JsonValue::as_u64),
+                        receipt
+                            .get("lane_block_height")
+                            .and_then(JsonValue::as_u64),
                         receipt
                             .get("legs")
                             .and_then(JsonValue::as_array)

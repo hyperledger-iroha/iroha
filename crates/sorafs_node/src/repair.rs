@@ -57,6 +57,13 @@ const MAX_REPAIR_STORE_RETRIES: usize = 3;
 const DEFAULT_REPAIR_EVENT_HISTORY_LIMIT: usize = 64;
 const DEFAULT_REPAIR_STORE_ENTRY_LIMIT: usize = 65_536;
 const DEFAULT_REPAIR_STORE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum canonical byte length of the embedded v1 slash proposal.
+///
+/// Its variable fields are each capped at 256 bytes and the remaining fields
+/// are fixed-width. Four KiB leaves ample codec overhead while preventing the
+/// embedded `Vec<u8>` from turning the checkpoint byte cap into an allocation
+/// limit.
+const MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES: usize = 16 * MAX_REPAIR_NOTES_BYTES;
 const REPAIR_STORE_VERSION_V1: u8 = 1;
 const REPAIR_STORE_FILE_NAME: &str = "repair_state.to";
 const REPAIR_STORE_TMP_EXT: &str = "tmp";
@@ -65,6 +72,35 @@ const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
 const NORITO_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
 static REPAIR_STORE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static REPAIR_STORE_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+fn repair_checkpoint_decode_limits(entry_limit: usize, max_bytes: u64) -> norito::DecodeLimits {
+    // Checkpoint sequences are either entry-limited histories/indices or the
+    // one fixed-bounded canonical proposal blob. The per-sequence bound stays
+    // schema-derived; cumulative element, field, and allocation budgets are
+    // additionally tied to the configured checkpoint byte ceiling.
+    let fixed_field_limit = MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES
+        .max(DEFAULT_IDEMPOTENCY_CACHE_SIZE)
+        .max(DEFAULT_REPAIR_EVENT_HISTORY_LIMIT);
+    let byte_limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+    let allocation_limit = byte_limit.checked_mul(4).unwrap_or(usize::MAX);
+    norito::DecodeLimits::new(
+        entry_limit.max(fixed_field_limit),
+        byte_limit,
+        byte_limit,
+        allocation_limit,
+        64,
+    )
+}
+
+fn repair_slash_proposal_decode_limits() -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES,
+        MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES,
+        65_536,
+        256 * 1024,
+        32,
+    )
+}
 
 #[cfg(unix)]
 const LOCK_EXCLUSIVE_NONBLOCKING: std::os::raw::c_int = 2 | 4;
@@ -358,6 +394,7 @@ struct StoredRepairTask {
     scheduler_notes: Option<String>,
     slash_proposal_digest: Option<[u8; 32]>,
     slash_proposal_bytes: Option<Vec<u8>>,
+    slash_proposal_stage: Option<RepairSlashProposalStage>,
     #[norito(default)]
     governance: RepairGovernanceState,
     governance_policy: Option<RepairGovernancePolicySnapshot>,
@@ -380,6 +417,7 @@ impl StoredRepairTask {
             scheduler_notes: task.scheduler_notes,
             slash_proposal_digest: task.slash_proposal_digest,
             slash_proposal_bytes: task.slash_proposal_bytes,
+            slash_proposal_stage: task.slash_proposal_stage,
             governance: task.governance,
             governance_policy: task.governance_policy,
             lease: task.lease.map(StoredRepairTaskLease::from_lease),
@@ -407,6 +445,7 @@ impl StoredRepairTask {
             scheduler_notes: self.scheduler_notes,
             slash_proposal_digest: self.slash_proposal_digest,
             slash_proposal_bytes: self.slash_proposal_bytes,
+            slash_proposal_stage: self.slash_proposal_stage,
             governance: self.governance,
             governance_policy: self.governance_policy,
             lease: self.lease.map(StoredRepairTaskLease::into_lease),
@@ -816,10 +855,13 @@ impl FileRepairStore {
         }
         let state = if let Some(bytes) = checkpoint_bytes {
             validate_bounded_uncompressed_norito(&bytes, max_bytes, "repair store checkpoint")?;
-            let snapshot: RepairStoreSnapshot =
-                norito::decode_from_bytes(&bytes).map_err(|err| {
-                    RepairStoreError::Other(format!("failed to decode repair store: {err}"))
-                })?;
+            let snapshot: RepairStoreSnapshot = norito::decode_from_bytes_with_limits(
+                &bytes,
+                repair_checkpoint_decode_limits(entry_limit, max_bytes),
+            )
+            .map_err(|err| {
+                RepairStoreError::Other(format!("failed to decode repair store: {err}"))
+            })?;
             let canonical = norito::to_bytes(&snapshot).map_err(|err| {
                 RepairStoreError::Other(format!("failed to re-encode repair store: {err}"))
             })?;
@@ -1578,6 +1620,21 @@ impl RepairStore for FileRepairStore {
                 ticket_id: ticket_id.to_string(),
             });
         }
+        if existing.slash_proposal_stage == Some(RepairSlashProposalStage::Submitted)
+            && task.slash_proposal_stage != Some(RepairSlashProposalStage::Submitted)
+        {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{ticket_id}` cannot downgrade a submitted slash proposal"
+            )));
+        }
+        if existing.slash_proposal_stage.is_some()
+            && (task.slash_proposal_digest != existing.slash_proposal_digest
+                || task.slash_proposal_bytes.as_deref() != existing.slash_proposal_bytes.as_deref())
+        {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{ticket_id}` cannot replace persisted slash proposal bytes"
+            )));
+        }
         let Some(previous) = guard.tasks.insert(ticket_id.0.clone(), task) else {
             return Err(RepairStoreError::NotFound {
                 ticket_id: ticket_id.to_string(),
@@ -1745,6 +1802,21 @@ pub struct RepairTaskFilters {
     pub status: Option<RepairTaskStatusV1>,
 }
 
+/// Authoritative publication stage of a persisted repair slash proposal.
+///
+/// The stage is checkpointed atomically with the proposal's canonical bytes
+/// and digest so a publisher can reconcile drafts after a process restart
+/// without resubmitting proposals already accepted locally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum RepairSlashProposalStage {
+    /// The scheduler created and persisted the proposal, but submission has not
+    /// yet been accepted.
+    Drafted,
+    /// [`RepairManager::submit_slash_proposal`] accepted this exact canonical
+    /// proposal.
+    Submitted,
+}
+
 /// Snapshot of a repair task with its event history.
 #[derive(Debug, Clone)]
 pub struct RepairTaskSnapshot {
@@ -1754,6 +1826,10 @@ pub struct RepairTaskSnapshot {
     pub events_dropped: u64,
     /// Event log ordered by occurrence.
     pub events: Vec<RepairTaskEventV1>,
+    /// Canonically decoded slash proposal, when this task is escalated.
+    pub slash_proposal: Option<RepairSlashProposalV1>,
+    /// Authoritative publication stage paired with [`Self::slash_proposal`].
+    pub slash_proposal_stage: Option<RepairSlashProposalStage>,
 }
 
 /// Result of applying a repair task transition.
@@ -2190,6 +2266,7 @@ impl RepairManager {
             scheduler_notes: None,
             slash_proposal_digest: None,
             slash_proposal_bytes: None,
+            slash_proposal_stage: None,
             governance: RepairGovernanceState::default(),
             governance_policy: None,
             lease: None,
@@ -2257,8 +2334,10 @@ impl RepairManager {
             .map_err(|err| repair_encoding_error("slash proposal", err))?;
         let proposal_digest = *hash(&proposal_bytes).as_bytes();
         let mut event = None;
+        let mut publication_transitioned = false;
         let task = self.update_task_with_retry(&proposal.ticket_id, |task| {
             event = None;
+            publication_transitioned = false;
             if task.report.evidence.manifest_digest != proposal.manifest_digest {
                 return Err(RepairSchedulerError::ManifestMismatch {
                     ticket_id: proposal.ticket_id.to_string(),
@@ -2282,13 +2361,37 @@ impl RepairManager {
                 ));
             }
             if let Some(existing_digest) = task.slash_proposal_digest {
-                if existing_digest == proposal_digest {
-                    return Ok(());
+                if existing_digest == proposal_digest
+                    && task.slash_proposal_bytes.as_deref() == Some(proposal_bytes.as_slice())
+                {
+                    return match task.slash_proposal_stage {
+                        Some(RepairSlashProposalStage::Drafted) => {
+                            task.slash_proposal_stage =
+                                Some(RepairSlashProposalStage::Submitted);
+                            publication_transitioned = true;
+                            Ok(())
+                        }
+                        Some(RepairSlashProposalStage::Submitted) => Ok(()),
+                        None => Err(RepairSchedulerError::Store(RepairStoreError::Other(
+                            format!(
+                                "repair task `{}` has slash proposal bytes without a publication stage",
+                                proposal.ticket_id
+                            ),
+                        ))),
+                    };
                 }
                 return Err(policy_violation(
                     &proposal.ticket_id,
                     "conflicting slash proposal already recorded",
                 ));
+            }
+            if task.slash_proposal_bytes.is_some() || task.slash_proposal_stage.is_some() {
+                return Err(RepairSchedulerError::Store(RepairStoreError::Other(
+                    format!(
+                        "repair task `{}` has incomplete slash proposal publication state",
+                        proposal.ticket_id
+                    ),
+                )));
             }
 
             if task.governance.decision.is_some() {
@@ -2347,6 +2450,8 @@ impl RepairManager {
             });
             task.slash_proposal_digest = Some(proposal_digest);
             task.slash_proposal_bytes = Some(proposal_bytes.clone());
+            task.slash_proposal_stage = Some(RepairSlashProposalStage::Submitted);
+            publication_transitioned = true;
             task.next_attempt_after_unix = None;
             if !was_escalated {
                 event = task.push_event(
@@ -2366,8 +2471,10 @@ impl RepairManager {
             self.observe_latency(queued_at, proposal.submitted_at_unix, "escalated");
             global_or_default().inc_sorafs_repair_tasks("escalated");
         }
-        global_sorafs_repair_otel().record_slash_proposal("submitted");
-        global_or_default().inc_sorafs_slash_proposals("submitted");
+        if publication_transitioned {
+            global_sorafs_repair_otel().record_slash_proposal("submitted");
+            global_or_default().inc_sorafs_slash_proposals("submitted");
+        }
         Ok(RepairTaskUpdate {
             record: task.to_record(),
             event,
@@ -2594,6 +2701,8 @@ impl RepairManager {
         let mut snapshots: Vec<RepairTaskSnapshot> = tasks
             .into_iter()
             .map(|task| task.to_snapshot())
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
             .filter(|snapshot| filters.matches(&snapshot.record))
             .collect();
         sort_repair_task_snapshots(&mut snapshots);
@@ -2994,7 +3103,10 @@ impl RepairManager {
         &self,
         ticket_id: &RepairTicketId,
     ) -> Result<Option<RepairTaskSnapshot>, RepairStoreError> {
-        Ok(self.store.task(ticket_id)?.map(|task| task.to_snapshot()))
+        self.store
+            .task(ticket_id)?
+            .map(|task| task.to_snapshot())
+            .transpose()
     }
 
     /// Mark a repair ticket as actively being addressed.
@@ -3914,6 +4026,7 @@ impl RepairManager {
         task.scheduler_notes = Some(rationale.clone());
         task.slash_proposal_digest = Some(digest);
         task.slash_proposal_bytes = Some(bytes);
+        task.slash_proposal_stage = Some(RepairSlashProposalStage::Drafted);
         task.lease = None;
         task.next_attempt_after_unix = None;
         task.governance = RepairGovernanceState::default();
@@ -4124,6 +4237,7 @@ struct RepairTaskInternal {
     slash_proposal_digest: Option<[u8; 32]>,
     /// Norito-encoded bytes for the slash proposal when present.
     slash_proposal_bytes: Option<Vec<u8>>,
+    slash_proposal_stage: Option<RepairSlashProposalStage>,
     governance: RepairGovernanceState,
     governance_policy: Option<RepairGovernancePolicySnapshot>,
     lease: Option<RepairTaskLease>,
@@ -4152,12 +4266,84 @@ impl RepairTaskInternal {
         }
     }
 
-    fn to_snapshot(&self) -> RepairTaskSnapshot {
-        RepairTaskSnapshot {
+    fn decoded_slash_proposal(&self) -> Result<Option<RepairSlashProposalV1>, RepairStoreError> {
+        let (expected_digest, bytes) = match (
+            &self.slash_proposal_digest,
+            &self.slash_proposal_bytes,
+            self.slash_proposal_stage,
+        ) {
+            (None, None, None) => return Ok(None),
+            (Some(expected_digest), Some(bytes), Some(_)) => (expected_digest, bytes),
+            _ => {
+                return Err(RepairStoreError::Other(format!(
+                    "repair task `{}` must persist slash proposal bytes, digest, and publication stage together",
+                    self.report.ticket_id
+                )));
+            }
+        };
+        if bytes.len() > MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{}` slash proposal is {} bytes, exceeding fixed limit {}",
+                self.report.ticket_id,
+                bytes.len(),
+                MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES
+            )));
+        }
+        let encoded_len = u64::try_from(bytes.len()).map_err(|_| {
+            RepairStoreError::Other(format!(
+                "repair task `{}` slash proposal length does not fit u64",
+                self.report.ticket_id
+            ))
+        })?;
+        validate_bounded_uncompressed_norito(
+            bytes,
+            encoded_len,
+            "persisted repair slash proposal",
+        )?;
+        let proposal: RepairSlashProposalV1 =
+            norito::decode_from_bytes_with_limits(bytes, repair_slash_proposal_decode_limits())
+                .map_err(|err| {
+                    RepairStoreError::Other(format!(
+                        "repair task `{}` contains an invalid slash proposal: {err}",
+                        self.report.ticket_id
+                    ))
+                })?;
+        proposal.validate().map_err(|err| {
+            RepairStoreError::Other(format!(
+                "repair task `{}` contains an invalid slash proposal: {err}",
+                self.report.ticket_id
+            ))
+        })?;
+        let canonical = norito::to_bytes(&proposal).map_err(|err| {
+            RepairStoreError::Other(format!(
+                "repair task `{}` slash proposal could not be re-encoded: {err}",
+                self.report.ticket_id
+            ))
+        })?;
+        if canonical.as_slice() != bytes.as_slice() || checkpoint_digest(bytes) != *expected_digest
+        {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{}` has non-canonical or digest-mismatched slash proposal bytes",
+                self.report.ticket_id
+            )));
+        }
+        if proposal.approval.is_some() {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{}` contains an unauthenticated embedded approval summary",
+                self.report.ticket_id
+            )));
+        }
+        Ok(Some(proposal))
+    }
+
+    fn to_snapshot(&self) -> Result<RepairTaskSnapshot, RepairStoreError> {
+        Ok(RepairTaskSnapshot {
             record: self.to_record(),
             events_dropped: self.events_dropped,
             events: self.events.clone(),
-        }
+            slash_proposal: self.decoded_slash_proposal()?,
+            slash_proposal_stage: self.slash_proposal_stage,
+        })
     }
 
     fn push_event(
@@ -4278,71 +4464,22 @@ impl RepairTaskInternal {
             RepairGovernancePolicySnapshot::from_runtime(escalation_policy)
         };
 
-        match (&self.slash_proposal_digest, &self.slash_proposal_bytes) {
-            (None, None) => {}
-            (Some(expected_digest), Some(bytes)) => {
-                let encoded_len = u64::try_from(bytes.len()).map_err(|_| {
-                    RepairStoreError::Other(format!(
-                        "repair task `{}` slash proposal length does not fit u64",
-                        self.report.ticket_id
-                    ))
-                })?;
-                validate_bounded_uncompressed_norito(
-                    bytes,
-                    encoded_len,
-                    "persisted repair slash proposal",
-                )?;
-                let proposal: RepairSlashProposalV1 =
-                    norito::decode_from_bytes(bytes).map_err(|err| {
-                        RepairStoreError::Other(format!(
-                            "repair task `{}` contains an invalid slash proposal: {err}",
-                            self.report.ticket_id
-                        ))
-                    })?;
-                proposal.validate().map_err(|err| {
-                    RepairStoreError::Other(format!(
-                        "repair task `{}` contains an invalid slash proposal: {err}",
-                        self.report.ticket_id
-                    ))
-                })?;
-                let canonical = norito::to_bytes(&proposal).map_err(|err| {
-                    RepairStoreError::Other(format!(
-                        "repair task `{}` slash proposal could not be re-encoded: {err}",
-                        self.report.ticket_id
-                    ))
-                })?;
-                if canonical.as_slice() != bytes.as_slice()
-                    || checkpoint_digest(bytes) != *expected_digest
-                    || proposal.ticket_id != self.report.ticket_id
-                    || proposal.manifest_digest != self.report.evidence.manifest_digest
-                    || proposal.provider_id != self.report.evidence.provider_id
-                    || proposal.auditor_account != self.report.auditor_account
-                    || proposal.proposed_penalty_nano > effective_governance_policy.max_penalty_nano
-                    || !matches!(self.state, RepairTaskStateV1::Escalated(_))
-                    || proposal.submitted_at_unix != queued_state_transition_timestamp(&self.state)
-                {
-                    return Err(RepairStoreError::Other(format!(
-                        "repair task `{}` has an inconsistent slash proposal",
-                        self.report.ticket_id
-                    )));
-                }
-                if proposal.approval.is_some() {
-                    return Err(RepairStoreError::Other(format!(
-                        "repair task `{}` contains an unauthenticated embedded approval summary",
-                        self.report.ticket_id
-                    )));
-                }
-            }
-            _ => {
-                return Err(RepairStoreError::Other(format!(
-                    "repair task `{}` must persist slash proposal bytes and digest together",
-                    self.report.ticket_id
-                )));
-            }
-        };
-        if matches!(self.state, RepairTaskStateV1::Escalated(_))
-            && self.slash_proposal_digest.is_none()
+        let slash_proposal = self.decoded_slash_proposal()?;
+        if let Some(proposal) = slash_proposal.as_ref()
+            && (proposal.ticket_id != self.report.ticket_id
+                || proposal.manifest_digest != self.report.evidence.manifest_digest
+                || proposal.provider_id != self.report.evidence.provider_id
+                || proposal.auditor_account != self.report.auditor_account
+                || proposal.proposed_penalty_nano > effective_governance_policy.max_penalty_nano
+                || !matches!(self.state, RepairTaskStateV1::Escalated(_))
+                || proposal.submitted_at_unix != queued_state_transition_timestamp(&self.state))
         {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{}` has an inconsistent slash proposal",
+                self.report.ticket_id
+            )));
+        }
+        if matches!(self.state, RepairTaskStateV1::Escalated(_)) && slash_proposal.is_none() {
             return Err(RepairStoreError::Other(format!(
                 "escalated repair task `{}` is missing its slash proposal",
                 self.report.ticket_id
@@ -5565,6 +5702,7 @@ mod tests {
             scheduler_notes: None,
             slash_proposal_digest: None,
             slash_proposal_bytes: None,
+            slash_proposal_stage: None,
             governance: RepairGovernanceState::default(),
             governance_policy: None,
             lease: None,
@@ -6397,27 +6535,31 @@ mod tests {
         manager
             .enqueue_report(submitted.clone())
             .expect("enqueue submitted-proposal task");
+        let submitted_proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: submitted.ticket_id.clone(),
+            provider_id: submitted.evidence.provider_id,
+            manifest_digest: submitted.evidence.manifest_digest,
+            auditor_account: submitted.auditor_account.clone(),
+            proposed_penalty_nano: 1,
+            submitted_at_unix: 101,
+            rationale: "submitted proposal".to_owned(),
+            approval: None,
+        };
         manager
-            .submit_slash_proposal(RepairSlashProposalV1 {
-                version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-                ticket_id: submitted.ticket_id.clone(),
-                provider_id: submitted.evidence.provider_id,
-                manifest_digest: submitted.evidence.manifest_digest,
-                auditor_account: submitted.auditor_account.clone(),
-                proposed_penalty_nano: 1,
-                submitted_at_unix: 101,
-                rationale: "submitted proposal".to_owned(),
-                approval: None,
-            })
+            .submit_slash_proposal(submitted_proposal.clone())
             .expect("persist submitted proposal");
 
         let drafted = report("REP-PROPOSAL-RELOAD-DRAFTED", [0x26; 32], [0x36; 32], 200);
         manager
             .enqueue_report(drafted.clone())
             .expect("enqueue auto-drafted task");
-        manager
-            .mark_failed(&drafted.ticket_id, 201, "failure".to_owned())
+        let drafted_proposal = manager
+            .mark_failed_with_event(&drafted.ticket_id, 201, "failure".to_owned())
             .expect("persist auto-drafted proposal");
+        let drafted_proposal = drafted_proposal
+            .slash_proposal
+            .expect("scheduler returned drafted proposal");
         drop(manager);
 
         let reloaded = RepairManager::try_new_with_config_policy_and_limits(
@@ -6427,11 +6569,23 @@ mod tests {
             DEFAULT_REPAIR_STORE_MAX_BYTES,
         )
         .expect("framed proposals reload");
-        for ticket_id in [&submitted.ticket_id, &drafted.ticket_id] {
+        for (ticket_id, expected_proposal, expected_stage) in [
+            (
+                &submitted.ticket_id,
+                &submitted_proposal,
+                RepairSlashProposalStage::Submitted,
+            ),
+            (
+                &drafted.ticket_id,
+                &drafted_proposal,
+                RepairSlashProposalStage::Drafted,
+            ),
+        ] {
             let task = reloaded
                 .load_task(ticket_id)
                 .expect("load escalated task after restart");
             assert!(matches!(task.state, RepairTaskStateV1::Escalated(_)));
+            assert_eq!(task.slash_proposal_stage, Some(expected_stage));
             let bytes = task
                 .slash_proposal_bytes
                 .as_deref()
@@ -6442,9 +6596,286 @@ mod tests {
                 "test proposal",
             )
             .expect("proposal uses framed uncompressed Norito");
-            let _: RepairSlashProposalV1 =
-                norito::decode_from_bytes(bytes).expect("decode framed proposal");
+            let decoded = norito::decode_from_bytes::<RepairSlashProposalV1>(bytes)
+                .expect("decode framed proposal");
+            assert_eq!(&decoded, expected_proposal);
+            assert_eq!(
+                task.slash_proposal_digest,
+                Some(*hash(bytes).as_bytes()),
+                "canonical proposal digest survives restart"
+            );
+
+            let snapshot = reloaded
+                .task_snapshot(ticket_id)
+                .expect("load public snapshot")
+                .expect("snapshot exists");
+            assert_eq!(snapshot.slash_proposal.as_ref(), Some(expected_proposal));
+            assert_eq!(snapshot.slash_proposal_stage, Some(expected_stage));
         }
+    }
+
+    #[test]
+    fn drafted_slash_proposal_submission_is_atomic_and_idempotent() {
+        let mut actual = actual::SorafsRepair::default();
+        actual.max_attempts = 1;
+        let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
+        let report = report(
+            "REP-PROPOSAL-DRAFT-SUBMIT",
+            [0x27; 32],
+            [0x37; 32],
+            1_700_100_365,
+        );
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue auto-drafted task");
+        let update = manager
+            .mark_failed_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 1,
+                "failure".to_owned(),
+            )
+            .expect("scheduler drafts proposal");
+        let proposal = update.slash_proposal.expect("drafted proposal returned");
+
+        let drafted = manager
+            .load_task(&report.ticket_id)
+            .expect("load drafted task");
+        let drafted_revision = drafted.revision;
+        let drafted_bytes = drafted
+            .slash_proposal_bytes
+            .clone()
+            .expect("drafted canonical bytes");
+        let drafted_digest = drafted
+            .slash_proposal_digest
+            .expect("drafted canonical digest");
+        assert_eq!(
+            drafted.slash_proposal_stage,
+            Some(RepairSlashProposalStage::Drafted)
+        );
+        let snapshot = manager
+            .task_snapshot(&report.ticket_id)
+            .expect("load drafted snapshot")
+            .expect("drafted snapshot exists");
+        assert_eq!(snapshot.slash_proposal.as_ref(), Some(&proposal));
+        assert_eq!(
+            snapshot.slash_proposal_stage,
+            Some(RepairSlashProposalStage::Drafted)
+        );
+
+        manager
+            .submit_slash_proposal(proposal.clone())
+            .expect("accept exact scheduler draft");
+        let submitted = manager
+            .load_task(&report.ticket_id)
+            .expect("load submitted task");
+        assert_eq!(submitted.revision, drafted_revision + 1);
+        assert_eq!(submitted.slash_proposal_bytes, Some(drafted_bytes));
+        assert_eq!(submitted.slash_proposal_digest, Some(drafted_digest));
+        assert_eq!(
+            submitted.slash_proposal_stage,
+            Some(RepairSlashProposalStage::Submitted)
+        );
+
+        let submitted_revision = submitted.revision;
+        manager
+            .submit_slash_proposal(proposal.clone())
+            .expect("exact submitted replay is idempotent");
+        let replayed = manager
+            .load_task(&report.ticket_id)
+            .expect("load replayed task");
+        assert_eq!(replayed.revision, submitted_revision);
+        assert_eq!(
+            replayed.slash_proposal_stage,
+            Some(RepairSlashProposalStage::Submitted)
+        );
+        let snapshot = manager
+            .task_snapshot(&report.ticket_id)
+            .expect("load submitted snapshot")
+            .expect("submitted snapshot exists");
+        assert_eq!(snapshot.slash_proposal, Some(proposal));
+        assert_eq!(
+            snapshot.slash_proposal_stage,
+            Some(RepairSlashProposalStage::Submitted)
+        );
+    }
+
+    #[test]
+    fn submitted_slash_proposal_cannot_downgrade_to_drafted() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report(
+            "REP-PROPOSAL-NO-DOWNGRADE",
+            [0x28; 32],
+            [0x38; 32],
+            1_700_100_366,
+        );
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .submit_slash_proposal(RepairSlashProposalV1 {
+                version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+                ticket_id: report.ticket_id.clone(),
+                provider_id: report.evidence.provider_id,
+                manifest_digest: report.evidence.manifest_digest,
+                auditor_account: report.auditor_account.clone(),
+                proposed_penalty_nano: 1,
+                submitted_at_unix: report.submitted_at_unix + 1,
+                rationale: "submitted proposal".to_owned(),
+                approval: None,
+            })
+            .expect("submit proposal");
+        let submitted_revision = manager
+            .load_task(&report.ticket_id)
+            .expect("load submitted task")
+            .revision;
+
+        let error = manager
+            .update_task_with_retry(&report.ticket_id, |task| {
+                task.slash_proposal_stage = Some(RepairSlashProposalStage::Drafted);
+                Ok(())
+            })
+            .expect_err("submitted stage cannot be downgraded");
+        assert!(matches!(
+            error,
+            RepairSchedulerError::Store(RepairStoreError::Other(message))
+                if message.contains("cannot downgrade")
+        ));
+        let retained = manager
+            .load_task(&report.ticket_id)
+            .expect("load retained submitted task");
+        assert_eq!(retained.revision, submitted_revision);
+        assert_eq!(
+            retained.slash_proposal_stage,
+            Some(RepairSlashProposalStage::Submitted)
+        );
+    }
+
+    #[test]
+    fn checkpoint_rejects_partial_slash_proposal_publication_state() {
+        let mut actual = actual::SorafsRepair::default();
+        actual.max_attempts = 1;
+        let (manager, temp_dir) = manager_with_config(RepairConfig::from(&actual));
+        let report = report(
+            "REP-PROPOSAL-PARTIAL-CHECKPOINT",
+            [0x29; 32],
+            [0x39; 32],
+            1_700_100_367,
+        );
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .mark_failed(
+                &report.ticket_id,
+                report.submitted_at_unix + 1,
+                "failure".to_owned(),
+            )
+            .expect("draft proposal");
+        let path = canonical_temp_path(&temp_dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
+        let bytes = fs::read(&path).expect("read valid drafted checkpoint");
+        let snapshot: RepairStoreSnapshot =
+            norito::decode_from_bytes(&bytes).expect("decode valid drafted checkpoint");
+        assert_eq!(
+            snapshot.tasks[0].slash_proposal_stage,
+            Some(RepairSlashProposalStage::Drafted)
+        );
+        assert!(snapshot.tasks[0].slash_proposal_digest.is_some());
+        assert!(snapshot.tasks[0].slash_proposal_bytes.is_some());
+        drop(manager);
+
+        let mut proposal_without_stage = snapshot.clone();
+        proposal_without_stage.tasks[0].slash_proposal_stage = None;
+        write_private_file(
+            &path,
+            &norito::to_bytes(&proposal_without_stage)
+                .expect("encode proposal without publication stage"),
+        );
+        let error = FileRepairStore::load_or_new(
+            path.clone(),
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect_err("proposal bytes without stage rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("bytes, digest, and publication stage together")
+        );
+
+        let mut stage_without_proposal = snapshot;
+        stage_without_proposal.tasks[0].slash_proposal_digest = None;
+        stage_without_proposal.tasks[0].slash_proposal_bytes = None;
+        write_private_file(
+            &path,
+            &norito::to_bytes(&stage_without_proposal)
+                .expect("encode publication stage without proposal"),
+        );
+        let error = FileRepairStore::load_or_new(
+            path,
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect_err("stage without proposal bytes and digest rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("bytes, digest, and publication stage together")
+        );
+    }
+
+    #[test]
+    fn checkpoint_rejects_corrupt_canonical_slash_proposal_bytes() {
+        let mut actual = actual::SorafsRepair::default();
+        actual.max_attempts = 1;
+        let (manager, temp_dir) = manager_with_config(RepairConfig::from(&actual));
+        let report = report(
+            "REP-PROPOSAL-CORRUPT-CHECKPOINT",
+            [0x2A; 32],
+            [0x3A; 32],
+            1_700_100_368,
+        );
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .mark_failed(
+                &report.ticket_id,
+                report.submitted_at_unix + 1,
+                "failure".to_owned(),
+            )
+            .expect("draft proposal");
+        let path = canonical_temp_path(&temp_dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
+        let bytes = fs::read(&path).expect("read valid drafted checkpoint");
+        let mut snapshot: RepairStoreSnapshot =
+            norito::decode_from_bytes(&bytes).expect("decode valid drafted checkpoint");
+        drop(manager);
+
+        let proposal_bytes = snapshot.tasks[0]
+            .slash_proposal_bytes
+            .as_mut()
+            .expect("drafted proposal bytes");
+        proposal_bytes.truncate(norito::core::Header::SIZE - 1);
+        snapshot.tasks[0].slash_proposal_digest = Some(checkpoint_digest(proposal_bytes));
+        write_private_file(
+            &path,
+            &norito::to_bytes(&snapshot).expect("encode corrupt nested proposal checkpoint"),
+        );
+        let error = FileRepairStore::load_or_new(
+            path,
+            DEFAULT_REPAIR_STORE_ENTRY_LIMIT,
+            DEFAULT_REPAIR_STORE_MAX_BYTES,
+        )
+        .expect_err("truncated canonical proposal rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("persisted repair slash proposal")
+                && message.contains("truncated before its Norito header"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
@@ -7990,6 +8421,138 @@ mod tests {
         .expect_err("corrupt store must fail");
         assert!(error.to_string().contains("truncated"));
         assert_eq!(fs::read(path).unwrap(), b"corrupt");
+    }
+
+    #[test]
+    fn repair_checkpoint_decode_limit_uses_schema_bounds_not_checkpoint_bytes() {
+        let default_limits = repair_checkpoint_decode_limits(1, DEFAULT_REPAIR_STORE_MAX_BYTES);
+        assert_eq!(
+            default_limits.max_sequence_elements(),
+            MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES
+        );
+        assert_eq!(
+            default_limits.max_field_bytes(),
+            usize::try_from(DEFAULT_REPAIR_STORE_MAX_BYTES).expect("default byte limit fits usize")
+        );
+        assert_eq!(
+            default_limits.max_total_elements(),
+            usize::try_from(DEFAULT_REPAIR_STORE_MAX_BYTES).expect("default byte limit fits usize")
+        );
+        assert_eq!(
+            default_limits.max_total_allocated_bytes(),
+            usize::try_from(DEFAULT_REPAIR_STORE_MAX_BYTES).expect("default byte limit fits usize")
+                * 4
+        );
+        assert_eq!(default_limits.max_nesting_depth(), 64);
+        let larger_entry_limit = MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES + 1;
+        assert_eq!(
+            repair_checkpoint_decode_limits(larger_entry_limit, DEFAULT_REPAIR_STORE_MAX_BYTES)
+                .max_sequence_elements(),
+            larger_entry_limit
+        );
+        assert!(
+            u64::try_from(
+                repair_checkpoint_decode_limits(1, DEFAULT_REPAIR_STORE_MAX_BYTES)
+                    .max_sequence_elements(),
+            )
+            .expect("limit fits u64")
+                < DEFAULT_REPAIR_STORE_MAX_BYTES
+        );
+    }
+
+    #[test]
+    fn repair_slash_proposal_decode_limits_are_schema_bounded() {
+        let limits = repair_slash_proposal_decode_limits();
+        assert_eq!(
+            limits.max_sequence_elements(),
+            MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES
+        );
+        assert_eq!(
+            limits.max_field_bytes(),
+            MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES
+        );
+        assert_eq!(limits.max_total_elements(), 65_536);
+        assert_eq!(limits.max_total_allocated_bytes(), 256 * 1024);
+        assert_eq!(limits.max_nesting_depth(), 32);
+    }
+
+    #[test]
+    fn repair_checkpoint_rejects_oversized_nested_sequence_before_semantic_validation() {
+        let dir = tempdir().expect("tempdir");
+        let path = canonical_temp_path(&dir)
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
+        fs::create_dir_all(path.parent().expect("parent")).expect("create checkpoint parent");
+
+        let mut stored = StoredRepairTask::from_internal(task_internal(report(
+            "REP-DECODE-LIMIT",
+            [0x31; 32],
+            [0x32; 32],
+            1_700_000_000,
+        )))
+        .expect("store task");
+        stored.slash_proposal_bytes = Some(vec![0; MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES + 1]);
+        let forged = RepairStoreSnapshot {
+            version: REPAIR_STORE_VERSION_V1,
+            next_por_history_id: 1,
+            next_audit_sequence: 1,
+            tasks: vec![stored],
+            por_history: Vec::new(),
+            auditor_nonces: Vec::new(),
+        };
+        write_private_file(
+            &path,
+            &norito::to_bytes(&forged).expect("encode adversarial checkpoint"),
+        );
+
+        let error = FileRepairStore::load_or_new(path, 1, DEFAULT_REPAIR_STORE_MAX_BYTES)
+            .expect_err("oversized nested sequence must fail at decode boundary");
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!(
+                "sequence length {} exceeds decode limit {}",
+                MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES + 1,
+                MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES
+            )),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("persist slash proposal bytes and digest together"),
+            "semantic validation ran before the allocation guard: {message}"
+        );
+    }
+
+    #[test]
+    fn fixed_slash_proposal_bound_covers_maximum_v1_fields() {
+        let max_string = "A".repeat(MAX_REPAIR_NOTES_BYTES);
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId(max_string.clone()),
+            provider_id: [0x41; 32],
+            manifest_digest: [0x42; 32],
+            auditor_account: max_string.clone(),
+            proposed_penalty_nano: u128::MAX,
+            submitted_at_unix: u64::MAX,
+            rationale: max_string,
+            approval: Some(RepairEscalationApprovalV1 {
+                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+                approve_votes: u32::MAX,
+                reject_votes: u32::MAX,
+                abstain_votes: u32::MAX,
+                approved_at_unix: u64::MAX,
+                finalized_at_unix: u64::MAX,
+            }),
+        };
+        proposal
+            .validate()
+            .expect("maximum-shaped proposal is valid");
+        let bytes = norito::to_bytes(&proposal).expect("encode maximum-shaped proposal");
+        assert!(
+            bytes.len() <= MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES,
+            "maximum-shaped proposal encoded to {} bytes (limit {})",
+            bytes.len(),
+            MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES
+        );
     }
 
     #[test]

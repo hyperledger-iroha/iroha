@@ -12064,6 +12064,9 @@ export declare const SORAFS_ORDERBOOK_PAYLOAD_KINDS: Readonly<{
   RUNTIME_SNAPSHOT: "runtime-snapshot";
 }>;
 
+/** Canonical maximum byte length for a V1 orderbook owner account. */
+export declare const ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: 256;
+
 export type SorafsOrderbookPayloadKind =
   | "order"
   | "order-request"
@@ -16680,11 +16683,6 @@ export interface SorafsPorVerdictResponse {
   status: string;
 }
 
-export interface SorafsPorObservationResponse {
-  status: string;
-  success: boolean;
-}
-
 export interface DaManifestFetchResponse {
   storage_ticket_hex: string;
   client_blob_id_hex: string;
@@ -18904,11 +18902,6 @@ export declare class ToriiClient {
     observedSecs: number;
     signal?: AbortSignal;
   }): Promise<SorafsUptimeObservationResponse>;
-  recordSorafsPorChallenge(input: {
-    challenge?: string | ArrayBuffer | ArrayBufferView | Buffer;
-    challengeB64?: string;
-    signal?: AbortSignal;
-  }): Promise<SorafsPorSubmissionResponse>;
   recordSorafsPorProof(input: {
     proof?: string | ArrayBuffer | ArrayBufferView | Buffer;
     proofB64?: string;
@@ -18919,10 +18912,6 @@ export declare class ToriiClient {
     verdictB64?: string;
     signal?: AbortSignal;
   }): Promise<SorafsPorVerdictResponse>;
-  submitSorafsPorObservation(input: {
-    success: boolean;
-    signal?: AbortSignal;
-  }): Promise<SorafsPorObservationResponse>;
   getSorafsPorStatus(options?: SorafsPorStatusOptions): Promise<Buffer>;
   exportSorafsPorStatus(options?: SorafsPorExportOptions): Promise<Buffer>;
   getSorafsPorWeeklyReport(

@@ -128,6 +128,60 @@ pub fn run_on_snapshot_with_mode_arc(
     mode: CursorMode,
     limits: QueryLimits,
 ) -> Result<QueryResponse, SnapshotQueryError> {
+    run_on_snapshot_with_mode_arc_inner(
+        state,
+        live_query_store,
+        authority,
+        request,
+        mode,
+        limits,
+        None,
+        false,
+    )
+}
+
+/// Execute an Arc-backed snapshot query while carrying the validated client
+/// budget for a stored `Start` request into query projection.
+///
+/// Unlike [`run_on_snapshot_with_mode_arc`], this entry point treats a missing
+/// budget as client input and rejects it when the configured stored-query
+/// minimum is non-zero.
+///
+/// # Errors
+/// Returns a validation error when the supplied budget is below the configured
+/// minimum, or an execution error if producing results fails.
+pub fn run_on_snapshot_with_mode_arc_and_start_budget(
+    state: &Arc<State>,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    request: QueryRequest,
+    mode: CursorMode,
+    limits: QueryLimits,
+    stored_start_budget: Option<u64>,
+) -> Result<QueryResponse, SnapshotQueryError> {
+    run_on_snapshot_with_mode_arc_inner(
+        state,
+        live_query_store,
+        authority,
+        request,
+        mode,
+        limits,
+        stored_start_budget,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_on_snapshot_with_mode_arc_inner(
+    state: &Arc<State>,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    request: QueryRequest,
+    mode: CursorMode,
+    limits: QueryLimits,
+    stored_start_budget: Option<u64>,
+    validate_start_budget: bool,
+) -> Result<QueryResponse, SnapshotQueryError> {
     let view = state.query_view();
 
     if matches!(mode, CursorMode::Ephemeral) && matches!(request, QueryRequest::Continue(_)) {
@@ -149,6 +203,20 @@ pub fn run_on_snapshot_with_mode_arc(
         }
     }
 
+    if validate_start_budget
+        && matches!(mode, CursorMode::Stored)
+        && matches!(request, QueryRequest::Start(_))
+    {
+        let min_gas = view.pipeline().query_stored_min_gas_units;
+        if min_gas > 0 && stored_start_budget.unwrap_or(0) < min_gas {
+            return Err(SnapshotQueryError::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "stored cursor start requires at least {min_gas} gas units"
+                )),
+            ));
+        }
+    }
+
     let validated = ValidQueryRequest::validate_for_client_parts(request, authority, &view, limits)
         .map_err(SnapshotQueryError::Validation)?;
 
@@ -159,7 +227,13 @@ pub fn run_on_snapshot_with_mode_arc(
             .execute_ephemeral(live_query_store, &view, authority)
             .map_err(SnapshotQueryError::Execution)?,
         CursorMode::Stored => validated
-            .execute_with_replay_state(live_query_store, &view, authority, Arc::downgrade(state))
+            .execute_with_replay_state_and_start_budget(
+                live_query_store,
+                &view,
+                authority,
+                Arc::downgrade(state),
+                stored_start_budget,
+            )
             .map_err(SnapshotQueryError::Execution)?,
     };
 
@@ -918,6 +992,65 @@ mod tests {
         let (batch, _remaining_hint, cursor) = next.into_parts();
         assert!(cursor.is_none());
         assert_eq!(domain_ids_from_batch(batch), vec![d3.id]);
+    }
+
+    #[tokio::test]
+    async fn arc_stored_start_carries_validated_client_budget_above_minimum() {
+        use crate::smartcontracts::isi::query::QueryCountMode;
+
+        let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
+        let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
+        let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
+        let account = alice_account();
+        let world = World::with([d1, d2, d3], [account], []);
+
+        let kura = Kura::blank_kura_for_testing();
+        let store = LiveQueryStore::start_test();
+        let mut state = State::new_with_chain(world, kura, store.clone(), ChainId::from("chain"));
+        state.pipeline.query_stored_min_gas_units = 10;
+        let state = Arc::new(state);
+        let params = QueryParams {
+            pagination: Pagination::default(),
+            sorting: Sorting::default(),
+            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+        };
+        let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
+
+        let err = run_on_snapshot_with_mode_arc_and_start_budget(
+            &state,
+            &store,
+            &ALICE_ID,
+            find_domains_start(params.clone()),
+            CursorMode::Stored,
+            limits,
+            Some(9),
+        )
+        .expect_err("client Start budget below the minimum must be rejected");
+        assert!(matches!(
+            err,
+            SnapshotQueryError::Validation(ValidationFail::NotPermitted(message))
+                if message.contains("gas")
+        ));
+
+        let iroha_data_model::query::QueryResponse::Iterable(first) =
+            run_on_snapshot_with_mode_arc_and_start_budget(
+                &state,
+                &store,
+                &ALICE_ID,
+                find_domains_start(params),
+                CursorMode::Stored,
+                limits,
+                Some(25),
+            )
+            .expect("client Start budget above the minimum must be honored")
+        else {
+            panic!("expected iterable output");
+        };
+        assert_eq!(
+            first.continue_cursor.expect("stored cursor").gas_budget,
+            Some(25),
+            "returned cursor must carry the validated client budget"
+        );
     }
 
     #[tokio::test]

@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_por_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location("check_sorafs_por_rollout_evidence", MODULE_PATH)
@@ -88,7 +90,6 @@ def scheduler_runtime(*, lag_seconds: int = 60, authz: bool = True) -> dict:
             "por_export",
             "por_report",
             "por_ingestion",
-            "capacity_por_challenge",
             "capacity_por_proof",
             "capacity_por_verdict",
         )
@@ -135,7 +136,6 @@ def validator_replay(*, merkle_replay: bool = True) -> dict:
 
 def reporting_archive(
     *,
-    route_state: str = "retired",
     latency_ms: int = 300,
     archive_backend: str = "parquet",
     handoff_digest: str | None = HANDOFF_DIGEST,
@@ -153,8 +153,6 @@ def reporting_archive(
             "archive_retention_bound": True,
             "operator_archive_decision_recorded": True,
             "archive_backend": archive_backend,
-            "manual_trigger_route_decided": True,
-            "manual_trigger_route_state": route_state,
             "report_latency_ms": latency_ms,
             "seed_replay_digest_hex": DIGEST,
             "report_digest_hex": DIGEST,
@@ -292,13 +290,6 @@ def test_fixture_inventories_cover_checker_required_sets() -> None:
     )
     assert reporting_archive()["archive_backend"] in MODULE.ALLOWED_ARCHIVE_BACKENDS
     assert tuple(observability()["metrics"]) == MODULE.REQUIRED_METRICS
-    assert (
-        reporting_archive()["manual_trigger_route_state"]
-        == MODULE.REQUIRED_MANUAL_TRIGGER_STATE
-    )
-    assert MODULE.ALLOWED_MANUAL_TRIGGER_STATES == (
-        MODULE.REQUIRED_MANUAL_TRIGGER_STATE,
-    )
 
 
 def test_summary_collects_reviewed_archive_backend_set(tmp_path: Path) -> None:
@@ -657,6 +648,24 @@ def test_scheduler_runtime_routes_must_not_include_unknown_values(
     assert "routes must not include unknown values" in artifact["errors"]
 
 
+def test_scheduler_runtime_rejects_retired_capacity_challenge_route(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = scheduler_runtime()
+    payload["routes"].append(route("capacity_por_challenge"))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "scheduler-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["scheduler_runtime"]["artifacts"][0]
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
 def test_scheduler_runtime_route_body_hash_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = scheduler_runtime()
@@ -786,6 +795,31 @@ def test_reporting_archive_routes_must_not_include_unknown_values(
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["reporting_archive"]["artifacts"][0]
     assert "routes must not include unknown values" in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("manual_trigger_route_decided", True),
+        ("manual_trigger_route_state", "retired"),
+    ),
+)
+def test_reporting_archive_rejects_retired_manual_trigger_fields(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reporting_archive()
+    payload[field] = value
+    write_json(tmp_path / "reporting-archive.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reporting_archive"]["artifacts"][0]
+    assert "payload must not include unknown fields" in artifact["errors"]
 
 
 def test_reporting_archive_route_body_hash_is_required(tmp_path: Path) -> None:
@@ -930,30 +964,6 @@ def test_stale_randomness_does_not_anchor_policy_bound_evidence(
         "governance_approval policy_digest_hex requires a valid randomness "
         "policy_digest_hex"
     ) in artifact["errors"]
-
-
-def test_reporting_archive_rejects_missing_manual_trigger_decision(tmp_path: Path) -> None:
-    write_complete_evidence(tmp_path)
-    write_json(tmp_path / "reporting-archive.json", reporting_archive(route_state="missing"))
-    summary = tmp_path / "summary.json"
-
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
-
-    payload = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = payload["required"]["reporting_archive"]["artifacts"][0]
-    assert "manual_trigger_route_state must be `retired`" in artifact["errors"]
-
-
-def test_reporting_archive_rejects_wired_manual_trigger_state(tmp_path: Path) -> None:
-    write_complete_evidence(tmp_path)
-    write_json(tmp_path / "reporting-archive.json", reporting_archive(route_state="wired"))
-    summary = tmp_path / "summary.json"
-
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
-
-    payload = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = payload["required"]["reporting_archive"]["artifacts"][0]
-    assert "manual_trigger_route_state must be `retired`" in artifact["errors"]
 
 
 def test_reporting_archive_rejects_unreviewed_archive_backend(tmp_path: Path) -> None:

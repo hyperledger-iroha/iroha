@@ -284,21 +284,15 @@ impl SetBlock<'_> {
         append_trigger_storage_delta(out, "triggers.data", &self.data_triggers, |value| {
             LoadedActionDto::from(value).encode()
         });
-        append_trigger_storage_delta(
-            out,
-            "triggers.pipeline",
-            &self.pipeline_triggers,
-            |value| LoadedActionDto::from(value).encode(),
-        );
+        append_trigger_storage_delta(out, "triggers.pipeline", &self.pipeline_triggers, |value| {
+            LoadedActionDto::from(value).encode()
+        });
         append_trigger_storage_delta(out, "triggers.time", &self.time_triggers, |value| {
             LoadedActionDto::from(value).encode()
         });
-        append_trigger_storage_delta(
-            out,
-            "triggers.by_call",
-            &self.by_call_triggers,
-            |value| LoadedActionDto::from(value).encode(),
-        );
+        append_trigger_storage_delta(out, "triggers.by_call", &self.by_call_triggers, |value| {
+            LoadedActionDto::from(value).encode()
+        });
         append_trigger_storage_delta(out, "triggers.ids", &self.ids, Encode::encode);
         append_trigger_storage_delta(
             out,

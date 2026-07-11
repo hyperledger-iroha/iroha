@@ -18,7 +18,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_por_rollout_evidence import (  # noqa: E402
-    ALLOWED_MANUAL_TRIGGER_STATES,
     ALLOWED_ARCHIVE_BACKENDS,
     CHALLENGE_LABEL_ERROR,
     CHALLENGE_LABEL_PATTERN,
@@ -36,7 +35,6 @@ from check_sorafs_por_rollout_evidence import (  # noqa: E402
     REQUIRED_METRICS,
     REQUIRED_REPORTING_ROUTES,
     REQUIRED_RUNTIME_ROUTES,
-    REQUIRED_MANUAL_TRIGGER_STATE,
     SEED_REPLAY_BOUND_KINDS,
     ValidationOptions,
     validate_evidence_payload,
@@ -326,8 +324,6 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "archive_retention_bound": True,
                 "operator_archive_decision_recorded": True,
                 "archive_backend": args.archive_backend,
-                "manual_trigger_route_decided": True,
-                "manual_trigger_route_state": args.manual_trigger_route_state,
                 "report_latency_ms": args.report_latency_ms,
                 "seed_replay_digest_hex": args.seed_replay_digest_hex,
                 "report_digest_hex": args.report_digest_hex,
@@ -480,8 +476,6 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--reporting-route",
             errors=errors,
         )
-        if args.manual_trigger_route_state not in ALLOWED_MANUAL_TRIGGER_STATES:
-            errors.append("--manual-trigger-route-state must be retired")
         if args.archive_backend not in ALLOWED_ARCHIVE_BACKENDS:
             errors.append("--archive-backend must be sql or parquet")
     elif args.kind == "observability":
@@ -624,11 +618,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--provider-count", type=positive_int_arg, default=3)
     parser.add_argument("--challenge-count", type=positive_int_arg, default=3)
     parser.add_argument("--pairs-replayed", type=positive_int_arg, default=3)
-    parser.add_argument(
-        "--manual-trigger-route-state",
-        choices=ALLOWED_MANUAL_TRIGGER_STATES,
-        default=REQUIRED_MANUAL_TRIGGER_STATE,
-    )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

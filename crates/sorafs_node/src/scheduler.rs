@@ -148,6 +148,12 @@ pub enum SchedulerAdmissionError {
         /// Minimum delay before the same reservation can be retried.
         retry_after: Duration,
     },
+    /// A scheduler lock was poisoned while processing another operation.
+    #[error("SoraFS scheduler state is unavailable: {component}")]
+    StateUnavailable {
+        /// Scheduler component that failed closed.
+        component: &'static str,
+    },
 }
 
 /// In-memory counters emitted by the storage telemetry layer.
@@ -253,7 +259,8 @@ impl StorageSchedulersRuntime {
     /// # Errors
     ///
     /// Returns [`SchedulerAdmissionError::PinSaturated`] when the configured
-    /// in-flight ceiling is already occupied.
+    /// in-flight ceiling is already occupied, or
+    /// [`SchedulerAdmissionError::StateUnavailable`] when admission state is poisoned.
     pub fn try_with_pin<F, R>(&self, work: F) -> Result<R, SchedulerAdmissionError>
     where
         F: FnOnce() -> R,
@@ -272,7 +279,8 @@ impl StorageSchedulersRuntime {
     /// # Errors
     ///
     /// Returns a [`SchedulerAdmissionError`] when concurrency, provider-map,
-    /// or byte-budget admission cannot be granted immediately.
+    /// or byte-budget admission cannot be granted immediately, including when
+    /// a poisoned admission lock forces the scheduler to fail closed.
     pub fn try_run_fetch<F, T, E>(
         &self,
         requested_bytes: u64,
@@ -302,7 +310,8 @@ impl StorageSchedulersRuntime {
     /// # Errors
     ///
     /// Returns [`SchedulerAdmissionError::PorSaturated`] when the configured
-    /// in-flight ceiling is already occupied.
+    /// in-flight ceiling is already occupied, or
+    /// [`SchedulerAdmissionError::StateUnavailable`] when admission state is poisoned.
     pub fn try_with_por<F, R>(&self, work: F) -> Result<R, SchedulerAdmissionError>
     where
         F: FnOnce() -> R,
@@ -369,14 +378,17 @@ impl RuntimeInner {
     fn config(&self) -> StorageSchedulerConfig {
         self.schedulers
             .read()
-            .expect("scheduler state poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .config
             .clone()
     }
 
     fn refresh_pin_metrics(&self) {
         let stats = self.pin.stats();
-        let mut sched = self.schedulers.write().expect("scheduler state poisoned");
+        let mut sched = self
+            .schedulers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sched.telemetry.pin_queue_depth = stats.inflight;
         sched.utilisation.pin_queue_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.pin_queue_max_inflight);
@@ -384,7 +396,10 @@ impl RuntimeInner {
 
     fn refresh_fetch_metrics(&self) {
         let stats = self.fetch.stats();
-        let mut sched = self.schedulers.write().expect("scheduler state poisoned");
+        let mut sched = self
+            .schedulers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sched.telemetry.fetch_inflight = stats.inflight;
         sched.utilisation.fetch_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.fetch_concurrency);
@@ -392,7 +407,10 @@ impl RuntimeInner {
 
     fn refresh_por_metrics(&self) {
         let stats = self.por.stats();
-        let mut sched = self.schedulers.write().expect("scheduler state poisoned");
+        let mut sched = self
+            .schedulers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sched.telemetry.por_inflight = stats.inflight;
         sched.utilisation.por_utilisation_bps =
             utilisation_ratio(stats.inflight, sched.config.por_concurrency);
@@ -409,7 +427,10 @@ impl RuntimeInner {
             u64::try_from(rate).unwrap_or(u64::MAX)
         };
 
-        let mut sched = self.schedulers.write().expect("scheduler state poisoned");
+        let mut sched = self
+            .schedulers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if sample_rate == 0 {
             sched.telemetry.fetch_bytes_per_sec = sched.telemetry.fetch_bytes_per_sec
                 * (FETCH_RATE_SMOOTHING_WEIGHT - 1)
@@ -428,7 +449,10 @@ impl RuntimeInner {
     }
 
     fn record_por_samples(&self, success: u64, failed: u64) {
-        let mut sched = self.schedulers.write().expect("scheduler state poisoned");
+        let mut sched = self
+            .schedulers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sched.telemetry.por_samples_success =
             sched.telemetry.por_samples_success.saturating_add(success);
         sched.telemetry.por_samples_failed =
@@ -436,7 +460,10 @@ impl RuntimeInner {
     }
 
     fn update_storage_bytes(&self, bytes_used: u64, bytes_capacity: u64) {
-        let mut sched = self.schedulers.write().expect("scheduler state poisoned");
+        let mut sched = self
+            .schedulers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sched.telemetry.bytes_used = bytes_used;
         sched.telemetry.bytes_capacity = bytes_capacity;
     }
@@ -444,7 +471,7 @@ impl RuntimeInner {
     fn telemetry_snapshot(&self) -> StorageTelemetrySnapshot {
         self.schedulers
             .read()
-            .expect("scheduler state poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .telemetry
             .clone()
     }
@@ -452,7 +479,7 @@ impl RuntimeInner {
     fn utilisation_snapshot(&self) -> SchedulerUtilisation {
         self.schedulers
             .read()
-            .expect("scheduler state poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .utilisation
             .clone()
     }
@@ -472,17 +499,20 @@ impl QueueLimiter {
         }
     }
 
-    fn try_acquire(&self) -> Option<QueueGuard<'_>> {
-        let mut guard = self.state.lock().expect("queue state poisoned");
+    fn try_acquire(&self) -> Result<Option<QueueGuard<'_>>, SchedulerStatePoisoned> {
+        let mut guard = self.state.lock().map_err(|_| SchedulerStatePoisoned)?;
         if guard.inflight >= self.limit {
-            return None;
+            return Ok(None);
         }
         guard.inflight = guard.inflight.saturating_add(1);
-        Some(QueueGuard { limiter: self })
+        Ok(Some(QueueGuard { limiter: self }))
     }
 
     fn stats(&self) -> QueueStats {
-        let guard = self.state.lock().expect("queue state poisoned");
+        let guard = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         QueueStats {
             inflight: guard.inflight,
         }
@@ -501,10 +531,17 @@ struct QueueGuard<'a> {
 
 impl Drop for QueueGuard<'_> {
     fn drop(&mut self) {
-        let mut guard = self.limiter.state.lock().expect("queue state poisoned");
+        let mut guard = self
+            .limiter
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.inflight = guard.inflight.saturating_sub(1);
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+struct SchedulerStatePoisoned;
 
 #[derive(Debug, Default)]
 struct QueueStats {
@@ -541,14 +578,22 @@ impl<'a> QueueScope<'a> {
             QueueKind::Pin => &runtime.pin,
             QueueKind::Por => &runtime.por,
         };
-        let guard = limiter.try_acquire().ok_or_else(|| match kind {
-            QueueKind::Pin => SchedulerAdmissionError::PinSaturated {
-                limit: limiter.limit,
-            },
-            QueueKind::Por => SchedulerAdmissionError::PorSaturated {
-                limit: limiter.limit,
-            },
-        })?;
+        let guard = limiter
+            .try_acquire()
+            .map_err(|_| SchedulerAdmissionError::StateUnavailable {
+                component: match kind {
+                    QueueKind::Pin => "pin queue",
+                    QueueKind::Por => "PoR queue",
+                },
+            })?
+            .ok_or_else(|| match kind {
+                QueueKind::Pin => SchedulerAdmissionError::PinSaturated {
+                    limit: limiter.limit,
+                },
+                QueueKind::Por => SchedulerAdmissionError::PorSaturated {
+                    limit: limiter.limit,
+                },
+            })?;
         let scope = Self {
             runtime,
             kind,
@@ -616,7 +661,12 @@ impl FetchLimiter {
         }
 
         {
-            let mut guard = self.state.lock().expect("fetch state poisoned");
+            let mut guard =
+                self.state
+                    .lock()
+                    .map_err(|_| SchedulerAdmissionError::StateUnavailable {
+                        component: "fetch concurrency",
+                    })?;
             if guard.inflight >= self.global_limit {
                 return Err(SchedulerAdmissionError::FetchSaturated {
                     limit: self.global_limit,
@@ -677,7 +727,10 @@ impl FetchLimiter {
     }
 
     fn release_concurrency(&self, provider_key: &str) {
-        let mut guard = self.state.lock().expect("fetch state poisoned");
+        let mut guard = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.inflight = guard.inflight.saturating_sub(1);
         if let Some(entry) = guard.per_provider_inflight.get_mut(provider_key) {
             *entry = entry.saturating_sub(1);
@@ -688,7 +741,10 @@ impl FetchLimiter {
     }
 
     fn stats(&self) -> FetchStats {
-        let guard = self.state.lock().expect("fetch state poisoned");
+        let guard = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         FetchStats {
             inflight: guard.inflight,
         }
@@ -804,7 +860,15 @@ impl RateLimiter {
                 burst_bytes: self.capacity_per_sec,
             });
         }
-        let mut state = self.state.lock().expect("rate limiter state poisoned");
+        let mut state =
+            self.state
+                .lock()
+                .map_err(|_| SchedulerAdmissionError::StateUnavailable {
+                    component: match scope {
+                        FetchRateScope::Global => "global fetch rate limiter",
+                        FetchRateScope::Provider => "provider fetch rate limiter",
+                    },
+                })?;
         state.refill(self.capacity_per_sec);
         if state.tokens < amount {
             return Err(SchedulerAdmissionError::RateLimited {
@@ -823,7 +887,10 @@ impl RateLimiter {
         if self.capacity_per_sec == 0 {
             return;
         }
-        let mut state = self.state.lock().expect("rate limiter state poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.refill(self.capacity_per_sec);
         state.tokens = state
             .tokens
@@ -907,7 +974,12 @@ impl RateLimiterMap {
             return Err(SchedulerAdmissionError::InvalidProviderLabel);
         }
         let limiter = {
-            let mut map = self.map.lock().expect("rate limiter map poisoned");
+            let mut map =
+                self.map
+                    .lock()
+                    .map_err(|_| SchedulerAdmissionError::StateUnavailable {
+                        component: "provider rate registry",
+                    })?;
             if let Some(limiter) = map.get(key) {
                 Arc::clone(limiter)
             } else {
@@ -926,7 +998,10 @@ impl RateLimiterMap {
 
     fn refund(&self, key: &str, amount: u64) {
         let limiter = {
-            let map = self.map.lock().expect("rate limiter map poisoned");
+            let map = self
+                .map
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             map.get(key).cloned()
         };
         if let Some(limiter) = limiter {
@@ -1110,5 +1185,91 @@ mod tests {
         assert_eq!(config.pin_queue_max_inflight, 3);
         assert_eq!(config.fetch_concurrency, 3);
         assert_eq!(config.por_concurrency, 3);
+    }
+
+    #[test]
+    fn poisoned_admission_state_fails_closed_without_repanicking() {
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig {
+            fetch_global_bytes_per_sec: 0,
+            ..StorageSchedulerConfig::default()
+        });
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.inner.pin.state.lock().expect("lock pin state");
+            panic!("poison pin state");
+        }));
+        assert!(poisoned.is_err());
+        assert_eq!(
+            runtime.try_with_pin(|| ()),
+            Err(SchedulerAdmissionError::StateUnavailable {
+                component: "pin queue"
+            })
+        );
+
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime.inner.fetch.state.lock().expect("lock fetch state");
+            panic!("poison fetch state");
+        }));
+        assert!(poisoned.is_err());
+        assert_eq!(
+            runtime
+                .try_run_fetch(0, Some("provider-a"), || -> Result<Vec<u8>, ()> {
+                    Ok(Vec::new())
+                })
+                .expect_err("poisoned fetch admission must fail"),
+            SchedulerAdmissionError::StateUnavailable {
+                component: "fetch concurrency"
+            }
+        );
+    }
+
+    #[test]
+    fn poisoned_rate_limit_state_fails_closed_and_refunds_do_not_panic() {
+        let limiter = RateLimiter::new(10);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = limiter.state.lock().expect("lock rate state");
+            panic!("poison rate state");
+        }));
+        assert!(poisoned.is_err());
+        assert_eq!(
+            limiter.try_acquire(1, FetchRateScope::Global),
+            Err(SchedulerAdmissionError::StateUnavailable {
+                component: "global fetch rate limiter"
+            })
+        );
+        limiter.refund(1);
+
+        let map = RateLimiterMap::with_max_entries(10, 1);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = map.map.lock().expect("lock provider map");
+            panic!("poison provider map");
+        }));
+        assert!(poisoned.is_err());
+        assert_eq!(
+            map.try_acquire("provider-a", 1),
+            Err(SchedulerAdmissionError::StateUnavailable {
+                component: "provider rate registry"
+            })
+        );
+        map.refund("provider-a", 1);
+    }
+
+    #[test]
+    fn poisoned_telemetry_state_recovers_without_process_panic() {
+        let runtime = StorageSchedulersRuntime::new(StorageSchedulerConfig::default());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = runtime
+                .inner
+                .schedulers
+                .write()
+                .expect("lock scheduler telemetry");
+            panic!("poison scheduler telemetry");
+        }));
+        assert!(poisoned.is_err());
+
+        runtime.update_storage_bytes(7, 11);
+        let snapshot = runtime.telemetry_snapshot();
+        assert_eq!(snapshot.bytes_used, 7);
+        assert_eq!(snapshot.bytes_capacity, 11);
+        assert!(runtime.config().fetch_concurrency > 0);
     }
 }

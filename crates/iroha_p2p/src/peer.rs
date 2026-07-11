@@ -2183,7 +2183,7 @@ mod run {
     }
 
     #[cfg(feature = "quic")]
-    struct QuicDatagramReceiver<E: Enc, T: Pload> {
+    struct QuicDatagramReceiver<E: Enc, T: Pload + ClassifyTopic> {
         connection: quinn::Connection,
         cryptographer: Cryptographer<E>,
         decrypted: Vec<u8>,
@@ -2194,7 +2194,7 @@ mod run {
     }
 
     #[cfg(feature = "quic")]
-    impl<E: Enc, T: Pload> QuicDatagramReceiver<E, T> {
+    impl<E: Enc, T: Pload + ClassifyTopic> QuicDatagramReceiver<E, T> {
         fn new(
             connection: quinn::Connection,
             cryptographer: Cryptographer<E>,
@@ -2242,10 +2242,11 @@ mod run {
             if frame_len != plaintext.len() {
                 return Err(Error::Format);
             }
-            let decoded = ncore::decode_from_bytes::<T>(plaintext).map_err(|err| {
-                iroha_logger::warn!(error = ?err, "Failed to decode peer datagram payload");
-                Error::Format
-            })?;
+            let decoded =
+                decode_inbound_frame::<T>(plaintext, self.framed_padding).map_err(|err| {
+                    iroha_logger::warn!(error = ?err, "Failed to decode peer datagram payload");
+                    Error::Format
+                })?;
             Ok((decoded, frame_len))
         }
     }
@@ -2261,7 +2262,7 @@ mod run {
     type DatagramReceiver<E, T> = std::marker::PhantomData<(E, T)>;
 
     #[cfg(feature = "quic")]
-    async fn recv_best_effort_datagram<E: Enc, T: Pload>(
+    async fn recv_best_effort_datagram<E: Enc, T: Pload + ClassifyTopic>(
         receiver: &mut Option<DatagramReceiver<E, T>>,
     ) -> Result<(T, usize), Error> {
         let receiver = receiver.as_mut().expect("guarded by is_some");
@@ -2269,7 +2270,7 @@ mod run {
     }
 
     #[cfg(not(feature = "quic"))]
-    async fn recv_best_effort_datagram<E: Enc, T: Pload>(
+    async fn recv_best_effort_datagram<E: Enc, T: Pload + ClassifyTopic>(
         _receiver: &mut Option<DatagramReceiver<E, T>>,
     ) -> Result<(T, usize), Error> {
         // No QUIC support in this build: the branch is always disabled by the guard in `select!`,
@@ -3706,7 +3707,7 @@ mod run {
     /// contain multiple Norito-framed messages concatenated back-to-back.
     /// This reduces the encrypted frame rate and therefore lowers Tokio IO
     /// driver overhead under high message volumes (e.g. `NPoS` consensus).
-    struct MessageReader<E: Enc, M: Pload> {
+    struct MessageReader<E: Enc, M: Pload + ClassifyTopic> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
         decrypted: Vec<u8>,
@@ -3720,7 +3721,7 @@ mod run {
         last_malformed_payload: Option<MalformedPayloadFrameContext>,
     }
 
-    impl<E: Enc, M: Pload> MessageReader<E, M> {
+    impl<E: Enc, M: Pload + ClassifyTopic> MessageReader<E, M> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
 
         fn new(
@@ -3873,9 +3874,9 @@ mod run {
                     && !((frame.as_ptr() as usize).is_multiple_of(align));
                 let decoded = if misaligned {
                     let aligned = Self::copy_to_aligned_scratch(decode_scratch, frame, align);
-                    ncore::decode_from_bytes::<M>(aligned)
+                    decode_inbound_frame::<M>(aligned, framed_padding)
                 } else {
-                    ncore::decode_from_bytes::<M>(frame)
+                    decode_inbound_frame::<M>(frame, framed_padding)
                 };
                 let decoded = match decoded {
                     Ok(decoded) => decoded,
@@ -4714,6 +4715,8 @@ mod run {
     }
 
     impl<T: ClassifyTopic> ClassifyTopic for Message<T> {
+        const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
+
         fn topic(&self) -> Topic {
             match self {
                 Self::Data(payload) => payload.topic(),
@@ -4721,6 +4724,43 @@ mod run {
                 // traffic. Classify them as `Health` to keep them low-impact.
                 Self::Ping | Self::Pong => Topic::Health,
             }
+        }
+
+        fn inbound_decode_limits(
+            payload: &[u8],
+            framed_len: usize,
+            flags: u8,
+        ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+            if !T::HAS_INBOUND_DECODE_LIMITS {
+                return Ok(None);
+            }
+
+            let discriminant = payload
+                .get(..core::mem::size_of::<u32>())
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let mut discriminant_bytes = [0_u8; core::mem::size_of::<u32>()];
+            discriminant_bytes.copy_from_slice(discriminant);
+            if u32::from_le_bytes(discriminant_bytes) != 0 {
+                // Ping and pong have no attacker-controlled nested payload.
+                // Unknown tags are rejected by the ordinary enum decoder.
+                return Ok(None);
+            }
+
+            let encoded_field = payload
+                .get(core::mem::size_of::<u32>()..)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let (field_len, prefix_len) =
+                ncore::read_len_from_slice_with_flags(encoded_field, flags)?;
+            let field_end = prefix_len
+                .checked_add(field_len)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            if field_end != encoded_field.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let field = encoded_field
+                .get(prefix_len..field_end)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            T::inbound_decode_limits(field, framed_len, flags)
         }
     }
 
@@ -4747,6 +4787,7 @@ mod run {
         }
     }
 
+    /// Return the complete Norito frame length of one P2P data envelope.
     pub fn data_message_wire_len<T: Encode>(payload: T) -> usize {
         let message = Message::Data(payload);
         ncore::to_bytes(&message)
@@ -4758,6 +4799,32 @@ mod run {
         let flags = ncore::default_encode_flags();
         let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
         ncore::to_bytes_in(msg, out)
+    }
+
+    fn decode_inbound_frame<T: Pload + ClassifyTopic>(
+        frame: &[u8],
+        padding: usize,
+    ) -> Result<T, ncore::Error> {
+        let limits = if T::HAS_INBOUND_DECODE_LIMITS {
+            let payload_offset = ncore::Header::SIZE
+                .checked_add(padding)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let payload = frame
+                .get(payload_offset..)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let flags = *frame
+                .get(ncore::Header::SIZE - 1)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            T::inbound_decode_limits(payload, frame.len(), flags)?
+        } else {
+            None
+        };
+
+        if let Some(limits) = limits {
+            ncore::decode_from_bytes_with_limits::<T>(frame, limits)
+        } else {
+            ncore::decode_from_bytes::<T>(frame)
+        }
     }
 
     fn framed_message_len<M: Pload>(
@@ -4844,6 +4911,27 @@ mod run {
         impl ClassifyTopic for Blob {}
 
         impl<'a> ncore::DecodeFromSlice<'a> for Blob {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
+        #[derive(Encode, Decode, Clone, Debug)]
+        struct GuardedBlob(Vec<u8>);
+
+        impl ClassifyTopic for GuardedBlob {
+            const HAS_INBOUND_DECODE_LIMITS: bool = true;
+
+            fn inbound_decode_limits(
+                _payload: &[u8],
+                _framed_len: usize,
+                _flags: u8,
+            ) -> Result<Option<norito::DecodeLimits>, ncore::Error> {
+                Ok(Some(norito::DecodeLimits::new(8, 1024, 16, 1024, 16)))
+            }
+        }
+
+        impl<'a> ncore::DecodeFromSlice<'a> for GuardedBlob {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
@@ -4992,6 +5080,51 @@ mod run {
                 frames = frames.saturating_add(1);
             }
             frames
+        }
+
+        fn framed_padding<T>() -> usize {
+            let align = core::mem::align_of::<ncore::Archived<T>>();
+            if align <= 1 {
+                return 0;
+            }
+            let remainder = ncore::Header::SIZE % align;
+            if remainder == 0 { 0 } else { align - remainder }
+        }
+
+        #[test]
+        fn data_envelope_applies_nested_decode_limits_before_sequence_allocation() {
+            let mut frame = Vec::new();
+            encode_wire_message(&Message::Data(GuardedBlob(vec![7; 64])), &mut frame)
+                .expect("encode guarded data envelope");
+
+            let error = decode_inbound_frame::<Message<GuardedBlob>>(
+                &frame,
+                framed_padding::<Message<GuardedBlob>>(),
+            )
+            .expect_err("nested sequence above the policy must be rejected");
+
+            assert!(matches!(
+                error,
+                ncore::Error::SequenceLengthExceeded {
+                    length: 64,
+                    limit: 8
+                }
+            ));
+        }
+
+        #[test]
+        fn payload_without_inbound_policy_retains_large_message_compatibility() {
+            let mut frame = Vec::new();
+            encode_wire_message(&Message::Data(Blob(vec![9; 64 * 1024])), &mut frame)
+                .expect("encode unrestricted data envelope");
+
+            let decoded =
+                decode_inbound_frame::<Message<Blob>>(&frame, framed_padding::<Message<Blob>>())
+                    .expect("payloads without a policy keep the ordinary decode path");
+            let Message::Data(Blob(bytes)) = decoded else {
+                panic!("decoded the wrong P2P envelope variant");
+            };
+            assert_eq!(bytes.len(), 64 * 1024);
         }
 
         #[tokio::test(flavor = "current_thread")]

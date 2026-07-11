@@ -155,13 +155,17 @@ until they are implemented and verified.
 - `SettlementChannelV1`: channel id, trade id, buyer account bytes, provider id, total/remaining bytes, locked XOR, status, and timestamps.
 - `SettlementReceiptV1`: receipt id, channel id, trade id, byte range, chunk hash, bytes delivered, XOR debited, provider credit, fee amount, issued timestamp, and signature material.
 - `OrderbookRuntimeSnapshotV1`: local replay checkpoint carrying next admission
-  sequence, generated timestamp, open orders, emitted trades, settlement
-  channels, accepted receipts, and expired-order tombstones.
+  sequence, generated timestamp, per-owner nonce high-waters, open orders,
+  emitted trades, settlement channels, accepted receipts, and expired-order
+  tombstones.
 - `ByteRangeV1`, `OrderSideV1`, `OrderTierV1`, `OrderCancelReasonV1`, `SettlementChannelStatusV1`, and `OrderbookSignatureV1`.
 
 The payloads use Norito, deterministic `XorAmount` micro-XOR values, and
-explicit schema-version constants. The validators reject zero identifiers,
-empty accounts, zero prices/quantities/escrow/debits, invalid remaining
+explicit schema-version constants. `ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1`
+caps canonical order/cancel owner accounts at 256 bytes before order-id hashing,
+signature hashing, SDK/native field building, or durable nonce-high-water use.
+The validators reject zero identifiers, empty or oversized owner accounts, zero
+prices/quantities/escrow/debits, invalid remaining
 quantities/bytes, invalid byte ranges, self-trades, fee basis points above 100%,
 bad Ed25519 key/signature lengths, and settlement receipts where provider credit
 plus fee does not equal the buyer debit. The separate signature helpers derive

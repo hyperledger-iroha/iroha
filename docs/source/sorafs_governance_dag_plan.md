@@ -67,7 +67,19 @@ Implemented foundations include:
   finance reports, weekly rollups, appeal finance settlement receipts, and
   orderbook settlement receipts also append to the local signed runtime DAG;
   duplicate publishes are idempotent and malformed runtime DAG index state
-  fails closed.
+  fails closed. A filesystem publisher now holds an exclusive lock on its root
+  for its full lifetime and serializes the artifact files, publish index, CAR
+  queue, and signed block/head update as one in-process publication transaction,
+  so two publishers cannot race the same mutable indexes. The configured
+  signing-key file must live outside the publisher root and be a non-symlink
+  regular file containing exactly 32 nonzero raw bytes or 64 lowercase
+  hexadecimal bytes with no whitespace; on Unix it must be owned by the
+  effective user, have exactly one hard link, and grant no group or other
+  permissions. Metadata stability is checked across the bounded read. Atomic
+  artifact replacements fsync both the file and its parent directory before
+  publication is acknowledged. The exclusive lock and mutable publish, CAR
+  queue, and runtime-DAG JSON indexes reject symlinks and hard links; indexes
+  are bounded at 64 MiB and must remain the same file throughout each read.
   The local filesystem sink also updates the Governance DAG backlog gauge from
   CAR queue pending segment counts and refreshes the local signed runtime-head
   age gauge when runtime DAG state is written or de-duplicated.

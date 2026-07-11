@@ -121,6 +121,7 @@ def test_builds_payload_free_scheduler_runtime_canary(tmp_path: Path) -> None:
     assert payload["route_count"] == len(MODULE.REQUIRED_RUNTIME_ROUTES)
     assert payload["passed_route_count"] == len(MODULE.REQUIRED_RUNTIME_ROUTES)
     assert payload["response_bodies_included"] is False
+    assert "capacity_por_challenge" not in {route["name"] for route in payload["routes"]}
     assert all(route["body_blake3_hex"] == DIGEST for route in payload["routes"])
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "scheduler_runtime"
@@ -160,7 +161,8 @@ def test_response_file_can_build_reporting_archive_canary(tmp_path: Path) -> Non
     assert MODULE.main([f"@{args_file}"]) == 0
 
     payload = json.loads(canary_path(tmp_path, "reporting_archive").read_text("utf-8"))
-    assert payload["manual_trigger_route_state"] == "retired"
+    assert "manual_trigger_route_decided" not in payload
+    assert "manual_trigger_route_state" not in payload
     assert payload["archive_backend"] == "parquet"
     assert payload["governance_archive_handoff_digest_hex"] == HANDOFF_DIGEST
     assert payload["routes"][0]["name"] == MODULE.REQUIRED_REPORTING_ROUTES[0]
@@ -350,6 +352,22 @@ def test_scheduler_runtime_routes_must_not_include_unknown_values_before_write(
 ) -> None:
     args = args_for("scheduler_runtime", tmp_path)
     args.extend(["--runtime-route", "unreviewed-runtime-route"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="scheduler_runtime",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--runtime-route contains an unknown value",
+    )
+
+
+def test_scheduler_runtime_rejects_retired_capacity_challenge_route_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("scheduler_runtime", tmp_path)
+    args.extend(["--runtime-route", "capacity_por_challenge"])
 
     assert_rejected_without_artifact(
         args,

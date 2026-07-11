@@ -2368,30 +2368,6 @@ pub struct ModerationBallotTallyRequestDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-challenge` route.
-pub struct StoragePorChallengeDto {
-    /// Base64-encoded Norito PoR challenge payload.
-    pub challenge_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-proof` route.
-pub struct StoragePorProofDto {
-    /// Base64-encoded Norito PoR proof payload.
-    pub proof_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload retained for the retired `/v1/sorafs/storage/por-verdict` route.
-pub struct StoragePorVerdictDto {
-    /// Base64-encoded Norito PoR verdict payload.
-    pub verdict_b64: String,
-}
-
-#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload returned by `/v1/sorafs/storage/state`.
 pub struct StorageStateResponseDto {
@@ -22504,7 +22480,6 @@ fn build_pinned_remote_client(source: &RemoteCidSource) -> Result<reqwest::Clien
         .referer(false)
         .timeout(REMOTE_FETCH_TIMEOUT)
         .connect_timeout(REMOTE_CONNECT_TIMEOUT)
-        .http1_max_headers(MAX_REMOTE_RESPONSE_HEADERS)
         .http2_max_header_list_size(32 * 1024)
         .pool_max_idle_per_host(1);
     if let Some(domain) = source.torii_base_url.domain() {
@@ -23774,7 +23749,7 @@ struct SiteResponseRange {
     partial: bool,
 }
 
-fn range_not_satisfiable(file_size: u64) -> Response {
+fn site_range_not_satisfiable(file_size: u64) -> Response {
     let mut response = json_error(
         StatusCode::RANGE_NOT_SATISFIABLE,
         "requested site byte range is not satisfiable",
@@ -23829,7 +23804,7 @@ fn parse_site_response_range(
         .split_once('-')
         .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid bytes range"))?;
     if file_size == 0 {
-        return Err(range_not_satisfiable(file_size));
+        return Err(site_range_not_satisfiable(file_size));
     }
 
     let (start, end) = if start.is_empty() {
@@ -23837,28 +23812,28 @@ fn parse_site_response_range(
             .parse::<u64>()
             .ok()
             .filter(|suffix| *suffix != 0)
-            .ok_or_else(|| range_not_satisfiable(file_size))?;
+            .ok_or_else(|| site_range_not_satisfiable(file_size))?;
         (file_size.saturating_sub(suffix), file_size - 1)
     } else {
         let start = start
             .parse::<u64>()
-            .map_err(|_| range_not_satisfiable(file_size))?;
+            .map_err(|_| site_range_not_satisfiable(file_size))?;
         let end = if end.is_empty() {
             file_size - 1
         } else {
             end.parse::<u64>()
-                .map_err(|_| range_not_satisfiable(file_size))?
+                .map_err(|_| site_range_not_satisfiable(file_size))?
                 .min(file_size - 1)
         };
         (start, end)
     };
     if start >= file_size || end < start {
-        return Err(range_not_satisfiable(file_size));
+        return Err(site_range_not_satisfiable(file_size));
     }
     let length = end
         .checked_sub(start)
         .and_then(|length| length.checked_add(1))
-        .ok_or_else(|| range_not_satisfiable(file_size))?;
+        .ok_or_else(|| site_range_not_satisfiable(file_size))?;
     if length > MAX_SITE_RESPONSE_BYTES {
         let mut response = json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -23872,7 +23847,7 @@ fn parse_site_response_range(
 
     Ok(SiteResponseRange {
         offset: start,
-        length: usize::try_from(length).map_err(|_| range_not_satisfiable(file_size))?,
+        length: usize::try_from(length).map_err(|_| site_range_not_satisfiable(file_size))?,
         partial: true,
     })
 }
@@ -28128,100 +28103,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
     }
 }
 
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_challenge(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorChallengeDto>,
-) -> Response {
-    retired_storage_por_mutation_response("challenge")
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) fn manual_por_trigger_retired_response() -> Response {
-    let response = json_object(vec![
-        json_entry("error", "manual_por_trigger_retired"),
-        json_entry("route_state", "retired"),
-        json_entry("replacement", "trusted PoR coordinator scheduler"),
-        json_entry(
-            "message",
-            "manual PoR trigger requests are retired; challenges are issued only by the trusted PoR coordinator scheduler",
-        ),
-    ]);
-    (StatusCode::GONE, JsonBody(response)).into_response()
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_proof(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorProofDto>,
-) -> Response {
-    retired_storage_por_mutation_response("proof")
-}
-
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_por_verdict(
-    State(_state): State<SharedAppState>,
-    JsonOnly(_req): JsonOnly<StoragePorVerdictDto>,
-) -> Response {
-    retired_storage_por_mutation_response("verdict")
-}
-
-#[cfg(feature = "app_api")]
-fn retired_storage_por_mutation_response(kind: &str) -> Response {
-    let replacement = match kind {
-        "challenge" => "trusted PoR coordinator scheduler".to_owned(),
-        _ => format!("/v1/sorafs/capacity/por-{kind}"),
-    };
-    (
-        StatusCode::GONE,
-        JsonBody(json_object(vec![
-            json_entry("error", "storage_por_mutation_retired"),
-            json_entry("kind", kind),
-            json_entry(
-                "replacement",
-                replacement,
-            ),
-            json_entry(
-                "message",
-                "direct storage PoR mutation routes are retired; use the authenticated capacity PoR lifecycle",
-            ),
-        ])),
-    )
-    .into_response()
-}
-
-#[cfg(feature = "app_api")]
-/// Build a stable retirement response for unsafe legacy capacity PoR mutations.
-pub(crate) fn capacity_por_mutation_retired_response(kind: &str) -> Response {
-    let (error, replacement, message) = match kind {
-        "challenge" => (
-            "capacity_por_challenge_retired",
-            "trusted PoR coordinator scheduler",
-            "externally supplied PoR challenges are retired because beacon and VRF evidence must originate from the trusted coordinator scheduler",
-        ),
-        "observation" => (
-            "capacity_por_observation_retired",
-            "/v1/sorafs/capacity/por-proof and /v1/sorafs/capacity/por-verdict",
-            "manual PoR success/failure observations are retired; metering is derived from the authenticated proof and verdict lifecycle",
-        ),
-        _ => (
-            "capacity_por_mutation_retired",
-            "trusted PoR lifecycle",
-            "this PoR mutation route is retired",
-        ),
-    };
-    (
-        StatusCode::GONE,
-        JsonBody(json_object(vec![
-            json_entry("error", error),
-            json_entry("kind", kind),
-            json_entry("replacement", replacement),
-            json_entry("message", message),
-        ])),
-    )
-        .into_response()
-}
-
 fn header_value(value: impl AsRef<str>, name: &str) -> HeaderValue {
     HeaderValue::from_str(value.as_ref())
         .unwrap_or_else(|_| panic!("{name} header produced invalid value: {}", value.as_ref()))
@@ -29554,6 +29435,17 @@ fn scheduler_admission_error_response(
 ) -> Response {
     use sorafs_node::scheduler::SchedulerAdmissionError;
 
+    if matches!(err, SchedulerAdmissionError::StateUnavailable { .. }) {
+        error!(?err, "SoraFS storage scheduler state unavailable");
+        let mut response = json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SoraFS storage scheduler is temporarily unavailable",
+        );
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+        return response;
+    }
     let retry_after_secs = match err {
         SchedulerAdmissionError::RateLimited { retry_after, .. } => {
             u64::try_from(retry_after.as_millis().saturating_add(999) / 1_000)
@@ -29771,6 +29663,23 @@ mod storage_backend_error_tests {
                 .get(RETRY_AFTER)
                 .expect("Retry-After header"),
             "2"
+        );
+    }
+
+    #[test]
+    fn poisoned_scheduler_state_maps_to_service_unavailable() {
+        let response = node_storage_error_response(NodeStorageError::Scheduler(
+            SchedulerAdmissionError::StateUnavailable {
+                component: "fetch concurrency",
+            },
+        ));
+        assert_eq!(response.status(), super::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get(RETRY_AFTER)
+                .expect("Retry-After header"),
+            "1"
         );
     }
 }
@@ -49371,115 +49280,6 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn manual_por_trigger_route_is_explicitly_retired() {
-        let response = manual_por_trigger_retired_response();
-        assert_eq!(response.status(), StatusCode::GONE);
-
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode retirement response");
-        assert_eq!(
-            value.get("error").and_then(Value::as_str),
-            Some("manual_por_trigger_retired")
-        );
-        assert_eq!(
-            value.get("route_state").and_then(Value::as_str),
-            Some("retired")
-        );
-        assert_eq!(
-            value.get("replacement").and_then(Value::as_str),
-            Some("trusted PoR coordinator scheduler")
-        );
-    }
-
-    #[tokio::test]
-    async fn capacity_challenge_and_manual_observation_routes_are_retired() {
-        for (kind, expected_error) in [
-            ("challenge", "capacity_por_challenge_retired"),
-            ("observation", "capacity_por_observation_retired"),
-        ] {
-            let response = capacity_por_mutation_retired_response(kind);
-            assert_eq!(response.status(), StatusCode::GONE);
-            let body = body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("retirement response body");
-            let value: Value = norito::json::from_slice(&body).expect("decode retirement response");
-            assert_eq!(
-                value.get("error").and_then(Value::as_str),
-                Some(expected_error)
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn storage_por_mutation_routes_are_retired_without_side_effects() {
-        let (challenge, proof, verdict) = sample_por_artifacts();
-
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let node_view = node.clone();
-        inner.sorafs_node = node;
-        let state = Arc::new(inner);
-
-        let challenge_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&challenge).expect("encode challenge"));
-        let challenge_req = StoragePorChallengeDto { challenge_b64 };
-        let challenge_resp =
-            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(challenge_req))
-                .await;
-        assert_eq!(challenge_resp.status(), StatusCode::GONE);
-        let challenge_body = body::to_bytes(challenge_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let challenge_json: Value =
-            norito::json::from_slice(&challenge_body).expect("challenge response");
-        assert_eq!(
-            challenge_json.get("error").and_then(Value::as_str),
-            Some("storage_por_mutation_retired")
-        );
-
-        let proof_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&proof).expect("encode proof"));
-        let proof_req = StoragePorProofDto { proof_b64 };
-        let proof_resp =
-            handle_post_sorafs_storage_por_proof(State(state.clone()), JsonOnly(proof_req)).await;
-        assert_eq!(proof_resp.status(), StatusCode::GONE);
-        let proof_body = body::to_bytes(proof_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let proof_json: Value = norito::json::from_slice(&proof_body).expect("proof response");
-        assert_eq!(
-            proof_json.get("replacement").and_then(Value::as_str),
-            Some("/v1/sorafs/capacity/por-proof")
-        );
-
-        let verdict_b64 = base64::engine::general_purpose::STANDARD
-            .encode(norito::to_bytes(&verdict).expect("encode verdict"));
-        let verdict_req = StoragePorVerdictDto { verdict_b64 };
-        let verdict_resp =
-            handle_post_sorafs_storage_por_verdict(State(state.clone()), JsonOnly(verdict_req))
-                .await;
-        assert_eq!(verdict_resp.status(), StatusCode::GONE);
-        let verdict_body = body::to_bytes(verdict_resp.into_body(), usize::MAX)
-            .await
-            .expect("body bytes");
-        let verdict_json: Value =
-            norito::json::from_slice(&verdict_body).expect("verdict response");
-        assert_eq!(
-            verdict_json.get("replacement").and_then(Value::as_str),
-            Some("/v1/sorafs/capacity/por-verdict")
-        );
-
-        let snapshot = node_view.metering_snapshot();
-        assert_eq!(snapshot.por_samples_success, 0);
-        assert_eq!(snapshot.por_samples_total, 0);
-        assert!(node_view.por_ingestion_overview().is_empty());
-    }
-
-    #[tokio::test]
     async fn por_ingestion_readback_limit_bounds_provider_statuses() {
         let (challenge, _, _) = sample_por_artifacts();
         let mut second_challenge = challenge.clone();
@@ -49540,32 +49340,6 @@ mod advert_tests {
                 .and_then(Value::as_u64),
             Some(1)
         );
-    }
-
-    #[tokio::test]
-    async fn retired_storage_por_challenge_does_not_parse_or_mutate_payload() {
-        let app = mk_app_state_for_tests();
-        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        inner.sorafs_node = node;
-        let state = Arc::new(inner);
-
-        let request = StoragePorChallengeDto {
-            challenge_b64: "!!not_base64!!".to_owned(),
-        };
-        let response =
-            handle_post_sorafs_storage_por_challenge(State(state.clone()), JsonOnly(request)).await;
-        assert_eq!(response.status(), StatusCode::GONE);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
-        let error_msg = value
-            .get("error")
-            .and_then(Value::as_str)
-            .expect("error string");
-        assert_eq!(error_msg, "storage_por_mutation_retired");
-        assert!(state.sorafs_node.por_ingestion_overview().is_empty());
     }
 
     #[tokio::test]

@@ -28,6 +28,8 @@ pub const DEAL_SETTLEMENT_VERSION_V1: u8 = 1;
 pub const MICRO_XOR_PER_XOR: u128 = 1_000_000;
 /// Basis points per unit probability (10_000 = 100%).
 pub const BASIS_POINTS_PER_UNIT: u16 = 10_000;
+/// Maximum UTF-8 byte length of settlement audit notes.
+pub const MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES: usize = 1_024;
 
 /// XOR-denominated amount expressed in micro units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
@@ -396,6 +398,9 @@ impl DealLedgerSnapshotV1 {
         if self.client_id.iter().all(|&byte| byte == 0) {
             return Err(DealLedgerValidationError::InvalidClientId);
         }
+        if self.captured_at == 0 {
+            return Err(DealLedgerValidationError::InvalidCapturedAt);
+        }
         if self.provider_accrual.as_micro() > self.client_liability.as_micro() {
             return Err(DealLedgerValidationError::ProviderExceedsClient);
         }
@@ -432,6 +437,32 @@ impl DealSettlementV1 {
         self.ledger
             .validate()
             .map_err(DealSettlementValidationError::Ledger)?;
+        if self.deal_id.iter().all(|&byte| byte == 0) {
+            return Err(DealSettlementValidationError::InvalidDealId);
+        }
+        if self.deal_id != self.ledger.deal_id {
+            return Err(DealSettlementValidationError::DealIdMismatch);
+        }
+        if self.settled_at == 0 {
+            return Err(DealSettlementValidationError::InvalidSettledAt);
+        }
+        if self.settled_at < self.ledger.captured_at {
+            return Err(DealSettlementValidationError::SettlementPredatesLedger {
+                settled_at: self.settled_at,
+                captured_at: self.ledger.captured_at,
+            });
+        }
+        if let Some(notes) = &self.audit_notes {
+            if notes.trim().is_empty() {
+                return Err(DealSettlementValidationError::EmptyAuditNotes);
+            }
+            if notes.len() > MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES {
+                return Err(DealSettlementValidationError::AuditNotesTooLong {
+                    length: notes.len(),
+                    max: MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES,
+                });
+            }
+        }
         match self.status {
             DealSettlementStatusV1::Completed => {
                 if self.ledger.bond_slashed.as_micro() != 0 && self.audit_notes.is_none() {
@@ -536,6 +567,8 @@ pub enum DealLedgerValidationError {
     InvalidProviderId,
     #[error("client identifier must not be zero")]
     InvalidClientId,
+    #[error("ledger captured_at must be greater than zero")]
+    InvalidCapturedAt,
     #[error("provider accrual exceeds client liability")]
     ProviderExceedsClient,
 }
@@ -547,8 +580,20 @@ pub enum DealSettlementValidationError {
     UnsupportedVersion { found: u8 },
     #[error("ledger validation failed: {0}")]
     Ledger(DealLedgerValidationError),
+    #[error("settlement deal identifier must not be zero")]
+    InvalidDealId,
+    #[error("settlement deal identifier does not match its ledger snapshot")]
+    DealIdMismatch,
+    #[error("settlement settled_at must be greater than zero")]
+    InvalidSettledAt,
+    #[error("settlement timestamp {settled_at} predates ledger capture {captured_at}")]
+    SettlementPredatesLedger { settled_at: u64, captured_at: u64 },
     #[error("audit notes must be supplied when a bond is slashed")]
     MissingAuditNotes,
+    #[error("settlement audit notes must not be blank")]
+    EmptyAuditNotes,
+    #[error("settlement audit notes are {length} bytes; maximum is {max}")]
+    AuditNotesTooLong { length: usize, max: usize },
 }
 
 #[cfg(test)]
@@ -709,6 +754,106 @@ mod tests {
             audit_notes: Some("failed PoR window".to_string()),
         };
         settlement.validate().expect("valid slashed settlement");
+    }
+
+    #[test]
+    fn settlement_rejects_identifier_and_timestamp_drift() {
+        let ledger = DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            deal_id: [0xAA; 32],
+            provider_id: [0xBB; 32],
+            client_id: [0xCC; 32],
+            provider_accrual: XorAmount::from_micro(100),
+            client_liability: XorAmount::from_micro(100),
+            bond_locked: XorAmount::from_micro(1_000),
+            bond_slashed: XorAmount::zero(),
+            captured_at: 1_700_000_100,
+        };
+        let valid = DealSettlementV1 {
+            version: DEAL_SETTLEMENT_VERSION_V1,
+            deal_id: ledger.deal_id,
+            ledger,
+            status: DealSettlementStatusV1::Completed,
+            settled_at: 1_700_000_100,
+            audit_notes: None,
+        };
+        valid.validate().expect("valid settlement");
+
+        let mut mismatched = valid.clone();
+        mismatched.deal_id[0] ^= 0x80;
+        assert_eq!(
+            mismatched.validate(),
+            Err(DealSettlementValidationError::DealIdMismatch)
+        );
+        let mut zero_deal = valid.clone();
+        zero_deal.deal_id = [0; 32];
+        assert_eq!(
+            zero_deal.validate(),
+            Err(DealSettlementValidationError::InvalidDealId)
+        );
+        let mut zero_timestamp = valid.clone();
+        zero_timestamp.settled_at = 0;
+        assert_eq!(
+            zero_timestamp.validate(),
+            Err(DealSettlementValidationError::InvalidSettledAt)
+        );
+        let mut stale_timestamp = valid;
+        stale_timestamp.settled_at -= 1;
+        assert!(matches!(
+            stale_timestamp.validate(),
+            Err(DealSettlementValidationError::SettlementPredatesLedger { .. })
+        ));
+    }
+
+    #[test]
+    fn settlement_rejects_blank_and_oversized_audit_notes() {
+        let ledger = DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            deal_id: [0xAA; 32],
+            provider_id: [0xBB; 32],
+            client_id: [0xCC; 32],
+            provider_accrual: XorAmount::from_micro(100),
+            client_liability: XorAmount::from_micro(100),
+            bond_locked: XorAmount::from_micro(1_000),
+            bond_slashed: XorAmount::zero(),
+            captured_at: 1_700_000_100,
+        };
+        let mut settlement = DealSettlementV1 {
+            version: DEAL_SETTLEMENT_VERSION_V1,
+            deal_id: ledger.deal_id,
+            ledger,
+            status: DealSettlementStatusV1::Completed,
+            settled_at: 1_700_000_101,
+            audit_notes: Some("   ".to_owned()),
+        };
+        assert_eq!(
+            settlement.validate(),
+            Err(DealSettlementValidationError::EmptyAuditNotes)
+        );
+        settlement.audit_notes = Some("x".repeat(MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES + 1));
+        assert!(matches!(
+            settlement.validate(),
+            Err(DealSettlementValidationError::AuditNotesTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn ledger_snapshot_rejects_zero_capture_timestamp() {
+        let ledger = DealLedgerSnapshotV1 {
+            version: DEAL_LEDGER_VERSION_V1,
+            deal_id: [0x11; 32],
+            provider_id: [0x22; 32],
+            client_id: [0x33; 32],
+            provider_accrual: XorAmount::from_micro(10),
+            client_liability: XorAmount::from_micro(10),
+            bond_locked: XorAmount::from_micro(1_000),
+            bond_slashed: XorAmount::zero(),
+            captured_at: 0,
+        };
+        assert_eq!(
+            ledger.validate(),
+            Err(DealLedgerValidationError::InvalidCapturedAt)
+        );
     }
 
     #[test]

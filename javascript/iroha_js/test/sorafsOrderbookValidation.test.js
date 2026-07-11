@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
   SORAFS_ORDERBOOK_PAYLOAD_KINDS,
   buildSignedOrderbookOrderCancel,
   buildSignedOrderbookOrderRequest,
@@ -213,6 +214,80 @@ test("order id derivation matches the cross-SDK golden vector", () => {
   );
   assert.throws(() => deriveOrderbookOrderId(Buffer.alloc(0), 7), /must not be empty/i);
   assert.throws(() => deriveOrderbookOrderId(Buffer.from("buyer@sora"), 0), /greater than zero/i);
+});
+
+test("orderbook builders accept owner accounts at the V1 byte ceiling", () => {
+  const ownerAccount = Buffer.alloc(ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, 0x45);
+  const orderId = deriveOrderbookOrderId(ownerAccount, 9);
+  const order = buildSignedOrderbookOrderRequest(
+    {
+      side: "bid",
+      tier: "hot",
+      pricePerGibMicroXor: "1",
+      quantityGib: "1",
+      ownerAccount,
+      expiryUnix: "1700010000",
+      nonce: "9",
+      makerFeeBps: 0,
+      takerFeeBps: 0,
+    },
+    ORDERBOOK_PRIVATE_KEY,
+  );
+  assert.equal(
+    validateOrderbookPayload("order-request", order, { generatedAtUnix: 1 }).status,
+    "Ok",
+  );
+
+  const cancel = buildSignedOrderbookOrderCancel(
+    {
+      orderId,
+      ownerAccount,
+      reason: "owner_requested",
+      nonce: 10,
+    },
+    ORDERBOOK_PRIVATE_KEY,
+  );
+  assert.equal(
+    validateOrderbookPayload("order-cancel", cancel, { generatedAtUnix: 1 }).status,
+    "Ok",
+  );
+});
+
+test("orderbook owner-account byte ceiling rejects adversarial oversized inputs", () => {
+  const ownerAccount = Buffer.alloc(ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1, 0x45);
+  const expected = /ownerAccount must be at most 256 bytes/i;
+  assert.throws(() => deriveOrderbookOrderId(ownerAccount, 9), expected);
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        {
+          side: "bid",
+          tier: "hot",
+          pricePerGibMicroXor: "1",
+          quantityGib: "1",
+          ownerAccount,
+          expiryUnix: "1700010000",
+          nonce: "9",
+          makerFeeBps: 0,
+          takerFeeBps: 0,
+        },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    expected,
+  );
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderCancel(
+        {
+          orderId: fixed32(0x45),
+          ownerAccount,
+          reason: "owner_requested",
+          nonce: 10,
+        },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    expected,
+  );
 });
 
 test("field-level orderbook builder rejects noncanonical supplied order ids", () => {

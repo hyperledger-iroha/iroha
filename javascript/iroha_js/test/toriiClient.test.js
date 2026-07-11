@@ -6507,42 +6507,17 @@ test("submitSorafsUptimeObservation rejects unsupported input fields", async () 
   );
 });
 
-test("recordSorafsPorChallenge normalizes base64 payloads", async () => {
-  let captured = null;
-  const challenge = Buffer.from("por-challenge");
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { status: "accepted" },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.recordSorafsPorChallenge({ challenge });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/capacity/por-challenge`);
-  const parsed = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(parsed.challenge_b64, challenge.toString("base64"));
-  assert.deepEqual(result, { status: "accepted" });
-});
-
-test("recordSorafsPorChallenge rejects unsupported input fields", async () => {
+test("retired PoR challenge and observation SDK methods are absent", () => {
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { status: "accepted" },
-        headers: { "content-type": "application/json" },
-      }),
+    fetchImpl: async () => {
+      throw new Error("retired PoR method must not issue a request");
+    },
   });
-  await assert.rejects(
-    () =>
-      client.recordSorafsPorChallenge({
-        challenge: Buffer.from("hello"),
-        memo: "nope",
-      }),
-    /recordSorafsPorChallenge input contains unsupported fields: memo/,
-  );
+  assert.equal("recordSorafsPorChallenge" in client, false);
+  assert.equal("submitSorafsPorObservation" in client, false);
+  assert.equal(typeof client.recordSorafsPorProof, "function");
+  assert.equal(typeof client.recordSorafsPorVerdict, "function");
+  assert.equal(typeof client.getSorafsPorStatus, "function");
 });
 
 test("recordSorafsPorProof rejects unsupported input fields", async () => {
@@ -6583,43 +6558,6 @@ test("recordSorafsPorVerdict rejects unsupported input fields", async () => {
   );
 });
 
-test("submitSorafsPorObservation posts probe results", async () => {
-  let captured = null;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { status: "success", success: true },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.submitSorafsPorObservation({ success: true });
-  assert.equal(captured?.url, `${BASE_URL}/v1/sorafs/capacity/por`);
-  const parsed = JSON.parse(captured?.init?.body ?? "{}");
-  assert.equal(parsed.success, true);
-  assert.deepEqual(result, { status: "success", success: true });
-});
-
-test("submitSorafsPorObservation rejects unsupported input fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { status: "success", success: true },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () =>
-      client.submitSorafsPorObservation({
-        success: true,
-        details: "invalid",
-      }),
-    /submitSorafsPorObservation input contains unsupported fields: details/,
-  );
-});
-
 const invalidSorafsSignalCases = [
   {
     label: "submitSorafsUptimeObservation",
@@ -6630,15 +6568,6 @@ const invalidSorafsSignalCases = [
         signal: "invalid",
       }),
     path: "submitSorafsUptimeObservation.options.signal",
-  },
-  {
-    label: "recordSorafsPorChallenge",
-    invoke: (client) =>
-      client.recordSorafsPorChallenge({
-        challenge: Buffer.from("challenge"),
-        signal: "invalid",
-      }),
-    path: "recordSorafsPorChallenge.options.signal",
   },
   {
     label: "recordSorafsPorProof",
@@ -6657,15 +6586,6 @@ const invalidSorafsSignalCases = [
         signal: "invalid",
       }),
     path: "recordSorafsPorVerdict.options.signal",
-  },
-  {
-    label: "submitSorafsPorObservation",
-    invoke: (client) =>
-      client.submitSorafsPorObservation({
-        success: true,
-        signal: "invalid",
-      }),
-    path: "submitSorafsPorObservation.options.signal",
   },
 ];
 

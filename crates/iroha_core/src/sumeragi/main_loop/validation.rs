@@ -992,11 +992,7 @@ impl Actor {
             }
             Err(err) => {
                 if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = &err {
-                    return self.defer_missing_certified_merge_sidecar(
-                        hash,
-                        pending,
-                        *entry_hash,
-                    );
+                    return self.defer_missing_certified_merge_sidecar(hash, pending, *entry_hash);
                 }
                 if let BlockValidationError::PrevBlockHeightMismatch { expected, actual } = &err {
                     if let Some(parent_hash) = pending.block.header().prev_block_hash() {
@@ -1160,14 +1156,7 @@ impl Actor {
                 evidence,
             } = self.finalize_validation_failure(hash, pending, &error)
             {
-                self.handle_validation_reject(
-                    hash,
-                    height,
-                    view,
-                    evidence,
-                    reason,
-                    reason_label,
-                );
+                self.handle_validation_reject(hash, height, view, evidence, reason, reason_label);
             }
         }
     }
@@ -1419,18 +1408,14 @@ impl Actor {
                         continue;
                     }
 
-                    if let Err(BlockValidationError::MissingCertifiedMergeSidecar {
-                        entry_hash,
-                    }) = &outcome
+                    if let Err(BlockValidationError::MissingCertifiedMergeSidecar { entry_hash }) =
+                        &outcome
                     {
                         if let Some((slot, _)) = vnext_result.take() {
                             let _ = self.mark_vnext_validation_deferred(slot);
                         }
-                        let _ = self.defer_missing_certified_merge_sidecar(
-                            hash,
-                            pending,
-                            *entry_hash,
-                        );
+                        let _ =
+                            self.defer_missing_certified_merge_sidecar(hash, pending, *entry_hash);
                         self.request_commit_pipeline();
                         progress = true;
                         continue;

@@ -8,7 +8,7 @@
 // error so FFI/CLI callers can render identical diagnostics without side state.
 #![allow(clippy::result_large_err)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use ed25519_dalek::SigningKey;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -25,15 +25,18 @@ use crate::{
     HedgingReferencePriceDecisionV1, HedgingValidationError, ORDERBOOK_CANCEL_VERSION_V1,
     ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
     OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, OrderbookValidationError,
-    PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
-    PdpProofV1, PdpProofValidationError, PopCommitmentRootV1, PopCredentialV1,
-    PopCredentialValidationError, PopEligibilityClassV1, PopEnrollmentRequestV1,
-    PopIssuedCredentialBundleV1, PopMembershipProofSystemV1, PopMembershipProofV1,
-    PopRenewalRequestV1, PopRevocationListV1, PopSignatureAlgorithmV1, PopSignatureV1,
-    PorChallengeV1, PorChallengeValidationError, PorProofV1, PorProofValidationError,
-    PotrReceiptV1, PotrReceiptValidationError, ProofStreamTier, ProviderAdmissionEnvelopeError,
-    ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError, ProviderAdmissionRenewalV1,
-    ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
+    PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+    PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1, PDP_MAX_MERKLE_PATH_DEPTH_V1,
+    PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1,
+    PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1,
+    PdpCommitmentValidationError, PdpProofV1, PdpProofValidationError, PdpVerificationError,
+    PopCommitmentRootV1, PopCredentialV1, PopCredentialValidationError, PopEligibilityClassV1,
+    PopEnrollmentRequestV1, PopIssuedCredentialBundleV1, PopMembershipProofSystemV1,
+    PopMembershipProofV1, PopRenewalRequestV1, PopRevocationListV1, PopSignatureAlgorithmV1,
+    PopSignatureV1, PorChallengeV1, PorChallengeValidationError, PorProofV1,
+    PorProofValidationError, PotrReceiptV1, PotrReceiptValidationError, ProofStreamTier,
+    ProviderAdmissionEnvelopeError, ProviderAdmissionEnvelopeV1, ProviderAdmissionRenewalError,
+    ProviderAdmissionRenewalV1, ProviderAdmissionRevocationError, ProviderAdmissionRevocationV1,
     ProviderAdmissionValidationError, ProviderAdvertV1, RepairAuditEventV1,
     RepairEscalationApprovalV1, RepairEscalationPolicyV1, RepairEvidenceV1, RepairReportV1,
     RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1,
@@ -44,8 +47,9 @@ use crate::{
     SignedAuditorRequestV1, SignedReplicationOrderV1, SignedReplicationOrderValidationError,
     TradeEventV1, XorAmount, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
-    verify_envelope_untrusted_signers, verify_pop_commitment_root_signature_v1,
-    verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
+    verify_envelope_untrusted_signers, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
+    verify_pop_commitment_root_signature_v1, verify_pop_credential_signature_v1,
+    verify_pop_revocation_list_signature_v1,
 };
 
 /// Current schema version for [`ValidationOutcomeV1`].
@@ -61,6 +65,10 @@ const CATEGORY_POLICY: &str = "policy";
 const CATEGORY_SIGNATURE: &str = "signature";
 const CATEGORY_NORITO: &str = "norito";
 const CATEGORY_INTERNAL: &str = "internal";
+const POP_REFERENCE_PAYLOAD_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+const PDP_STRUCTURAL_OK_CODE: &str = "SFS-PDP-DIAG-000";
+const PDP_TRUST_REQUIRED_CODE: &str = "SFS-PDP-004";
+const PDP_REFERENCE_DECODE_MAX_DEPTH_V1: usize = 64;
 
 /// Structured key/value context attached to validation outcomes.
 #[derive(
@@ -524,17 +532,25 @@ pub fn validate_fixture_bundle_payloads(
         }
     }
 
-    if let (Some(challenge), Some(proof)) = (
-        payloads
-            .iter()
-            .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpChallenge),
-        payloads
-            .iter()
-            .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpProof),
-    ) {
-        let outcome = validate_pdp_challenge_proof_bytes(
+    let pdp_commitment = payloads
+        .iter()
+        .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpCommitment);
+    let pdp_challenge = payloads
+        .iter()
+        .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpChallenge);
+    let pdp_proof = payloads
+        .iter()
+        .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpProof);
+    let mut pdp_witness_diagnostic = false;
+
+    if let (Some(commitment), Some(challenge), Some(proof)) =
+        (pdp_commitment, pdp_challenge, pdp_proof)
+    {
+        let outcome = validate_pdp_commitment_challenge_proof_bytes(
+            commitment.bytes,
             challenge.bytes,
             proof.bytes,
+            commitment.label.clone(),
             challenge.label.clone(),
             proof.label.clone(),
             generated_at,
@@ -542,25 +558,32 @@ pub fn validate_fixture_bundle_payloads(
         if !outcome.is_ok() {
             return remap_bundle_payload_error(outcome, inputs, generated_at);
         }
-    }
+        pdp_witness_diagnostic = true;
+    } else {
+        if let (Some(challenge), Some(proof)) = (pdp_challenge, pdp_proof) {
+            let outcome = validate_pdp_challenge_proof_bytes(
+                challenge.bytes,
+                proof.bytes,
+                challenge.label.clone(),
+                proof.label.clone(),
+                generated_at,
+            );
+            if !outcome.is_ok() {
+                return remap_bundle_payload_error(outcome, inputs, generated_at);
+            }
+        }
 
-    if let (Some(commitment), Some(challenge)) = (
-        payloads
-            .iter()
-            .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpCommitment),
-        payloads
-            .iter()
-            .find(|payload| payload.kind == FixtureBundlePayloadKindV1::PdpChallenge),
-    ) {
-        let outcome = validate_pdp_commitment_challenge_bytes(
-            commitment.bytes,
-            challenge.bytes,
-            commitment.label.clone(),
-            challenge.label.clone(),
-            generated_at,
-        );
-        if !outcome.is_ok() {
-            return remap_bundle_payload_error(outcome, inputs, generated_at);
+        if let (Some(commitment), Some(challenge)) = (pdp_commitment, pdp_challenge) {
+            let outcome = validate_pdp_commitment_challenge_bytes(
+                commitment.bytes,
+                challenge.bytes,
+                commitment.label.clone(),
+                challenge.label.clone(),
+                generated_at,
+            );
+            if !outcome.is_ok() {
+                return remap_bundle_payload_error(outcome, inputs, generated_at);
+            }
         }
     }
 
@@ -584,10 +607,33 @@ pub fn validate_fixture_bundle_payloads(
         }
     }
 
-    let context = match links.finish(inputs.clone(), generated_at) {
+    let mut context = match links.finish(inputs.clone(), generated_at) {
         Ok(context) => context,
         Err(outcome) => return outcome,
     };
+
+    if pdp_witness_diagnostic {
+        context.extend([
+            ValidationContextFieldV1::new(
+                "verification_scope",
+                "exhaustive_pdp_witness_diagnostic_without_admission",
+            ),
+            ValidationContextFieldV1::new("production_acceptance", "false"),
+            ValidationContextFieldV1::new("admission_trust", "not_evaluated"),
+        ]);
+        return ValidationOutcomeV1::ok(
+            PDP_STRUCTURAL_OK_CODE,
+            "fixture bundle cross-links and PDP witnesses accepted for diagnostics; production PDP admission was not evaluated",
+            vec![
+                "sorafs.reference.bundle".to_owned(),
+                "sorafs.reference.pdp".to_owned(),
+                format!("sorafs.reference.code.{PDP_STRUCTURAL_OK_CODE}"),
+            ],
+            context,
+            inputs,
+            generated_at,
+        );
+    }
 
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
@@ -727,7 +773,9 @@ fn validate_fixture_bundle_payload(
             }
         }
         FixtureBundlePayloadKindV1::PdpCommitment => {
-            let commitment = decode_bundle_payload::<PdpCommitmentV1>(payload, generated_at)?;
+            let commitment = decode_pdp_commitment_reference(payload.bytes).map_err(|error| {
+                bundle_decode_error(payload.kind, &payload.label, error, generated_at)
+            })?;
             let mut context = pdp_commitment_context(&commitment);
             if let Err(error) = commitment.validate() {
                 let code = pdp_commitment_validation_code(&error);
@@ -760,7 +808,9 @@ fn validate_fixture_bundle_payload(
             )?;
         }
         FixtureBundlePayloadKindV1::PdpChallenge => {
-            let challenge = decode_bundle_payload::<PdpChallengeV1>(payload, generated_at)?;
+            let challenge = decode_pdp_challenge_reference(payload.bytes).map_err(|error| {
+                bundle_decode_error(payload.kind, &payload.label, error, generated_at)
+            })?;
             let mut context = pdp_challenge_context(&challenge);
             if let Err(error) = challenge.validate() {
                 let code = pdp_challenge_validation_code(&error);
@@ -799,7 +849,9 @@ fn validate_fixture_bundle_payload(
             );
         }
         FixtureBundlePayloadKindV1::PdpProof => {
-            let proof = decode_bundle_payload::<PdpProofV1>(payload, generated_at)?;
+            let proof = decode_pdp_proof_reference(payload.bytes).map_err(|error| {
+                bundle_decode_error(payload.kind, &payload.label, error, generated_at)
+            })?;
             let mut context = pdp_proof_context(&proof);
             if let Err(error) = proof.validate() {
                 let code = pdp_proof_validation_code(&error);
@@ -2081,6 +2133,7 @@ fn pop_commitment_root_context(root: &PopCommitmentRootV1) -> Vec<ValidationCont
         ValidationContextFieldV1::new("version", root.version.to_string()),
         ValidationContextFieldV1::new("root_digest_hex", hex::encode(root.root_digest)),
         ValidationContextFieldV1::new("tree_size", root.tree_size.to_string()),
+        ValidationContextFieldV1::new("tree_depth", root.tree_depth.to_string()),
         ValidationContextFieldV1::new("tree_version", root.tree_version.to_string()),
         ValidationContextFieldV1::new("issuer_id", root.issuer_id.clone()),
         ValidationContextFieldV1::new("published_at_epoch", root.published_at_epoch.to_string()),
@@ -2105,6 +2158,14 @@ fn pop_revocation_list_context(revocations: &PopRevocationListV1) -> Vec<Validat
         ValidationContextFieldV1::new(
             "commitment_root_hex",
             hex::encode(revocations.commitment_root),
+        ),
+        ValidationContextFieldV1::new(
+            "revocation_root_hex",
+            hex::encode(revocations.revocation_root),
+        ),
+        ValidationContextFieldV1::new(
+            "revocation_tree_depth",
+            revocations.revocation_tree_depth.to_string(),
         ),
         ValidationContextFieldV1::new("issuer_id", revocations.issuer_id.clone()),
         ValidationContextFieldV1::new(
@@ -2205,12 +2266,6 @@ fn pop_membership_proof_context(proof: &PopMembershipProofV1) -> Vec<ValidationC
     vec![
         ValidationContextFieldV1::new("schema", "PopMembershipProofV1"),
         ValidationContextFieldV1::new("version", proof.version.to_string()),
-        ValidationContextFieldV1::new("proof_id_hex", hex::encode(proof.proof_id)),
-        ValidationContextFieldV1::new("credential_id_hex", hex::encode(proof.credential_id)),
-        ValidationContextFieldV1::new(
-            "holder_commitment_hex",
-            hex::encode(proof.holder_commitment),
-        ),
         ValidationContextFieldV1::new(
             "eligibility_class",
             pop_eligibility_class_label(proof.eligibility_class),
@@ -2220,6 +2275,7 @@ fn pop_membership_proof_context(proof: &PopMembershipProofV1) -> Vec<ValidationC
             "commitment_tree_version",
             proof.commitment_tree_version.to_string(),
         ),
+        ValidationContextFieldV1::new("revocation_root_hex", hex::encode(proof.revocation_root)),
         ValidationContextFieldV1::new(
             "revocation_list_version",
             proof.revocation_list_version.to_string(),
@@ -2231,7 +2287,19 @@ fn pop_membership_proof_context(proof: &PopMembershipProofV1) -> Vec<ValidationC
             "proof_system",
             pop_membership_proof_system_label(proof.proof_system),
         ),
-        ValidationContextFieldV1::new("proof_digest_hex", hex::encode(proof.proof_digest)),
+        ValidationContextFieldV1::new(
+            "membership_circuit_id",
+            proof.verifier_material.circuit_id.clone(),
+        ),
+        ValidationContextFieldV1::new(
+            "membership_parameter_digest_hex",
+            hex::encode(proof.verifier_material.parameter_digest),
+        ),
+        ValidationContextFieldV1::new(
+            "membership_verifying_key_digest_hex",
+            hex::encode(proof.verifier_material.verifying_key_digest),
+        ),
+        ValidationContextFieldV1::new("proof_bytes_len", proof.proof_bytes.len().to_string()),
         ValidationContextFieldV1::new("expires_at_epoch", proof.expires_at_epoch.to_string()),
     ]
 }
@@ -2272,7 +2340,7 @@ fn pop_signature_algorithm_label(algorithm: PopSignatureAlgorithmV1) -> &'static
 
 fn pop_membership_proof_system_label(system: PopMembershipProofSystemV1) -> &'static str {
     match system {
-        PopMembershipProofSystemV1::TranscriptDigestV1 => "transcript_digest_v1",
+        PopMembershipProofSystemV1::Halo2IpaPastaV1 => "halo2_ipa_pasta_v1",
     }
 }
 
@@ -3056,6 +3124,13 @@ pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
     fields: OrderbookOrderRequestFieldsV1,
     signing_key_bytes: &[u8],
 ) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
+    let schema = OrderbookValidationPayloadKindV1::OrderRequest.schema();
+    crate::orderbook::validate_owner_account_v1(&fields.owner_account).map_err(|err| {
+        OrderbookPayloadSigningError::Sign {
+            schema,
+            reason: err.to_string(),
+        }
+    })?;
     let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
     let order_id = crate::derive_orderbook_order_id_v1(&fields.owner_account, fields.nonce);
     let payload = OrderRequestV1 {
@@ -3073,7 +3148,6 @@ pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
         taker_fee_bps: fields.taker_fee_bps,
         signature: empty_sdk_orderbook_signature(),
     };
-    let schema = OrderbookValidationPayloadKindV1::OrderRequest.schema();
     let signed = sign_order_request_ed25519_v1(payload, &signing_key).map_err(|err| {
         OrderbookPayloadSigningError::Sign {
             schema,
@@ -3088,6 +3162,13 @@ pub fn build_signed_orderbook_order_cancel_bytes_ed25519_v1(
     fields: OrderbookOrderCancelFieldsV1,
     signing_key_bytes: &[u8],
 ) -> Result<Vec<u8>, OrderbookPayloadSigningError> {
+    let schema = OrderbookValidationPayloadKindV1::OrderCancel.schema();
+    crate::orderbook::validate_owner_account_v1(&fields.owner_account).map_err(|err| {
+        OrderbookPayloadSigningError::Sign {
+            schema,
+            reason: err.to_string(),
+        }
+    })?;
     let signing_key = orderbook_signing_key_from_bytes(signing_key_bytes)?;
     let payload = OrderCancelV1 {
         version: ORDERBOOK_CANCEL_VERSION_V1,
@@ -3097,7 +3178,6 @@ pub fn build_signed_orderbook_order_cancel_bytes_ed25519_v1(
         nonce: fields.nonce,
         signature: empty_sdk_orderbook_signature(),
     };
-    let schema = OrderbookValidationPayloadKindV1::OrderCancel.schema();
     let signed = sign_order_cancel_ed25519_v1(payload, &signing_key).map_err(|err| {
         OrderbookPayloadSigningError::Sign {
             schema,
@@ -3362,7 +3442,7 @@ pub fn validate_pop_payload_bytes(
 
     match kind {
         PopValidationPayloadKindV1::Credential => {
-            match norito::decode_from_bytes::<PopCredentialV1>(bytes) {
+            match decode_pop_reference_payload::<PopCredentialV1>(bytes) {
                 Ok(payload) => validate_pop_payload_value(
                     kind,
                     verify_pop_credential_signature_v1(&payload),
@@ -3374,7 +3454,7 @@ pub fn validate_pop_payload_bytes(
             }
         }
         PopValidationPayloadKindV1::CommitmentRoot => {
-            match norito::decode_from_bytes::<PopCommitmentRootV1>(bytes) {
+            match decode_pop_reference_payload::<PopCommitmentRootV1>(bytes) {
                 Ok(payload) => validate_pop_payload_value(
                     kind,
                     verify_pop_commitment_root_signature_v1(&payload),
@@ -3386,7 +3466,7 @@ pub fn validate_pop_payload_bytes(
             }
         }
         PopValidationPayloadKindV1::RevocationList => {
-            match norito::decode_from_bytes::<PopRevocationListV1>(bytes) {
+            match decode_pop_reference_payload::<PopRevocationListV1>(bytes) {
                 Ok(payload) => validate_pop_payload_value(
                     kind,
                     verify_pop_revocation_list_signature_v1(&payload),
@@ -3398,7 +3478,7 @@ pub fn validate_pop_payload_bytes(
             }
         }
         PopValidationPayloadKindV1::IssuedCredentialBundle => {
-            match norito::decode_from_bytes::<PopIssuedCredentialBundleV1>(bytes) {
+            match decode_pop_reference_payload::<PopIssuedCredentialBundleV1>(bytes) {
                 Ok(payload) => validate_pop_payload_value(
                     kind,
                     payload.validate(),
@@ -3410,7 +3490,7 @@ pub fn validate_pop_payload_bytes(
             }
         }
         PopValidationPayloadKindV1::EnrollmentRequest => {
-            match norito::decode_from_bytes::<PopEnrollmentRequestV1>(bytes) {
+            match decode_pop_reference_payload::<PopEnrollmentRequestV1>(bytes) {
                 Ok(payload) => validate_pop_payload_value(
                     kind,
                     payload.validate(),
@@ -3422,7 +3502,7 @@ pub fn validate_pop_payload_bytes(
             }
         }
         PopValidationPayloadKindV1::RenewalRequest => {
-            match norito::decode_from_bytes::<PopRenewalRequestV1>(bytes) {
+            match decode_pop_reference_payload::<PopRenewalRequestV1>(bytes) {
                 Ok(payload) => validate_pop_payload_value(
                     kind,
                     payload.validate(),
@@ -3434,7 +3514,7 @@ pub fn validate_pop_payload_bytes(
             }
         }
         PopValidationPayloadKindV1::MembershipProof => {
-            match norito::decode_from_bytes::<PopMembershipProofV1>(bytes) {
+            match decode_pop_reference_payload::<PopMembershipProofV1>(bytes) {
                 Ok(payload) => validate_pop_payload_value(
                     kind,
                     payload.validate(),
@@ -3446,6 +3526,32 @@ pub fn validate_pop_payload_bytes(
             }
         }
     }
+}
+
+fn decode_pop_reference_payload<T>(bytes: &[u8]) -> Result<T, String>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.len() > POP_REFERENCE_PAYLOAD_MAX_BYTES_V1 {
+        return Err(format!(
+            "PoP payload exceeds {} byte reference-validator limit",
+            POP_REFERENCE_PAYLOAD_MAX_BYTES_V1
+        ));
+    }
+    let limits = norito::DecodeLimits::new(
+        POP_REFERENCE_PAYLOAD_MAX_BYTES_V1,
+        POP_REFERENCE_PAYLOAD_MAX_BYTES_V1,
+        POP_REFERENCE_PAYLOAD_MAX_BYTES_V1.saturating_mul(2),
+        POP_REFERENCE_PAYLOAD_MAX_BYTES_V1.saturating_mul(4),
+        64,
+    );
+    let payload: T =
+        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| error.to_string())?;
+    let canonical = norito::to_bytes(&payload).map_err(|error| error.to_string())?;
+    if canonical != bytes {
+        return Err("PoP payload is not the canonical Norito encoding".to_owned());
+    }
+    Ok(payload)
 }
 
 fn validate_pop_payload_value(
@@ -3703,7 +3809,7 @@ pub fn validate_repair_payload_bytes(
                 "payload_digest_hex",
                 hex::encode(event.header.payload_digest),
             ));
-            if let Err(error) = event.payload.validate() {
+            if let Err(error) = event.validate() {
                 return repair_validation_error_outcome(error, context, inputs, generated_at);
             }
             context
@@ -4053,7 +4159,7 @@ pub fn validate_provider_admission_renewal_bytes(
         Ok(updated_record) => {
             context.push(ValidationContextFieldV1::new(
                 "updated_advert_body_digest_hex",
-                hex::encode(updated_record.advert_body_digest),
+                hex::encode(updated_record.advert_body_digest()),
             ));
             context.push(ValidationContextFieldV1::new(
                 "council_signer_trust",
@@ -4215,7 +4321,7 @@ pub fn validate_provider_admission_revocation_bytes(
     }
 }
 
-/// Validates a Norito-encoded [`PdpCommitmentV1`] and emits a reference outcome.
+/// Diagnoses a Norito-encoded [`PdpCommitmentV1`] without authorizing acceptance.
 #[must_use]
 pub fn validate_pdp_commitment_bytes(
     bytes: &[u8],
@@ -4227,7 +4333,7 @@ pub fn validate_pdp_commitment_bytes(
         "pdp_commitment",
         input_label.clone(),
     )];
-    let commitment = match norito::decode_from_bytes::<PdpCommitmentV1>(bytes) {
+    let commitment = match decode_pdp_commitment_reference(bytes) {
         Ok(commitment) => commitment,
         Err(error) => {
             return pdp_decode_error(
@@ -4260,17 +4366,15 @@ pub fn validate_pdp_commitment_bytes(
         );
     }
 
-    ValidationOutcomeV1::ok(
-        "SFS-OK-000",
-        "PDP commitment accepted",
-        pdp_tags("SFS-OK-000"),
+    pdp_structural_ok(
+        "PDP commitment is structurally valid",
         context,
         inputs,
         generated_at,
     )
 }
 
-/// Validates a Norito-encoded [`PdpChallengeV1`] and emits a reference outcome.
+/// Diagnoses a Norito-encoded [`PdpChallengeV1`] without authorizing acceptance.
 #[must_use]
 pub fn validate_pdp_challenge_bytes(
     bytes: &[u8],
@@ -4279,7 +4383,7 @@ pub fn validate_pdp_challenge_bytes(
 ) -> ValidationOutcomeV1 {
     let input_label = input_label.into();
     let inputs = vec![ValidationInputV1::new("pdp_challenge", input_label.clone())];
-    let challenge = match norito::decode_from_bytes::<PdpChallengeV1>(bytes) {
+    let challenge = match decode_pdp_challenge_reference(bytes) {
         Ok(challenge) => challenge,
         Err(error) => {
             return pdp_decode_error(
@@ -4312,17 +4416,15 @@ pub fn validate_pdp_challenge_bytes(
         );
     }
 
-    ValidationOutcomeV1::ok(
-        "SFS-OK-000",
-        "PDP challenge accepted",
-        pdp_tags("SFS-OK-000"),
+    pdp_structural_ok(
+        "PDP challenge is structurally valid",
         context,
         inputs,
         generated_at,
     )
 }
 
-/// Validates a Norito-encoded [`PdpProofV1`] and emits a reference outcome.
+/// Diagnoses a Norito-encoded [`PdpProofV1`] without admission or root verification.
 #[must_use]
 pub fn validate_pdp_proof_bytes(
     bytes: &[u8],
@@ -4331,7 +4433,7 @@ pub fn validate_pdp_proof_bytes(
 ) -> ValidationOutcomeV1 {
     let input_label = input_label.into();
     let inputs = vec![ValidationInputV1::new("pdp_proof", input_label.clone())];
-    let proof = match norito::decode_from_bytes::<PdpProofV1>(bytes) {
+    let proof = match decode_pdp_proof_reference(bytes) {
         Ok(proof) => proof,
         Err(error) => {
             return pdp_decode_error(
@@ -4364,10 +4466,8 @@ pub fn validate_pdp_proof_bytes(
         );
     }
 
-    ValidationOutcomeV1::ok(
-        "SFS-OK-000",
-        "PDP proof accepted",
-        pdp_tags("SFS-OK-000"),
+    pdp_structural_ok(
+        "PDP proof is structurally valid; signer admission and Merkle roots were not evaluated",
         context,
         inputs,
         generated_at,
@@ -4387,7 +4487,7 @@ pub fn validate_pdp_commitment_challenge_bytes(
         ValidationInputV1::new("pdp_commitment", commitment_label),
         ValidationInputV1::new("pdp_challenge", challenge_label),
     ];
-    let commitment = match norito::decode_from_bytes::<PdpCommitmentV1>(commitment_bytes) {
+    let commitment = match decode_pdp_commitment_reference(commitment_bytes) {
         Ok(commitment) => commitment,
         Err(error) => {
             return pdp_decode_error(
@@ -4399,7 +4499,7 @@ pub fn validate_pdp_commitment_challenge_bytes(
             );
         }
     };
-    let challenge = match norito::decode_from_bytes::<PdpChallengeV1>(challenge_bytes) {
+    let challenge = match decode_pdp_challenge_reference(challenge_bytes) {
         Ok(challenge) => challenge,
         Err(error) => {
             return pdp_decode_error(
@@ -4449,6 +4549,31 @@ pub fn validate_pdp_commitment_challenge_bytes(
             generated_at,
         );
     }
+    let commitment_digest = match commitment.commitment_digest() {
+        Ok(digest) => digest,
+        Err(error) => {
+            context.push(ValidationContextFieldV1::new(
+                "commitment_digest_error",
+                error.to_string(),
+            ));
+            return pdp_binding_error(
+                "PDP commitment digest could not be derived canonically",
+                "Regenerate the commitment with the canonical PDP schema.",
+                context,
+                inputs,
+                generated_at,
+            );
+        }
+    };
+    if challenge.commitment_digest != commitment_digest {
+        return pdp_binding_error(
+            "PDP challenge commitment digest does not match commitment",
+            "Regenerate the challenge for the exact canonical commitment being validated.",
+            context,
+            inputs,
+            generated_at,
+        );
+    }
     if commitment.manifest_digest != challenge.manifest_digest {
         return pdp_binding_error(
             "PDP challenge manifest digest does not match commitment",
@@ -4483,18 +4608,32 @@ pub fn validate_pdp_commitment_challenge_bytes(
             generated_at,
         );
     }
+    if commitment.sealed_at > challenge.issued_at_unix {
+        context.push(ValidationContextFieldV1::new(
+            "seal_order_error",
+            "commitment sealed after challenge issuance",
+        ));
+        return ValidationOutcomeV1::error(
+            "SFS-POL-002",
+            CATEGORY_POLICY,
+            "PDP challenge predates the commitment seal",
+            "Issue the challenge only after the exact commitment has been sealed.",
+            pdp_tags("SFS-POL-002"),
+            context,
+            inputs,
+            generated_at,
+        );
+    }
 
-    ValidationOutcomeV1::ok(
-        "SFS-OK-000",
-        "PDP commitment/challenge accepted",
-        pdp_tags("SFS-OK-000"),
+    pdp_structural_ok(
+        "PDP commitment/challenge binding is structurally valid",
         context,
         inputs,
         generated_at,
     )
 }
 
-/// Validates Norito-encoded PDP commitment, challenge, and proof payloads.
+/// Exhaustively diagnoses PDP witnesses without evaluating governed admission.
 #[must_use]
 pub fn validate_pdp_commitment_challenge_proof_bytes(
     commitment_bytes: &[u8],
@@ -4508,40 +4647,202 @@ pub fn validate_pdp_commitment_challenge_proof_bytes(
     let commitment_label = commitment_label.into();
     let challenge_label = challenge_label.into();
     let proof_label = proof_label.into();
-    let commitment_outcome = validate_pdp_commitment_challenge_bytes(
-        commitment_bytes,
-        challenge_bytes,
-        commitment_label.clone(),
-        challenge_label.clone(),
-        generated_at,
-    );
-    if !commitment_outcome.is_ok() {
-        return commitment_outcome;
+    let inputs = vec![
+        ValidationInputV1::new("pdp_commitment", commitment_label),
+        ValidationInputV1::new("pdp_challenge", challenge_label),
+        ValidationInputV1::new("pdp_proof", proof_label),
+    ];
+    let commitment = match decode_pdp_commitment_reference(commitment_bytes) {
+        Ok(commitment) => commitment,
+        Err(error) => {
+            return pdp_decode_error(
+                "PdpCommitmentV1",
+                "pdp commitment",
+                error,
+                inputs,
+                generated_at,
+            );
+        }
+    };
+    let challenge = match decode_pdp_challenge_reference(challenge_bytes) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            return pdp_decode_error(
+                "PdpChallengeV1",
+                "pdp challenge",
+                error,
+                inputs,
+                generated_at,
+            );
+        }
+    };
+    let proof = match decode_pdp_proof_reference(proof_bytes) {
+        Ok(proof) => proof,
+        Err(error) => {
+            return pdp_decode_error("PdpProofV1", "pdp proof", error, inputs, generated_at);
+        }
+    };
+
+    let mut context = pdp_commitment_challenge_context(&commitment, &challenge);
+    context.extend(pdp_proof_context(&proof));
+    context.push(ValidationContextFieldV1::new(
+        "witness_verification",
+        "sampled_bytes_signature_and_both_merkle_roots",
+    ));
+    if let Err(error) = verify_pdp_witnesses_v1(&commitment, &challenge, &proof) {
+        let (code, category) = pdp_verification_code_and_category(&error);
+        context.push(ValidationContextFieldV1::new(
+            "verification_error",
+            error.to_string(),
+        ));
+        context.push(ValidationContextFieldV1::new(
+            "production_acceptance",
+            "false",
+        ));
+        return ValidationOutcomeV1::error(
+            code,
+            category,
+            format!("PDP exhaustive witness verification failed: {error}"),
+            "Reject the payload set and regenerate the commitment, challenge, or proof; active governed admission must still be evaluated separately after witness verification succeeds.",
+            pdp_tags(code),
+            context,
+            inputs,
+            generated_at,
+        );
     }
 
-    let proof_outcome = validate_pdp_challenge_proof_bytes(
-        challenge_bytes,
-        proof_bytes,
-        challenge_label.clone(),
-        proof_label.clone(),
+    pdp_diagnostic_ok(
+        "PDP sampled bytes, signature, geometry, coverage, and both Merkle roots are valid; production admission was not evaluated",
+        "exhaustive_pdp_witness_diagnostic_without_admission",
+        context,
+        inputs,
         generated_at,
-    );
-    if !proof_outcome.is_ok() {
-        return proof_outcome;
-    }
+    )
+}
 
-    let mut context = commitment_outcome.context;
-    context.extend(proof_outcome.context);
+/// Exhaustively verifies canonical PDP bytes against an active governed admission record.
+///
+/// `active_admission` must come from the caller's current council-verified,
+/// revocation-aware admission registry. Unlike the structural reference
+/// validators, this function hashes sampled bytes, verifies every Merkle path
+/// against both roots, verifies the provider signature, and binds the signer to
+/// the immutable admission record.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn validate_pdp_commitment_challenge_proof_with_admission_bytes(
+    commitment_bytes: &[u8],
+    challenge_bytes: &[u8],
+    proof_bytes: &[u8],
+    commitment_label: impl Into<String>,
+    challenge_label: impl Into<String>,
+    proof_label: impl Into<String>,
+    active_admission: &AdmissionRecord,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    let inputs = vec![
+        ValidationInputV1::new("pdp_commitment", commitment_label),
+        ValidationInputV1::new("pdp_challenge", challenge_label),
+        ValidationInputV1::new("pdp_proof", proof_label),
+    ];
+    let commitment = match decode_pdp_commitment_reference(commitment_bytes) {
+        Ok(commitment) => commitment,
+        Err(error) => {
+            return pdp_decode_error(
+                "PdpCommitmentV1",
+                "pdp commitment",
+                error,
+                inputs,
+                generated_at,
+            );
+        }
+    };
+    let challenge = match decode_pdp_challenge_reference(challenge_bytes) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            return pdp_decode_error(
+                "PdpChallengeV1",
+                "pdp challenge",
+                error,
+                inputs,
+                generated_at,
+            );
+        }
+    };
+    let proof = match decode_pdp_proof_reference(proof_bytes) {
+        Ok(proof) => proof,
+        Err(error) => {
+            return pdp_decode_error("PdpProofV1", "pdp proof", error, inputs, generated_at);
+        }
+    };
+
+    let mut context = pdp_commitment_challenge_context(&commitment, &challenge);
+    context.extend(pdp_proof_context(&proof));
+    context.extend([
+        ValidationContextFieldV1::new(
+            "admission_provider_id_hex",
+            hex::encode(active_admission.provider_id()),
+        ),
+        ValidationContextFieldV1::new(
+            "admission_envelope_digest_hex",
+            hex::encode(active_admission.envelope_digest()),
+        ),
+        ValidationContextFieldV1::new(
+            "admission_council_verified",
+            active_admission.is_council_verified().to_string(),
+        ),
+        ValidationContextFieldV1::new("verification_scope", "exhaustive_production"),
+    ]);
+
+    let verified = match verify_pdp_bundle_v1(&commitment, &challenge, &proof, active_admission) {
+        Ok(verified) => verified,
+        Err(error) => {
+            let (code, category) = pdp_verification_code_and_category(&error);
+            context.push(ValidationContextFieldV1::new(
+                "verification_error",
+                error.to_string(),
+            ));
+            context.push(ValidationContextFieldV1::new(
+                "production_acceptance",
+                "false",
+            ));
+            return ValidationOutcomeV1::error(
+                code,
+                category,
+                format!("PDP exhaustive verification failed: {error}"),
+                "Reject the proof and resolve the commitment, challenge, proof, or active admission mismatch before retrying.",
+                pdp_tags(code),
+                context,
+                inputs,
+                generated_at,
+            );
+        }
+    };
+
+    context.extend([
+        ValidationContextFieldV1::new("production_acceptance", "true"),
+        ValidationContextFieldV1::new(
+            "verified_proof_digest_hex",
+            hex::encode(verified.proof_digest()),
+        ),
+        ValidationContextFieldV1::new(
+            "verified_sampled_segments",
+            verified.sampled_segments().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "verified_sampled_hot_leaves",
+            verified.sampled_hot_leaves().to_string(),
+        ),
+        ValidationContextFieldV1::new(
+            "verified_sampled_bytes",
+            verified.sampled_bytes().to_string(),
+        ),
+    ]);
     ValidationOutcomeV1::ok(
         "SFS-OK-000",
-        "PDP commitment/challenge/proof accepted",
+        "PDP commitment/challenge/proof accepted by exhaustive admission-bound verification",
         pdp_tags("SFS-OK-000"),
         context,
-        vec![
-            ValidationInputV1::new("pdp_commitment", commitment_label),
-            ValidationInputV1::new("pdp_challenge", challenge_label),
-            ValidationInputV1::new("pdp_proof", proof_label),
-        ],
+        inputs,
         generated_at,
     )
 }
@@ -4559,7 +4860,7 @@ pub fn validate_pdp_challenge_proof_bytes(
         ValidationInputV1::new("pdp_challenge", challenge_label),
         ValidationInputV1::new("pdp_proof", proof_label),
     ];
-    let challenge = match norito::decode_from_bytes::<PdpChallengeV1>(challenge_bytes) {
+    let challenge = match decode_pdp_challenge_reference(challenge_bytes) {
         Ok(challenge) => challenge,
         Err(error) => {
             return pdp_decode_error(
@@ -4571,7 +4872,7 @@ pub fn validate_pdp_challenge_proof_bytes(
             );
         }
     };
-    let proof = match norito::decode_from_bytes::<PdpProofV1>(proof_bytes) {
+    let proof = match decode_pdp_proof_reference(proof_bytes) {
         Ok(proof) => proof,
         Err(error) => {
             return pdp_decode_error(
@@ -4621,6 +4922,15 @@ pub fn validate_pdp_challenge_proof_bytes(
             generated_at,
         );
     }
+    if proof.commitment_digest != challenge.commitment_digest {
+        return pdp_binding_error(
+            "PDP proof commitment digest does not match challenge",
+            "Regenerate the proof for the exact commitment digest named by the challenge.",
+            context,
+            inputs,
+            generated_at,
+        );
+    }
     if proof.challenge_id != challenge.challenge_id {
         return pdp_binding_error(
             "PDP proof challenge_id does not match challenge",
@@ -4657,16 +4967,18 @@ pub fn validate_pdp_challenge_proof_bytes(
             generated_at,
         );
     }
-    if proof.issued_at_unix > challenge.response_deadline_unix {
+    if proof.issued_at_unix < challenge.issued_at_unix
+        || proof.issued_at_unix > challenge.response_deadline_unix
+    {
         context.push(ValidationContextFieldV1::new(
             "deadline_error",
-            "proof issued after challenge response deadline",
+            "proof issued outside challenge response window",
         ));
         return ValidationOutcomeV1::error(
             "SFS-POL-002",
             CATEGORY_POLICY,
-            "PDP proof missed the challenge response deadline",
-            "Treat the proof as late unless a governed policy override explicitly extends the deadline.",
+            "PDP proof timestamp falls outside the challenge response window",
+            "Reject the proof and regenerate it while the exact challenge is active.",
             pdp_tags("SFS-POL-002"),
             context,
             inputs,
@@ -4686,11 +4998,25 @@ pub fn validate_pdp_challenge_proof_bytes(
             generated_at,
         );
     }
+    if let Err(error) = proof.verify_signature() {
+        context.push(ValidationContextFieldV1::new(
+            "proof_signature_error",
+            error.to_string(),
+        ));
+        return ValidationOutcomeV1::error(
+            "SFS-SIG-008",
+            CATEGORY_SIGNATURE,
+            format!("PDP proof signature verification failed: {error}"),
+            "Reject the proof and require a canonical domain-separated provider signature.",
+            pdp_tags("SFS-SIG-008"),
+            context,
+            inputs,
+            generated_at,
+        );
+    }
 
-    ValidationOutcomeV1::ok(
-        "SFS-OK-000",
-        "PDP challenge/proof accepted",
-        pdp_tags("SFS-OK-000"),
+    pdp_structural_ok(
+        "PDP challenge/proof binding and proof signature are structurally valid; signer admission and Merkle roots were not evaluated",
         context,
         inputs,
         generated_at,
@@ -5003,6 +5329,69 @@ fn pdp_tags(code: &str) -> Vec<String> {
     ]
 }
 
+fn decode_pdp_commitment_reference(bytes: &[u8]) -> Result<PdpCommitmentV1, String> {
+    decode_pdp_reference_payload(
+        bytes,
+        "PdpCommitmentV1",
+        PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        256,
+    )
+}
+
+fn decode_pdp_challenge_reference(bytes: &[u8]) -> Result<PdpChallengeV1, String> {
+    decode_pdp_reference_payload(
+        bytes,
+        "PdpChallengeV1",
+        PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+        PDP_MAX_SEGMENT_SAMPLES_V1.max(PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1),
+    )
+}
+
+fn decode_pdp_proof_reference(bytes: &[u8]) -> Result<PdpProofV1, String> {
+    decode_pdp_reference_payload(
+        bytes,
+        "PdpProofV1",
+        PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+        usize::try_from(crate::PDP_HOT_LEAF_SIZE_V1)
+            .unwrap_or(PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1)
+            .max(PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1)
+            .max(PDP_MAX_MERKLE_PATH_DEPTH_V1),
+    )
+}
+
+fn decode_pdp_reference_payload<T>(
+    bytes: &[u8],
+    schema: &'static str,
+    maximum_bytes: usize,
+    maximum_sequence_elements: usize,
+) -> Result<T, String>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.len() > maximum_bytes {
+        return Err(format!(
+            "{schema} payload is {} bytes; maximum canonical size is {maximum_bytes}",
+            bytes.len()
+        ));
+    }
+    let limits = norito::DecodeLimits::new(
+        maximum_sequence_elements,
+        maximum_bytes,
+        maximum_bytes,
+        maximum_bytes.saturating_mul(2),
+        PDP_REFERENCE_DECODE_MAX_DEPTH_V1,
+    );
+    let payload: T =
+        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| error.to_string())?;
+    let canonical = norito::to_bytes(&payload).map_err(|error| error.to_string())?;
+    if canonical != bytes {
+        return Err(format!(
+            "{schema} payload is not the exact canonical Norito encoding"
+        ));
+    }
+    Ok(payload)
+}
+
 fn pdp_decode_error(
     schema: &'static str,
     label: &'static str,
@@ -5035,6 +5424,50 @@ fn pdp_binding_error(
         message,
         action,
         pdp_tags("SFS-PDP-003"),
+        context,
+        inputs,
+        generated_at,
+    )
+}
+
+fn pdp_structural_ok(
+    message: impl Into<String>,
+    context: Vec<ValidationContextFieldV1>,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    pdp_diagnostic_ok(
+        message,
+        "structural_diagnostic_only",
+        context,
+        inputs,
+        generated_at,
+    )
+}
+
+fn pdp_diagnostic_ok(
+    message: impl Into<String>,
+    verification_scope: impl Into<String>,
+    mut context: Vec<ValidationContextFieldV1>,
+    inputs: Vec<ValidationInputV1>,
+    generated_at: u64,
+) -> ValidationOutcomeV1 {
+    context.push(ValidationContextFieldV1::new(
+        "verification_scope",
+        verification_scope,
+    ));
+    context.push(ValidationContextFieldV1::new(
+        "production_acceptance",
+        "false",
+    ));
+    context.push(ValidationContextFieldV1::new(
+        "admission_trust",
+        "not_evaluated",
+    ));
+    ValidationOutcomeV1::ok(
+        PDP_STRUCTURAL_OK_CODE,
+        message,
+        pdp_tags(PDP_STRUCTURAL_OK_CODE),
         context,
         inputs,
         generated_at,
@@ -5124,7 +5557,7 @@ fn pdp_proof_context(proof: &PdpProofV1) -> Vec<ValidationContextFieldV1> {
                 .sum::<usize>()
                 .to_string(),
         ),
-        ValidationContextFieldV1::new("signature_len", proof.signature.len().to_string()),
+        ValidationContextFieldV1::new("signature_len", proof.signature.signature.len().to_string()),
         ValidationContextFieldV1::new("issued_at_unix", proof.issued_at_unix.to_string()),
     ]
 }
@@ -5187,73 +5620,35 @@ fn validate_pdp_proof_coverage(
     challenge: &PdpChallengeV1,
     proof: &PdpProofV1,
 ) -> Result<(), String> {
-    let mut expected = BTreeMap::new();
-    for sample in &challenge.samples {
-        let hot_leaves = sample
-            .hot_leaf_indices
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        if hot_leaves.len() != sample.hot_leaf_indices.len() {
-            return Err(format!(
-                "challenge segment {} contains duplicate hot leaf indices",
-                sample.segment_index
-            ));
-        }
-        if expected
-            .insert(sample.segment_index, (sample.segment_leaf_hash, hot_leaves))
-            .is_some()
-        {
-            return Err(format!(
-                "challenge contains duplicate segment {}",
-                sample.segment_index
-            ));
-        }
+    if challenge.samples.len() != proof.proof_leaves.len() {
+        return Err(format!(
+            "proof has {} segment witnesses; challenge requires {}",
+            proof.proof_leaves.len(),
+            challenge.samples.len()
+        ));
     }
-
-    let mut actual = BTreeMap::new();
-    for leaf in &proof.proof_leaves {
-        let hot_leaves = leaf
-            .hot_leaves
-            .iter()
-            .map(|hot| hot.leaf_index)
-            .collect::<BTreeSet<_>>();
-        if hot_leaves.len() != leaf.hot_leaves.len() {
+    for (sample, segment) in challenge.samples.iter().zip(&proof.proof_leaves) {
+        if sample.segment_index != segment.segment_index {
             return Err(format!(
-                "proof segment {} contains duplicate hot leaf proofs",
-                leaf.segment_index
+                "proof segment {} does not match challenged segment {} at the same canonical position",
+                segment.segment_index, sample.segment_index
             ));
         }
-        if actual
-            .insert(leaf.segment_index, (leaf.segment_hash, hot_leaves))
-            .is_some()
-        {
+        if sample.hot_leaf_indices.len() != segment.hot_leaves.len() {
             return Err(format!(
-                "proof contains duplicate segment {}",
-                leaf.segment_index
+                "proof segment {} has {} hot leaves; challenge requires {}",
+                sample.segment_index,
+                segment.hot_leaves.len(),
+                sample.hot_leaf_indices.len()
             ));
         }
-    }
-
-    if expected.keys().copied().collect::<BTreeSet<_>>()
-        != actual.keys().copied().collect::<BTreeSet<_>>()
-    {
-        return Err("proof segment set does not match challenge segment set".to_owned());
-    }
-
-    for (segment_index, (expected_hash, expected_hot_leaves)) in expected {
-        let Some((actual_hash, actual_hot_leaves)) = actual.get(&segment_index) else {
-            return Err(format!("proof is missing segment {segment_index}"));
-        };
-        if expected_hash != *actual_hash {
-            return Err(format!(
-                "proof segment {segment_index} hash does not match challenge"
-            ));
-        }
-        if &expected_hot_leaves != actual_hot_leaves {
-            return Err(format!(
-                "proof segment {segment_index} hot leaf set does not match challenge"
-            ));
+        for (&expected, actual) in sample.hot_leaf_indices.iter().zip(&segment.hot_leaves) {
+            if expected != actual.leaf_index {
+                return Err(format!(
+                    "proof segment {} hot leaf {} does not match challenged leaf {} at the same canonical position",
+                    sample.segment_index, actual.leaf_index, expected
+                ));
+            }
         }
     }
 
@@ -5890,7 +6285,9 @@ fn orderbook_validation_code(error: &OrderbookValidationError) -> &'static str {
         | OrderbookValidationError::InvalidChannelId
         | OrderbookValidationError::InvalidReceiptId
         | OrderbookValidationError::InvalidChunkHash
-        | OrderbookValidationError::InvalidProviderId => "SFS-VAL-001",
+        | OrderbookValidationError::InvalidProviderId
+        | OrderbookValidationError::EmptyOwnerAccount
+        | OrderbookValidationError::OwnerAccountTooLong { .. } => "SFS-VAL-001",
         OrderbookValidationError::InvalidTimestamp
         | OrderbookValidationError::ZeroNonce
         | OrderbookValidationError::InvalidFeeBps { .. }
@@ -5918,6 +6315,11 @@ fn pop_validation_code(error: &PopCredentialValidationError) -> &'static str {
         | PopCredentialValidationError::DuplicateRequestedAttribute { .. }
         | PopCredentialValidationError::DuplicateDigest { .. }
         | PopCredentialValidationError::InvalidVersionCounter { .. }
+        | PopCredentialValidationError::InvalidTreeDepth { .. }
+        | PopCredentialValidationError::InvalidMerklePathDepth { .. }
+        | PopCredentialValidationError::ResourceLimitExceeded { .. }
+        | PopCredentialValidationError::InvalidScalarEncoding { .. }
+        | PopCredentialValidationError::InvalidRevocationNonceEncoding
         | PopCredentialValidationError::UnsortedRevocationList
         | PopCredentialValidationError::DuplicateRevocationNonce => "SFS-VAL-001",
         PopCredentialValidationError::InvalidTimestamp { .. }
@@ -5929,21 +6331,24 @@ fn pop_validation_code(error: &PopCredentialValidationError) -> &'static str {
         | PopCredentialValidationError::RevocationListVersionMismatch { .. }
         | PopCredentialValidationError::RevokedCredential
         | PopCredentialValidationError::ReplayedProof
-        | PopCredentialValidationError::PolicyOnlyProofSystem => "SFS-POL-010",
-        PopCredentialValidationError::ProofDigestMismatch
-        | PopCredentialValidationError::ProofCredentialMismatch
-        | PopCredentialValidationError::ProofHolderCommitmentMismatch
-        | PopCredentialValidationError::ProofEligibilityClassMismatch
+        | PopCredentialValidationError::ReplayCacheLimitExceeded
+        | PopCredentialValidationError::ChallengeMismatch
+        | PopCredentialValidationError::VerifierContextMismatch => "SFS-POL-010",
+        PopCredentialValidationError::ProofHolderCommitmentMismatch
         | PopCredentialValidationError::WrongCommitmentRoot
+        | PopCredentialValidationError::RevocationRootMismatch
         | PopCredentialValidationError::CommitmentTreeVersionMismatch
         | PopCredentialValidationError::IssuerMismatch
         | PopCredentialValidationError::IssuerKeyMismatch
-        | PopCredentialValidationError::CredentialRevocationListMismatch => "SFS-POP-001",
+        | PopCredentialValidationError::CredentialRevocationListMismatch
+        | PopCredentialValidationError::InvalidVerifierMaterial { .. }
+        | PopCredentialValidationError::InvalidMembershipProof { .. } => "SFS-POP-001",
         PopCredentialValidationError::InvalidPublicKeyLength { .. }
         | PopCredentialValidationError::InvalidSignatureLength { .. }
         | PopCredentialValidationError::InvalidPublicKey { .. }
         | PopCredentialValidationError::SignatureVerification { .. } => "SFS-SIG-009",
-        PopCredentialValidationError::SignaturePayloadEncoding { .. } => "SFS-INT-001",
+        PopCredentialValidationError::SignaturePayloadEncoding { .. }
+        | PopCredentialValidationError::ProofBackend { .. } => "SFS-INT-001",
     }
 }
 
@@ -6021,14 +6426,10 @@ fn pdp_commitment_validation_code(error: &PdpCommitmentValidationError) -> &'sta
     match error {
         PdpCommitmentValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
         PdpCommitmentValidationError::InvalidManifestDigest => "SFS-VAL-001",
-        PdpCommitmentValidationError::UnsupportedProfileMultihash { .. } => "SFS-VAL-003",
-        PdpCommitmentValidationError::InvalidSampleWindow => "SFS-PDP-001",
+        PdpCommitmentValidationError::InvalidChunkProfile(_) => "SFS-VAL-003",
+        PdpCommitmentValidationError::InvalidSampleWindow { .. } => "SFS-PDP-001",
         PdpCommitmentValidationError::InvalidSealedAt => "SFS-POL-002",
-        PdpCommitmentValidationError::InvalidHotRoot
-        | PdpCommitmentValidationError::InvalidSegmentRoot
-        | PdpCommitmentValidationError::UnsupportedHashAlgorithm { .. }
-        | PdpCommitmentValidationError::InvalidHotTreeHeight
-        | PdpCommitmentValidationError::InvalidSegmentTreeHeight => "SFS-PDP-002",
+        _ => "SFS-PDP-002",
     }
 }
 
@@ -6036,14 +6437,24 @@ fn pdp_challenge_validation_code(error: &PdpChallengeValidationError) -> &'stati
     match error {
         PdpChallengeValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
         PdpChallengeValidationError::InvalidManifestDigest => "SFS-VAL-001",
-        PdpChallengeValidationError::InvalidDeadline => "SFS-POL-002",
+        PdpChallengeValidationError::InvalidChunkProfile(_) => "SFS-VAL-003",
+        PdpChallengeValidationError::InvalidDeadline { .. } => "SFS-POL-002",
         PdpChallengeValidationError::EmptySampleSet
+        | PdpChallengeValidationError::TooManySegments { .. }
+        | PdpChallengeValidationError::NonCanonicalSegmentOrder
         | PdpChallengeValidationError::EmptyHotLeafSet { .. }
-        | PdpChallengeValidationError::DuplicateHotLeafIndex { .. }
-        | PdpChallengeValidationError::InvalidSegmentDigest { .. } => "SFS-PDP-001",
+        | PdpChallengeValidationError::TooManyHotLeaves { .. }
+        | PdpChallengeValidationError::HotLeafIndexOutOfRange { .. }
+        | PdpChallengeValidationError::NonCanonicalHotLeafOrder { .. }
+        | PdpChallengeValidationError::TooManyHotLeavesTotal { .. } => "SFS-PDP-001",
         PdpChallengeValidationError::InvalidChallengeId
+        | PdpChallengeValidationError::InvalidCommitmentDigest
         | PdpChallengeValidationError::InvalidProviderId
-        | PdpChallengeValidationError::InvalidSeed => "SFS-PDP-002",
+        | PdpChallengeValidationError::InvalidSeed
+        | PdpChallengeValidationError::InvalidEpoch
+        | PdpChallengeValidationError::InvalidDrandRound
+        | PdpChallengeValidationError::ChallengeIdMismatch
+        | PdpChallengeValidationError::CanonicalEncoding => "SFS-PDP-002",
     }
 }
 
@@ -6051,18 +6462,78 @@ fn pdp_proof_validation_code(error: &PdpProofValidationError) -> &'static str {
     match error {
         PdpProofValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
         PdpProofValidationError::InvalidManifestDigest => "SFS-VAL-001",
-        PdpProofValidationError::MissingSignature | PdpProofValidationError::InertSignature => {
-            "SFS-SIG-008"
-        }
+        PdpProofValidationError::InvalidSignature(_) => "SFS-SIG-008",
+        PdpProofValidationError::InvalidIssuedAt => "SFS-POL-002",
         PdpProofValidationError::EmptyProofSet
-        | PdpProofValidationError::InvalidSegmentDigest { .. }
-        | PdpProofValidationError::MissingSegmentMerklePath { .. }
+        | PdpProofValidationError::TooManySegments { .. }
+        | PdpProofValidationError::NonCanonicalSegmentOrder
+        | PdpProofValidationError::InvalidSegmentLength { .. }
+        | PdpProofValidationError::InvalidSegmentOffset { .. }
         | PdpProofValidationError::MissingHotLeafProofs { .. }
-        | PdpProofValidationError::InvalidLeafDigest { .. }
-        | PdpProofValidationError::MissingLeafMerklePath { .. } => "SFS-PDP-001",
-        PdpProofValidationError::InvalidChallengeId
+        | PdpProofValidationError::TooManyHotLeafProofs { .. }
+        | PdpProofValidationError::HotLeafIndexOutOfRange { .. }
+        | PdpProofValidationError::NonCanonicalHotLeafOrder { .. }
+        | PdpProofValidationError::InvalidLeafLength { .. }
+        | PdpProofValidationError::LeafByteLengthMismatch { .. }
+        | PdpProofValidationError::InvalidLeafOffset { .. }
+        | PdpProofValidationError::MerklePathTooDeep { .. }
+        | PdpProofValidationError::TooManyHotLeavesTotal { .. } => "SFS-PDP-001",
+        PdpProofValidationError::InvalidCommitmentDigest
+        | PdpProofValidationError::InvalidChallengeId
         | PdpProofValidationError::InvalidProviderId
-        | PdpProofValidationError::InvalidIssuedAt => "SFS-PDP-002",
+        | PdpProofValidationError::InvalidEpoch
+        | PdpProofValidationError::GeometryOverflow
+        | PdpProofValidationError::CanonicalEncoding => "SFS-PDP-002",
+    }
+}
+
+fn pdp_verification_code_and_category(
+    error: &PdpVerificationError,
+) -> (&'static str, &'static str) {
+    match error {
+        PdpVerificationError::Commitment(error) => (
+            pdp_commitment_validation_code(error),
+            pdp_commitment_validation_category(error),
+        ),
+        PdpVerificationError::Challenge(error) => (
+            pdp_challenge_validation_code(error),
+            pdp_challenge_validation_category(error),
+        ),
+        PdpVerificationError::Proof(error) => (
+            pdp_proof_validation_code(error),
+            pdp_proof_validation_category(error),
+        ),
+        PdpVerificationError::AdmissionNotCouncilVerified
+        | PdpVerificationError::AdmissionProviderMismatch => {
+            (PDP_TRUST_REQUIRED_CODE, CATEGORY_POLICY)
+        }
+        PdpVerificationError::AdmissionKeyMismatch | PdpVerificationError::Signature(_) => {
+            ("SFS-SIG-008", CATEGORY_SIGNATURE)
+        }
+        PdpVerificationError::AdmissionNotActiveAtChallenge { .. }
+        | PdpVerificationError::ChallengeBeyondAdmission { .. }
+        | PdpVerificationError::AdmissionExpiredAtProof { .. }
+        | PdpVerificationError::ProofOutsideChallengeWindow { .. }
+        | PdpVerificationError::CommitmentSealedAfterChallenge { .. } => {
+            ("SFS-POL-002", CATEGORY_POLICY)
+        }
+        PdpVerificationError::CommitmentDigestEncoding { .. }
+        | PdpVerificationError::ProofDigestEncoding { .. }
+        | PdpVerificationError::CoverageOverflow => ("SFS-INT-001", CATEGORY_INTERNAL),
+        PdpVerificationError::SampleWindowExceeded { .. }
+        | PdpVerificationError::SegmentCoverageCountMismatch { .. }
+        | PdpVerificationError::SegmentCoverageMismatch { .. }
+        | PdpVerificationError::HotLeafCoverageCountMismatch { .. }
+        | PdpVerificationError::HotLeafCoverageMismatch { .. }
+        | PdpVerificationError::SegmentOutOfRange { .. }
+        | PdpVerificationError::HotLeafOutOfRange { .. }
+        | PdpVerificationError::SegmentGeometryMismatch { .. }
+        | PdpVerificationError::HotLeafGeometryMismatch { .. }
+        | PdpVerificationError::GeometryOverflow
+        | PdpVerificationError::SegmentHotPath { .. }
+        | PdpVerificationError::GlobalHotPath { .. }
+        | PdpVerificationError::SegmentPath { .. } => ("SFS-PDP-001", CATEGORY_VALIDATION),
+        _ => ("SFS-PDP-003", CATEGORY_VALIDATION),
     }
 }
 
@@ -6116,7 +6587,8 @@ fn provider_admission_renewal_code(error: &ProviderAdmissionRenewalError) -> &'s
         | ProviderAdmissionRenewalError::ProviderMismatch { .. } => "SFS-VAL-007",
         ProviderAdmissionRenewalError::RetentionNotExtended { .. }
         | ProviderAdmissionRenewalError::IssuedAtRegression { .. } => "SFS-POL-004",
-        ProviderAdmissionRenewalError::ProfileIdChanged { .. }
+        ProviderAdmissionRenewalError::UntrustedBaseRecord
+        | ProviderAdmissionRenewalError::ProfileIdChanged { .. }
         | ProviderAdmissionRenewalError::ProfileAliasesChanged
         | ProviderAdmissionRenewalError::CapabilitiesChanged
         | ProviderAdmissionRenewalError::AdvertKeyChanged
@@ -6224,16 +6696,14 @@ fn pdp_commitment_validation_category(error: &PdpCommitmentValidationError) -> &
 
 fn pdp_challenge_validation_category(error: &PdpChallengeValidationError) -> &'static str {
     match error {
-        PdpChallengeValidationError::InvalidDeadline => CATEGORY_POLICY,
+        PdpChallengeValidationError::InvalidDeadline { .. } => CATEGORY_POLICY,
         _ => CATEGORY_VALIDATION,
     }
 }
 
 fn pdp_proof_validation_category(error: &PdpProofValidationError) -> &'static str {
     match error {
-        PdpProofValidationError::MissingSignature | PdpProofValidationError::InertSignature => {
-            CATEGORY_SIGNATURE
-        }
+        PdpProofValidationError::InvalidSignature(_) => CATEGORY_SIGNATURE,
         _ => CATEGORY_VALIDATION,
     }
 }
@@ -6273,12 +6743,15 @@ fn pop_validation_category(error: &PopCredentialValidationError) -> &'static str
         | PopCredentialValidationError::RevocationListVersionMismatch { .. }
         | PopCredentialValidationError::RevokedCredential
         | PopCredentialValidationError::ReplayedProof
-        | PopCredentialValidationError::PolicyOnlyProofSystem => CATEGORY_POLICY,
+        | PopCredentialValidationError::ReplayCacheLimitExceeded
+        | PopCredentialValidationError::ChallengeMismatch
+        | PopCredentialValidationError::VerifierContextMismatch => CATEGORY_POLICY,
         PopCredentialValidationError::InvalidPublicKeyLength { .. }
         | PopCredentialValidationError::InvalidSignatureLength { .. }
         | PopCredentialValidationError::InvalidPublicKey { .. }
         | PopCredentialValidationError::SignatureVerification { .. } => CATEGORY_SIGNATURE,
-        PopCredentialValidationError::SignaturePayloadEncoding { .. } => CATEGORY_INTERNAL,
+        PopCredentialValidationError::SignaturePayloadEncoding { .. }
+        | PopCredentialValidationError::ProofBackend { .. } => CATEGORY_INTERNAL,
         _ => CATEGORY_VALIDATION,
     }
 }
@@ -6785,6 +7258,18 @@ mod tests {
         [seed; 32]
     }
 
+    fn pop_scalar(value: u64) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    fn pop_nonce(value: u128) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
     fn pop_empty_signature() -> crate::PopSignatureV1 {
         crate::PopSignatureV1 {
             algorithm: crate::PopSignatureAlgorithmV1::Ed25519,
@@ -6796,8 +7281,8 @@ mod tests {
     fn pop_credential() -> crate::PopCredentialV1 {
         crate::PopCredentialV1 {
             version: crate::POP_CREDENTIAL_VERSION_V1,
-            credential_id: pop_digest(0x11),
-            holder_commitment: pop_digest(0x12),
+            credential_id: pop_scalar(0x11),
+            holder_commitment: pop_scalar(0x12),
             eligibility_class: crate::PopEligibilityClassV1::General,
             attributes: vec![crate::PopCredentialAttributeV1 {
                 key: "residency".to_owned(),
@@ -6807,8 +7292,8 @@ mod tests {
             issued_at_epoch: 100,
             expires_at_epoch: 1_000,
             renewal_at_epoch: 800,
-            revocation_nonce: pop_digest(0x14),
-            commitment_root: pop_digest(0x15),
+            revocation_nonce: pop_nonce(0x14),
+            commitment_root: pop_scalar(0x15),
             commitment_tree_version: 7,
             revocation_list_version: 3,
             issuer_signature: pop_empty_signature(),
@@ -6818,8 +7303,9 @@ mod tests {
     fn pop_commitment_root() -> crate::PopCommitmentRootV1 {
         crate::PopCommitmentRootV1 {
             version: crate::POP_COMMITMENT_ROOT_VERSION_V1,
-            root_digest: pop_digest(0x15),
+            root_digest: pop_scalar(0x15),
             tree_size: 32,
+            tree_depth: crate::pop_credentials::POP_CREDENTIAL_TREE_DEPTH_V1,
             tree_version: 7,
             issuer_id: "issuer.sorafs".to_owned(),
             published_at_epoch: 120,
@@ -6833,7 +7319,10 @@ mod tests {
         crate::PopRevocationListV1 {
             version: crate::POP_REVOCATION_LIST_VERSION_V1,
             list_version: 3,
-            commitment_root: pop_digest(0x15),
+            commitment_root: pop_scalar(0x15),
+            revocation_root: crate::pop_credentials::pop_revocation_root_v1(&[])
+                .expect("empty revocation root"),
+            revocation_tree_depth: crate::pop_credentials::POP_REVOCATION_TREE_DEPTH_V1,
             issuer_id: "issuer.sorafs".to_owned(),
             published_at_epoch: 130,
             entries: Vec::new(),
@@ -6868,23 +7357,31 @@ mod tests {
     }
 
     fn pop_membership_proof() -> crate::PopMembershipProofV1 {
-        crate::finalize_pop_membership_proof_digest_v1(crate::PopMembershipProofV1 {
+        let proof = crate::PopMembershipProofV1 {
             version: crate::POP_MEMBERSHIP_PROOF_VERSION_V1,
-            proof_id: pop_digest(0x41),
-            credential_id: pop_digest(0x11),
-            holder_commitment: pop_digest(0x12),
             eligibility_class: crate::PopEligibilityClassV1::General,
-            commitment_root: pop_digest(0x15),
+            commitment_root: pop_scalar(0x15),
             commitment_tree_version: 7,
+            revocation_root: crate::pop_credentials::pop_revocation_root_v1(&[])
+                .expect("empty revocation root"),
             revocation_list_version: 3,
-            nullifier: pop_digest(0x42),
+            nullifier: pop_scalar(0x42),
             challenge_digest: pop_digest(0x43),
             verifier_context: "jury-case-1".to_owned(),
-            proof_system: crate::PopMembershipProofSystemV1::TranscriptDigestV1,
-            proof_digest: [0; 32],
+            proof_system: crate::PopMembershipProofSystemV1::Halo2IpaPastaV1,
+            verifier_material: crate::pop_credentials::PopMembershipVerifierMaterialV1 {
+                circuit_id: "sorafs-pop-membership-halo2-ipa-pasta-v1".to_owned(),
+                circuit_k: 14,
+                credential_tree_depth: crate::pop_credentials::POP_CREDENTIAL_TREE_DEPTH_V1,
+                revocation_tree_depth: crate::pop_credentials::POP_REVOCATION_TREE_DEPTH_V1,
+                parameter_digest: pop_digest(0x44),
+                verifying_key_digest: pop_digest(0x45),
+            },
+            proof_bytes: vec![0xAA; 64],
             expires_at_epoch: 2_000,
-        })
-        .expect("finalize PoP proof digest")
+        };
+        proof.validate().expect("validate PoP proof payload");
+        proof
     }
 
     fn signed_pop_material() -> (
@@ -7169,6 +7666,58 @@ mod tests {
         );
         assert!(!outcome.is_ok());
         assert_eq!(outcome.action.as_deref(), Some("fix input"));
+    }
+
+    #[test]
+    fn pdp_reference_context_and_categories_match_fixed_signature_model() {
+        let proof = PdpProofV1 {
+            version: crate::PDP_PROOF_VERSION_V1,
+            commitment_digest: [0x11; 32],
+            challenge_id: [0x22; 32],
+            manifest_digest: [0x33; 32],
+            provider_id: [0x44; 32],
+            epoch_id: 1,
+            proof_leaves: Vec::new(),
+            issued_at_unix: 1,
+            signature: crate::PdpEd25519SignatureV1 {
+                public_key: [0x55; PUBLIC_KEY_LENGTH],
+                signature: [0x66; SIGNATURE_LENGTH],
+            },
+        };
+        let context = pdp_proof_context(&proof);
+        assert!(context.iter().any(|field| {
+            field.key == "signature_len" && field.value == SIGNATURE_LENGTH.to_string()
+        }));
+
+        assert_eq!(
+            pdp_challenge_validation_category(&PdpChallengeValidationError::InvalidDeadline {
+                issued_at: 2,
+                deadline_at: 2,
+            }),
+            CATEGORY_POLICY
+        );
+        assert_eq!(
+            pdp_proof_validation_category(&PdpProofValidationError::InvalidSignature(
+                crate::PdpSignatureVerificationError::InvalidSignature {
+                    reason: "fixture".to_owned(),
+                },
+            )),
+            CATEGORY_SIGNATURE
+        );
+        assert_eq!(
+            pdp_proof_validation_category(&PdpProofValidationError::InvalidIssuedAt),
+            CATEGORY_VALIDATION
+        );
+    }
+
+    #[test]
+    fn untrusted_admission_renewal_maps_to_structural_validation() {
+        let error = ProviderAdmissionRenewalError::UntrustedBaseRecord;
+        assert_eq!(provider_admission_renewal_code(&error), "SFS-VAL-006");
+        assert_eq!(
+            provider_admission_renewal_category(&error),
+            CATEGORY_VALIDATION
+        );
     }
 
     #[test]
@@ -8195,7 +8744,8 @@ mod tests {
         );
         assert!(outcome.is_ok(), "{outcome:?}");
 
-        let proof_bytes = to_bytes(&pop_membership_proof()).expect("encode PoP proof");
+        let proof = pop_membership_proof();
+        let proof_bytes = to_bytes(&proof).expect("encode PoP proof");
         let outcome = validate_pop_payload_bytes(
             PopValidationPayloadKindV1::MembershipProof,
             &proof_bytes,
@@ -8208,6 +8758,21 @@ mod tests {
                 .telemetry_tags
                 .contains(&"sorafs.reference.pop.membership_proof".to_owned())
         );
+        for private_key in [
+            "proof_id_hex",
+            "credential_id_hex",
+            "holder_commitment_hex",
+            "revocation_nonce_hex",
+            "proof_bytes",
+        ] {
+            assert!(
+                outcome.context.iter().all(|field| field.key != private_key),
+                "private proof context key leaked: {private_key}"
+            );
+        }
+        assert!(outcome.context.iter().any(|field| {
+            field.key == "proof_bytes_len" && field.value == proof.proof_bytes.len().to_string()
+        }));
     }
 
     #[test]
@@ -8221,6 +8786,34 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-NORITO-001");
         assert_eq!(outcome.category, CATEGORY_NORITO);
+    }
+
+    #[test]
+    fn validate_pop_payload_bytes_rejects_oversize_and_noncanonical_archives() {
+        let oversized = vec![0u8; POP_REFERENCE_PAYLOAD_MAX_BYTES_V1 + 1];
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::EnrollmentRequest,
+            &oversized,
+            "oversized-pop-enrollment.to",
+            33,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+
+        let compressed = norito::to_compressed_bytes(
+            &pop_enrollment(),
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode noncanonical compressed PoP enrollment");
+        let outcome = validate_pop_payload_bytes(
+            PopValidationPayloadKindV1::EnrollmentRequest,
+            &compressed,
+            "compressed-pop-enrollment.to",
+            33,
+        );
+        assert!(!outcome.is_ok());
+        assert_eq!(outcome.code, "SFS-NORITO-001");
+        assert!(outcome.message.contains("canonical Norito"), "{outcome:?}");
     }
 
     #[test]
@@ -8387,6 +8980,89 @@ mod tests {
     }
 
     #[test]
+    fn field_level_orderbook_builders_accept_owner_account_at_v1_byte_ceiling() {
+        let seed = [0xB7; 32];
+        let owner_account = vec![0x44; crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+        let order_id = crate::derive_orderbook_order_id_v1(&owner_account, 1);
+        let order_bytes = build_signed_orderbook_order_request_bytes_ed25519_v1(
+            OrderbookOrderRequestFieldsV1 {
+                side: OrderSideV1::Bid,
+                tier: OrderTierV1::Hot,
+                price_per_gib_micro_xor: 1,
+                quantity_gib: 1,
+                remaining_gib: 1,
+                owner_account: owner_account.clone(),
+                expiry_unix: 1,
+                nonce: 1,
+                maker_fee_bps: 0,
+                taker_fee_bps: 0,
+            },
+            &seed,
+        )
+        .expect("maximum-length owner request must build");
+        let order: OrderRequestV1 =
+            decode_from_bytes(&order_bytes).expect("decode maximum-length owner request");
+        assert_eq!(order.owner_account, owner_account);
+
+        let cancel_bytes = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
+            OrderbookOrderCancelFieldsV1 {
+                order_id,
+                owner_account: order.owner_account,
+                reason: OrderCancelReasonV1::OwnerRequested,
+                nonce: 2,
+            },
+            &seed,
+        )
+        .expect("maximum-length owner cancel must build");
+        let cancel: OrderCancelV1 =
+            decode_from_bytes(&cancel_bytes).expect("decode maximum-length owner cancel");
+        assert_eq!(
+            cancel.owner_account.len(),
+            crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1
+        );
+    }
+
+    #[test]
+    fn field_level_orderbook_builders_reject_oversized_owner_before_key_or_id_use() {
+        let owner_account = vec![0x44; crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        let request_err = build_signed_orderbook_order_request_bytes_ed25519_v1(
+            OrderbookOrderRequestFieldsV1 {
+                side: OrderSideV1::Bid,
+                tier: OrderTierV1::Hot,
+                price_per_gib_micro_xor: 1,
+                quantity_gib: 1,
+                remaining_gib: 1,
+                owner_account: owner_account.clone(),
+                expiry_unix: 1,
+                nonce: 1,
+                maker_fee_bps: 0,
+                taker_fee_bps: 0,
+            },
+            &[0xB7; 31],
+        )
+        .expect_err("oversized request owner must fail before signing-key parsing");
+        assert!(
+            matches!(request_err, OrderbookPayloadSigningError::Sign { reason, .. }
+            if reason.contains("exceeds maximum 256 bytes"))
+        );
+
+        let cancel_err = build_signed_orderbook_order_cancel_bytes_ed25519_v1(
+            OrderbookOrderCancelFieldsV1 {
+                order_id: [0x11; 32],
+                owner_account,
+                reason: OrderCancelReasonV1::OwnerRequested,
+                nonce: 1,
+            },
+            &[0xB7; 31],
+        )
+        .expect_err("oversized cancel owner must fail before signing-key parsing");
+        assert!(
+            matches!(cancel_err, OrderbookPayloadSigningError::Sign { reason, .. }
+            if reason.contains("exceeds maximum 256 bytes"))
+        );
+    }
+
+    #[test]
     fn build_signed_orderbook_payload_bytes_ed25519_v1_rejects_invalid_fields() {
         let err = build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
             OrderbookSettlementReceiptFieldsV1 {
@@ -8500,6 +9176,39 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-POL-007", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_POLICY);
+    }
+
+    #[test]
+    fn validate_orderbook_payload_bytes_rejects_oversized_request_and_cancel_owners() {
+        let owner_account = vec![0x45; crate::ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1];
+        let mut order = orderbook_order_request();
+        order.owner_account.clone_from(&owner_account);
+        order.order_id = crate::derive_orderbook_order_id_v1(&owner_account, order.nonce);
+        let order_bytes = to_bytes(&order).expect("encode oversized-owner request");
+        let order_outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::OrderRequest,
+            &order_bytes,
+            "oversized-owner-order.to",
+            34,
+        );
+        assert!(!order_outcome.is_ok());
+        assert_eq!(order_outcome.code, "SFS-VAL-001", "{order_outcome:?}");
+        assert_eq!(order_outcome.category, CATEGORY_VALIDATION);
+        assert!(order_outcome.message.contains("exceeds maximum 256 bytes"));
+
+        let mut cancel = orderbook_order_cancel();
+        cancel.owner_account = owner_account;
+        let cancel_bytes = to_bytes(&cancel).expect("encode oversized-owner cancel");
+        let cancel_outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::OrderCancel,
+            &cancel_bytes,
+            "oversized-owner-cancel.to",
+            34,
+        );
+        assert!(!cancel_outcome.is_ok());
+        assert_eq!(cancel_outcome.code, "SFS-VAL-001", "{cancel_outcome:?}");
+        assert_eq!(cancel_outcome.category, CATEGORY_VALIDATION);
+        assert!(cancel_outcome.message.contains("exceeds maximum 256 bytes"));
     }
 
     #[test]

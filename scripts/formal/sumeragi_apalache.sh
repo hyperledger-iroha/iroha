@@ -1306,7 +1306,10 @@ case "$mode" in
   autoscale-transition-fast)
     spec_file="$spec_dir/SumeragiAutoscaleTransitionGate.tla"
     cfg_file="$spec_dir/SumeragiAutoscaleTransitionGate_fast.cfg"
-    apalache_length=10
+    # Request -> certify -> carry -> retire completes by depth 8; one extra
+    # step covers a post-retirement interleaving without the disproportionate
+    # SMT cost of depth 10. TLC still exhausts the complete bounded graph.
+    apalache_length=9
     ;;
   merge-execution-order-fast)
     spec_file="$spec_dir/SumeragiMergeExecutionOrder.tla"

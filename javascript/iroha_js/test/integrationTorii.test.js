@@ -3071,29 +3071,6 @@ test(
       "sorafs uptime response observed_secs must be non-negative",
     );
 
-    let porObservation;
-    try {
-      porObservation = await client.submitSorafsPorObservation({ success: true });
-    } catch (error) {
-      if (shouldSkipSorafsPorEndpoints(error)) {
-        t.diagnostic(
-          `SoraFS PoR observation endpoint unavailable on target node: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        return;
-      }
-      throw error;
-    }
-    assert.ok(
-      typeof porObservation.status === "string" && porObservation.status.length > 0,
-      "SoraFS PoR observation response must include a status string",
-    );
-    assert.equal(
-      porObservation.success,
-      true,
-      "SoraFS PoR observation payload should echo the submitted success flag",
-    );
   },
 );
 

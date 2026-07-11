@@ -15,10 +15,13 @@ use std::str::FromStr;
 use std::{
     collections::{BTreeMap, HashSet},
     convert::TryFrom,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 
 use blake3::{Hash, Hasher};
 #[cfg(feature = "manifest")]
@@ -176,12 +179,42 @@ pub enum ChunkStoreError {
     ChunkOffsetTooLarge { offset: usize },
     #[error("payload length exceeds u64::MAX")]
     PayloadLengthTooLarge,
+    #[error("chunk plan must contain at least one chunk")]
+    EmptyPlan,
+    #[error("chunk {chunk_index} has zero length")]
+    ZeroLengthChunk { chunk_index: usize },
+    #[error("chunk {chunk_index} is not contiguous: expected offset {expected}, found {actual}")]
+    NonContiguousChunk {
+        chunk_index: usize,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("chunk {chunk_index} range overflows u64: offset {offset}, length {length}")]
+    ChunkRangeOverflow {
+        chunk_index: usize,
+        offset: u64,
+        length: u32,
+    },
+    #[error("payload digest does not match plan payload digest")]
+    PayloadDigestMismatch,
+    #[error("failed to reserve {requested} entries/bytes for {context}")]
+    AllocationFailed {
+        context: &'static str,
+        requested: usize,
+    },
 }
 
 /// Abstraction over payload sources that support random-access reads.
 pub trait PayloadSource {
     /// Reads exactly `buf.len()` bytes starting at `offset` into `buf`.
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError>;
+
+    /// Verify that the source contains exactly the planned payload length when knowable.
+    ///
+    /// Random-access sources with no cheap length operation may retain the default no-op.
+    fn ensure_exhausted(&mut self, _expected_len: u64) -> Result<(), ChunkStoreError> {
+        Ok(())
+    }
 }
 
 /// Streaming payload backed by a sequential reader.
@@ -208,8 +241,29 @@ impl<R: Read> PayloadSource for ReaderPayload<'_, R> {
             });
         }
         self.reader.read_exact(buf).map_err(ChunkStoreError::Io)?;
-        self.consumed += buf.len() as u64;
+        self.consumed = self
+            .consumed
+            .checked_add(buf.len() as u64)
+            .ok_or(ChunkStoreError::PayloadLengthTooLarge)?;
         Ok(())
+    }
+
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
+        let mut trailing = [0u8; 1];
+        match self
+            .reader
+            .read(&mut trailing)
+            .map_err(ChunkStoreError::Io)?
+        {
+            0 => Ok(()),
+            count => Err(ChunkStoreError::LengthMismatch {
+                expected: expected_len,
+                actual: self
+                    .consumed
+                    .checked_add(count as u64)
+                    .ok_or(ChunkStoreError::PayloadLengthTooLarge)?,
+            }),
+        }
     }
 }
 
@@ -227,7 +281,10 @@ impl<'a> InMemoryPayload<'a> {
 
 impl PayloadSource for InMemoryPayload<'_> {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
-        let start = offset as usize;
+        let start = usize::try_from(offset).map_err(|_| ChunkStoreError::OffsetOutOfRange {
+            offset,
+            len: self.data.len() as u64,
+        })?;
         let end = start
             .checked_add(buf.len())
             .ok_or(ChunkStoreError::OffsetOutOfRange {
@@ -241,6 +298,18 @@ impl PayloadSource for InMemoryPayload<'_> {
             });
         }
         buf.copy_from_slice(&self.data[start..end]);
+        Ok(())
+    }
+
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
+        let actual =
+            u64::try_from(self.data.len()).map_err(|_| ChunkStoreError::PayloadLengthTooLarge)?;
+        if actual != expected_len {
+            return Err(ChunkStoreError::LengthMismatch {
+                expected: expected_len,
+                actual,
+            });
+        }
         Ok(())
     }
 }
@@ -266,6 +335,17 @@ impl PayloadSource for FilePayload {
         self.file.read_exact(buf).map_err(ChunkStoreError::Io)?;
         Ok(())
     }
+
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
+        let actual = self.file.metadata().map_err(ChunkStoreError::Io)?.len();
+        if actual != expected_len {
+            return Err(ChunkStoreError::LengthMismatch {
+                expected: expected_len,
+                actual,
+            });
+        }
+        Ok(())
+    }
 }
 
 struct FileSpan {
@@ -284,14 +364,25 @@ pub struct DirectoryPayload {
 
 impl DirectoryPayload {
     pub fn new(root: &Path, files: &[FilePlan]) -> Result<Self, io::Error> {
-        let mut spans = Vec::with_capacity(files.len());
+        let mut spans = Vec::new();
+        spans.try_reserve_exact(files.len()).map_err(|_| {
+            io::Error::other(format!(
+                "failed to reserve directory payload spans for {} files",
+                files.len()
+            ))
+        })?;
         let mut offset = 0u64;
         for file in files {
             let mut path = root.to_path_buf();
             for component in &file.path {
                 path.push(component);
             }
-            let end = offset + file.size;
+            let end = offset.checked_add(file.size).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "directory payload file sizes overflow u64",
+                )
+            })?;
             spans.push(FileSpan {
                 start: offset,
                 end,
@@ -347,7 +438,12 @@ impl PayloadSource for DirectoryPayload {
             let span = &self.spans[span_index];
 
             let span_offset = current_offset - span.start;
-            let span_remaining = (span.end - current_offset) as usize;
+            let span_remaining = usize::try_from(span.end - current_offset).map_err(|_| {
+                ChunkStoreError::OffsetOutOfRange {
+                    offset: current_offset,
+                    len: self.total_len,
+                }
+            })?;
             let to_read = span_remaining.min(remaining);
 
             let file = self.open_file(span_index)?;
@@ -361,6 +457,16 @@ impl PayloadSource for DirectoryPayload {
             current_offset += to_read as u64;
         }
 
+        Ok(())
+    }
+
+    fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
+        if self.total_len != expected_len {
+            return Err(ChunkStoreError::LengthMismatch {
+                expected: expected_len,
+                actual: self.total_len,
+            });
+        }
         Ok(())
     }
 }
@@ -417,6 +523,10 @@ pub struct CarChunk {
 }
 
 const CAR_CHUNK_LENGTH_LIMIT: u32 = u32::MAX;
+// Keep a single untrusted plan entry from requesting a multi-gigabyte allocation. Canonical
+// SoraFS profiles are at most 512 KiB and DA ingest is specified at no more than 2 MiB, so this
+// ceiling retains headroom without making allocation size attacker-controlled.
+const CHUNK_STORE_MAX_CHUNK_BYTES: u32 = 4 * 1024 * 1024;
 
 fn ensure_car_plan_profile(profile: ChunkProfile) -> Result<(), CarPlanError> {
     profile.validate()?;
@@ -440,6 +550,60 @@ fn ensure_chunk_store_profile(profile: ChunkProfile) -> Result<(), ChunkStoreErr
         });
     }
     Ok(())
+}
+
+fn preflight_chunk_store_plan(plan: &CarBuildPlan) -> Result<usize, ChunkStoreError> {
+    ensure_chunk_store_profile(plan.chunk_profile)?;
+    if plan.chunks.is_empty() {
+        return Err(ChunkStoreError::EmptyPlan);
+    }
+
+    let profile_limit = u32::try_from(plan.chunk_profile.max_size)
+        .unwrap_or(CAR_CHUNK_LENGTH_LIMIT)
+        .min(CHUNK_STORE_MAX_CHUNK_BYTES);
+    let mut expected_offset = 0u64;
+    let mut max_chunk_len = 0usize;
+
+    for (chunk_index, chunk) in plan.chunks.iter().enumerate() {
+        if chunk.length == 0 {
+            return Err(ChunkStoreError::ZeroLengthChunk { chunk_index });
+        }
+        let chunk_end = chunk.offset.checked_add(u64::from(chunk.length)).ok_or(
+            ChunkStoreError::ChunkRangeOverflow {
+                chunk_index,
+                offset: chunk.offset,
+                length: chunk.length,
+            },
+        )?;
+        if chunk.offset != expected_offset {
+            return Err(ChunkStoreError::NonContiguousChunk {
+                chunk_index,
+                expected: expected_offset,
+                actual: chunk.offset,
+            });
+        }
+        if chunk.length > profile_limit {
+            return Err(ChunkStoreError::ChunkLengthTooLarge {
+                length: chunk.length as usize,
+                limit: profile_limit,
+            });
+        }
+        let chunk_len =
+            usize::try_from(chunk.length).map_err(|_| ChunkStoreError::ChunkLengthTooLarge {
+                length: usize::MAX,
+                limit: profile_limit,
+            })?;
+        max_chunk_len = max_chunk_len.max(chunk_len);
+        expected_offset = chunk_end;
+    }
+
+    if expected_offset != plan.content_length {
+        return Err(ChunkStoreError::LengthMismatch {
+            expected: plan.content_length,
+            actual: expected_offset,
+        });
+    }
+    Ok(max_chunk_len)
 }
 
 fn car_chunk_from_digest_with_base(
@@ -965,12 +1129,207 @@ pub struct DirectoryChunkSinkOutput {
     pub total_bytes: u64,
 }
 
+const ATOMIC_PATH_RETRIES: usize = 32;
+
+fn normalized_parent(path: &Path) -> Result<&Path, ChunkStoreError> {
+    path.parent()
+        .map(|parent| {
+            if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            }
+        })
+        .ok_or_else(|| ChunkStoreError::Io(io::Error::other("missing parent directory")))
+}
+
+fn validate_directory_path(path: &Path) -> Result<(), ChunkStoreError> {
+    let metadata = fs::symlink_metadata(path).map_err(ChunkStoreError::Io)?;
+    validate_directory_metadata(path, &metadata)
+}
+
+fn validate_directory_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), ChunkStoreError> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ChunkStoreError::Io(io::Error::other(format!(
+            "chunk sink path `{}` must be a real directory",
+            path.display()
+        ))));
+    }
+    Ok(())
+}
+
+fn validate_atomic_destination_absent(path: &Path) -> Result<(), ChunkStoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let kind = if metadata.file_type().is_symlink() {
+                "symlink"
+            } else if metadata.is_dir() {
+                "directory"
+            } else {
+                #[cfg(unix)]
+                if metadata.nlink() != 1 {
+                    "hard-linked file"
+                } else {
+                    "file"
+                }
+                #[cfg(not(unix))]
+                {
+                    "file"
+                }
+            };
+            Err(ChunkStoreError::Io(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "refusing to replace {kind} at atomic chunk destination `{}`",
+                    path.display()
+                ),
+            )))
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(ChunkStoreError::Io(err)),
+    }
+}
+
+fn validate_atomic_temp(path: &Path, file: &File) -> Result<(), ChunkStoreError> {
+    let opened = file.metadata().map_err(ChunkStoreError::Io)?;
+    let linked = fs::symlink_metadata(path).map_err(ChunkStoreError::Io)?;
+    if !opened.is_file() || linked.file_type().is_symlink() || !linked.is_file() {
+        return Err(ChunkStoreError::Io(io::Error::other(format!(
+            "atomic chunk temporary `{}` is not a regular file",
+            path.display()
+        ))));
+    }
+    if !metadata_identifies_same_file(&opened, &linked) {
+        return Err(ChunkStoreError::Io(io::Error::other(format!(
+            "atomic chunk temporary `{}` changed after opening",
+            path.display()
+        ))));
+    }
+    #[cfg(unix)]
+    if opened.nlink() != 1 || linked.nlink() != 1 {
+        return Err(ChunkStoreError::Io(io::Error::other(format!(
+            "atomic chunk temporary `{}` has {} hard links",
+            path.display(),
+            opened.nlink().max(linked.nlink())
+        ))));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.file_type() == right.file_type()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+}
+
+fn unique_unused_sibling(parent: &Path, prefix: &str) -> Result<PathBuf, ChunkStoreError> {
+    for _ in 0..ATOMIC_PATH_RETRIES {
+        let nonce: [u8; 16] = rand::random();
+        let candidate = parent.join(format!("{prefix}.{}", hex::encode(nonce)));
+        match fs::symlink_metadata(&candidate) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(candidate),
+            Ok(_) => continue,
+            Err(err) => return Err(ChunkStoreError::Io(err)),
+        }
+    }
+    Err(ChunkStoreError::Io(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to allocate a collision-free sibling path",
+    )))
+}
+
+fn remove_path_no_follow(path: &Path) {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            let _ = fs::remove_file(path);
+        }
+        Ok(_) => {
+            let _ = fs::remove_dir_all(path);
+        }
+        Err(_) => {}
+    }
+}
+
+fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn set_atomic_no_follow(options: &mut OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_atomic_no_follow(_options: &mut OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
+}
+
 /// Writes each chunk into a deterministic directory layout (`chunk_{idx:05}.bin`).
-#[derive(Debug, Clone)]
+///
+/// Writes are assembled in a private sibling directory and published only from [`Self::finish`],
+/// so a failed ingest never exposes a partially replaced destination.
+#[derive(Debug)]
 pub struct DirectoryChunkSink {
     root: PathBuf,
     records: Vec<PersistedChunkRecord>,
     total_bytes: u64,
+    staging_root: Option<PathBuf>,
+    staging_before: Option<fs::Metadata>,
+    root_before: Option<fs::Metadata>,
+    parent_before: Option<fs::Metadata>,
 }
 
 impl DirectoryChunkSink {
@@ -981,36 +1340,259 @@ impl DirectoryChunkSink {
             root: root.into(),
             records: Vec::new(),
             total_bytes: 0,
+            staging_root: None,
+            staging_before: None,
+            root_before: None,
+            parent_before: None,
         }
     }
 
     fn write_atomic(path: &Path, data: &[u8]) -> Result<(), ChunkStoreError> {
-        let parent = path
-            .parent()
-            .ok_or_else(|| ChunkStoreError::Io(io::Error::other("missing parent directory")))?;
-        fs::create_dir_all(parent).map_err(ChunkStoreError::Io)?;
-        let mut tmp = path.to_path_buf();
-        tmp.add_extension("partial");
-        {
-            let mut file = File::create(&tmp).map_err(ChunkStoreError::Io)?;
+        let parent = normalized_parent(path)?;
+        validate_directory_path(parent)?;
+        let parent_before = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
+        validate_atomic_destination_absent(path)?;
+
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ChunkStoreError::Io(io::Error::other("invalid chunk file name")))?;
+        let mut temp_path = None;
+        let mut temp_file = None;
+        for _ in 0..ATOMIC_PATH_RETRIES {
+            let nonce: [u8; 16] = rand::random();
+            let candidate = parent.join(format!(".{file_name}.{}.partial", hex::encode(nonce)));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            set_atomic_no_follow(&mut options);
+            #[cfg(unix)]
+            options.mode(0o600);
+            match options.open(&candidate) {
+                Ok(file) => {
+                    if let Err(error) = validate_atomic_temp(&candidate, &file) {
+                        drop(file);
+                        let _ = fs::remove_file(&candidate);
+                        return Err(error);
+                    }
+                    temp_path = Some(candidate);
+                    temp_file = Some(file);
+                    break;
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(ChunkStoreError::Io(err)),
+            }
+        }
+        let temp_path = temp_path.ok_or_else(|| {
+            ChunkStoreError::Io(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "failed to allocate a collision-free chunk temporary file",
+            ))
+        })?;
+        let mut file = temp_file.expect("temporary path and file are assigned together");
+
+        let result = (|| {
             file.write_all(data).map_err(ChunkStoreError::Io)?;
             file.sync_all().map_err(ChunkStoreError::Io)?;
+            validate_atomic_temp(&temp_path, &file)?;
+            drop(file);
+            let parent_after = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
+            if !metadata_identifies_same_file(&parent_before, &parent_after) {
+                return Err(ChunkStoreError::Io(io::Error::other(format!(
+                    "atomic chunk parent `{}` changed during write",
+                    parent.display()
+                ))));
+            }
+            validate_directory_metadata(parent, &parent_after)?;
+            validate_atomic_destination_absent(path)?;
+            fs::rename(&temp_path, path).map_err(ChunkStoreError::Io)?;
+            sync_directory(parent).map_err(ChunkStoreError::Io)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
         }
-        fs::rename(&tmp, path).map_err(ChunkStoreError::Io)?;
+        result
+    }
+
+    fn create_staging_root(&self, parent: &Path) -> Result<PathBuf, ChunkStoreError> {
+        for _ in 0..ATOMIC_PATH_RETRIES {
+            let nonce: [u8; 16] = rand::random();
+            let candidate = parent.join(format!(".sorafs-chunks.{}.partial", hex::encode(nonce)));
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.create(&candidate) {
+                Ok(()) => {
+                    if let Err(error) = validate_directory_path(&candidate)
+                        .and_then(|()| sync_directory(parent).map_err(ChunkStoreError::Io))
+                    {
+                        remove_path_no_follow(&candidate);
+                        return Err(error);
+                    }
+                    return Ok(candidate);
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(ChunkStoreError::Io(err)),
+            }
+        }
+        Err(ChunkStoreError::Io(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "failed to allocate a collision-free chunk staging directory",
+        )))
+    }
+
+    fn validate_destination_unchanged(&self) -> Result<(), ChunkStoreError> {
+        let current = match fs::symlink_metadata(&self.root) {
+            Ok(metadata) => Some(metadata),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(ChunkStoreError::Io(err)),
+        };
+        match (&self.root_before, current.as_ref()) {
+            (None, None) => Ok(()),
+            (Some(before), Some(after)) if metadata_identifies_same_file(before, after) => {
+                validate_directory_metadata(&self.root, after)
+            }
+            _ => Err(ChunkStoreError::Io(io::Error::other(format!(
+                "chunk sink destination `{}` changed during ingest",
+                self.root.display()
+            )))),
+        }
+    }
+
+    fn validate_staging_unchanged(&self, staging: &Path) -> Result<(), ChunkStoreError> {
+        let before = self
+            .staging_before
+            .as_ref()
+            .ok_or_else(|| ChunkStoreError::Io(io::Error::other("chunk sink was not prepared")))?;
+        let current = fs::symlink_metadata(staging).map_err(ChunkStoreError::Io)?;
+        if !metadata_identifies_same_file(before, &current) {
+            return Err(ChunkStoreError::Io(io::Error::other(format!(
+                "chunk sink staging directory `{}` changed during ingest",
+                staging.display()
+            ))));
+        }
+        validate_directory_metadata(staging, &current)
+    }
+
+    fn commit_staging(&self, staging: &Path) -> Result<(), ChunkStoreError> {
+        let parent = normalized_parent(&self.root)?;
+        let parent_now = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
+        let parent_before = self
+            .parent_before
+            .as_ref()
+            .ok_or_else(|| ChunkStoreError::Io(io::Error::other("chunk sink was not prepared")))?;
+        if !metadata_identifies_same_file(parent_before, &parent_now) {
+            return Err(ChunkStoreError::Io(io::Error::other(format!(
+                "chunk sink parent `{}` changed during ingest",
+                parent.display()
+            ))));
+        }
+        validate_directory_metadata(parent, &parent_now)?;
+        self.validate_destination_unchanged()?;
+        self.validate_staging_unchanged(staging)?;
+        sync_directory(staging).map_err(ChunkStoreError::Io)?;
+
+        let backup = if self.root_before.is_some() {
+            Some(unique_unused_sibling(parent, ".sorafs-chunks.backup")?)
+        } else {
+            None
+        };
+        if let Some(backup) = backup.as_ref() {
+            fs::rename(&self.root, backup).map_err(ChunkStoreError::Io)?;
+            if let Err(err) = sync_directory(parent) {
+                let _ = fs::rename(backup, &self.root);
+                return Err(ChunkStoreError::Io(err));
+            }
+        }
+
+        if let Err(err) = fs::rename(staging, &self.root) {
+            if let Some(backup) = backup.as_ref() {
+                let _ = fs::rename(backup, &self.root);
+                let _ = sync_directory(parent);
+            }
+            return Err(ChunkStoreError::Io(err));
+        }
+        if let Err(err) = sync_directory(parent) {
+            let _ = fs::rename(&self.root, staging);
+            if let Some(backup) = backup.as_ref() {
+                let _ = fs::rename(backup, &self.root);
+            }
+            let _ = sync_directory(parent);
+            return Err(ChunkStoreError::Io(err));
+        }
+
+        if let Some(backup) = backup.as_ref() {
+            if let (Some(before), Ok(current)) =
+                (self.root_before.as_ref(), fs::symlink_metadata(backup))
+                && metadata_identifies_same_file(before, &current)
+            {
+                remove_path_no_follow(backup);
+            }
+            let _ = sync_directory(parent);
+        }
         Ok(())
+    }
+}
+
+impl Clone for DirectoryChunkSink {
+    fn clone(&self) -> Self {
+        Self::new(self.root.clone())
+    }
+}
+
+impl Drop for DirectoryChunkSink {
+    fn drop(&mut self) {
+        if let (Some(staging), Some(before)) =
+            (self.staging_root.take(), self.staging_before.take())
+            && let Ok(current) = fs::symlink_metadata(&staging)
+            && metadata_identifies_same_file(&before, &current)
+        {
+            remove_path_no_follow(&staging);
+        }
     }
 }
 
 impl ChunkSink for DirectoryChunkSink {
     type Output = DirectoryChunkSinkOutput;
 
-    fn prepare(&mut self, _plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
-        if self.root.exists() {
-            fs::remove_dir_all(&self.root).map_err(ChunkStoreError::Io)?;
+    fn prepare(&mut self, plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
+        if self.staging_root.is_some() {
+            return Err(ChunkStoreError::Io(io::Error::other(
+                "chunk sink is already prepared",
+            )));
         }
-        fs::create_dir_all(&self.root).map_err(ChunkStoreError::Io)?;
+        let parent = normalized_parent(&self.root)?;
+        fs::create_dir_all(parent).map_err(ChunkStoreError::Io)?;
+        validate_directory_path(parent)?;
+        let root_before = match fs::symlink_metadata(&self.root) {
+            Ok(metadata) => {
+                validate_directory_metadata(&self.root, &metadata)?;
+                Some(metadata)
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(ChunkStoreError::Io(err)),
+        };
+        let parent_before = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
+
         self.records.clear();
+        self.records
+            .try_reserve_exact(plan.chunks.len())
+            .map_err(|_| ChunkStoreError::AllocationFailed {
+                context: "directory sink records",
+                requested: plan.chunks.len(),
+            })?;
         self.total_bytes = 0;
+        self.root_before = root_before;
+        self.parent_before = Some(parent_before);
+        let staging = self.create_staging_root(parent)?;
+        let staging_before = match fs::symlink_metadata(&staging) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                remove_path_no_follow(&staging);
+                return Err(ChunkStoreError::Io(error));
+            }
+        };
+        self.staging_root = Some(staging);
+        self.staging_before = Some(staging_before);
         Ok(())
     }
 
@@ -1021,7 +1603,12 @@ impl ChunkSink for DirectoryChunkSink {
         data: &[u8],
     ) -> Result<(), ChunkStoreError> {
         let file_name = format!("chunk_{index:05}.bin");
-        let path = self.root.join(&file_name);
+        let staging = self
+            .staging_root
+            .as_ref()
+            .ok_or_else(|| ChunkStoreError::Io(io::Error::other("chunk sink was not prepared")))?;
+        self.validate_staging_unchanged(staging)?;
+        let path = staging.join(&file_name);
         Self::write_atomic(&path, data)?;
         self.records.push(PersistedChunkRecord {
             file_name,
@@ -1038,9 +1625,16 @@ impl ChunkSink for DirectoryChunkSink {
         Ok(())
     }
 
-    fn finish(self) -> Result<Self::Output, ChunkStoreError> {
+    fn finish(mut self) -> Result<Self::Output, ChunkStoreError> {
+        let staging = self
+            .staging_root
+            .as_ref()
+            .ok_or_else(|| ChunkStoreError::Io(io::Error::other("chunk sink was not prepared")))?;
+        self.commit_staging(staging)?;
+        self.staging_root = None;
+        self.staging_before = None;
         Ok(DirectoryChunkSinkOutput {
-            records: self.records,
+            records: std::mem::take(&mut self.records),
             total_bytes: self.total_bytes,
         })
     }
@@ -1178,15 +1772,25 @@ impl ChunkStore {
     pub fn try_ingest_bytes(&mut self, payload: &[u8]) -> Result<(), ChunkStoreError> {
         ensure_chunk_store_profile(self.profile)?;
         let vectors = sorafs_chunker::try_chunk_bytes_with_digests_profile(self.profile, payload)?;
-        self.chunks.clear();
-        self.chunks.reserve(vectors.len());
+        let mut chunks = Vec::new();
+        chunks
+            .try_reserve_exact(vectors.len())
+            .map_err(|_| ChunkStoreError::AllocationFailed {
+                context: "chunk metadata",
+                requested: vectors.len(),
+            })?;
         for digest in vectors {
-            self.chunks.push(stored_chunk_from_digest(digest)?);
+            chunks.push(stored_chunk_from_digest(digest)?);
         }
-        self.por_tree = PorMerkleTree::from_payload(payload, &self.chunks);
-        self.payload_digest = blake3::hash(payload);
-        self.payload_len =
+        let payload_len =
             u64::try_from(payload.len()).map_err(|_| ChunkStoreError::PayloadLengthTooLarge)?;
+        let por_tree = PorMerkleTree::from_payload(payload, &chunks);
+        let payload_digest = blake3::hash(payload);
+
+        self.chunks = chunks;
+        self.por_tree = por_tree;
+        self.payload_digest = payload_digest;
+        self.payload_len = payload_len;
         Ok(())
     }
 
@@ -1228,17 +1832,41 @@ impl ChunkStore {
         P: PayloadSource,
         S: ChunkSink,
     {
-        self.profile = plan.chunk_profile;
-        self.chunks.clear();
-        self.chunks.reserve(plan.chunks.len());
+        let max_chunk_len = preflight_chunk_store_plan(plan)?;
+        let chunk_count = plan.chunks.len();
+
+        let mut chunks = Vec::new();
+        chunks
+            .try_reserve_exact(chunk_count)
+            .map_err(|_| ChunkStoreError::AllocationFailed {
+                context: "chunk metadata",
+                requested: chunk_count,
+            })?;
+        let mut chunk_nodes = Vec::new();
+        chunk_nodes.try_reserve_exact(chunk_count).map_err(|_| {
+            ChunkStoreError::AllocationFailed {
+                context: "PoR chunk nodes",
+                requested: chunk_count,
+            }
+        })?;
+        let mut chunk_roots = Vec::new();
+        chunk_roots.try_reserve_exact(chunk_count).map_err(|_| {
+            ChunkStoreError::AllocationFailed {
+                context: "PoR chunk roots",
+                requested: chunk_count,
+            }
+        })?;
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(max_chunk_len)
+            .map_err(|_| ChunkStoreError::AllocationFailed {
+                context: "chunk read buffer",
+                requested: max_chunk_len,
+            })?;
 
         sink.prepare(plan)?;
 
-        let mut chunk_nodes = Vec::with_capacity(plan.chunks.len());
-        let mut chunk_roots = Vec::with_capacity(plan.chunks.len());
         let mut payload_hasher = blake3::Hasher::new();
-        let mut buffer = Vec::new();
-        let mut last_chunk_end = 0u64;
 
         for (idx, chunk_plan) in plan.chunks.iter().enumerate() {
             let expected_len = chunk_plan.length as usize;
@@ -1264,21 +1892,7 @@ impl ChunkStore {
             }
             payload_hasher.update(&buffer);
 
-            if idx == 0 {
-                if chunk_plan.offset != 0 {
-                    return Err(ChunkStoreError::OffsetOutOfRange {
-                        offset: chunk_plan.offset,
-                        len: 0,
-                    });
-                }
-            } else if chunk_plan.offset != last_chunk_end {
-                return Err(ChunkStoreError::OffsetOutOfRange {
-                    offset: chunk_plan.offset,
-                    len: last_chunk_end,
-                });
-            }
-
-            self.chunks.push(StoredChunk {
+            chunks.push(StoredChunk {
                 offset: chunk_plan.offset,
                 length: chunk_plan.length,
                 blake3: chunk_plan.digest,
@@ -1295,26 +1909,24 @@ impl ChunkStore {
             chunk_nodes.push(chunk_tree);
 
             sink.write_chunk(idx, chunk_plan, &buffer)?;
-            last_chunk_end = chunk_plan
-                .offset
-                .checked_add(chunk_plan.length as u64)
-                .ok_or(ChunkStoreError::LengthMismatch {
-                    expected: plan.content_length,
-                    actual: u64::MAX,
-                })?;
         }
 
-        if last_chunk_end != plan.content_length {
-            return Err(ChunkStoreError::LengthMismatch {
-                expected: plan.content_length,
-                actual: last_chunk_end,
-            });
+        source.ensure_exhausted(plan.content_length)?;
+
+        let payload_digest = payload_hasher.finalize();
+        if payload_digest != plan.payload_digest {
+            return Err(ChunkStoreError::PayloadDigestMismatch);
         }
 
-        self.por_tree = PorMerkleTree::from_chunks(chunk_nodes, chunk_roots, plan.content_length);
-        self.payload_digest = payload_hasher.finalize();
+        let por_tree = PorMerkleTree::from_chunks(chunk_nodes, chunk_roots, plan.content_length);
+        let output = sink.finish()?;
+
+        self.profile = plan.chunk_profile;
+        self.chunks = chunks;
+        self.por_tree = por_tree;
+        self.payload_digest = payload_digest;
         self.payload_len = plan.content_length;
-        sink.finish()
+        Ok(output)
     }
 
     /// Ingests chunk metadata while persisting chunk bytes to `directory`.
@@ -2747,6 +3359,14 @@ fn build_index(sections: &[CarSection]) -> Option<Vec<u8>> {
 }
 
 impl CarBuildPlan {
+    /// Validate all untrusted fields that drive [`ChunkStore`] allocations and reads.
+    ///
+    /// Validation is allocation-free and rejects empty, zero-length, oversized,
+    /// non-contiguous, overflowing, or content-length-inconsistent chunk sequences.
+    pub fn validate_for_ingest(&self) -> Result<(), ChunkStoreError> {
+        preflight_chunk_store_plan(self).map(|_| ())
+    }
+
     /// Creates a CAR plan by chunking the provided payload with the SoraFS SF-1
     /// profile. Returns `CarPlanError::EmptyInput` if the payload is empty.
     pub fn single_file(payload: &[u8]) -> Result<Self, CarPlanError> {
@@ -2930,15 +3550,144 @@ pub struct FileEntry {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::Cell,
         collections::{BTreeMap, HashSet},
         fs,
         io::Cursor,
+        rc::Rc,
     };
 
     use sorafs_chunker::fixtures::FixtureProfile;
     use tempfile::tempdir;
 
     use super::*;
+
+    #[derive(Debug)]
+    struct StoreSnapshot {
+        profile: ChunkProfile,
+        chunks: Vec<StoredChunk>,
+        por_root: [u8; 32],
+        payload_digest: [u8; 32],
+        payload_len: u64,
+    }
+
+    impl StoreSnapshot {
+        fn capture(store: &ChunkStore) -> Self {
+            Self {
+                profile: store.profile(),
+                chunks: store.chunks().to_vec(),
+                por_root: *store.por_tree().root(),
+                payload_digest: *store.payload_digest().as_bytes(),
+                payload_len: store.payload_len(),
+            }
+        }
+
+        fn assert_unchanged(&self, store: &ChunkStore) {
+            assert_eq!(store.profile(), self.profile);
+            assert_eq!(store.chunks(), self.chunks);
+            assert_eq!(store.por_tree().root(), &self.por_root);
+            assert_eq!(store.payload_digest().as_bytes(), &self.payload_digest);
+            assert_eq!(store.payload_len(), self.payload_len);
+        }
+    }
+
+    #[derive(Clone)]
+    struct ProbeSource {
+        reads: Rc<Cell<usize>>,
+    }
+
+    impl PayloadSource for ProbeSource {
+        fn read_exact(&mut self, _offset: u64, _buf: &mut [u8]) -> Result<(), ChunkStoreError> {
+            self.reads.set(self.reads.get() + 1);
+            Err(ChunkStoreError::Io(io::Error::other(
+                "probe source must not be read",
+            )))
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum ProbeSinkFailure {
+        Never,
+        Write(usize),
+        Finish,
+    }
+
+    #[derive(Clone)]
+    struct ProbeSink {
+        prepares: Rc<Cell<usize>>,
+        writes: Rc<Cell<usize>>,
+        finishes: Rc<Cell<usize>>,
+        failure: ProbeSinkFailure,
+    }
+
+    impl ChunkSink for ProbeSink {
+        type Output = ();
+
+        fn prepare(&mut self, _plan: &CarBuildPlan) -> Result<(), ChunkStoreError> {
+            self.prepares.set(self.prepares.get() + 1);
+            Ok(())
+        }
+
+        fn write_chunk(
+            &mut self,
+            index: usize,
+            _chunk: &CarChunk,
+            _data: &[u8],
+        ) -> Result<(), ChunkStoreError> {
+            self.writes.set(self.writes.get() + 1);
+            if matches!(self.failure, ProbeSinkFailure::Write(failed) if failed == index) {
+                return Err(ChunkStoreError::Io(io::Error::other(
+                    "injected sink write failure",
+                )));
+            }
+            Ok(())
+        }
+
+        fn finish(self) -> Result<Self::Output, ChunkStoreError> {
+            self.finishes.set(self.finishes.get() + 1);
+            if matches!(self.failure, ProbeSinkFailure::Finish) {
+                return Err(ChunkStoreError::Io(io::Error::other(
+                    "injected sink finish failure",
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    fn probe_sink(failure: ProbeSinkFailure) -> (ProbeSink, [Rc<Cell<usize>>; 3]) {
+        let prepares = Rc::new(Cell::new(0));
+        let writes = Rc::new(Cell::new(0));
+        let finishes = Rc::new(Cell::new(0));
+        (
+            ProbeSink {
+                prepares: Rc::clone(&prepares),
+                writes: Rc::clone(&writes),
+                finishes: Rc::clone(&finishes),
+                failure,
+            },
+            [prepares, writes, finishes],
+        )
+    }
+
+    fn reject_before_io(plan: &CarBuildPlan) -> ChunkStoreError {
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(b"pre-existing store state");
+        let before = StoreSnapshot::capture(&store);
+        let reads = Rc::new(Cell::new(0));
+        let mut source = ProbeSource {
+            reads: Rc::clone(&reads),
+        };
+        let (sink, counters) = probe_sink(ProbeSinkFailure::Never);
+        let error = store
+            .ingest_plan_source_with_sink(plan, &mut source, sink)
+            .expect_err("malicious plan must fail preflight");
+        assert_eq!(reads.get(), 0, "preflight failure read from source");
+        assert_eq!(counters[0].get(), 0, "preflight failure prepared sink");
+        assert_eq!(counters[1].get(), 0, "preflight failure wrote sink");
+        assert_eq!(counters[2].get(), 0, "preflight failure finished sink");
+        before.assert_unchanged(&store);
+        error
+    }
 
     #[test]
     fn chunk_plan_digest_depends_on_ordered_chunk_metadata() {
@@ -3255,6 +4004,7 @@ mod tests {
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut store = ChunkStore::with_profile(plan.chunk_profile);
         let dir = tempdir().expect("temp dir");
+        fs::write(dir.path().join("obsolete"), b"old directory state").expect("obsolete state");
 
         let mut source = InMemoryPayload::new(payload);
         let output = store
@@ -3263,12 +4013,41 @@ mod tests {
 
         assert_eq!(output.total_bytes, plan.content_length);
         assert_eq!(output.records.len(), plan.chunks.len());
+        assert!(!dir.path().join("obsolete").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            assert_eq!(
+                fs::metadata(dir.path())
+                    .expect("sink directory metadata")
+                    .permissions()
+                    .mode()
+                    & 0o077,
+                0,
+                "published sink directory must remain private"
+            );
+        }
 
         for record in &output.records {
             let chunk_path = dir.path().join(&record.file_name);
             let bytes = fs::read(&chunk_path).expect("chunk file");
             assert_eq!(bytes.len(), record.length as usize);
             assert_eq!(blake3::hash(&bytes).as_bytes(), &record.digest);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+
+                assert_eq!(
+                    fs::metadata(&chunk_path)
+                        .expect("chunk metadata")
+                        .permissions()
+                        .mode()
+                        & 0o077,
+                    0,
+                    "persisted chunk must remain private"
+                );
+            }
         }
 
         assert_eq!(
@@ -3292,6 +4071,409 @@ mod tests {
         assert_eq!(output.total_bytes, plan.content_length);
         assert_eq!(output.records.len(), plan.chunks.len());
         assert_eq!(reader.position(), payload.len() as u64);
+    }
+
+    #[test]
+    fn ingest_preflight_rejects_u32_max_chunk_before_allocation_or_io() {
+        let payload = b"x";
+        let mut plan = CarBuildPlan::single_file(payload).expect("plan");
+        plan.chunks[0].length = u32::MAX;
+        plan.content_length = u64::from(u32::MAX);
+
+        let error = reject_before_io(&plan);
+        assert!(matches!(
+            error,
+            ChunkStoreError::ChunkLengthTooLarge {
+                length,
+                limit: CHUNK_STORE_MAX_CHUNK_BYTES,
+            } if length == u32::MAX as usize
+        ));
+    }
+
+    #[test]
+    fn ingest_preflight_rejects_chunk_longer_than_declared_profile() {
+        let payload = b"x";
+        let mut plan = CarBuildPlan::single_file(payload).expect("plan");
+        plan.chunk_profile = ChunkProfile {
+            min_size: 1,
+            target_size: 1,
+            max_size: 1,
+            break_mask: 1,
+        };
+        plan.chunks[0].length = 2;
+        plan.content_length = 2;
+
+        let error = reject_before_io(&plan);
+        assert!(matches!(
+            error,
+            ChunkStoreError::ChunkLengthTooLarge {
+                length: 2,
+                limit: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn ingest_preflight_rejects_noncontiguous_offsets_before_io() {
+        let payload = b"ab";
+        let mut plan = CarBuildPlan::single_file(payload).expect("plan");
+        plan.chunks[0].offset = 1;
+        plan.content_length = 3;
+
+        let error = reject_before_io(&plan);
+        assert!(matches!(
+            error,
+            ChunkStoreError::NonContiguousChunk {
+                chunk_index: 0,
+                expected: 0,
+                actual: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn ingest_preflight_rejects_overflowing_chunk_range_before_io() {
+        let payload = b"ab";
+        let mut plan = CarBuildPlan::single_file(payload).expect("plan");
+        plan.chunks.push(CarChunk {
+            offset: u64::MAX - 1,
+            length: 4,
+            digest: [0; 32],
+            taikai_segment_hint: None,
+        });
+        plan.content_length = u64::MAX;
+
+        let error = reject_before_io(&plan);
+        assert!(matches!(
+            error,
+            ChunkStoreError::ChunkRangeOverflow {
+                chunk_index: 1,
+                offset,
+                length: 4,
+            } if offset == u64::MAX - 1
+        ));
+    }
+
+    #[test]
+    fn ingest_preflight_rejects_zero_length_and_empty_plans_before_io() {
+        let payload = b"x";
+        let mut zero = CarBuildPlan::single_file(payload).expect("plan");
+        zero.chunks[0].length = 0;
+        zero.content_length = 0;
+        assert!(matches!(
+            reject_before_io(&zero),
+            ChunkStoreError::ZeroLengthChunk { chunk_index: 0 }
+        ));
+
+        let mut empty = CarBuildPlan::single_file(payload).expect("plan");
+        empty.chunks.clear();
+        empty.content_length = 0;
+        assert!(matches!(
+            reject_before_io(&empty),
+            ChunkStoreError::EmptyPlan
+        ));
+    }
+
+    #[test]
+    fn ingest_preflight_rejects_content_length_mismatch_before_io() {
+        let payload = b"payload";
+        let mut plan = CarBuildPlan::single_file(payload).expect("plan");
+        plan.content_length += 1;
+        let error = reject_before_io(&plan);
+        assert!(matches!(error, ChunkStoreError::LengthMismatch { .. }));
+    }
+
+    #[test]
+    fn short_read_preserves_preexisting_chunk_store_state() {
+        let payload = b"replacement payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(b"pre-existing store state");
+        let before = StoreSnapshot::capture(&store);
+        let mut reader = Cursor::new(&payload[..payload.len() - 1]);
+
+        let error = store
+            .ingest_plan_stream(&plan, &mut reader)
+            .expect_err("short read must fail");
+        assert!(matches!(
+            error,
+            ChunkStoreError::UnexpectedEof { chunk_index: 0, .. }
+        ));
+        before.assert_unchanged(&store);
+    }
+
+    #[test]
+    fn trailing_stream_data_preserves_preexisting_chunk_store_state() {
+        let payload = b"replacement payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(b"pre-existing store state");
+        let before = StoreSnapshot::capture(&store);
+        let mut with_trailer = payload.to_vec();
+        with_trailer.extend_from_slice(b"attacker trailer");
+        let mut reader = Cursor::new(with_trailer);
+
+        let error = store
+            .ingest_plan_stream(&plan, &mut reader)
+            .expect_err("trailing data must fail");
+        assert!(matches!(
+            error,
+            ChunkStoreError::LengthMismatch {
+                expected,
+                actual,
+            } if expected == plan.content_length && actual == plan.content_length + 1
+        ));
+        before.assert_unchanged(&store);
+    }
+
+    #[test]
+    fn chunk_and_payload_digest_failures_preserve_preexisting_store_state() {
+        let payload = b"replacement payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(b"pre-existing store state");
+        let before = StoreSnapshot::capture(&store);
+
+        let mut corrupted = payload.to_vec();
+        corrupted[0] ^= 0xff;
+        let mut source = InMemoryPayload::new(&corrupted);
+        assert!(matches!(
+            store.ingest_plan_source(&plan, &mut source),
+            Err(ChunkStoreError::DigestMismatch { chunk_index: 0 })
+        ));
+        before.assert_unchanged(&store);
+
+        let mut wrong_payload_digest = plan.clone();
+        wrong_payload_digest.payload_digest = blake3::hash(b"wrong payload digest");
+        let mut source = InMemoryPayload::new(payload);
+        assert!(matches!(
+            store.ingest_plan_source(&wrong_payload_digest, &mut source),
+            Err(ChunkStoreError::PayloadDigestMismatch)
+        ));
+        before.assert_unchanged(&store);
+    }
+
+    #[test]
+    fn sink_write_and_finish_failures_preserve_preexisting_store_state() {
+        let payload = b"replacement payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(b"pre-existing store state");
+        let before = StoreSnapshot::capture(&store);
+
+        let (sink, counters) = probe_sink(ProbeSinkFailure::Write(0));
+        let mut source = InMemoryPayload::new(payload);
+        assert!(matches!(
+            store.ingest_plan_source_with_sink(&plan, &mut source, sink),
+            Err(ChunkStoreError::Io(_))
+        ));
+        assert_eq!(counters[0].get(), 1);
+        assert_eq!(counters[1].get(), 1);
+        assert_eq!(counters[2].get(), 0);
+        before.assert_unchanged(&store);
+
+        let (sink, counters) = probe_sink(ProbeSinkFailure::Finish);
+        let mut source = InMemoryPayload::new(payload);
+        assert!(matches!(
+            store.ingest_plan_source_with_sink(&plan, &mut source, sink),
+            Err(ChunkStoreError::Io(_))
+        ));
+        assert_eq!(counters[0].get(), 1);
+        assert_eq!(counters[1].get(), plan.chunks.len());
+        assert_eq!(counters[2].get(), 1);
+        before.assert_unchanged(&store);
+    }
+
+    #[test]
+    fn directory_sink_failure_preserves_old_directory_and_cleans_staging() {
+        let base = tempdir().expect("base");
+        let root = base.path().join("chunks");
+        fs::create_dir(&root).expect("old root");
+        fs::write(root.join("sentinel"), b"old state").expect("old sentinel");
+
+        let profile = ChunkProfile {
+            min_size: 1,
+            target_size: 1,
+            max_size: 1,
+            break_mask: 1,
+        };
+        let payload = b"abc";
+        let plan = CarBuildPlan::single_file_with_profile(payload, profile).expect("plan");
+        assert!(plan.chunks.len() > 1);
+        let mut corrupted = payload.to_vec();
+        corrupted[1] ^= 0xff;
+        let mut source = InMemoryPayload::new(&corrupted);
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(b"pre-existing store state");
+        let before = StoreSnapshot::capture(&store);
+
+        assert!(matches!(
+            store.ingest_plan_to_directory(&plan, &mut source, &root),
+            Err(ChunkStoreError::DigestMismatch { chunk_index: 1 })
+        ));
+        before.assert_unchanged(&store);
+        assert_eq!(
+            fs::read(root.join("sentinel")).expect("sentinel"),
+            b"old state"
+        );
+        let staged = fs::read_dir(base.path())
+            .expect("base listing")
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.starts_with(".sorafs-chunks."))
+            .collect::<Vec<_>>();
+        assert!(staged.is_empty(), "orphan staging paths: {staged:?}");
+    }
+
+    #[test]
+    fn directory_sink_detects_destination_collision_before_commit() {
+        let base = tempdir().expect("base");
+        let root = base.path().join("chunks");
+        let payload = b"payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut sink = DirectoryChunkSink::new(&root);
+        sink.prepare(&plan).expect("prepare");
+        sink.write_chunk(0, &plan.chunks[0], payload)
+            .expect("staged chunk");
+
+        fs::create_dir(&root).expect("attacker collision root");
+        fs::write(root.join("sentinel"), b"attacker state").expect("sentinel");
+        assert!(matches!(sink.finish(), Err(ChunkStoreError::Io(_))));
+        assert_eq!(
+            fs::read(root.join("sentinel")).expect("sentinel"),
+            b"attacker state"
+        );
+    }
+
+    #[test]
+    fn atomic_chunk_write_ignores_predictable_partial_collision() {
+        let dir = tempdir().expect("dir");
+        let output = dir.path().join("chunk.bin");
+        let stale_partial = dir.path().join("chunk.bin.partial");
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"victim").expect("victim");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, &stale_partial).expect("partial symlink");
+        #[cfg(not(unix))]
+        fs::write(&stale_partial, b"collision").expect("partial collision");
+
+        DirectoryChunkSink::write_atomic(&output, b"new chunk").expect("atomic write");
+        assert_eq!(fs::read(&output).expect("output"), b"new chunk");
+        assert_eq!(fs::read(&victim).expect("victim"), b"victim");
+        assert!(fs::symlink_metadata(&stale_partial).is_ok());
+        let random_partials = fs::read_dir(dir.path())
+            .expect("listing")
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.starts_with(".chunk.bin.") && name.ends_with(".partial"))
+            .collect::<Vec<_>>();
+        assert!(
+            random_partials.is_empty(),
+            "orphan random partials: {random_partials:?}"
+        );
+    }
+
+    #[test]
+    fn atomic_chunk_write_rejects_existing_file_collision() {
+        let dir = tempdir().expect("dir");
+        let output = dir.path().join("chunk.bin");
+        fs::write(&output, b"old chunk").expect("old chunk");
+        assert!(matches!(
+            DirectoryChunkSink::write_atomic(&output, b"new chunk"),
+            Err(ChunkStoreError::Io(_))
+        ));
+        assert_eq!(fs::read(&output).expect("output"), b"old chunk");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_chunk_write_rejects_symlink_and_hardlink_destinations() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("dir");
+        let victim = dir.path().join("victim");
+        fs::write(&victim, b"victim").expect("victim");
+
+        let symlink_path = dir.path().join("symlink-chunk");
+        symlink(&victim, &symlink_path).expect("symlink");
+        assert!(matches!(
+            DirectoryChunkSink::write_atomic(&symlink_path, b"attack"),
+            Err(ChunkStoreError::Io(_))
+        ));
+        assert_eq!(fs::read(&victim).expect("victim"), b"victim");
+
+        let hardlink_path = dir.path().join("hardlink-chunk");
+        fs::hard_link(&victim, &hardlink_path).expect("hard link");
+        assert!(matches!(
+            DirectoryChunkSink::write_atomic(&hardlink_path, b"attack"),
+            Err(ChunkStoreError::Io(_))
+        ));
+        assert_eq!(fs::read(&victim).expect("victim"), b"victim");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_sink_rejects_symlink_root_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let base = tempdir().expect("base");
+        let victim = base.path().join("victim");
+        fs::create_dir(&victim).expect("victim directory");
+        fs::write(victim.join("sentinel"), b"victim").expect("sentinel");
+        let root = base.path().join("chunks");
+        symlink(&victim, &root).expect("root symlink");
+
+        let payload = b"payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut source = InMemoryPayload::new(payload);
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(b"pre-existing store state");
+        let before = StoreSnapshot::capture(&store);
+        assert!(matches!(
+            store.ingest_plan_to_directory(&plan, &mut source, &root),
+            Err(ChunkStoreError::Io(_))
+        ));
+        before.assert_unchanged(&store);
+        assert_eq!(
+            fs::read(victim.join("sentinel")).expect("sentinel"),
+            b"victim"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_sink_detects_staging_symlink_replacement_without_following_it() {
+        use std::os::unix::fs::symlink;
+
+        let base = tempdir().expect("base");
+        let root = base.path().join("chunks");
+        let victim = base.path().join("victim");
+        fs::create_dir(&victim).expect("victim directory");
+        fs::write(victim.join("sentinel"), b"victim").expect("sentinel");
+        let payload = b"payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut sink = DirectoryChunkSink::new(&root);
+        sink.prepare(&plan).expect("prepare");
+        let staging = sink.staging_root.clone().expect("staging path");
+        let displaced = base.path().join("displaced-staging");
+        fs::rename(&staging, &displaced).expect("displace staging");
+        symlink(&victim, &staging).expect("replace staging with symlink");
+
+        assert!(matches!(
+            sink.write_chunk(0, &plan.chunks[0], payload),
+            Err(ChunkStoreError::Io(_))
+        ));
+        drop(sink);
+        assert_eq!(
+            fs::read(victim.join("sentinel")).expect("sentinel"),
+            b"victim"
+        );
+        assert!(
+            fs::symlink_metadata(&staging)
+                .expect("replacement remains")
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]
@@ -3902,6 +5084,29 @@ mod tests {
             assert_eq!(mem.0, dir.0);
             assert_eq!(mem.1.leaf_bytes, dir.1.leaf_bytes);
         }
+    }
+
+    #[test]
+    fn directory_payload_rejects_file_span_length_overflow() {
+        let files = vec![
+            FilePlan {
+                path: vec!["first".to_owned()],
+                first_chunk: 0,
+                chunk_count: 0,
+                size: u64::MAX,
+            },
+            FilePlan {
+                path: vec!["second".to_owned()],
+                first_chunk: 0,
+                chunk_count: 0,
+                size: 1,
+            },
+        ];
+        let error = match DirectoryPayload::new(Path::new("."), &files) {
+            Ok(_) => panic!("overflowing file spans must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

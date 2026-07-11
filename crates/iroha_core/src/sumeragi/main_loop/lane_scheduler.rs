@@ -2857,13 +2857,15 @@ mod tests {
             AUTOSCALE_META_CREATED_HEIGHT.to_string(),
             created_height.to_string(),
         );
-        LaneConfig {
+        let mut lane = LaneConfig {
             id: lane_id,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: format!("elastic-lane-{}", lane_id.as_u32()),
             metadata,
             ..LaneConfig::default()
-        }
+        };
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
+        lane
     }
 
     fn proposal_candidate(gas_cost: u64, is_ivm_heavy: bool) -> ProposalAdmissionCandidate {
@@ -4043,16 +4045,34 @@ mod tests {
             "permissioned",
         )
         .expect("lane consensus domains");
+        let lane_1_incarnation = Hash::new(
+            [
+                b"lane-subject-test-incarnation:".as_slice(),
+                &LaneId::new(1).as_u32().to_be_bytes(),
+                &DataSpaceId::new(11).as_u64().to_be_bytes(),
+            ]
+            .concat(),
+        );
+        let lane_2_incarnation = Hash::new(
+            [
+                b"lane-subject-test-incarnation:".as_slice(),
+                &LaneId::new(2).as_u32().to_be_bytes(),
+                &DataSpaceId::new(22).as_u64().to_be_bytes(),
+            ]
+            .concat(),
+        );
         let slots = vec![
             LaneBlockSlot {
                 lane_id: LaneId::new(2),
                 dataspace_id: DataSpaceId::new(22),
+                lane_incarnation: lane_2_incarnation,
                 lane_block_height: 4,
                 lane_block_view: 8,
             },
             LaneBlockSlot {
                 lane_id: LaneId::new(1),
                 dataspace_id: DataSpaceId::new(11),
+                lane_incarnation: lane_1_incarnation,
                 lane_block_height: 10,
                 lane_block_view: 1,
             },
@@ -4100,12 +4120,14 @@ mod tests {
                 LaneBlockSlot {
                     lane_id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(11),
+                    lane_incarnation: Hash::new(b"lane-tip-incarnation:1:11"),
                     lane_block_height: 10,
                     lane_block_view: 5,
                 },
                 LaneBlockSlot {
                     lane_id: LaneId::new(2),
                     dataspace_id: DataSpaceId::new(22),
+                    lane_incarnation: Hash::new(b"lane-tip-incarnation:2:22"),
                     lane_block_height: 4,
                     lane_block_view: 5,
                 },
@@ -4195,12 +4217,14 @@ mod tests {
                 LaneBlockSlot {
                     lane_id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(11),
+                    lane_incarnation: Hash::new(b"lane-tip-incarnation:1:11"),
                     lane_block_height: 8,
                     lane_block_view: 5,
                 },
                 LaneBlockSlot {
                     lane_id: LaneId::new(2),
                     dataspace_id: DataSpaceId::new(22),
+                    lane_incarnation: Hash::new(b"lane-tip-incarnation:2:22"),
                     lane_block_height: 1,
                     lane_block_view: 5,
                 },
@@ -4401,6 +4425,7 @@ mod tests {
                 proposal_view: entry.slot.lane_block_view,
                 lane_id: ownership.lane_id,
                 dataspace_id: ownership.dataspace_id,
+                lane_incarnation: ownership.lane_incarnation,
                 lane_block_height: ownership.lane_block_height,
                 lane_block_view: ownership.lane_block_view,
                 subject_hash: ownership.subject_hash,
@@ -5254,6 +5279,7 @@ mod tests {
         let slot = LaneBlockSlot {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::new(11),
+            lane_incarnation: Hash::new(b"lane-tip-incarnation:1:11"),
             lane_block_height: 7,
             lane_block_view: 3,
         };
@@ -5288,6 +5314,7 @@ mod tests {
         let unexpected = LaneBlockSlot {
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(22),
+            lane_incarnation: Hash::new(b"lane-tip-incarnation:2:22"),
             lane_block_height: 1,
             lane_block_view: 0,
         };

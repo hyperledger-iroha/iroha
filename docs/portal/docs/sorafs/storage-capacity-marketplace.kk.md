@@ -4,8 +4,8 @@ direction: ltr
 source: docs/portal/docs/sorafs/storage-capacity-marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 868edd6aa7401c64b8757db188edb13aa8e6ca8959966b6fea02e44bc298c6b7
-source_last_modified: "2026-01-05T09:28:11.910794+00:00"
+source_hash: 3204de74db86201d7876afd376f4c5c19cb534dae63bd38db1742e59257bdae2
+source_last_modified: "2026-07-10T10:31:46+00:00"
 translation_last_reviewed: 2026-02-07
 id: storage-capacity-marketplace
 title: SoraFS Storage Capacity Marketplace
@@ -112,10 +112,10 @@ rollout checks required before hosted production settlement.
   alongside the scheduler so operators (or background workers) can derive canonical
   `CapacityTelemetryV1` payloads capturing GiB·hour, uptime, and PoR success metrics before posting
   through Torii.【crates/iroha_torii/src/routing.rs:4806】【crates/sorafs_node/src/lib.rs:110】【crates/sorafs_node/src/telemetry.rs:1】
-- Local metering now surfaces dedicated observation endpoints. `POST /v1/sorafs/capacity/uptime`,
-  `POST /v1/sorafs/capacity/por`, and `POST /v1/sorafs/capacity/failure` update the embedded
-  `CapacityMeter`, telemetry accumulator, and Prometheus gauges without issuing transactions,
-  ensuring probe data and replication failures feed dashboards and fee accrual logic immediately.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
+- Local metering accepts dedicated uptime and replication-failure observations. The manual PoR
+  observation surface is absent; PoR counters derive only from authenticated proof and
+  trusted-threshold verdict lifecycle transitions, preventing callers from forging provider
+  success rates.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
 - The trustless gateway profile enumerates the HTTP request/response matrix, proof formats, and
   telemetry expectations that gateways must satisfy before joining the SF-5 conformance suite. See
   `docs/source/sorafs_gateway_profile.md` for the normative specification.

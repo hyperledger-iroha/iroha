@@ -13,6 +13,7 @@ use norito::{
 };
 
 #[cfg(feature = "packed-struct")]
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct PackedRow {
     id: u32,

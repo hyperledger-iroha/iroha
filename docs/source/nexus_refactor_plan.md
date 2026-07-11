@@ -1,6 +1,15 @@
 # Sora Nexus Ledger Refactor Plan
 
-This document captures the immediate roadmap for the Sora Nexus Ledger ("Iroha 3") refactor. It reflects the current repository layout and the regressions observed in genesis/WSV bookkeeping, Sumeragi consensus, smart-contract triggers, snapshot queries, pointer-ABI host bindings, and Norito codecs. The objective is to converge on a coherent, testable architecture without attempting to land all fixes in one monolithic patch.
+> **Archived plan (2025-09-12):** This document records the original refactor
+> decomposition and is not current operational guidance. In particular,
+> DA/RBC is mandatory for Nexus lanes and certified lane work reaches the WSV
+> only through exact global merge carriers. See `nexus_cross_lane.md`,
+> `merge_ledger.md`, `status.md`, and `roadmap.md` for the implemented design
+> and outstanding validation gates.
+
+This document captured the initial roadmap for the Sora Nexus Ledger
+("Iroha 3") refactor. It reflects the repository layout and regressions known
+when the plan was written.
 
 ## 0. Guiding Principles
 - Preserve deterministic behavior across heterogeneous hardware; leverage acceleration only through opt-in feature flags with identical fallbacks.
@@ -90,8 +99,9 @@ This document captures the immediate roadmap for the Sora Nexus Ledger ("Iroha 3
   - `ivm`: CUDA toggle exposure, envelope validation, and Halo2/Metal coverage map to Phase D host-boundary work plus the cross-cutting GPU acceleration theme; kernels remain on the dedicated GPU backlog until ready.
 - Prepare cross-team RFC summarizing this plan for sign-off before landing invasive code changes.
 
-## 5. Open Questions
-- Should RBC remain optional past P1, or is it mandatory for Nexus ledger lanes? Requires stakeholder decision.
+## 5. Resolved and Open Questions
+- Resolved: DA/RBC is mandatory for Nexus ledger lanes; it is not a runtime or
+  build-time policy toggle.
 - Do we enforce DS composability groups in P1 or keep them disabled until lane proofs mature?
 - What is the canonical location for ML-DSA-87 parameters? Candidate: new `crates/fastpq_isi` crate (pending creation).
 

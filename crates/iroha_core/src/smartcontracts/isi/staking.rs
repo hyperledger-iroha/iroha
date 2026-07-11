@@ -2782,6 +2782,7 @@ mod tests {
         autoscale_lane
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
 
         stx.nexus.enabled = true;
         stx.nexus.autoscale.enabled = true;

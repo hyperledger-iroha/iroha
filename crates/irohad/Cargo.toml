@@ -93,6 +93,7 @@ iroha_p2p = { workspace = true }
 mv = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 parking_lot = { workspace = true }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 sorafs_node = { path = "../sorafs_node" }
 
 # Optional deps for recovery diagnostics (feature: dag-recovery-verify)
@@ -124,7 +125,6 @@ iroha_config_base = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { path = "../sorafs_chunker" }
-sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }

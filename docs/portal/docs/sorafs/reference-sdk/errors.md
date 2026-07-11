@@ -14,6 +14,7 @@ summary: Stable ValidationOutcomeV1 codes emitted by sorafs-validate and the ref
 | Code | Category | Meaning | Operator action |
 |------|----------|---------|-----------------|
 | `SFS-OK-000` | `validation` | Payload accepted. | Keep the generated outcome with release or rollout evidence. |
+| `SFS-PDP-DIAG-000` | `validation` | PDP structure, pair binding, or exhaustive witness verification succeeded only for the diagnostic scope named in `context`; governed admission was not evaluated. | Never treat this code as production proof acceptance. Require `SFS-OK-000` from the admission-bound production verifier and verify `production_acceptance=true`. |
 | `SFS-NORITO-001` | `norito` | Input could not be decoded with the expected SoraFS Norito schema. | Re-encode the payload with the current SoraFS Norito type and retry. |
 | `SFS-CAR-001` | `validation` | CAR stream replay failed against the manifest commitments. | Regenerate or refetch the CAR stream so its roots, chunk plan, digest, and size match the manifest. |
 | `SFS-CAR-002` | `internal` | Trustless manifest/CAR replay could not derive expected metadata after parsing. | Update the trustless verifier config or report the replay metadata derivation failure to maintainers. |
@@ -26,9 +27,10 @@ summary: Stable ValidationOutcomeV1 codes emitted by sorafs-validate and the ref
 | `SFS-POL-007` | `policy` | Orderbook timestamp, nonce, or fee policy failed. | Regenerate the orderbook payload from canonical state with non-zero timestamps/nonces and governed fee basis points. |
 | `SFS-POR-001` | `validation` | PoR proof sample coverage does not match the challenge. | Regenerate the proof with exactly the sample indices requested by the challenge. |
 | `SFS-POR-003` | `validation` | PoR challenge/proof binding failed. | Regenerate the proof for the exact challenge, manifest, and provider named by the challenge. |
-| `SFS-PDP-001` | `validation` | PDP sample window or coverage failed validation. | Regenerate the PDP challenge and proof with the exact deterministic sample labels and coverage required by the commitment. |
+| `SFS-PDP-001` | `validation` | PDP sample window, coverage, geometry, bounds, or authentication-path shape failed validation. | Regenerate the PDP challenge and proof with the exact deterministic sample labels, geometry, and canonical paths required by the commitment. |
 | `SFS-PDP-002` | `validation` | PDP commitment, challenge, or proof structure failed validation. | Regenerate the PDP payload from canonical manifest/provider state and inspect the `context` fields for the invalid field. |
-| `SFS-PDP-003` | `validation` | PDP commitment/challenge/proof binding failed. | Regenerate the PDP challenge and proof for the exact commitment, manifest, provider, epoch, sample window, and coverage. |
+| `SFS-PDP-003` | `validation` | PDP commitment/challenge/proof binding or authenticated root comparison failed. | Regenerate the PDP challenge and proof for the exact commitment, manifest, provider, epoch, sampled bytes, and both Merkle roots. |
+| `SFS-PDP-004` | `policy` | Production PDP verification lacks a council-verified active admission record or names a different admitted provider. | Resolve the provider from the current revocation-aware admission registry and retry the admission-bound verifier; never upgrade an integrity-only record to trusted state. |
 | `SFS-POTR-001` | `policy` | PoTR receipt reports a successful retrieval that missed its deadline. | Treat the receipt as late unless a governed profile override explicitly extends the deadline. |
 | `SFS-POTR-002` | `validation` | PoTR receipt tier does not match the requested profile. | Validate the receipt against the tier profile that was requested, or rerun retrieval for the requested tier. |
 | `SFS-OBK-001` | `validation` | Orderbook payload structure failed validation outside the more specific code families. | Regenerate the order, cancellation, trade, channel, or receipt payload from canonical orderbook state and inspect the `context` fields. |
@@ -36,7 +38,7 @@ summary: Stable ValidationOutcomeV1 codes emitted by sorafs-validate and the ref
 | `SFS-BND-001` | `validation` | Fixture bundle payload validation failed, or the bundle contains fewer than two linkable SoraFS artifacts. | Fix the invalid payload named in the outcome, or point `--bundle` at a directory containing at least two known fixture artifacts. |
 | `SFS-BND-002` | `validation` | Fixture bundle artifacts name different manifest digests. | Regenerate the order, PoR/PoTR, and repair payloads so manifest-bearing artifacts reference the same canonical manifest digest. |
 | `SFS-BND-003` | `validation` | Fixture bundle provider links do not agree with each other or with replication-order assignments. | Regenerate provider-admission artifacts from the same provider metadata and ensure manifest-bearing provider artifacts are assigned by the replication order. |
-| `SFS-FFI-001` | `internal` | Reference FFI caller supplied an invalid ABI argument such as a null pointer with non-zero length or an unsupported selector value. | Fix the SDK binding to pass valid pointers and selector constants before retrying. |
+| `SFS-FFI-001` | `internal` | Reference FFI caller supplied an invalid ABI argument such as a null/misaligned pointer, oversized input/bundle, invalid UTF-8 or control-bearing label, or unsupported selector. | Fix the SDK binding to enforce the published input bounds, canonical labels, pointer contracts, and selector constants before retrying. |
 | `SFS-FFI-002` | `internal` | Reference FFI panicked or could not render the outcome JSON. | Treat the input as not accepted and report the validator version plus payload to maintainers. |
 | `SFS-REP-001` | `validation` | Repair evidence is incomplete or internally invalid. | Attach complete evidence with non-zero PoR samples, latency, or replica shortfall details. |
 | `SFS-REP-002` | `validation` | Repair task, report, event, or worker payload structure failed validation. | Regenerate the repair payload from canonical scheduler or auditor state. |
@@ -76,3 +78,8 @@ summary: Stable ValidationOutcomeV1 codes emitted by sorafs-validate and the ref
 | `3` | Input/output error. |
 | `4` | Command-line configuration error. |
 | `10` | Internal fault. |
+
+Exit code `0` can represent diagnostic success such as
+`SFS-PDP-DIAG-000`. Production automation must additionally require the exact
+acceptance code and `production_acceptance=true`; it must not branch on exit
+status or `status: Ok` alone.

@@ -1718,6 +1718,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     por_coordinator: Arc<sorafs::PorCoordinator>,
     #[cfg(feature = "app_api")]
+    por_runtime: Option<Arc<sorafs::PorCoordinatorRuntime>>,
+    #[cfg(feature = "app_api")]
     por_auditor_signature_threshold: usize,
     #[cfg(feature = "app_api")]
     sorafs_alias_cache_policy: sorafs::AliasCachePolicy,
@@ -30296,15 +30298,6 @@ async fn handler_post_sorafs_capacity_uptime(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_sorafs_capacity_por(
-    State(_app): State<SharedAppState>,
-) -> Result<AxResponse, Error> {
-    Ok(sorafs::api::capacity_por_mutation_retired_response(
-        "observation",
-    ))
-}
-
-#[cfg(feature = "app_api")]
 fn authenticated_por_operator_signer(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
@@ -30370,48 +30363,6 @@ async fn admitted_por_provider_key(
             message: format!("PoR provider advert signature is invalid: {error}"),
         })?;
     Ok(advert.signature.public_key.clone())
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_capacity_por_challenge(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let _authenticated_signer = authenticated_por_operator_signer(&app, &headers)?;
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/capacity/por-challenge",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    Ok(sorafs::api::capacity_por_mutation_retired_response(
-        "challenge",
-    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -30544,17 +30495,6 @@ async fn handler_post_sorafs_capacity_por_verdict(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_sorafs_por_trigger(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/sorafs/por/trigger").await?;
-    Ok(sorafs::api::manual_por_trigger_retired_response())
-}
-
-#[cfg(feature = "app_api")]
 async fn handler_post_sorafs_por_vrf(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -30573,7 +30513,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::UNPROCESSABLE_ENTITY,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_invalid",
-                "detail": error.to_string(),
+                "detail": (error.to_string()),
             })),
         )
             .into_response();
@@ -30615,7 +30555,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::UNAUTHORIZED,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_signature_invalid",
-                "detail": error.to_string(),
+                "detail": (error.to_string()),
             })),
         )
             .into_response();
@@ -30628,7 +30568,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::TOO_MANY_REQUESTS,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_quota_exceeded",
-                "detail": error.to_string(),
+                "detail": (error.to_string()),
             })),
         )
             .into_response();
@@ -30661,7 +30601,7 @@ async fn handler_post_sorafs_por_vrf(
                 status,
                 JsonBody(norito::json!({
                     "error": "sorafs_por_vrf_rejected",
-                    "detail": error.to_string(),
+                    "detail": (error.to_string()),
                 })),
             )
                 .into_response()
@@ -30670,7 +30610,7 @@ async fn handler_post_sorafs_por_vrf(
             StatusCode::INTERNAL_SERVER_ERROR,
             JsonBody(norito::json!({
                 "error": "sorafs_por_vrf_worker_failed",
-                "detail": error.to_string(),
+                "detail": (error.to_string()),
             })),
         )
             .into_response(),
@@ -39037,11 +38977,6 @@ impl Torii {
                     post(handler_post_sorafs_capacity_uptime),
                 )
                 .route(
-                    "/v1/sorafs/capacity/por-challenge",
-                    post(handler_post_sorafs_capacity_por_challenge)
-                        .layer(por_operator_layer.clone()),
-                )
-                .route(
                     "/v1/sorafs/capacity/por-proof",
                     post(handler_post_sorafs_capacity_por_proof).layer(por_operator_layer.clone()),
                 )
@@ -39059,15 +38994,7 @@ impl Torii {
                     "/v1/sorafs/por/report/{iso_week}",
                     get(handler_get_sorafs_por_report),
                 )
-                .route(
-                    "/v1/sorafs/por/trigger",
-                    post(handler_post_sorafs_por_trigger),
-                )
                 .route("/v1/sorafs/por/vrf", post(handler_post_sorafs_por_vrf))
-                .route(
-                    "/v1/sorafs/capacity/por",
-                    post(handler_post_sorafs_capacity_por),
-                )
                 .route(
                     "/v1/sorafs/capacity/failure",
                     post(handler_post_sorafs_capacity_failure),
@@ -40602,18 +40529,6 @@ impl Torii {
                         axum::routing::post(sorafs::api::handle_post_sorafs_proof_stream),
                     )
                     .route(
-                        "/v1/sorafs/storage/por-challenge",
-                        axum::routing::post(sorafs::api::handle_post_sorafs_storage_por_challenge),
-                    )
-                    .route(
-                        "/v1/sorafs/storage/por-proof",
-                        axum::routing::post(sorafs::api::handle_post_sorafs_storage_por_proof),
-                    )
-                    .route(
-                        "/v1/sorafs/storage/por-verdict",
-                        axum::routing::post(sorafs::api::handle_post_sorafs_storage_por_verdict),
-                    )
-                    .route(
                         "/v1/sorafs/deal/usage",
                         axum::routing::post(handler_post_sorafs_deal_usage),
                     )
@@ -42067,6 +41982,8 @@ impl Torii {
             sorafs_limits: self.sorafs_limits.clone(),
             #[cfg(feature = "app_api")]
             por_coordinator: self.por_coordinator.clone(),
+            #[cfg(feature = "app_api")]
+            por_runtime: self.por_runtime.clone(),
             #[cfg(feature = "app_api")]
             por_auditor_signature_threshold: self.por_auditor_signature_threshold,
             #[cfg(feature = "app_api")]
@@ -46292,6 +46209,10 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_limits,
             #[cfg(feature = "app_api")]
             por_coordinator: Arc::new(sorafs::PorCoordinator::new()),
+            #[cfg(feature = "app_api")]
+            por_runtime: None,
+            #[cfg(feature = "app_api")]
+            por_auditor_signature_threshold: 1,
             #[cfg(feature = "app_api")]
             sorafs_alias_cache_policy: sorafs_alias_cache,
             #[cfg(feature = "app_api")]
@@ -60910,7 +60831,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn sorafs_por_mutation_route_requires_fresh_path_bound_operator_signature() {
+    async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
         use tower::ServiceExt as _;
@@ -60924,8 +60845,8 @@ pub(crate) mod tests_runtime_handlers {
         >(app.clone(), operator_signatures::enforce_operator_access);
         let router = axum::Router::new()
             .route(
-                "/v1/sorafs/capacity/por-challenge",
-                axum::routing::post(handler_post_sorafs_capacity_por_challenge)
+                "/v1/sorafs/capacity/por-proof",
+                axum::routing::post(handler_post_sorafs_capacity_por_proof)
                     .layer(operator_layer.clone()),
             )
             .route(
@@ -60933,12 +60854,12 @@ pub(crate) mod tests_runtime_handlers {
                 axum::routing::post(handler_post_sorafs_capacity_por_verdict).layer(operator_layer),
             )
             .with_state(app);
-        let body = br#"{"challenge_b64":"not-base64%%"}"#.to_vec();
+        let body = br#"{"proof_b64":"not-base64%%"}"#.to_vec();
         let remote =
             axum::extract::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 19_999));
 
         let unsigned = axum::http::Request::builder()
-            .uri("/v1/sorafs/capacity/por-challenge")
+            .uri("/v1/sorafs/capacity/por-proof")
             .method(axum::http::Method::POST)
             .header(axum::http::header::CONTENT_TYPE, "application/json")
             .extension(remote)
@@ -60951,9 +60872,9 @@ pub(crate) mod tests_runtime_handlers {
             .expect("unsigned response");
         assert_eq!(unsigned_response.status(), StatusCode::UNAUTHORIZED);
 
-        let uri = "/v1/sorafs/capacity/por-challenge"
+        let uri = "/v1/sorafs/capacity/por-proof"
             .parse::<crate::Uri>()
-            .expect("PoR challenge URI");
+            .expect("PoR proof URI");
         let signed_headers =
             operator_signatures::signed_request_headers(&signer, &crate::Method::POST, &uri, &body)
                 .expect("signed PoR headers");
@@ -60974,7 +60895,7 @@ pub(crate) mod tests_runtime_handlers {
             .oneshot(signed_request())
             .await
             .expect("authenticated response");
-        assert_eq!(accepted_auth.status(), StatusCode::GONE);
+        assert_eq!(accepted_auth.status(), StatusCode::BAD_REQUEST);
 
         let replay = router
             .clone()
@@ -60996,88 +60917,6 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("cross-path response");
         assert_eq!(cross_path_response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn retired_por_challenge_route_rejects_forged_wrong_round_and_replayed_inputs_without_state()
-     {
-        use tower::ServiceExt as _;
-
-        let app = mk_app_state_for_tests();
-        let signer = app.da_receipt_signer.clone();
-        let coordinator = app.por_coordinator.clone();
-        let before = coordinator.query_statuses(&sorafs::PorStatusFilter::default(), None, None);
-        let operator_layer = axum::middleware::from_fn_with_state::<
-            _,
-            _,
-            (axum::extract::State<SharedAppState>, axum::extract::Request),
-        >(app.clone(), operator_signatures::enforce_operator_access);
-        let router = axum::Router::new()
-            .route(
-                "/v1/sorafs/capacity/por-challenge",
-                axum::routing::post(handler_post_sorafs_capacity_por_challenge)
-                    .layer(operator_layer),
-            )
-            .with_state(app);
-        let uri = "/v1/sorafs/capacity/por-challenge"
-            .parse::<crate::Uri>()
-            .expect("PoR challenge URI");
-
-        let valid: sorafs_manifest::por::PorChallengeV1 = norito::decode_from_bytes(
-            include_bytes!("../../../fixtures/sorafs_manifest/por/challenge_v1.to"),
-        )
-        .expect("decode canonical PoR challenge fixture");
-        let mut forged_drand = valid.clone();
-        forged_drand.drand_signature[0] ^= 0x80;
-        let mut wrong_round = valid.clone();
-        wrong_round.drand_round = wrong_round.drand_round.saturating_add(1);
-        let mut wrong_vrf_proof = valid.clone();
-        wrong_vrf_proof.vrf_proof = Some(iroha_crypto::vrf::VrfProof::SigInG1([0xEE; 48]));
-
-        for (label, challenge) in [
-            ("forged drand signature", forged_drand),
-            ("wrong drand round", wrong_round),
-            ("wrong VRF proof", wrong_vrf_proof),
-            ("valid but externally supplied", valid.clone()),
-            ("freshly authenticated exact replay", valid),
-        ] {
-            let challenge_b64 = base64::engine::general_purpose::STANDARD
-                .encode(norito::to_bytes(&challenge).expect("encode adversarial PoR challenge"));
-            let body =
-                norito::json::to_vec(&crate::routing::RecordPorChallengeDto { challenge_b64 })
-                    .expect("encode adversarial PoR request");
-            let signed_headers = operator_signatures::signed_request_headers(
-                &signer,
-                &crate::Method::POST,
-                &uri,
-                &body,
-            )
-            .expect("sign adversarial PoR request");
-            let mut request = axum::http::Request::builder()
-                .uri(uri.clone())
-                .method(axum::http::Method::POST)
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .extension(axum::extract::ConnectInfo(
-                    "127.0.0.1:19998".parse::<std::net::SocketAddr>().unwrap(),
-                ))
-                .body(axum::body::Body::from(body))
-                .expect("adversarial PoR request");
-            request.headers_mut().extend(signed_headers);
-
-            let response = router
-                .clone()
-                .oneshot(request)
-                .await
-                .unwrap_or_else(|error| panic!("{label} request failed: {error}"));
-            assert_eq!(response.status(), StatusCode::GONE, "{label}");
-        }
-
-        assert_eq!(
-            coordinator.query_statuses(&sorafs::PorStatusFilter::default(), None, None),
-            before,
-            "retired challenge ingestion must never mutate coordinator state"
-        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -64132,6 +63971,114 @@ pub(crate) mod tests_runtime_handlers {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn retired_por_mutation_routes_are_absent_from_api_router() {
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Method, Request, StatusCode},
+        };
+        use tower::ServiceExt as _;
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("sorafs-retired-por-router-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+        let router = torii.api_router_for_tests();
+
+        for path in [
+            "/v1/sorafs/por/trigger",
+            "/v1/sorafs/capacity/por-challenge",
+            "/v1/sorafs/capacity/por",
+            "/v1/sorafs/storage/por-challenge",
+            "/v1/sorafs/storage/por-proof",
+            "/v1/sorafs/storage/por-verdict",
+        ] {
+            for method in [Method::POST, Method::PUT, Method::GET] {
+                let mut request = Request::builder()
+                    .method(method.clone())
+                    .uri(path)
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"malformed":true}"#))
+                    .expect("retired-route probe");
+                request
+                    .extensions_mut()
+                    .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+                let response = router
+                    .clone()
+                    .oneshot(request)
+                    .await
+                    .expect("retired-route response");
+                assert_eq!(
+                    response.status(),
+                    StatusCode::NOT_FOUND,
+                    "retired route must remain absent: {method} {path}"
+                );
+            }
+        }
+
+        for (method, path) in [
+            (Method::POST, "/v1/sorafs/capacity/por-proof"),
+            (Method::POST, "/v1/sorafs/capacity/por-verdict"),
+            (Method::POST, "/v1/sorafs/por/vrf"),
+            (Method::GET, "/v1/sorafs/por/status"),
+            (Method::GET, "/v1/sorafs/por/export"),
+            (Method::GET, "/v1/sorafs/por/report/2026-W01"),
+        ] {
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(path)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("live-route probe");
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("live-route response");
+            assert_ne!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "live PoR route was removed accidentally: {method} {path}"
+            );
+        }
     }
 
     #[cfg(feature = "app_api")]

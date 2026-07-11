@@ -4089,17 +4089,6 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/por-challenge".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "External PoR challenge submission retired.",
-            "Return 410 Gone after operator authentication. The verified coordinator scheduler is the only permitted future production authority; automation enablement fails closed until authenticated external drand/VRF feeds are configured.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/sorafs/capacity/por-proof".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
@@ -4166,28 +4155,6 @@ fn sorafs_paths() -> Map {
             "Fetch PoR report for an ISO week.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("iso_week", "ISO week label.")],
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/por/trigger".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Manual PoR trigger retired.",
-            "Return a fail-closed retirement response for the legacy manual PoR trigger route. The verified scheduler is the only permitted future challenge authority, and is not enabled without authenticated external drand/VRF feeds.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/capacity/por".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Manual PoR observation retired.",
-            "Return 410 Gone; PoR metering is derived from authenticated proof and verdict lifecycle transitions.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths.insert(
@@ -5541,39 +5508,6 @@ fn sorafs_paths() -> Map {
             "SoraFS",
             "Stream proofs.",
             "Request a PoR or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/storage/por-challenge".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit storage PoR challenge.",
-            "Submit a storage PoR challenge.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/storage/por-proof".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit storage PoR proof.",
-            "Submit a storage PoR proof.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/storage/por-verdict".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit storage PoR verdict.",
-            "Submit a storage PoR verdict.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -9646,7 +9580,7 @@ fn openapi_schemas() -> Map {
                 "version": { "type": "integer", "format": "uint16", "enum": [1] },
                 "source_id": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "payer_account_id": { "type": "string", "minLength": 1 },
                 "fee_asset_id": { "type": "string", "minLength": 1 },
@@ -9675,10 +9609,10 @@ fn openapi_schemas() -> Map {
                     "enum": ["prepare", "commit"],
                     "description": "Native AMX phase certified by the participant committee."
                 },
-                "coordinator_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295 },
+                "coordinator_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "coordinator_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "coordinator_lane_incarnation": { "$ref": "#/components/schemas/Hash" },
-                "participant_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295 },
+                "participant_lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "participant_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "participant_lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "authority_context_height": { "type": "integer", "format": "uint64", "minimum": 1 },
@@ -9725,7 +9659,7 @@ fn openapi_schemas() -> Map {
             "required": ["lane_id", "dataspace_id", "lane_incarnation", "prepare_qc", "commit_qc"],
             "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "prepare_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" },
@@ -9748,7 +9682,7 @@ fn openapi_schemas() -> Map {
                 },
                 "chain_id_hash": { "$ref": "#/components/schemas/Hash" },
                 "plan_digest": { "$ref": "#/components/schemas/Hash" },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "authority_context_height": { "type": "integer", "format": "uint64", "minimum": 1 },
@@ -9772,7 +9706,7 @@ fn openapi_schemas() -> Map {
             "additionalProperties": false,
             "properties": {
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "tx_count": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -9811,7 +9745,7 @@ fn openapi_schemas() -> Map {
             "required": ["lane_id", "lane_incarnation", "dataspace_id", "block_height", "block_hash", "da_commitment_hash", "commit_qc", "settlement_commitment", "settlement_hash", "rbc_bytes_total"],
             "additionalProperties": false,
             "properties": {
-                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4294967295 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -13795,7 +13729,32 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
-        assert!(paths.contains_key("/v1/sorafs/por/trigger"));
+        for retired_path in [
+            "/v1/sorafs/por/trigger",
+            "/v1/sorafs/capacity/por-challenge",
+            "/v1/sorafs/capacity/por",
+            "/v1/sorafs/storage/por-challenge",
+            "/v1/sorafs/storage/por-proof",
+            "/v1/sorafs/storage/por-verdict",
+        ] {
+            assert!(
+                !paths.contains_key(retired_path),
+                "retired PoR mutation leaked into OpenAPI: {retired_path}"
+            );
+        }
+        for live_path in [
+            "/v1/sorafs/capacity/por-proof",
+            "/v1/sorafs/capacity/por-verdict",
+            "/v1/sorafs/por/status",
+            "/v1/sorafs/por/export",
+            "/v1/sorafs/por/report/{iso_week}",
+            "/v1/sorafs/por/ingestion/{manifest_digest_hex}",
+        ] {
+            assert!(
+                paths.contains_key(live_path),
+                "live PoR route missing from OpenAPI: {live_path}"
+            );
+        }
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
         let appeal_pricing_status_description = paths
@@ -15661,6 +15620,31 @@ mod tests {
                 .iter()
                 .any(|value| value.as_str() == Some("commit"))
         );
+
+        for (schema_name, field_name) in [
+            ("NexusFeeReceipt", "lane_id"),
+            ("NativeAmxAttestationBody", "coordinator_lane_id"),
+            ("NativeAmxAttestationBody", "participant_lane_id"),
+            ("NativeAmxLegRecord", "lane_id"),
+            ("NativeAmxReceipt", "lane_id"),
+            ("LaneSettlementCommitment", "lane_id"),
+            ("LaneRelayEnvelope", "lane_id"),
+        ] {
+            let maximum = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field_name))
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("maximum"))
+                .and_then(Value::as_u64);
+            assert_eq!(
+                maximum,
+                Some(u64::from(u32::MAX)),
+                "{schema_name}.{field_name} must retain an unsigned uint32 maximum"
+            );
+        }
     }
 
     #[test]

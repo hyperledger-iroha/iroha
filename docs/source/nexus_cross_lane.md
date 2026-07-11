@@ -1,177 +1,327 @@
 ---
-title: Nexus Cross-Lane Commitments
-sidebar_label: Cross-Lane Commitments
-description: Proof pipeline, relay responsibilities, and evidence requirements for roadmap item NX-4.
+title: Nexus Cross-Lane Execution
+sidebar_label: Cross-Lane Execution
+description: Production lane lifecycle, certification, global merge, proof, and recovery rules.
 ---
 
-# Nexus Cross-Lane Commitments & Proof Pipeline
+# Nexus cross-lane execution
 
-> **Status:** NX-4 deliverable — cross-lane commitment pipeline & proofs (target Q4 2025).  
-> **Owners:** Nexus Core WG · Cryptography WG · Networking TL.  
-> **Related roadmap items:** NX-1 (lane geometry), NX-3 (settlement router), NX-4 (this document), NX-8 (global scheduler), NX-11 (SDK conformance).
+Nexus partitions transaction scheduling and lane-local certification while
+retaining one deterministic, globally ordered WSV. Lanes can be created and
+retired automatically to add horizontal execution capacity, but lane QCs never
+mutate shared state directly. A merge QC bound to a canonical global carrier is
+the only bridge from autonomous lane execution into WSV.
 
-This note describes how per-lane execution data becomes a verifiable global commitment. It ties together the existing settlement router (`crates/settlement_router`), the lane block builder (`crates/iroha_core/src/block.rs`), telemetry/status surfaces, the LaneRelay path, and the remaining DA artifact-proof hooks for roadmap **NX-4**.
+This document describes the current production path. The exact merge protocol
+and storage crash contract are specified in [Merge ledger](merge_ledger.md).
 
-## Goals
+## End-to-end flow
 
-- Produce a deterministic `LaneBlockCommitment` per lane block capturing settlement, liquidity, and variance data without leaking private state.
-- Relay these commitments (and their DA attestations) to the global NPoS ring so the merge ledger can order, validate, and persist cross-lane updates.
-- Expose the same payloads through Torii and telemetry so operators, SDKs, and auditors can replay the pipeline without bespoke tooling.
-- Define the invariants and evidence bundles required to graduate NX-4: lane proofs, DA attestations, merge-ledger integration, and regression coverage.
+1. The live Nexus router assigns each accepted transaction to a canonical
+   `(LaneId, DataSpaceId)` using explicit rules or the default-route shard set.
+2. An autonomous lane leader creates a non-empty payload and authenticates its
+   queue reservations, accepted transaction hashes, routing plans, and RBC
+   ownership.
+3. The authoritative lane committee forms an availability-backed prepare QC
+   and a commit QC. The complete certified source is persisted independently of
+   global block arrival.
+4. The deterministic global-round leader chooses the next contiguous certified
+   source from eligible lanes, orders the sources canonically, executes them on
+   the committed WSV base, and disseminates that exact candidate.
+5. Followers authenticate the leader, reconstruct and re-execute the exact
+   embedded body, durably lock the round/digest, and contribute merge-QC
+   signatures.
+6. A canonical global block carries a compact reference to the certified full
+   entry. Nodes missing the sidecar fetch it from merge-QC signers and defer the
+   block until the exact body is available.
+7. The merge entry is staged before ordinary block effects, Kura makes the
+   block/entry/carrier durable, and WSV commits the complete deterministic
+   overlay atomically.
+8. Transaction queries expose both ordinary and merge-carried transactions,
+   with a proof binding each merge result to the compact carrier.
 
-## Components & Surfaces
+This separation permits lane committees to progress independently without
+allowing network arrival order, machine speed, or local inventory to choose a
+global state order.
 
-| Component | Responsibility | Implementation references |
-|-----------|----------------|---------------------------|
-| Lane executor & settlement router | Quote XOR conversions, accumulate receipts per transaction, enforce buffer policy | `crates/iroha_core/src/settlement/mod.rs`, `crates/settlement_router` |
-| Lane block builder | Drain `SettlementAccumulator`s, emit `LaneBlockCommitment`s alongside the lane block | `crates/iroha_core/src/block.rs:3340-3415` |
-| LaneRelay broadcaster | Bundle lane QCs + DA proofs, gossip them across `iroha_p2p`, and feed the merge ring | `crates/iroha_core/src/nexus/lane_relay.rs`, `crates/iroha_core/src/sumeragi/main_loop.rs` |
-| Global merge ledger | Verify lane QCs, reduce merge hints, persist world-state commitments | `docs/source/merge_ledger.md`, `crates/iroha_core/src/sumeragi/status.rs`, `crates/iroha_core/src/state.rs` |
-| Torii status & dashboards | Surface `lane_commitments`, `lane_settlement_commitments`, `lane_relay_envelopes`, scheduler gauges, and Grafana boards | `crates/iroha_torii/src/routing.rs:16660-16880`, `dashboards/grafana/nexus_lanes.json` |
-| Evidence storage | Archive `LaneBlockCommitment`s, RBC artefacts, and Alertmanager snapshots for audits | `docs/settlement-router.md`, `artifacts/nexus/*` (future bundle) |
+## Routing and horizontal capacity
 
-## Data Structures & Payload Layout
+The canonical account identity remains domainless. Dataspace and lane routing
+come from Nexus configuration and committed lane lifecycle state.
 
-The canonical payloads live in `crates/iroha_data_model/src/block/consensus.rs`.
+Explicit routing rules target fixed operator-managed lanes. Automatic elastic
+lanes are reserved for unmatched traffic on the default route and cannot be
+made explicit-rule targets. Stateful routing uses the current committed catalog,
+dataspace catalog, lane incarnation, activation height, and autoscale range;
+stale router snapshots fall back to the fixed default lane rather than routing
+work into a retired or future lane.
 
-### `LaneSettlementReceipt`
+The default route is sharded deterministically across its fixed anchor and
+currently active, valid `autoscale.managed` elastic lanes. A managed lane must:
 
-- `source_id` — transaction hash or caller-provided id.
-- `local_amount_micro` — dataspace gas token debit.
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` — deterministic XOR book entries and the per-receipt safety margin (`due - after haircut`).
-- `timestamp_ms` — UTC millisecond timestamp captured during settlement.
+- lie in the configured elastic ID range;
+- use the default dataspace and the supported public base profile;
+- carry the exact reserved ownership and creation-height metadata;
+- carry the exact ordered BLS committee and aligned proofs of possession pinned
+  for that incarnation;
+- have a committed, never-reused incarnation; and
+- have reached its first eligible proposal height.
 
-Receipts inherit the deterministic quoting rules from `SettlementEngine` and are aggregated inside each `LaneBlockCommitment`.
+Malformed ownership markers, manual occupants of reserved IDs, disabled Nexus
+or autoscale state, future creation heights, off-default dataspaces, or catalog
+drift fail closed.
 
-### `LaneSwapMetadata`
+## Automatic lane creation and retirement
 
-Optional metadata that records the parameters used while quoting:
+Autoscale parameters are ordinary `iroha_config` values under
+`nexus.autoscale`; production behavior does not depend on environment toggles.
+Every validator computes the same decision while applying the same canonical
+global block.
 
-- `epsilon_bps`, `twap_window_seconds`, `volatility_class`.
-- `liquidity_profile` bucket (Tier1–Tier3).
-- `twap_local_per_xor` string so auditors can recompute conversions exactly.
+### Scale out
 
-### `LaneBlockCommitment`
+For the configured block window, validators derive deterministic p95 block
+latency and utilization from canonical block data. Sustained latency or
+utilization pressure selects the first free elastic lane ID. The new lane is
+cloned from the supported default public profile, receives exact managed
+metadata and a fresh incarnation, and is committed through the lane lifecycle
+journal. Before publication, the node verifies that the prospective
+authoritative lane committee has the exact required `3f+1` members. Lane
+committees are capped at 128 validators by both configuration parsing and
+runtime admission, matching the lane-QC and drain wire protocols.
 
-Per-lane summary stored with every block:
+The ordered committee and one verified BLS proof of possession per member are
+pinned into reserved lane metadata *before* the catalog and incarnation hashes
+are derived. Proposal, prepare/commit QC, availability, NewView, and Native AMX
+authority for that incarnation all resolve this pin; they never fall back to a
+later global roster, manifest, or live-key cache. Changing the pin therefore
+requires retiring and recreating the lane. A roster/key-policy change that
+removes too many pinned members may stall that lane safely, so operators must
+drain and retire affected lanes before rotating away their required quorum.
 
-- Header: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- Totals: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
-- Optional `swap_metadata`.
-- Ordered `receipts` vector.
-- Ordered `nexus_fee_receipts` vector for lane-relay-burn XOR gas settlement.
-- Ordered `native_amx_receipts` vector. Each entry records the source
-  transaction id, coordinator lane/dataspace/height, routing plan digest, and the
-  per-dataspace legs that prepared and committed for a native cross-dataspace
-  transaction.
+The lifecycle block is the creation boundary. The lane becomes eligible for
+proposals only at the following global height, so messages prepared before
+catalog commitment cannot race activation.
 
-These structs already derive `NoritoSerialize`/`NoritoDeserialize`, so they can be streamed on-chain, through Torii, or via fixtures without schema drift.
+### Scale in
 
-### `LaneRelayEnvelope`
+A complete cold window and expired cooldown select the highest active managed
+elastic lane. Selection begins an irreversible drain; it does not remove the
+lane immediately. The committed intent records the exact chain, lane,
+dataspace, incarnation, close height, current merged frontier, and ordered
+`3f+1` lane committee. Routing and lane authority admit proposal heights up to
+the close height and reject every later proposal, while already certified
+pre-close work may still reach the global merge frontier.
 
-`LaneRelayEnvelope` (see `crates/iroha_data_model/src/nexus/relay.rs`) packages the lane
-`BlockHeader`, optional commit QC (`Qc`), optional `DaCommitmentBundle` hash, the full
-`LaneBlockCommitment`, and the per-lane RBC byte count. The envelope stores a Norito-derived
-`settlement_hash` (via `compute_settlement_hash`) so receivers can validate the settlement payload
-before forwarding it to the merge ledger. Callers should reject envelopes when `verify` fails (QC
-subject mismatch, DA hash mismatch, or settlement hash mismatch), when `verify_with_quorum` fails
-(signer bitmap length/quorum errors), or when the aggregated QC signature cannot be verified
-against the per-dataspace committee roster. The QC preimage covers the lane block hash plus
-`parent_state_root` and `post_state_root`, so membership and state-root correctness are verified
-together.
+Each historical committee member keeps a crash-safe signing journal. It will
+not sign a drain below any Commit vote it signed, cannot sign conflicting or
+regressing drain bodies, and cannot sign a later Commit vote after closing. It
+may re-sign the same intent at a strictly higher canonical frontier when
+delayed pre-close work is globally applied. Once the committee reaches its
+canonical quorum on the exact final frontier, any current global validator can
+assemble the self-contained certificate. The next deterministic merge leader
+orders it in a certificate-only merge entry. The carrier atomically replaces
+the intent-only metadata with a commitment to the certificate, merge-entry
+hash, carrier height, and final frontier.
 
-### Lane committee selection
+The journal directory has one exclusive `owner.lock`; a second process cannot
+open the same signing identity concurrently. Lock files and decision records
+must be regular, bounded, canonically encoded files and symlinks fail closed.
+Inbound drain-vote frames are rejected before materialization when they exceed
+16 KiB or the 128-member sequence bound, on both TCP and QUIC paths. This keeps
+an unauthenticated oversized committee from turning control-plane decode into
+an allocation attack.
 
-Lane relay QCs are validated against a per-dataspace committee. Committee size is `3f+1`, where
-`f` is configured in the dataspace catalog (`fault_tolerance`). The validator pool is the
-dataspace's validators: lane governance manifests for admin-managed lanes and public-lane staking
-records for stake-elected lanes. Committee membership is deterministically sampled per epoch using
-the VRF epoch seed bound with `dataspace_id` and `lane_id` (stable for the epoch). If the pool is
-smaller than `3f+1`, lane relay finality pauses until quorum is restored. Operators can extend the
-pool using the admin multisig instruction `SetLaneRelayEmergencyValidators` (requires
-`CanManagePeers` and `nexus.lane_relay_emergency.enabled = true`, which is disabled by default).
-When enabled, the authority must be a multisig account meeting the configured minimums
-(`nexus.lane_relay_emergency.multisig_threshold`/`multisig_members`, default 3-of-5). Overrides are
-stored per dataspace, applied only when the pool is under quorum, and cleared by submitting an
-empty validator list. When `expires_at_height` is set, validation ignores the override once the
-lane relay envelope `block_height` exceeds the expiry height. The telemetry counter
-`lane_relay_emergency_override_total{lane,dataspace,outcome}` records whether the override was
-applied (`applied`) or missing/expired/insufficient/disabled during validation.
+Retirement is considered only in a global block whose height is strictly
+greater than the certificate carrier. At most one lane retires per block, and
+retirement is refused when the candidate:
 
-## Commitment Lifecycle
+- owns work in the committing block;
+- has an unmerged admissible relay;
+- has a certified lane block without a matching global application receipt;
+- has an unrepaired application marker;
+- has no exact globally carried drain certificate, or its replicated frontier
+  differs from the certified frontier;
+- is outside the managed range, manually owned, malformed, or non-default; or
+- would violate the fixed base capacity.
 
-1. **Quote & stage receipts.**  
-   The settlement façade (`SettlementEngine`, `SettlementAccumulator`) records a `PendingSettlement` per transaction. Each record stores the TWAP inputs, liquidity profile, timestamps, and XOR amounts so it can later become a `LaneSettlementReceipt`.
+The selector does not skip a blocked highest lane to destroy a lower lane.
+Only after blockers are merged/repaired, the close certificate is carried, and
+a later block observes the exact frontier does the highest lane retire. The
+same process repeats in descending lane order until only the fixed base
+capacity remains. Additional cold heartbeats then produce no lifecycle
+transition. Malformed or ambiguous drain metadata fails closed and suppresses
+both a second drain and scale-out rather than skipping the affected lane.
 
-2. **Seal receipts into the block.**  
-   During `BlockBuilder::finalize`, each `(lane_id, dataspace_id)` pair drains its accumulator. The builder instantiates a `LaneBlockCommitment`, copies the receipt list, accumulates totals, stores optional swap metadata (via `SwapEvidence`), and appends native AMX prepare/commit receipts only when the proposer supplies participant-committee QCs for every planned native AMX leg. Those QCs sign the source transaction, coordinator route, participant route, planned height, and routing-plan digest, and are sealed into the external execution context before proposal broadcast. Assembly no longer synthesizes coordinator-only receipts; without collected participant evidence, the proposal path defers/requeues the transaction until collection succeeds. The resulting vector is pushed to the Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) so Torii and telemetry can expose it immediately.
-   Before sealing, proposal assembly scans a bounded window of routed queue
-   entries and applies slot-rotated lane interleaving. This keeps the current
-   global block path from starving later lanes when the block slot count is
-   smaller than the queue lookahead budget; overflow transactions are deferred
-   for deterministic requeueing.
+### Atomic geometry and cleanup
 
-3. **Relay packaging & DA attestations.**  
-   `LaneRelayBroadcaster` consumes the `LaneRelayEnvelope`s emitted during block sealing and gossips them as high-priority `NetworkMessage::LaneRelay` frames. Block sealing emits these as pending relays without copying the global block commit QC into the lane QC field. Structurally valid envelopes are de-duplicated by `(lane_id,dataspace_id,height,settlement_hash)` and persisted in the Sumeragi status snapshot (`/v1/sumeragi/status`) even while lane QC and FastPQ proof material are still pending. A later relay for the same key upgrades the snapshot to FastPQ-verified status. The broadcaster will continue to evolve to attach DA artefacts (RBC chunk proofs, Norito headers, SoraFS/Object manifests) and feed the merge ring without head-of-line blocking.
+Lifecycle publication is consensus state. Kura journals physical geometry
+preparation and reconciles it against the committed catalog after restart. A
+failed block or catalog preflight cannot leak a partially created/retired lane.
+On successful retirement, lane-scoped DA cursors and commitments, pin intents,
+verified relays, merge history indexes, queue/session state, public validator
+and economic rows, emergency overrides, AXT replay data, and application
+markers are reset at the same incarnation boundary. Old files remain historical
+proof material only where policy requires them; they cannot authorize or route
+new work.
 
-4. **Global ordering & merge ledger.**  
-   The NPoS ring validates each FastPQ-verified relay envelope: check `lane_qc` against the per-dataspace committee, recompute settlement totals, verify DA proofs, and feed the lane merge-hint root into the merge-ledger reduction described in `docs/source/merge_ledger.md`. Persisted verified relay records are also hydrated from contract state into the runtime relay cache after their relay reference, proof digest, verification height, manifest root, FastPQ effect type, and claim digest are checked. Newly committed `RegisterVerifiedLaneRelay` records stage the same hydration at block commit, after the contract-visible state is durable. Configured lanes without a verified relay are idle for that merge entry rather than blocking active lanes. When the merge entry is sealed the world-state hash (`global_state_root`) commits to the active lane merge-hint roots.
+Consensus-owned smart-contract-state namespaces are not writable through
+generic IVM state syscalls. Merge application/frontier markers, Nexus fee
+replay markers, and sealed-transaction commitments are opaque even to reads or
+enumeration; verified relay and fee-budget records remain readable where they
+are a public contract surface but are read-only. Delimiter-aware negative tests
+preserve similarly named user keys while preventing contracts from forging or
+deleting lifecycle safety state.
 
-5. **Persistence & exposure.**  
-   Kura writes the lane block, merge entry, and `LaneBlockCommitment` atomically so replay can reconstruct the same reduction. `/v1/sumeragi/status` exposes:
-   - `lane_commitments` (execution metadata).
-   - `lane_settlement_commitments` (the payload described here).
-   - `lane_relay_envelopes` (relay headers, QCs, DA digests, settlement hash, and RBC byte counts).
-  Dashboards (`dashboards/grafana/nexus_lanes.json`) read the same telemetry and status surfaces to display lane throughput, DA availability warnings, RBC volume, settlement deltas, and relay evidence.
+## Lane certification and data availability
 
-## Verification & Proof Rules
+`LaneBlockProposalV1` binds the lane/dataspace/incarnation, global proposal
+height, lane-local height/view and predecessor, exact accepted queue indices and
+transaction hashes, payload ownership/RBC identities, ordered validator set,
+canonical quorum, and proposal hash.
 
-The merge ring MUST enforce the following before accepting a lane commitment:
+Prepare votes require payload availability. A certified source contains:
 
-1. **Lane QC validity.** Verify the aggregated BLS signature over the execution-vote preimage
-   (block hash, `parent_state_root`, `post_state_root`, height/view/epoch, chain_id, and mode tag)
-   against the per-dataspace committee roster; ensure the signer bitmap length matches the
-   committee, signers map to valid indices, and the header height matches
-   `LaneBlockCommitment.block_height`.
-2. **Receipt integrity.** Recompute the `total_*` aggregates from the receipt vector; reject the commitment if the sums diverge or the receipts contain duplicate `source_id`s.
-3. **Swap metadata sanity.** Confirm that `swap_metadata` (if present) matches the lane’s current settlement configuration and buffer policy.
-4. **DA attestation.** Validate that the relay-provided RBC/SoraFS proofs hash to the embedded digest and that the chunk set covers the entire block payload (`rbc_bytes_total` telemetry should mirror this).
-5. **Merge reduction.** Once the per-lane proofs pass, include the lane tip in the merge ledger entry and recompute the Poseidon2 reduction (`reduce_merge_hint_roots`). Any mismatch aborts the merge entry.
-6. **Telemetry & audit trail.** Increment the per-lane audit counters (`nexus_audit_outcome_total{lane_id,…}`) and persist the envelope so the evidence bundle contains both the proof and the observability trail.
+- the producer-authenticated origin payload and current proposal;
+- the prepare QC with its availability QC;
+- the commit QC;
+- canonical signer proofs of possession;
+- the exact payload bytes or recoverable canonical block hint; and
+- chain/epoch/payload hashes sufficient for restart verification.
 
-## Data Availability & Observability
+Ingress and local loopback use the same route, activation, reset-watermark,
+committee, quorum, signature, conflict, and size checks. Senderless votes,
+self-appointed committees, downgraded quorum, wrong dataspace/incarnation,
+stale predecessors, duplicate/conflicting slots, and malformed RBC ownership
+are rejected before cache, status, vote, or broadcast side effects.
 
-- **Metrics:**  
-  `nexus_scheduler_lane_teu_*`, `nexus_scheduler_dataspace_*`, `sumeragi_rbc_da_reschedule_total`,
-  `da_reschedule_total`, `sumeragi_da_gate_block_total{reason="missing_local_data"}`,
-  `lane_relay_invalid_total{error}`, `lane_relay_emergency_override_total{outcome}`, and
-  `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`.
-  Operators should keep `lane_relay_invalid_total` at zero outside adversarial drills.
-- **Torii surfaces:**  
-  `/v1/sumeragi/status` includes `lane_commitments`, `lane_settlement_commitments`, and dataspace snapshots. `/v1/nexus/lane-config` (planned) will publish the `LaneConfig` geometry so clients can match `lane_id` ↔ dataspace labels.
-- **Dashboards:**  
-  `dashboards/grafana/nexus_lanes.json` charts lane backlog, DA availability signals, and the settlement totals exposed above. Alert definitions should page when:
-  - `nexus_scheduler_dataspace_age_slots` breaches policy.
-  - `sumeragi_da_gate_block_total{reason="missing_local_data"}` increases persistently.
-  - `total_xor_variance_micro` deviates from historical norms.
-- **Evidence bundles:**  
-  Every release must attach `LaneBlockCommitment` exports, Grafana/Alertmanager snapshots, and the relay DA manifests under `artifacts/nexus/cross-lane/<date>/`. The bundle becomes the canonical proof set when submitting NX-4 readiness reports.
+Certified sources are durable even when the global leader has not yet selected
+them. Queue backpressure does not evict quorum-certified sessions, and restart
+hydrates only fully revalidated current-incarnation artifacts.
 
-## Implementation Checklist (NX-4)
+## Relay commitments and settlement
 
-1. **LaneRelay service**
-   - Schema defined in `LaneRelayEnvelope`; broadcaster implemented in `crates/iroha_core/src/nexus/lane_relay.rs` and wired into block sealing (`crates/iroha_core/src/sumeragi/main_loop.rs`), emitting `NetworkMessage::LaneRelay` with per-node de-duplication and status persistence.
-   - Persist relay artefacts for audits (`artifacts/nexus/relay/…`).
-2. **DA attestation hooks**
-   - Integrate RBC / SoraFS chunk proofs with relay envelopes and store summary metrics in `SumeragiStatus`.
-   - Expose DA status via Torii and Grafana for operators.
-3. **Merge-ledger validation**
-   - Implemented in `State::commit_merge_entry`: merge entries require stored verified relay envelopes with matching lane tips, merge-hint roots, and reduction roots.
-   - Add replay tests (`integration_tests/tests/nexus/*.rs`) that feed synthetic commitments through the merge ledger and assert deterministic reduction.
-4. **SDK & tooling updates**
-   - Document the `LaneBlockCommitment` Norito layout for SDK consumers (`docs/portal/docs/nexus/lane-model.md` already links here; extend it with API snippets).
-   - Deterministic fixtures live under `fixtures/nexus/lane_commitments/*.{json,to}`; run `cargo xtask nexus-fixtures` to regenerate (or `--verify` to validate) the `default_public_lane_commitment` and `cbdc_private_lane_commitment` samples whenever schema changes land.
-5. **Observability & runbooks**
-   - Wire the Alertmanager pack for the new metrics and document the evidence workflow in `docs/source/runbooks/nexus_cross_lane_incident.md` (follow-up).
+`LaneBlockCommitment` records the lane coordinates, ordered settlement receipts,
+Nexus fee receipts, Native AMX receipts, totals, and optional swap evidence.
+`LaneRelayEnvelope` binds that commitment and its hash to the lane header, lane
+QC, DA commitment, RBC byte count, manifest root, and FastPQ proof material.
 
-Completing the checklist above, alongside this specification, satisfies the documentation portion of **NX-4** and unblocks the remaining implementation work.
+A relay becomes merge-admissible only after all structural, committee,
+signature, DA, proof, settlement, and activation checks pass. Contract-persisted
+verified relay records are revalidated before hydrating the runtime cache.
+Envelope identity includes immutable header, descriptor, DA, settlement, RBC,
+and manifest fields, so a later “upgrade” cannot overwrite drifted evidence.
+
+Relay settlement candidates contain the exact envelope. Merge validators
+preflight duplicate markers, fee schedule arithmetic, canonical asset
+selection, aggregate burns, and payer balances before signing. Settlement is
+then staged on the same pristine carrier overlay and is idempotent across crash
+replay.
+
+## Native AMX cross-dataspace transactions
+
+Native AMX execution uses the same globally certified batch. A routing plan
+names its coordinator and every participant leg. The producer must collect the
+required participant prepare/commit QCs; coordinator-only evidence is not
+synthesized. `NativeAmxReceipt.authority_context_height` binds the global
+application context, while each leg retains its lane-local height. Validation
+checks chain, source ID, entrypoint, routing-plan digest, lane/dataspace roles,
+authority height, participant committees, QCs, and duplicate sources before
+state execution.
+
+All entrypoints in one merge batch execute in canonical order on one revertible
+overlay. Any divergence in results, settlement evidence, write-set roots, or
+expected post-state hash invalidates the complete candidate.
+
+## Compact carrier, recovery, and proofs
+
+The full merge entry can be up to 16 MiB; the global block instead carries a
+`CertifiedMergeLedgerReference`. Its merge QC identifies authenticated sidecar
+holders. Fetch uses bounded 64-KiB chunks and global/per-peer resource caps,
+while authoritative pending blocks retry through holder withholding without a
+fixed attempt horizon.
+
+Kura maintains indexed full-entry and carrier stores. A node that restarts with
+only the compact block fetches or replays the exact sidecar, re-executes the
+same WSV transition, and reconstructs the same transaction history. Torn,
+oversized, non-canonical, conflicting, symlinked, or future-uncommitted storage
+is truncated or rejected according to the crash boundary; incomplete network
+assemblies are never persisted.
+
+Chain truncation publishes a fsynced prune intent before lowering the durable
+block marker. Carrier/log, commit-roster, WSV-checkpoint, commit-manifest,
+pipeline-recovery, and roster-metadata sidecar suffixes are removed
+forward-only, and the live block/query indexes remain on the old prefix until
+all durable stages complete. Startup finishes an interrupted intent before
+serving state; conflicting, tampered, symlinked, or non-canonical intent and
+sidecar material is rejected. Durable lane writers share the prune and
+lane-geometry locks, preventing stale-path resurrection while scale-in archives
+an incarnation. A poisoned merge-height lookup is an error rather than an empty
+history, so no candidate can restart lane height progression while recovery is
+outstanding.
+
+`FindTransactions` returns merge-carried entrypoints with
+`CertifiedMergeTransactionInclusion`. Clients can verify both entrypoint and
+result Merkle proofs against the compact reference and then bind that reference
+to the exact signed carrier block. A merge transaction is not duplicated in the
+ordinary block Merkle roots.
+
+Hash/authority/time/status filters use Kura's unified ordinary-plus-merge
+height index and read only selected carriers. Unindexed pagination scans and
+drops one full sidecar at a time, retaining only the current page; exact-count
+and sorted requests still validate all selected evidence without retaining all
+proofs. Unsorted cursors are anchored to a canonical prefix and resume from a
+compact height/intra-carrier checkpoint. Sorted windows are materialized once
+only after full validation and are capped at 4,096 positions, so oversized or
+unbounded requests fail at the materialization limit rather than becoming a
+history-sized allocation. The eager transaction count of each touched carrier
+is precharged before merge Merkle proof construction or predicate evaluation;
+insufficient gas cannot trigger unaccounted carrier-sized work.
+
+## Status and events
+
+`/v1/sumeragi/status` exposes lane proposals/commitments, relay envelopes,
+payload ownership, committed lane sessions and execution status, configured
+lane/dataspace geometry, and autoscale transition data. Status rows are
+validated before publication and conflicting latest identities remain visible
+as ambiguity rather than being silently collapsed.
+
+The first successful live publication of a globally carried entry emits one
+`MergeLedgerEvent`. Kura/state retries and restart replay are silent, so event
+consumers do not observe duplicates. Transaction pipeline events continue to
+carry the routed lane ID before final merge approval.
+
+Operational metrics include lane scheduler age/utilization, DA/RBC deferrals,
+relay validation outcomes, lane lifecycle outcomes, and autoscale capacity.
+Rollout evidence must use quorum-consistent status and transition rows; file
+mtime changes, descriptorless relays, wrong-dataspace rows, ambiguous duplicate
+rows, or stale prior-cycle logs do not prove expansion or safe contraction.
+
+## Verification matrix
+
+The production corridor includes:
+
+- unit tests for router activation/incarnation boundaries, committee and quorum
+  authority, lane proposal/QC aggregation, payload recovery, merge
+  re-execution, fee preflight, lifecycle atomicity, cleanup, and recovery;
+- negative tests for wrong leader/round/parent/roster, equivocation, duplicate
+  signatures, lost signing locks, malformed/corrupt chunks, oversized counts,
+  stale/future lanes, forged/under-quorum drain certificates, post-close work,
+  same-carrier retirement, delayed pre-close work loss, unsafe retirement, and
+  every durable crash boundary;
+- four-peer localnet autoscale expansion/contraction, repeated cycles, a
+  full intent/certificate/later-retirement cycle, a certified elastic-lane merge
+  with one offline/missing-sidecar peer, WSV/query proof convergence, and
+  repeated restart idempotency;
+- twelve-peer cross-dataspace/native-AMX integration and soak corridors; and
+- TLC/Apalache models for autoscale lifecycle, pinned-incarnation authority
+  under independent current-roster rotation, merge execution order, and exact
+  merge-carrier safety, each with expected-failure mutations.
+
+Primary code lives in `crates/iroha_core/src/state.rs`,
+`crates/iroha_core/src/lane_consensus.rs`,
+`crates/iroha_core/src/lane_drain.rs`,
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/merge_sidecar.rs`, and
+`crates/iroha_core/src/kura.rs`; canonical DTOs live under
+`crates/iroha_data_model/src/{block,merge,nexus,query}`.

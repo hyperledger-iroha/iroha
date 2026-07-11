@@ -160,11 +160,6 @@ mod block {
         pub fn get(&self) -> &V {
             &self.blocks
         }
-
-        /// Return whether this block has staged a value mutation.
-        pub fn is_dirty(&self) -> bool {
-            self.dirty
-        }
     }
 
     impl<V: Value> Deref for Block<'_, V> {
