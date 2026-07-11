@@ -1985,7 +1985,10 @@ impl Kura {
             && published_index + 1 == current_applied_count
         {
             let _sidecar_guard = self.sidecar_lock.lock();
-            self.apply_geometry_operations_forward(&journal.records[published_index].operations)?;
+            self.apply_geometry_operations_forward(
+                &journal.records[published_index].operations,
+                GeometryEvidencePolicy::RequireDurableEvidence,
+            )?;
             self.ensure_authoritative_lane_markers(
                 updated,
                 updated_incarnations,
@@ -2018,7 +2021,10 @@ impl Kura {
             self.ensure_lane_retirement_admissible_locked(&retiring)?;
             journal.records[existing_index].phase = LaneGeometryPhase::Intent;
             self.write_lane_geometry_journal(&journal)?;
-            self.apply_geometry_operations_forward(&operations)?;
+            self.apply_geometry_operations_forward(
+                &operations,
+                GeometryEvidencePolicy::RequireDurableEvidence,
+            )?;
             journal.records[existing_index].phase = LaneGeometryPhase::FilesApplied;
             self.write_lane_geometry_journal(&journal)?;
             *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(updated);
@@ -2081,11 +2087,15 @@ impl Kura {
         self.write_lane_geometry_journal(&journal)?;
 
         let record_index = journal.records.len() - 1;
-        if let Err(error) =
-            self.apply_geometry_operations_forward(&journal.records[record_index].operations)
+        if let Err(error) = self.apply_geometry_operations_forward(
+            &journal.records[record_index].operations,
+            GeometryEvidencePolicy::AllowJournalIntentProvisioning,
+        )
         {
-            if let Err(rollback_error) =
-                self.apply_geometry_operations_rollback(&journal.records[record_index].operations)
+            if let Err(rollback_error) = self.apply_geometry_operations_rollback(
+                &journal.records[record_index].operations,
+                GeometryEvidencePolicy::AllowJournalIntentProvisioning,
+            )
             {
                 return Err(Error::IO(
                     std::io::Error::other(format!(
@@ -3260,11 +3270,22 @@ impl Kura {
                 LaneGeometryPhase::Intent | LaneGeometryPhase::FilesApplied
             )
         }) {
+            let evidence_policy = if journal.records[boundary].phase == LaneGeometryPhase::Intent {
+                GeometryEvidencePolicy::AllowJournalIntentProvisioning
+            } else {
+                GeometryEvidencePolicy::RequireDurableEvidence
+            };
             if boundary < desired_applied_count {
-                self.apply_geometry_operations_forward(&journal.records[boundary].operations)?;
+                self.apply_geometry_operations_forward(
+                    &journal.records[boundary].operations,
+                    evidence_policy,
+                )?;
                 journal.records[boundary].phase = LaneGeometryPhase::CatalogPublished;
             } else {
-                self.apply_geometry_operations_rollback(&journal.records[boundary].operations)?;
+                self.apply_geometry_operations_rollback(
+                    &journal.records[boundary].operations,
+                    evidence_policy,
+                )?;
                 journal.records[boundary].phase = LaneGeometryPhase::RolledBack;
             }
             self.write_lane_geometry_journal(journal)?;
@@ -3278,7 +3299,10 @@ impl Kura {
         for index in (desired_applied_count..current_applied_count).rev() {
             journal.records[index].phase = LaneGeometryPhase::Intent;
             self.write_lane_geometry_journal(journal)?;
-            self.apply_geometry_operations_rollback(&journal.records[index].operations)?;
+            self.apply_geometry_operations_rollback(
+                &journal.records[index].operations,
+                GeometryEvidencePolicy::RequireDurableEvidence,
+            )?;
             journal.records[index].phase = LaneGeometryPhase::RolledBack;
             self.write_lane_geometry_journal(journal)?;
         }
@@ -3291,7 +3315,10 @@ impl Kura {
         for index in current_applied_count..desired_applied_count {
             journal.records[index].phase = LaneGeometryPhase::Intent;
             self.write_lane_geometry_journal(journal)?;
-            self.apply_geometry_operations_forward(&journal.records[index].operations)?;
+            self.apply_geometry_operations_forward(
+                &journal.records[index].operations,
+                GeometryEvidencePolicy::RequireDurableEvidence,
+            )?;
             journal.records[index].phase = LaneGeometryPhase::CatalogPublished;
             self.write_lane_geometry_journal(journal)?;
         }
@@ -3301,12 +3328,18 @@ impl Kura {
         // recovery. The pair movers authenticate an already-complete target and resume only the
         // block-before-merge crash frontier, so this is idempotent without reopening history.
         if let Some(record) = journal.records.get(desired_applied_count) {
-            self.apply_geometry_operations_rollback(&record.operations)?;
+            self.apply_geometry_operations_rollback(
+                &record.operations,
+                GeometryEvidencePolicy::RequireDurableEvidence,
+            )?;
         } else if let Some(record) = desired_applied_count
             .checked_sub(1)
             .and_then(|index| journal.records.get(index))
         {
-            self.apply_geometry_operations_forward(&record.operations)?;
+            self.apply_geometry_operations_forward(
+                &record.operations,
+                GeometryEvidencePolicy::RequireDurableEvidence,
+            )?;
         }
         Ok(())
     }
